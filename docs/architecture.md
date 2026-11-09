@@ -1136,8 +1136,8 @@ rules. Identify which one a task belongs to before you start.
   exact row. Its candidates are EVERY exact namesake at the gazetteer's version, as about 77 % of street names repeat
   in another town and only about one Nádražní in seven has a door 12: streets whose `name_norm` is the name as typed,
   without the generic word ("Nádražní ulice") or in any spelling the resolver's abbreviation folds make equal on both
-  sides ("nám. Míru" and náměstí Míru, "ČSA" and Čs. armády), and, for a streetless door, části obce named exactly so (a village is a část, never the town: a č.p. is unique
-  only within its část). A literal LIMIT 1000 per kind guards a runaway name and ranks nothing (the largest, Zahradní,
+  sides ("nám. Míru" and náměstí Míru, "ČSA" and Čs. armády), and, for a streetless door, části obce named exactly
+  so (a village is a část, never the town: a č.p. is unique only within its část). A literal LIMIT 1000 per kind guards a runaway name and ranks nothing (the largest, Zahradní,
   is 705 streets). Candidates reach their doors by stable code, through every street row of the code and every obec
   row of the town, as the resolver does. A bare number is tried as the č.p. AND as the č.o., two arms that are each an
   index condition on `ruian_ap_street_hn` (an OR would use only its `street_id`); "12/3a" asks that č.p. and č.o.,
@@ -1149,8 +1149,8 @@ rules. Identify which one a task belongs to before you start.
   for its version to publish, but doors are unversioned, so an in-place update or retirement shows at once, and a
   re-pointed door's label may carry the next version's street name while its street chip carries the current one's.
   A door row is `{level: 'adresni_misto', id, name, context, point, street}`: the kód ADM, the ONE label (no number for
-  a streetless door, for a č.ev. door only its č.o. if any, never the č.ev.; migration 503), its town's okres, the door's own point, and its street's chip `{level:
-  'ulice', id, name, context}` at the gazetteer's version, null for a streetless door; no `places`, count, PSČ, KÚ,
+  a streetless door, for a č.ev. door only its č.o. if any, never the č.ev.; migration 503), its town's okres, the
+  door's own point, and its street's chip `{level: 'ulice', id, name, context}` at the gazetteer's version, null for a streetless door; no `places`, count, PSČ, KÚ,
   foreign place or country. The label is one SQL fragment in `location_data/place_search.py`, shared by the door read
   (computed for the rows kept) and `DOOR_LABEL_SQL`, which the address picker imports until the switch-over (#2453)
   moves it to door rows, if addresses pass the gate. Order, a builder decision no ruling covers (#2441, #2451, #2453):
