@@ -15,6 +15,10 @@ IPv4 transaction pooler; no production DB string is kept on disk):
     python3 -m scripts.place_search_gate_eval --window-first D1 --window-last D2 ... )
   (a) the look:     ... --no-latency --report ~/gate-look.html
   (b) the operator strikes mislabelled misses by question number, one per line, in ~/gate-strikes.txt
+  (b2) the operator dictates the address questions in chat, each with the house meant; the session finds each
+      house's kód ADM with a read-only SELECT on ruian_address_points (obec or část, typ_so č.p./č.ev.,
+      cislo_domovni, cislo_orientacni, street), the operator confirms each one (always for a streetless or č.ev.
+      door, whose label names no number), and the session writes ~/gate-addresses.tsv (kod_adm<TAB>text)
   (c) the figures:  ... --strikes ~/gate-strikes.txt --addresses ~/gate-addresses.tsv --report ~/gate-figures.html
       (about 30 s a text); answers can move between (a) and (c), so before the verdict goes on #2465 the operator
       checks in that report that every unstruck miss is a real miss: a new mislabelled one means (c) again, struck

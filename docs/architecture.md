@@ -1210,7 +1210,9 @@ rules. Identify which one a task belongs to before you start.
   the span that had run 30 minutes unreplaced by then (an assumption; a FAILED or SKIPPED one never counts); a page of
   5,000 rows (the CLI's most) is read again in halves; a deployment created during the replay is flagged, as its cold
   start skews the p50.
-  **Addresses:** `--addresses` (kód ADM, a tab, the text as dictated) are asked whole after the replay under the agent
+  **Addresses:** `--addresses` (kód ADM, a tab, the text as dictated; the session looks up each dictated house's kód
+  ADM in `ruian_address_points` with a read-only SELECT and the operator confirms it, so the label stays the
+  operator's) are asked whole after the replay under the agent
   plus `-addresses`, so never in the latency read; a hit is the `adresni_misto` row of that kód ADM (#2451: never the
   label); Q2 c's thresholds, no strike, no Mapy figure. **The look:** `--report` writes one self-contained HTML file
   (CSP `default-src 'none'`, no referrer, mode 0600): per numbered question, refused and not-live ones too, the text,
