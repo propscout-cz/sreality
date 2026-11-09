@@ -1085,3 +1085,18 @@ def test_a_cast_obce_typed_as_the_town_answers_the_door_that_lies_in_it(mirror, 
         {"level": "adresni_misto", "id": 21000122, "name": "Nádražní 12, Kolín", "context": "Kolín", "point": None,
          "street": {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}},
     ]
+
+
+def test_a_village_typed_with_a_mestska_cast_answers_its_streetless_door_only_if_it_lies_in_it(mirror, client):
+    """Dejvice has a streetless č.p. 6, as Vysočany does in production, and it lies in Praha 6: a village narrows to the
+    town's obec, Praha, and its door to the městská část typed."""
+    praha = _praha(mirror)
+    praha_6 = mirror.unit("momc", PRAHA_6, "Praha 6", praha)
+    mirror.unit("momc", PRAHA_7, "Praha 7", praha)
+    mirror.house(21000601, praha, part=mirror.unit("cast_obce", DEJVICE, "Dejvice", praha), cp=6, momc=praha_6)
+    mirror.publish()
+    assert _suggest(client, "Dejvice 6, Praha 6") == [
+        {"level": "adresni_misto", "id": 21000601, "name": "Dejvice, Praha", "context": "území Hlavního města Prahy",
+         "point": None, "street": None},
+    ]
+    assert _suggest(client, "Dejvice 6, Praha 7") == []
