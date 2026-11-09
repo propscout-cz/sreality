@@ -788,3 +788,16 @@ def test_doors_answer_at_the_index_s_version_while_a_load_writes_the_next(mirror
          "street": {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}},
     ]
     assert _doors(_suggest(client, "Lhota 25")) == []
+
+
+def test_a_village_named_exactly_answers_before_one_whose_name_only_starts_so_before_its_qualifier(mirror, client):
+    """As the name read ranks a qualifier-stripped name below an exact one: Lhota u Příbramě's č.p. 25 has the lower
+    code, yet the Lhota's answers first. Production answers "Lhota 25" with 19 doors in official Lhotas and 14 in
+    qualified ones."""
+    kraj = mirror.unit("kraj", STREDOCESKY, "Středočeský kraj")
+    lhota = mirror.unit("obec", 513041, "Lhota", mirror.unit("okres", 3203, "Kladno", kraj))
+    breznice = mirror.unit("obec", 540153, "Březnice", mirror.unit("okres", 3211, "Příbram", kraj))
+    mirror.house(21000201, breznice, part=mirror.unit("cast_obce", 70960, "Lhota u Příbramě", breznice), cp=25)
+    mirror.house(21000202, lhota, part=mirror.unit("cast_obce", 70971, "Lhota", lhota), cp=25)
+    mirror.publish()
+    assert _doors(_suggest(client, "Lhota 25")) == [(21000202, "Lhota"), (21000201, "Lhota u Příbramě, Březnice")]

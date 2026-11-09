@@ -146,23 +146,24 @@ streets AS (
      AND (s.valid_to IS NULL OR s.last_version_id > (SELECT id FROM cur))
    ORDER BY s.code, s.valid_from DESC),
 parts AS (
-  SELECT DISTINCT ON (u.code) u.code, u.parent_id
+  SELECT DISTINCT ON (u.code) u.code, u.parent_id,
+         CASE WHEN n.name_kind <> 'qualifier_stripped' THEN 0 ELSE 1 END AS tier
     FROM ruian_name_index n
     JOIN ruian_admin_units u ON u.id = n.entity_id AND u.level = n.entity_kind
    WHERE n.registry_version_id = (SELECT id FROM cur) AND n.name_norm = %(part_key)s::text
      AND n.entity_kind = 'cast_obce' AND (SELECT id FROM cur) BETWEEN u.first_version_id AND u.last_version_id
-   ORDER BY u.code, u.valid_from DESC),
+   ORDER BY u.code, tier, u.valid_from DESC),
 candidates AS (
-  (SELECT coalesce(c.n, 0) AS served, st.code AS street_code, st.name AS street_name,
+  (SELECT 0 AS tier, coalesce(c.n, 0) AS served, st.code AS street_code, st.name AS street_name,
           st.obec_unit_id AS street_obec, NULL::bigint AS part_code, NULL::bigint AS part_parent
      FROM streets st LEFT JOIN place_served_counts c ON c.level = 'ulice' AND c.code = st.code
-    ORDER BY 1 DESC, 2 LIMIT 1000)
+    ORDER BY 2 DESC, 3 LIMIT 1000)
   UNION ALL
-  (SELECT coalesce(c.n, 0), NULL, NULL, NULL, p.code, p.parent_id
+  (SELECT p.tier, coalesce(c.n, 0), NULL, NULL, NULL, p.code, p.parent_id
      FROM parts p LEFT JOIN place_served_counts c ON c.level = 'cast_obce' AND c.code = p.code
-    ORDER BY 1 DESC, 5 LIMIT 1000)),
+    ORDER BY 1, 2 DESC, 6 LIMIT 1000)),
 doors AS (
-  SELECT k.served, k.street_code, k.street_name, k.street_obec, a.kod_adm
+  SELECT k.tier, k.served, k.street_code, k.street_name, k.street_obec, a.kod_adm
     FROM candidates k
     JOIN ruian_streets sr ON sr.code = k.street_code
     CROSS JOIN LATERAL (
@@ -176,7 +177,7 @@ doors AS (
        WHERE ap.street_id = sr.id AND ap.cislo_orientacni = %(bare)s::integer
          AND ap.valid_to IS NULL AND ap.first_version_id <= (SELECT id FROM cur)) a
   UNION ALL
-  SELECT k.served, NULL, NULL, NULL, ap.kod_adm
+  SELECT k.tier, k.served, NULL, NULL, NULL, ap.kod_adm
     FROM candidates k
     JOIN ruian_admin_units po ON po.id = k.part_parent AND po.level = 'obec'
     JOIN ruian_admin_units ob ON ob.level = 'obec' AND ob.code = po.code
@@ -184,13 +185,13 @@ doors AS (
    WHERE ap.cislo_domovni = %(domovni)s::integer AND ap.typ_so = %(typ)s::text
      AND ap.street_id IS NULL AND ap.cast_obce_kod = k.part_code
      AND %(orientacni)s::integer IS NULL AND ap.valid_to IS NULL AND ap.first_version_id <= (SELECT id FROM cur)),
-top AS (SELECT * FROM doors ORDER BY served DESC, kod_adm LIMIT %(limit)s)
+top AS (SELECT * FROM doors ORDER BY tier, served DESC, kod_adm LIMIT %(limit)s)
 SELECT d.kod_adm, {_DOOR_LABEL}, tc.name, ST_Y(ap.geom), ST_X(ap.geom), d.street_code, d.street_name, so.name
   FROM top d
   JOIN ruian_address_points ap ON ap.kod_adm = d.kod_adm{_DOOR_LABEL_JOINS}
   LEFT JOIN ruian_admin_units tc ON tc.id = o.parent_id AND tc.level IN ('kraj', 'okres', 'obec')
   LEFT JOIN ruian_admin_units so ON so.id = d.street_obec AND so.level IN ('kraj', 'okres', 'obec')
- ORDER BY d.served DESC, d.kod_adm
+ ORDER BY d.tier, d.served DESC, d.kod_adm
 """
 
 
