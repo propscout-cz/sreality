@@ -1174,6 +1174,55 @@ rules. Identify which one a task belongs to before you start.
   database is a 503 `place_search_unavailable`: the module logs only the SQLSTATE, the route only the error class,
   never the typed text. No cache, flag or admin parameter; it never reads `place_picks` (its holdout). It ships with no
   caller: the switch-over (#2453) points the place boxes at it after the gate and deletes the Mapy search path.
+- **The gate's eval** (#2452; spec #2441 Part 4 (1)–(4), Q2 c; the gate is #2465). `scripts/place_search_gate_eval.py`
+  scores own search on the recorded picks, read-only on production, and goes at Stage B (#2455) with its test
+  (`tests/api/test_place_search_gate_eval_live.py`, a migrations-lane step). **Reads:** `place_picks` only through
+  `picks_between`, every pick up to the window's end (a question seen before the window is left out: ruling
+  2026-11-08), plus the current registry version, its `momc_cast_obce` pair count and, for each place the window's
+  picks name (passed in as arrays, never a join on the picks), own search's liveness predicates (a copy until Stage B)
+  and the latest name and parent, all in ONE `connect_read_only` transaction, closed before the first request. **Calls:** only
+  `POST /places/suggest`, as the non-admin smoke account (a password grant, renewed 5 minutes before it lapses; a 401
+  gets one fresh sign-in, a second stops the run), agent `propscout-gate-eval-2452/run-<8 hex>`; and the pinned
+  Railway CLI (`.railway/node_modules/.bin/railway`, the box's own login), only `deployment list` and `logs --http
+  --json`. It never calls Mapy (the test's fakes fail on any other URL or CLI verb) and its one write is the smoke
+  account's auth session. **Questions:** a window is whole Prague days from `--window-first` (never before 2026-11-09,
+  window 1's first full day) to the day its 200th scorable question landed; a window short of 200, one scored past
+  that day (the day is named) and N = 0 are refused, exit 2. A question is a distinct (text, level, code): NULL-text,
+  refused and not-live rows are counted and left out, the digit share is NULL-text rows over the window's rows, and a
+  pick at a level outside kraj, okres, obec, momc, část obce and ulice stops the run. Numbered by first pick, then
+  level, code, text, so the operator's strikes are numbers in a file, never text; striking an unknown or unscorable
+  number or a top-1 hit stops the run. A momc question whose městská část has no quarter pair at the current version
+  stops it before any request, naming the finishing-only re-dispatch. Top-1: the first row is the stored place (a
+  shortcut: `momc` and the městská část's code); top-5: within the first five. An answer other than 200, or a
+  timeout, is asked once more after the gap, and one that stays failed is a miss ("route errors k"). Pass: ⌈0.97 N⌉
+  top-5 and ⌈0.90 N⌉ top-1 hits after strikes; printed before and after strikes with the Wilson 95 % interval (too
+  narrow: questions cluster by about four people) and Mapy's rank-based top-1 and top-5 from the stored rank, a
+  repeat keeping its best, marked biased upward. **Latency**, by method from the API host's HTTP log: Mapy's
+  `GET /maps/suggest`, every client, over the 7 days before the replay (or from a later `--mapy-from`), read FIRST so
+  retention cannot eat its oldest rows (the earliest row is printed); then the prefix replay (each numbered text,
+  refused and not-live ones too, from two trimmed characters, 0.2 s between keystrokes, 30 s between texts; the last
+  prefix's answer is the one scored); then its own rows, found by the run's agent and re-read every 30 s for up to
+  5 minutes until the log holds every request sent, else the latency part is incomplete. Each side: n, p50 and p95
+  of the 200s, counts by status, and Mapy's 499 share; own p50 ≤ Mapy p50 passes. The deployment list gives no
+  removal time, so the read covers every deployment created by the span's end, back to the newest one created before
+  the span that had run 30 minutes unreplaced by then (an assumption; a FAILED or SKIPPED one never counts); a page of
+  5,000 rows (the CLI's most) is read again in halves; a deployment created during the replay is flagged, as its cold
+  start skews the p50.
+  **Addresses:** `--addresses` (kód ADM, a tab, the text as dictated) are asked whole after the replay under the agent
+  plus `-addresses`, so never in the latency read; a hit is the `adresni_misto` row of that kód ADM (#2451: never the
+  label); Q2 c's thresholds, no strike, no Mapy figure. **The look:** `--report` writes one self-contained HTML file
+  (CSP `default-src 'none'`, no referrer, mode 0600): per numbered question, refused and not-live ones too, the text,
+  the place it became, own top 5 with that place marked, the outcome, Mapy's best rank, the pick count and a key-free
+  mapy.cz link; then the addresses. The report, strikes and addresses files are refused inside any git checkout.
+  Stdout carries tallies only, and an uncaught error prints its class alone. A Claude session never opens the report
+  (that would send the texts to the model's provider): the operator opens it (`wslview`) and deletes it after the
+  look. Exit 0 every measured part passes, 1 a part fails, 2 a refusal, an error, or an incomplete part with none
+  failed. **Run** (the
+  recipe and the four steps are the module docstring, `--help`): in the operator's terminal, the database string
+  pasted for the command (the IPv4 transaction pooler; none is kept on disk); before it, the momc pairs at the current
+  version, no merge during the replay and no registry load (the 1st of the month) across it, as liveness is judged at
+  the version current when the eval reads. After #2461 the same window is re-scored and that verdict replaces the
+  first.
 - Frontend conventions live in `frontend/README.md`. Design tokens (every colour and
   radius of the six themes) are in `frontend/src/styles/tokens.css`, plain CSS that
   `globals.css` imports (its `@theme` keeps only the fonts); **never tweak these
@@ -1398,7 +1447,9 @@ on 2026-12-01, and until then a file of that name would override the applied set
 - **What the read tools can and cannot say.** Request metrics (`http-requests`, `http-error-rate`,
   `http-response-time`) match exact paths only: no prefix, wildcard or route pattern, so `/images` and
   `/properties/{property_id}/notes` read 0 while both serve traffic, and a 0 speaks only for that literal path. Logs
-  (`get-logs`) cap at 500 entries per stream, so they show presence, not a count.
+  (`get-logs`) cap at 500 entries per stream, so they show presence, not a count. The pinned CLI can count:
+  `logs <deployment> --http --json` returns up to 5,000 rows a call (5,001 is refused), the newest of the range when
+  it holds more, and reads a REMOVED deployment's log (measured 2026-11-09; the gate's eval reads it this way).
 - **One file, three plans.** An IaC file describes one project/environment and omitting a resource deletes it, so the
   file returns the linked project's own definition, keyed by project id AND name: a wrong `railway link` throws.
 - **Deploys never read it.** A change ships as a PR, then the operator applies it with `scripts/railway_iac_wizard.sh`

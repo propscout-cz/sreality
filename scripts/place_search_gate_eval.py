@@ -1,10 +1,23 @@
-"""The gate's eval (#2452; spec #2441 Part 4 (1)–(4), Q2 c): own place search scored on the recorded picks.
+"""The gate's eval (#2452; spec #2441 Part 4 (1)–(4), Q2 c; the gate is #2465): own place search scored on the recorded
+picks, read-only on production.
 
-Reads `place_picks` only through Part 1's reader (`location_data.place_picks.picks_between`) and asks only the own
-route, `POST /places/suggest`, as the non-admin smoke account; it never calls Mapy. A question is a distinct (text,
-level, code); a run scores one window of whole Prague days. Latency comes from the API host's HTTP log through the
-pinned Railway CLI, which it only reads. Stdout carries tallies only, never a pick's text. Goes at Stage B (#2455)
-with its test."""
+Reads `place_picks` only through Part 1's reader (`location_data.place_picks.picks_between`), with the current registry
+version, in one READ ONLY transaction it closes before any request. Asks only the own route, `POST /places/suggest`, as
+the non-admin smoke account; never calls Mapy. Latency comes from the API host's HTTP log through the pinned Railway
+CLI (`deployment list` and `logs` only). Its one write is the smoke account's auth session. A question is a distinct
+(text, level, code); a run scores one window of whole Prague days, from --window-first to the day its 200th question
+landed. Stdout carries tallies only, never a pick's text: the texts go only into the --report file, which the
+operator opens (wslview) and a Claude session never reads. Goes at Stage B (#2455) with its test.
+
+Run it from the repo root in the operator's terminal, every file outside any git checkout, the DB string pasted (the
+IPv4 transaction pooler; no production DB string is kept on disk):
+  ( set -a; . ./.env; . frontend/.env.local; set +a; read -rsp 'DB URL: ' SUPABASE_DB_URL; export SUPABASE_DB_URL
+    python3 -m scripts.place_search_gate_eval --window-first D1 --window-last D2 ... )
+  (a) the look:     ... --no-latency --report ~/gate-look.html
+  (b) the operator strikes mislabelled misses by question number, one per line, in ~/gate-strikes.txt
+  (c) the figures:  ... --strikes ~/gate-strikes.txt --addresses ~/gate-addresses.tsv  (about 30 s a text)
+  (d) rm ~/gate-look.html ~/gate-strikes.txt ~/gate-addresses.tsv
+Exit 0: every measured part passes; 1: a part fails; 2: a refusal, an error, or an incomplete part with none failed."""
 
 from __future__ import annotations
 
@@ -160,7 +173,8 @@ def _aware(value: str) -> datetime:
 
 
 def _parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="python -m scripts.place_search_gate_eval", description=__doc__)
+    p = argparse.ArgumentParser(prog="python3 -m scripts.place_search_gate_eval", description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--window-first", type=date.fromisoformat, required=True)
     p.add_argument("--window-last", type=date.fromisoformat, required=True)
     p.add_argument("--window-size", type=_positive, default=200,
