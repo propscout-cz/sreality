@@ -682,3 +682,13 @@ def test_a_typed_cp_and_co_answer_only_that_door_a_typed_letter_must_match_an_un
         (21000101, "Nádražní 12/3a, Kolín"),
         (21000102, "Nádražní 12/3b, Kolín"),
     ]
+
+
+def test_a_village_and_a_typed_co_answer_no_streetless_door(mirror, client):
+    """A house on no street carries no č.o., so "Lhota 25/3" is no streetless č.p. 25."""
+    okres = mirror.unit("okres", 3203, "Kladno", mirror.unit("kraj", STREDOCESKY, "Středočeský kraj"))
+    lhota = mirror.unit("obec", 513041, "Lhota", okres)
+    mirror.house(21000201, lhota, part=mirror.unit("cast_obce", 70971, "Lhota", lhota), cp=25)
+    mirror.publish()
+    assert _doors(_suggest(client, "Lhota 25")) == [(21000201, "Lhota")]
+    assert _doors(_suggest(client, "Lhota 25/3")) == []
