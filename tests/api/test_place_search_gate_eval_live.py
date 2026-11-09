@@ -219,8 +219,10 @@ class _Railway:
     `@clientUa:` filter applied on the server. A row is logged by the deployment serving then: the one that came up
     last (`up`; None for one that never served). Any other command breaches the contract: the eval only reads."""
 
-    def __init__(self, deployments: list[tuple[str, datetime, datetime | None]]) -> None:
-        self.deployments, self.rows = deployments, []
+    def __init__(self, deployments: list[tuple[str, datetime, datetime | None]], clock: _Clock | None = None,
+                 lag: timedelta = timedelta()) -> None:
+        """With `clock`, a row shows only `lag` after its stamp."""
+        self.deployments, self.rows, self.clock, self.lag = deployments, [], clock, lag
 
     def log(self, at: datetime, method: str, path: str, status: int, ms: int, ua: str = "Mozilla/5.0 (test)") -> None:
         serving = max((d for d in self.deployments if d[2] is not None and d[2] <= at), key=lambda d: d[2])
@@ -249,7 +251,8 @@ class _Railway:
         ua = opts["--filter"].removeprefix("@clientUa:") if "--filter" in opts else None
         found = [r for r in self.rows
                  if r["deploymentId"] == argv[1] and r["method"] == opts["--method"] and r["path"] == opts["--path"]
-                 and since <= datetime.fromisoformat(r["timestamp"]) <= until and ua in (None, r["clientUa"])]
+                 and since <= datetime.fromisoformat(r["timestamp"]) <= until and ua in (None, r["clientUa"])
+                 and (self.clock is None or datetime.fromisoformat(r["timestamp"]) + self.lag <= self.clock.at)]
         return "".join(jsonlib.dumps(r) + "\n" for r in found[-int(opts["--lines"]):])
 
 
@@ -534,10 +537,10 @@ def test_a_pick_at_a_level_no_question_is_scored_at_stops_the_run(
     assert code == 2
 
 
-def _host(clock: _Clock) -> _Railway:
+def _host(clock: _Clock, lag: timedelta = timedelta()) -> _Railway:
     """One API deployment, up for a month, that logged three suggest calls in the 7 days before the run: two answered
-    in 344 and 560 ms, one the client left (499)."""
-    railway = _Railway([("dep-1", clock.at - timedelta(days=30), clock.at - timedelta(days=30))])
+    in 344 and 560 ms, one the client left (499). A row shows `lag` after its stamp."""
+    railway = _Railway([("dep-1", clock.at - timedelta(days=30), clock.at - timedelta(days=30))], clock, lag)
     railway.log(clock.at - timedelta(days=3), "GET", "/maps/suggest", 200, 560)
     railway.log(clock.at - timedelta(days=2), "GET", "/maps/suggest", 499, 1200)
     railway.log(clock.at - timedelta(days=1), "GET", "/maps/suggest", 200, 344)
@@ -633,6 +636,31 @@ def test_a_log_range_that_fills_a_page_is_read_in_parts(
     assert ("Mapy · 200s n 5000 · p50 300 ms · p95 300 ms · aborts 1 of 5001 (0.0 %) · statuses 200: 5000, 499: 1"
             in out)
     assert code == 0
+
+
+@REQUIRED_DB
+@pytest.mark.parametrize(("lag", "lines", "polls", "exit_code"), [
+    (timedelta(seconds=45), ["own POST /places/suggest · sent 4 · log holds 4 of 4",
+                             "latency: own p50 200 ms ≤ Mapy p50 344 ms → not slower → pass",
+                             "verdict: questions pass · latency pass → pass"], 2, 0),
+    (timedelta(minutes=10), ["own POST /places/suggest · sent 4 · log holds 0 of 4", "own · 200s n 0 · statuses —",
+                             "latency: incomplete: no verdict without both medians and every request sent in the log",
+                             "verdict: questions pass · latency incomplete → incomplete"], 10, 2),
+], ids=["caught up in a minute", "still behind after 5 minutes"])
+def test_own_side_waits_up_to_5_minutes_for_the_log_to_hold_every_request(
+    conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str], lag: timedelta,
+    lines: list[str], polls: int, exit_code: int,
+) -> None:
+    _resolve(client, TOWN_BRNO, "Brno a", 1)
+    clock = _clock(conn)
+    railway = _host(clock, lag)
+    route = _Logged(_Canned({"Brno a": 1}, others=2), railway, clock, [200] * 4)
+    code, out = _run(conn, capsys, route, "--window-size", "1", clock=clock, railway=railway)
+    for line in lines:
+        assert line in out
+    assert clock.events[-polls:] == [("sleep", 30.0)] * polls
+    assert clock.events[-polls - 1] == ("post", "Brno a")
+    assert code == exit_code
 
 
 def test_missing_credentials_are_named_before_any_read(capsys: pytest.CaptureFixture[str],

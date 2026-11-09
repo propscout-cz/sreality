@@ -55,6 +55,7 @@ NEVER_SERVED = frozenset({"FAILED", "SKIPPED"})
 MAPY_SPAN = timedelta(days=7)
 # This box's clock against the edge's stamps; the run's own agent keeps the read exact.
 SKEW = timedelta(minutes=1)
+POLL_S, POLL_TIMES = 30.0, 10
 _CURRENT_SQL = """
 SELECT v.id, v.label,
        (SELECT count(*) FROM ruian_admin_unit_relations rel
@@ -410,10 +411,15 @@ def _mapy(io: Boundaries, say: _Out, mapy_from: datetime | None) -> int | None:
 
 def _own(io: Boundaries, say: _Out, ua: str, sent: int, run_start: datetime,
          run_end: datetime) -> tuple[int | None, bool]:
-    """Own side: the replay's requests, found by the run's agent. Returns the p50 and whether the log held every
-    request sent."""
+    """Own side: the replay's requests, found by the run's agent; the log is read again every 30 s, up to 5 minutes,
+    until it holds every request sent. Returns the p50 and whether it held them all."""
     start, end = run_start - SKEW, run_end + SKEW
-    rows = _log(io, _serving(_deployments(io), start, end), "POST", "/places/suggest", start, end, ua)
+    serving = _serving(_deployments(io), start, end)
+    for n in range(POLL_TIMES + 1):
+        rows = _log(io, serving, "POST", "/places/suggest", start, end, ua)
+        if len(rows) >= sent or n == POLL_TIMES:
+            break
+        io.sleep(POLL_S)
     say(f"own POST /places/suggest · sent {sent} · log holds {len(rows)} of {sent}")
     return _figures(say, "own", rows), len(rows) >= sent
 
