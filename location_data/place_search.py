@@ -27,7 +27,7 @@ from typing import Any
 import psycopg
 
 from location_data.name_index import normalize_name, normalize_street_name
-from location_data.resolver.composite import abbreviation_spellings
+from location_data.resolver.composite import WHOLE_LEVELS, abbreviation_spellings
 from location_data.resolver.normalize import TYP_CP, house_number, split_street_and_number, strip_street_generic
 
 LOG = logging.getLogger("location_data.place_search")
@@ -152,14 +152,30 @@ SELECT r.level::text, r.code, r.name, par.name, f.lat, f.lng,
 # rule): a load updates doors in place, re-pointing them to the rows it reopens. A door it inserts waits for its version
 # to publish. The č.p. and the č.o. are two arms, each an index condition on ruian_ap_street_hn, as the OR form would
 # use only its street_id. Labels are computed for the `top` rows alone.
+#
+# A typed town (#2485) is every obec, část obce and městská část of that name at the index's version, every name kind,
+# homonyms all kept: the read narrows a list and binds nothing, so the resolver's whole-string ladder and its fail-closed
+# rule do not apply, but its levels do (an okres or a kraj is a region, never the town). Streets narrow to its obce.
+# With no town each condition folds away at plan time: the statement is unnamed, its parameters planned in.
+_TOWN_LEVELS = ", ".join(f"'{level}'" for level in WHOLE_LEVELS)
 _DOORS_SQL = f"""
 WITH cur AS (SELECT id FROM registry_versions WHERE is_current),
+town AS (
+  SELECT DISTINCT u.level, u.code, CASE WHEN u.level = 'obec' THEN u.code ELSE po.code END AS obec_code
+    FROM ruian_name_index n
+    JOIN ruian_admin_units u ON u.id = n.entity_id AND u.level = n.entity_kind
+    LEFT JOIN ruian_admin_units po ON po.id = u.parent_id AND po.level = 'obec'
+   WHERE n.registry_version_id = (SELECT id FROM cur) AND n.name_norm = %(town)s::text
+     AND n.entity_kind IN ({_TOWN_LEVELS})
+     AND (SELECT id FROM cur) BETWEEN u.first_version_id AND u.last_version_id),
+town_obce AS (SELECT o.id FROM ruian_admin_units o WHERE o.level = 'obec' AND o.code IN (SELECT obec_code FROM town)),
 streets AS (
   SELECT DISTINCT ON (s.code) s.code, s.name, s.obec_unit_id
     FROM ruian_streets s
    WHERE s.name_norm = ANY(%(street_keys)s::text[])
      AND s.first_version_id <= (SELECT id FROM cur) AND s.last_version_id >= (SELECT id FROM cur)
      AND (s.valid_to IS NULL OR s.last_version_id > (SELECT id FROM cur))
+     AND (%(town)s::text IS NULL OR s.obec_unit_id IN (SELECT id FROM town_obce))
    ORDER BY s.code, s.valid_from DESC),
 parts AS (
   SELECT DISTINCT ON (u.code) u.code, u.parent_id,
@@ -284,7 +300,8 @@ class _Reading:
     def params(self, limit: int) -> dict[str, Any]:
         return {"street_keys": _street_keys(self.street), "part_key": normalize_name(self.street),
                 "domovni": self.domovni, "orientacni": self.orientacni, "znak": self.znak, "typ": self.typ or TYP_CP,
-                "bare": self.domovni if self.orientacni is None and self.typ is None else None, "limit": limit}
+                "bare": self.domovni if self.orientacni is None and self.typ is None else None, "town": self.town,
+                "limit": limit}
 
 
 def _address(text: str, town: str | None) -> _Reading | None:

@@ -936,3 +936,33 @@ def test_a_street_whose_name_holds_a_number_still_answers_its_door_as_the_whole_
          "point": None, "street": street},
         {**street, "point": None},
     ]
+
+
+def test_the_town_typed_decides_which_of_two_same_named_streets_answers_whatever_their_served_counts(mirror, client):
+    """Kutná Hora's Nádražní serves a property and Kolín's none: typed with Kolín, Kolín's door 12 answers alone, and
+    typed with Kutná Hora, Kutná Hora's. With no town, both answer as #2451 ranks them, the served street's first."""
+    towns = _towns(mirror)
+    kolin = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    kutna_hora = mirror.street(NADRAZNI_KH, "Nádražní", towns["kutna_hora"])
+    mirror.house(21000101, towns["kolin"], street=kolin, cp=12, point=(15.2003, 50.0275))
+    mirror.house(21000102, towns["kutna_hora"], street=kutna_hora, cp=12, point=(15.2681, 49.9481))
+    mirror.served(region=STREDOCESKY, okres=KUTNA_HORA_OKRES, obec=KUTNA_HORA, street=NADRAZNI_KH)
+    mirror.publish()
+    assert _suggest(client, "Nádražní 12, Kolín") == [DOOR_KOLIN]
+    assert _suggest(client, "Kutná Hora, Nádražní 12") == [
+        {"level": "adresni_misto", "id": 21000102, "name": "Nádražní 12, Kutná Hora", "context": "Kutná Hora",
+         "point": {"lat": 49.9481, "lng": 15.2681},
+         "street": {"level": "ulice", "id": NADRAZNI_KH, "name": "Nádražní", "context": "Kutná Hora"}},
+    ]
+    assert _suggest(client, "Nádražní 12") == [
+        {"level": "adresni_misto", "id": 21000102, "name": "Nádražní 12, Kutná Hora", "context": "Kutná Hora",
+         "point": {"lat": 49.9481, "lng": 15.2681},
+         "street": {"level": "ulice", "id": NADRAZNI_KH, "name": "Nádražní", "context": "Kutná Hora"}},
+        {"level": "adresni_misto", "id": 21000101, "name": "Nádražní 12, Kolín", "context": "Kolín",
+         "point": {"lat": 50.0275, "lng": 15.2003},
+         "street": {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}},
+        {"level": "ulice", "id": NADRAZNI_KH, "name": "Nádražní", "context": "Kutná Hora",
+         "point": {"lat": 49.9481, "lng": 15.2681}},
+        {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín",
+         "point": {"lat": 50.0275, "lng": 15.2003}},
+    ]
