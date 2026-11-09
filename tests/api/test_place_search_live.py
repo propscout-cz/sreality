@@ -820,3 +820,31 @@ def test_a_street_typed_with_the_word_ulice_after_it_answers_its_door(mirror, cl
     mirror.house(21000101, towns["kolin"], street=mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"]), cp=12)
     mirror.publish()
     assert _doors(_suggest(client, "Nádražní ulice 12")) == [(21000101, "Nádražní 12, Kolín")]
+
+
+def test_doors_fill_the_whole_list_when_there_are_as_many_as_the_limit(mirror, client):
+    """Builder decision for the operator's ruling (PR notes): doors rank above what is only similar, so a common street
+    shows doors alone (production has 67 doors for "Nádražní 12", 10 shown, no street row) and a common village
+    shows no town ("Lhota 25", 33 doors)."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000101, towns["kolin"], street=nadrazni, cp=345, co=12)
+    mirror.house(21000102, towns["kolin"], street=nadrazni, cp=12)
+    lhota = mirror.unit("obec", 513041, "Lhota", mirror.unit("okres", 3203, "Kladno", towns["kraj"]))
+    mirror.house(21000201, lhota, part=mirror.unit("cast_obce", 70971, "Lhota", lhota), cp=25)
+    mirror.publish()
+    street = {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}
+    res = client.post("/places/suggest", json={"query": "Nádražní 12", "limit": 2})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"items": [
+        {"level": "adresni_misto", "id": 21000101, "name": "Nádražní 345/12, Kolín", "context": "Kolín",
+         "point": None, "street": street},
+        {"level": "adresni_misto", "id": 21000102, "name": "Nádražní 12, Kolín", "context": "Kolín",
+         "point": None, "street": street},
+    ]}
+    res = client.post("/places/suggest", json={"query": "Lhota 25", "limit": 1})
+    assert res.status_code == 200, res.text
+    assert res.json() == {"items": [
+        {"level": "adresni_misto", "id": 21000201, "name": "Lhota", "context": "Kladno", "point": None,
+         "street": None},
+    ]}
