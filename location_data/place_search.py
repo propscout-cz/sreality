@@ -37,7 +37,8 @@ _LETTER = re.compile(r"[a-z]")
 _DOOR_LEVEL = "adresni_misto"
 
 # The door's label: the ONE label (rule 25) over its register fields, as the row will read. Shared with the address
-# picker's preview (api/maps.py imports DOOR_LABEL_SQL until the switch-over, #2453, moves the picker to door rows).
+# picker's preview (api/maps.py imports DOOR_LABEL_SQL until the switch-over, #2453, moves the picker to door rows, if
+# addresses pass the gate, #2465).
 _DOOR_LABEL = """location_display_label(
          s.name, CASE WHEN ap.typ_so = 'č.p.' THEN ap.cislo_domovni::text END,
          ap.cislo_orientacni::text || coalesce(ap.znak_orientacniho, ''),
