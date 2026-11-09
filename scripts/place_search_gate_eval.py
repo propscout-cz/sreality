@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import html
 import json
 import math
 import os
 import secrets
+import shlex
 import subprocess
 import time
 from collections import Counter
@@ -23,6 +25,7 @@ from datetime import UTC, date, datetime, timedelta
 from datetime import time as dt_time
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -67,6 +70,7 @@ SELECT v.id, v.label,
 """
 # A copy of own search's liveness (location_data/place_search.py) until Stage B: a unit is live when the current
 # version draws it, a street when that version holds it open; a městská část answers only with quarter pairs there.
+# Also the place's latest name and its parent's, for the report.
 _LIVE_SQL = """
 SELECT a.level, a.code,
        CASE WHEN a.level = 'ulice' THEN EXISTS (
@@ -81,8 +85,18 @@ SELECT a.level, a.code,
               SELECT 1 FROM ruian_admin_units u
                 JOIN ruian_admin_unit_relations rel ON rel.from_id = u.id
                WHERE u.level = 'momc' AND u.code = a.code AND %(cur)s BETWEEN u.first_version_id AND u.last_version_id
-                 AND rel.relation_type = 'momc_cast_obce' AND rel.registry_version_id = %(cur)s)
+                 AND rel.relation_type = 'momc_cast_obce' AND rel.registry_version_id = %(cur)s),
+       coalesce(un.name, st.name), coalesce(un.context, st.context)
   FROM unnest(%(levels)s::text[], %(codes)s::bigint[]) AS a(level, code)
+  LEFT JOIN LATERAL (
+         SELECT u.name, par.name AS context FROM ruian_admin_units u
+           LEFT JOIN ruian_admin_units par ON par.id = u.parent_id AND par.level IN ('kraj', 'okres', 'obec')
+          WHERE a.level <> 'ulice' AND u.level = a.level::ruian_level AND u.code = a.code
+          ORDER BY u.last_version_id DESC, u.valid_from DESC LIMIT 1) un ON true
+  LEFT JOIN LATERAL (
+         SELECT s.name, o.name AS context FROM ruian_streets s JOIN ruian_admin_units o ON o.id = s.obec_unit_id
+          WHERE a.level = 'ulice' AND s.code = a.code
+          ORDER BY s.last_version_id DESC, s.valid_from DESC LIMIT 1) st ON true
 """
 CREDENTIALS = ("SUPABASE_DB_URL", "SMOKE_TEST_NONADMIN_EMAIL", "SMOKE_TEST_NONADMIN_PASSWORD", "VITE_SUPABASE_URL",
                "VITE_SUPABASE_ANON_KEY")
@@ -123,6 +137,7 @@ class Question:
     code: int | None
     best_rank: int
     first_at: datetime
+    picks: int
 
 
 @dataclass(frozen=True)
@@ -154,6 +169,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--strikes", type=Path, help="the operator's struck question numbers, one per line, '#' comments")
     p.add_argument("--addresses", type=Path,
                    help="the dictated address questions: kod_adm<TAB>the house as dictated, one per line, '#' comments")
+    p.add_argument("--report", type=Path, help="write the look's local HTML report here, outside any git checkout")
     p.add_argument("--text-gap", type=float, default=30.0, help="seconds between texts in the prefix replay")
     p.add_argument("--keystroke-gap", type=float, default=0.2, help="seconds between a text's prefixes")
     p.add_argument("--mapy-from", type=_aware, help="start Mapy's 7 days no earlier than this (after its cache went)")
@@ -212,16 +228,18 @@ def _questions(window: list[StoredPick], earlier: set[tuple[str, str, int | None
     how many were left out as earlier."""
     first: dict[tuple[str, str, int | None], datetime] = {}
     best: dict[tuple[str, str, int | None], int] = {}
+    picks: Counter[tuple[str, str, int | None]] = Counter()
     for pick in window:
         if pick.text is None:
             continue
         key = (pick.text, pick.level, pick.code)
         first.setdefault(key, pick.created_at)
         best[key] = min(best.get(key, pick.rank), pick.rank)
+        picks[key] += 1
     ordered = sorted((k for k in first if k not in earlier),
                      key=lambda k: (first[k], k[1], k[2] is None, k[2] or 0, k[0]))
-    return ([Question(n, text, level, code, best[(text, level, code)], first[(text, level, code)])
-             for n, (text, level, code) in enumerate(ordered, 1)], len(first) - len(ordered))
+    return ([Question(n, *key, best[key], first[key], picks[key]) for n, key in enumerate(ordered, 1)],
+            len(first) - len(ordered))
 
 
 def _share(part: int, whole: int) -> str:
@@ -235,6 +253,7 @@ class Registry:
     pairs: int
     live: dict[tuple[str, int], bool]
     answerable: dict[tuple[str, int], bool]
+    names: dict[tuple[str, int], tuple[str | None, str | None]]
 
 
 def _registry(conn: psycopg.Connection, window: list[StoredPick]) -> Registry | None:
@@ -248,8 +267,9 @@ def _registry(conn: psycopg.Connection, window: list[StoredPick]) -> Registry | 
     rows = conn.execute(_LIVE_SQL, {"cur": version, "levels": [lv for lv, _ in places],
                                     "codes": [code for _, code in places]}).fetchall()
     return Registry(int(version), str(label), int(pairs),
-                    {(level, int(code)): bool(live) for level, code, live, _ in rows},
-                    {(level, int(code)): bool(answerable) for level, code, _, answerable in rows})
+                    {(level, int(code)): bool(live) for level, code, live, *_ in rows},
+                    {(level, int(code)): bool(answerable) for level, code, _, answerable, *_ in rows},
+                    {(level, int(code)): (name, context) for level, code, _, _, name, context in rows})
 
 
 def _vintage(label: str) -> str:
@@ -506,6 +526,94 @@ def _score_addresses(say: _Out, addresses: list[tuple[int, str]], answers: dict[
     return verdict
 
 
+LEVEL_CS = {"kraj": "kraj", "okres": "okres", "obec": "obec", "momc": "městská část", "cast_obce": "část obce",
+            "ulice": "ulice", DOOR: "adresa"}
+# One file, nothing fetched: the policy forbids every load but its own inline style, and no link sends a referrer.
+_HEAD = """<!doctype html>
+<html lang="cs"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<meta name="referrer" content="no-referrer"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gate eval look</title>
+<style>
+body { font: 14px/1.45 system-ui, sans-serif; margin: 16px; color: #1c1c1c; background: #fff; }
+.banner { padding: 8px 12px; border: 2px solid #b3261e; color: #b3261e; font-weight: 600; }
+pre { white-space: pre-wrap; background: #f3f3f3; padding: 8px; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border-bottom: 1px solid #ddd; padding: 4px 6px; text-align: left; vertical-align: top; }
+ol { margin: 0; padding-left: 20px; }
+li.hit { font-weight: 700; }
+a { color: #0b57d0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6e6e6; background: #161616; } pre { background: #262626; } th, td { border-color: #333; }
+  .banner { color: #f2b8b5; border-color: #f2b8b5; } a { color: #a8c7fa; }
+}
+</style></head><body>
+<p class="banner">Private: holds typed text. Delete after the look.</p>
+"""
+
+
+def _label(level: str, name: str | None, context: str | None) -> str:
+    return f"{LEVEL_CS.get(level, level)} {name or '?'}" + (f" ({context})" if context else "")
+
+
+def _top5(rows: list[Row] | None, place: tuple[str, int | None]) -> str:
+    if rows is None:
+        return "route error"
+    items = "".join(f"<li{' class=hit' if (r[0], r[1]) == place else ''}>{html.escape(_label(r[0], r[2], r[3]))}</li>"
+                    for r in rows[:5])
+    return f"<ol>{items}</ol>" if items else "no row"
+
+
+def _outcome(rank: int | None) -> str:
+    return "top-1" if rank == 1 else "top-5" if rank is not None and rank <= 5 else "miss"
+
+
+def _mapy_link(text: str) -> str:
+    """A key-free search link (no API host): the operator's own look at what Mapy lists."""
+    return (f'<a href="https://mapy.cz/zakladni?q={html.escape(quote(text, safe=""))}" rel="noreferrer noopener">'
+            "mapy.cz</a>")
+
+
+def _report(tally: list[str], questions: list[Question], registry: Registry, answers: dict[str, list[Row] | None],
+            ranks: dict[int, int | None], struck: set[int], addresses: list[tuple[int, str]],
+            doors: dict[str, list[Row] | None]) -> str:
+    """The look (story 52): per numbered question, refused and not-live ones too, the text, the place it became, own
+    top 5 with that place marked, hit or miss, Mapy's best rank and the picks; then the dictated addresses. A NULL-text
+    row is only a count in the tally."""
+    out = [_HEAD, f"<pre>{html.escape(chr(10).join(tally))}</pre>", "<h2>Questions</h2><table><thead><tr><th>#</th>"
+           "<th>Text</th><th>Became</th><th>Own top 5</th><th>Own</th><th>Mapy best rank</th><th>Picks</th><th></th>"
+           "</tr></thead><tbody>"]
+    for q in questions:
+        place = (q.level, q.code)
+        if q.code is None:
+            became, outcome = f"odmítnuto ({q.level})", "—"
+        elif not registry.live[(q.level, q.code)]:
+            became, outcome = f"neplatné ({q.level} {q.code})", "—"
+        else:
+            became = _label(q.level, *registry.names[(q.level, q.code)])
+            outcome = _outcome(ranks[q.number]) + (" · struck" if q.number in struck else "")
+        out.append(f"<tr><td>{q.number}</td><td>{html.escape(q.text)}</td><td>{html.escape(became)}</td>"
+                   f"<td>{_top5(answers[q.text], place)}</td><td>{outcome}</td><td>{q.best_rank}</td>"
+                   f"<td>{q.picks}</td><td>{_mapy_link(q.text)}</td></tr>")
+    out.append("</tbody></table>")
+    if addresses:
+        out.append("<h2>Addresses</h2><table><thead><tr><th>#</th><th>Text</th><th>Kód ADM</th><th>Own top 5</th>"
+                   "<th>Own</th><th></th></tr></thead><tbody>")
+        for n, (kod, text) in enumerate(addresses, 1):
+            out.append(f"<tr><td>{n}</td><td>{html.escape(text)}</td><td>{kod}</td>"
+                       f"<td>{_top5(doors[text], (DOOR, kod))}</td><td>{_outcome(_rank(doors[text], (DOOR, kod)))}</td>"
+                       f"<td>{_mapy_link(text)}</td></tr>")
+        out.append("</tbody></table>")
+    out.append("</body></html>\n")
+    return "".join(out)
+
+
+def _write_private(path: Path, page: str) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(page)
+
+
 def _run(args: argparse.Namespace, io: Boundaries) -> int:
     say = _Out()
     missing = [name for name in CREDENTIALS if not os.environ.get(name)]
@@ -520,6 +628,8 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
         raise Stop(f"{args.window_last} is not over yet in Prague")
     struck = _strikes(args.strikes)
     addresses = _addresses(args.addresses)
+    if args.report is not None and (_inside_checkout(args.report) or not args.report.resolve().parent.is_dir()):
+        raise Stop("report: write it to an existing folder outside any git checkout, and delete it after the look")
     with io.open_conn() as conn, conn.transaction():
         picks = picks_between(conn, EPOCH, end)
         window = [p for p in picks if p.created_at >= start]
@@ -575,6 +685,7 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
         run_start = io.now()
         answers = _replay(route, texts, args.text_gap, args.keystroke_gap, _prefixes)
         run_end, sent = io.now(), route.sent
+    doors: dict[str, list[Row] | None] = {}
     if addresses:
         route.ua = f"{ua}-addresses"
         doors = _replay(route, list(dict.fromkeys(text for _, text in addresses)), WHOLE_TEXT_GAP_S, 0.0, _whole)
@@ -611,6 +722,11 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
     measured = [v for v in parts.values() if v not in ("not measured", "not asked")]
     overall = "fail" if "fail" in measured else "incomplete" if "incomplete" in measured else "pass"
     say(f"verdict: {' · '.join(f'{part} {value}' for part, value in parts.items())} → {overall}")
+    if args.report is not None:
+        _write_private(args.report, _report(say.lines, questions, registry, answers, {s.question.number: s.own_rank
+                                                                                      for s in scored}, struck,
+                                            addresses, doors))
+        print(f"Report: {args.report}. Delete it after the look: rm {shlex.quote(str(args.report))}")
     return {"pass": 0, "fail": 1, "incomplete": 2}[overall]
 
 

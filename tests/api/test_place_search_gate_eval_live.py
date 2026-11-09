@@ -791,6 +791,32 @@ def test_dictated_address_questions_are_scored_by_their_kod_adm(
     assert code == exit_code
 
 
+@REQUIRED_DB
+def test_the_looks_run_ends_by_naming_its_report_and_how_to_delete_it(
+    conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str], tmp_path: Path,
+) -> None:
+    """Refused, not-live and NULL-text rows and a dictated address all reach the report; what it shows is the
+    operator's look (no page test, spec #2441 Part 4 (c))."""
+    _resolve(client, TOWN_BRNO, "Brno", 1)
+    _resolve(client, MOMC_PRAHA_6, "Praha 6", 1)
+    _resolve(client, PART_BARRANDOV, "Barrandov", 3)
+    older = conn.execute(
+        "INSERT INTO registry_versions (label, kind, source_date, artifact_urls, proj_version, proj_pipeline,"
+        " is_current) VALUES ('test:gate-eval-older', 'baseline', '2026-10-01', '{}', 'p', 'q', false) RETURNING id",
+        ).fetchone()[0]
+    _unit(conn, "obec", LOMNICE, "Lomnice", None, older)
+    conn.execute("INSERT INTO place_picks (text, rank, level, code) VALUES ('Lomnice', 1, 'obec', %s)", (LOMNICE,))
+    addresses = tmp_path / "addresses.tsv"
+    addresses.write_text("21000001\tNad Bořislavkou 487\n", encoding="utf-8")
+    report = tmp_path / "look.html"
+    route = _Doors({"Brno": 1}, {"Nad Bořislavkou 487": (21000001, 1)})
+    code, out = _run(conn, capsys, route, "--no-latency", "--window-size", "1", "--addresses", str(addresses),
+                     "--report", str(report))
+    assert out[-2] == "verdict: questions pass · latency not measured · addresses pass → pass"
+    assert out[-1] == f"Report: {report}. Delete it after the look: rm {report}"
+    assert code == 0
+
+
 def test_missing_credentials_are_named_before_any_read(capsys: pytest.CaptureFixture[str],
                                                        monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SUPABASE_DB_URL")
