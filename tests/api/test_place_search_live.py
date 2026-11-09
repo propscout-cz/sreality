@@ -711,3 +711,14 @@ def test_a_whole_text_that_is_exactly_a_name_answers_before_the_doors_and_they_b
          "point": None, "street": {"level": "ulice", "id": 402001, "name": "Na Hroudách", "context": "Nymburk"}},
         {"level": "ulice", "id": 402001, "name": "Na Hroudách", "context": "Nymburk", "point": None},
     ]
+
+
+def test_a_number_no_door_carries_answers_the_whole_text_s_rows_as_before(mirror, client):
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    mirror.house(21000101, towns["kolin"], street=nadrazni, cp=12, point=(15.2003, 50.0275))
+    mirror.publish()
+    assert _suggest(client, "Nádražní 99") == [
+        {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín",
+         "point": {"lat": 50.0275, "lng": 15.2003}},
+    ]
