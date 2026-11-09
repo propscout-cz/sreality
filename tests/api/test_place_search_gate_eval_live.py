@@ -7,6 +7,7 @@ B (#2455) with the eval."""
 from __future__ import annotations
 
 import contextlib
+import json as jsonlib
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -151,6 +152,10 @@ class _Answer:
         return self._body
 
 
+class _Breach(BaseException):
+    """A step outside the eval's boundary contract. Not an Exception, so the eval's own catch-all cannot hide it."""
+
+
 class _Route:
     """The eval's HTTP boundary: the auth host signs the smoke account in (an automation account, as production's
     is), the API host is the real route on the test connection; any other URL fails the test."""
@@ -164,7 +169,7 @@ class _Route:
             return _Answer(200, {"access_token": token, "expires_in": 3600})
         if url == f"{API}/places/suggest":
             return self.suggest(json, headers)
-        raise AssertionError(f"the eval called an unrouted URL: {url}")
+        raise _Breach(f"the eval called an unrouted URL: {url}")
 
     def suggest(self, body: dict[str, Any], headers: dict[str, str]) -> Any:
         return self.client.post("/places/suggest", json=body, headers=headers)
@@ -174,28 +179,115 @@ FILLER = [("kraj", 116), ("okres", 3702), ("obec", PRAHA), ("kraj", 19), ("momc"
 
 
 class _Canned(_Route):
-    """Own search's rows, canned per text: Brno at the 1-based position `at[text]`, filler rows before it."""
+    """Own search's rows, canned per text: Brno at the 1-based position `at[text]` (`others` for a text not in it),
+    filler rows before it."""
 
-    def __init__(self, at: dict[str, int]) -> None:
-        self.at = at
+    def __init__(self, at: dict[str, int], others: int | None = None) -> None:
+        self.at, self.others = at, others
 
     def suggest(self, body: dict[str, Any], headers: dict[str, str]) -> Any:
-        position = self.at[body["query"]]
+        position = self.at.get(body["query"], self.others)
+        if position is None:
+            raise _Breach(f"no canned answer for {body['query']!r}")
         rows = [*FILLER[:position - 1], ("obec", BRNO), *FILLER[position - 1:]]
         return _Answer(200, {"items": [{"level": lv, "id": code, "name": "", "context": None} for lv, code in rows]})
 
 
-def _run(conn: psycopg.Connection, capsys: pytest.CaptureFixture[str], http: Any,
-         *argv: str) -> tuple[int, list[str]]:
-    """The eval over the window of the transaction's Prague day (a later `--window-last` in `argv` wins), three days
-    later, so that day and the next are over, DST or not."""
-    now, day = conn.execute("SELECT now(), (now() AT TIME ZONE 'Europe/Prague')::date").fetchone()
+class _Clock:
+    """The eval's clock: a sleep moves it, and lands in `events` beside the requests the API host logs."""
+
+    def __init__(self, start: datetime) -> None:
+        self.at, self.events = start, []
+
+    def now(self) -> datetime:
+        return self.at
+
+    def sleep(self, seconds: float) -> None:
+        self.events.append(("sleep", seconds))
+        self.at += timedelta(seconds=seconds)
+
+
+def _stamp(at: datetime) -> str:
+    """A log row's stamp as the CLI prints it: UTC, to the nanosecond."""
+    return f"{at.astimezone(UTC):%Y-%m-%dT%H:%M:%S.%f}000Z"
+
+
+class _Railway:
+    """Railway's side of the boundary, as the pinned CLI answered on 2026-11-09: `deployment list --json` newest first,
+    with no removal time; `logs <deployment> --http --json` one row per line, oldest first, at most `--lines` (more than
+    5000 is refused), the newest kept when the range holds more, `--method`, `--path`, `--since`, `--until` and an
+    `@clientUa:` filter applied on the server. A row is logged by the deployment serving then: the one that came up
+    last (`up`; None for one that never served). Any other command breaches the contract: the eval only reads."""
+
+    def __init__(self, deployments: list[tuple[str, datetime, datetime | None]]) -> None:
+        self.deployments, self.rows = deployments, []
+
+    def log(self, at: datetime, method: str, path: str, status: int, ms: int, ua: str = "Mozilla/5.0 (test)") -> None:
+        serving = max((d for d in self.deployments if d[2] is not None and d[2] <= at), key=lambda d: d[2])
+        # The fields of a row read on 2026-11-09; the address and the agent are invented.
+        self.rows.append({
+            "timestamp": _stamp(at), "method": method, "path": path, "httpStatus": status, "totalDuration": ms,
+            "requestId": str(uuid.uuid4()), "host": "api.test", "clientUa": ua, "srcIp": "192.0.2.1",
+            "edgeRegion": "europe-west4-drams3a", "txBytes": 512, "rxBytes": 64, "upstreamRqDuration": ms - 5,
+            "upstreamAddress": "10.0.0.1:8080", "upstreamProto": "HTTP/1.1", "downstreamProto": "HTTP/2.0",
+            "upstreamErrors": "", "responseDetails": "", "deploymentId": serving[0],
+            "deploymentInstanceId": f"i-{serving[0]}"})
+
+    def __call__(self, argv: list[str]) -> str:
+        if argv[:2] == ["deployment", "list"]:
+            return jsonlib.dumps([{"id": d, "status": "SUCCESS" if n == 0 else "REMOVED", "createdAt": _stamp(made),
+                                   "meta": {}}
+                                  for n, (d, made, _up) in enumerate(sorted(self.deployments, key=lambda d: d[1],
+                                                                            reverse=True))])
+        if argv[:1] != ["logs"] or "--http" not in argv or "--json" not in argv:
+            raise _Breach(f"the eval ran railway {argv[:2]}")
+        rest = [a for a in argv[2:] if a not in ("--http", "--json")]
+        opts = dict(zip(rest[::2], rest[1::2], strict=True))
+        if int(opts["--lines"]) > 5000:
+            raise _Breach("Error in beforeLimit - Invalid input")
+        since, until = (datetime.fromisoformat(opts[k]) for k in ("--since", "--until"))
+        ua = opts["--filter"].removeprefix("@clientUa:") if "--filter" in opts else None
+        found = [r for r in self.rows
+                 if r["deploymentId"] == argv[1] and r["method"] == opts["--method"] and r["path"] == opts["--path"]
+                 and since <= datetime.fromisoformat(r["timestamp"]) <= until and ua in (None, r["clientUa"])]
+        return "".join(jsonlib.dumps(r) + "\n" for r in found[-int(opts["--lines"]):])
+
+
+class _Logged:
+    """The API host in front of a route: each request the eval sends is logged at the eval's clock with the next of
+    `durations`, and lands in the clock's events."""
+
+    def __init__(self, route: Any, railway: _Railway, clock: _Clock, durations: list[int]) -> None:
+        self.route, self.railway, self.clock, self.durations = route, railway, clock, iter(durations)
+
+    def post(self, url: str, *, json: dict[str, Any], headers: dict[str, str], timeout: float) -> Any:
+        res = self.route.post(url, json=json, headers=headers, timeout=timeout)
+        if url != AUTH:
+            self.clock.events.append(("post", json["query"]))
+            self.railway.log(self.clock.now(), "POST", "/places/suggest", res.status_code, next(self.durations),
+                             headers["User-Agent"])
+        return res
+
+
+def _clock(conn: psycopg.Connection) -> _Clock:
+    """Three days after the transaction, so its Prague day and the next are over, DST or not."""
+    return _Clock(conn.execute("SELECT now()").fetchone()[0] + timedelta(days=3))
+
+
+def _run(conn: psycopg.Connection, capsys: pytest.CaptureFixture[str], http: Any, *argv: str,
+         clock: _Clock | None = None, railway: Any = None) -> tuple[int, list[str]]:
+    """The eval over the window of the transaction's Prague day (a later `--window-last` in `argv` wins)."""
+    day = conn.execute("SELECT (now() AT TIME ZONE 'Europe/Prague')::date").fetchone()[0]
+    clock = clock or _clock(conn)
 
     @contextlib.contextmanager
     def open_conn() -> Iterator[psycopg.Connection]:
         yield conn
 
-    io = gate.Boundaries(http=http, open_conn=open_conn, now=lambda: now + timedelta(days=3), sleep=lambda _s: None)
+    def no_cli(argv: list[str]) -> str:
+        raise _Breach(f"the eval ran railway {argv[:2]} on a run that reads no log")
+
+    io = gate.Boundaries(http=http, open_conn=open_conn, run_cli=railway or no_cli, now=clock.now, sleep=clock.sleep)
     code = gate.main(["--window-first", day.isoformat(), "--window-last", day.isoformat(), "--api", API, *argv], io)
     return code, capsys.readouterr().out.splitlines()
 
@@ -211,7 +303,8 @@ def test_a_repeated_question_counts_once_and_keeps_its_best_mapy_rank(
     assert "after strikes · top-1: 1 of 1 (needs 1) · Wilson 20.7–100.0 %" in out
     assert "after strikes · top-5: 1 of 1 (needs 1) · Wilson 20.7–100.0 %" in out
     assert "after strikes · Mapy rank-based (biased upward): top-1 1 of 1, top-5 1 of 1" in out
-    assert out[-1] == "questions: top-5 pass · top-1 pass → pass"
+    assert "questions: top-5 pass · top-1 pass → pass" in out
+    assert out[-1] == "verdict: questions pass · latency not measured → pass"
     assert code == 0
 
 
@@ -302,7 +395,8 @@ def test_a_strike_lowers_n_and_is_counted(conn: psycopg.Connection, client: Test
     assert "before strikes · Mapy rank-based (biased upward): top-1 1 of 3, top-5 2 of 3" in out
     assert "after strikes · top-1: 2 of 2 (needs 2) · Wilson 34.2–100.0 %" in out
     assert "after strikes · Mapy rank-based (biased upward): top-1 1 of 2, top-5 2 of 2" in out
-    assert out[-1] == "questions: top-5 pass · top-1 pass → pass"
+    assert "questions: top-5 pass · top-1 pass → pass" in out
+    assert out[-1] == "verdict: questions pass · latency not measured → pass"
     assert code == 0
 
 
@@ -381,7 +475,7 @@ def _refused_before_any_read(capsys: pytest.CaptureFixture[str], now: datetime, 
     def no_conn() -> Any:
         raise AssertionError("the eval read the database")
 
-    io = gate.Boundaries(http=None, open_conn=no_conn, now=lambda: now, sleep=lambda _s: None)
+    io = gate.Boundaries(http=None, open_conn=no_conn, run_cli=None, now=lambda: now, sleep=lambda _s: None)
     code = gate.main(["--no-latency", *argv], io)
     return code, capsys.readouterr().out.splitlines()
 
@@ -440,6 +534,41 @@ def test_a_pick_at_a_level_no_question_is_scored_at_stops_the_run(
     assert code == 2
 
 
+def _host(clock: _Clock) -> _Railway:
+    """One API deployment, up for a month, that logged three suggest calls in the 7 days before the run: two answered
+    in 344 and 560 ms, one the client left (499)."""
+    railway = _Railway([("dep-1", clock.at - timedelta(days=30), clock.at - timedelta(days=30))])
+    railway.log(clock.at - timedelta(days=3), "GET", "/maps/suggest", 200, 560)
+    railway.log(clock.at - timedelta(days=2), "GET", "/maps/suggest", 499, 1200)
+    railway.log(clock.at - timedelta(days=1), "GET", "/maps/suggest", 200, 344)
+    return railway
+
+
+@REQUIRED_DB
+@pytest.mark.parametrize(("durations", "own", "latency", "exit_code"), [
+    ([230, 183, 200, 186], "own · 200s n 4 · p50 186 ms · p95 230 ms · statuses 200: 4",
+     "latency: own p50 186 ms ≤ Mapy p50 344 ms → not slower → pass", 0),
+    ([400, 380, 390, 410], "own · 200s n 4 · p50 390 ms · p95 410 ms · statuses 200: 4",
+     "latency: own p50 390 ms > Mapy p50 344 ms → slower → fail", 1),
+], ids=["not slower", "slower"])
+def test_the_latency_run_reads_both_medians_from_the_host_log(
+    conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str], durations: list[int], own: str,
+    latency: str, exit_code: int,
+) -> None:
+    """Own: the four prefixes the replay of "Brno a" sends ("Brno " trims to a repeat), as the host logged them."""
+    _resolve(client, TOWN_BRNO, "Brno a", 1)
+    clock = _clock(conn)
+    railway = _host(clock)
+    route = _Logged(_Canned({"Brno a": 1}, others=2), railway, clock, durations)
+    code, out = _run(conn, capsys, route, "--window-size", "1", clock=clock, railway=railway)
+    assert "Mapy · 200s n 2 · p50 344 ms · p95 560 ms · aborts 1 of 3 (33.3 %) · statuses 200: 2, 499: 1" in out
+    assert "own POST /places/suggest · sent 4 · log holds 4 of 4" in out
+    assert own in out
+    assert latency in out
+    assert "after strikes · top-1: 1 of 1 (needs 1) · Wilson 20.7–100.0 %" in out
+    assert code == exit_code
+
+
 def test_missing_credentials_are_named_before_any_read(capsys: pytest.CaptureFixture[str],
                                                        monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SUPABASE_DB_URL")
@@ -455,8 +584,8 @@ def test_a_failure_prints_its_class_alone(capsys: pytest.CaptureFixture[str]) ->
     def failing() -> Any:
         raise psycopg.OperationalError("connection to server at db.invalid failed for 'Brno a' with password x")
 
-    io = gate.Boundaries(http=None, open_conn=failing, now=lambda: datetime(2026, 11, 20, 12, 0, tzinfo=UTC),
-                         sleep=lambda _s: None)
+    io = gate.Boundaries(http=None, open_conn=failing, run_cli=None,
+                         now=lambda: datetime(2026, 11, 20, 12, 0, tzinfo=UTC), sleep=lambda _s: None)
     code = gate.main(["--no-latency", "--window-first", "2026-11-09", "--window-last", "2026-11-12"], io)
     assert capsys.readouterr().out.splitlines() == ["failed: OperationalError"]
     assert code == 2
