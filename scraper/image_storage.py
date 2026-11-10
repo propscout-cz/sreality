@@ -310,14 +310,16 @@ class R2Client:
         self._secret_access_key = secret_access_key
         # Pool sized to the download worker count — the default of 10 caused
         # constant "Connection pool is full, discarding connection" churn
-        # under the 32-worker image phase. Timeouts and attempts left unset keep
-        # botocore's defaults (60 s each, legacy retries); only the clip job sets
+        # under the 32-worker image phase. Timeouts left unset keep botocore's 60 s
+        # each, and attempts left unset pin legacy retries (5 attempts), which
+        # botocore 1.44 stopped defaulting to (standard: 3); only the clip job sets
         # them, so one stalled GET cannot hold its chunk for minutes (#2032).
         # max_attempts counts the first request too (botocore's total_max_attempts).
-        timeouts = {name: value for name, value in (("connect_timeout", connect_timeout_s),
-                                                    ("read_timeout", read_timeout_s)) if value is not None}
-        if max_attempts is not None:
-            timeouts["retries"] = {"total_max_attempts": max_attempts, "mode": "standard"}
+        timeouts: dict[str, Any] = {name: value for name, value in (("connect_timeout", connect_timeout_s),
+                                                                    ("read_timeout", read_timeout_s))
+                                    if value is not None}
+        timeouts["retries"] = ({"mode": "legacy"} if max_attempts is None
+                               else {"total_max_attempts": max_attempts, "mode": "standard"})
         self._client = boto3.client(
             "s3",
             endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
