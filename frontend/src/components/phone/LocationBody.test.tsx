@@ -145,8 +145,8 @@ describe('<LocationBody>', () => {
       type: 'geojson',
       data: { geometry: { type: 'Point', coordinates: [14.5, 50.105123] } },
     });
-    expect(fakeMaps[0].layers.map((l) => l.id)).toEqual(['aerial', 'pin']);
-    expect(fakeMaps[0].layers[1]).toMatchObject({ type: 'circle', source: 'pin' });
+    expect(fakeMaps[0].layers.map((l) => l.id)).toEqual(['relief', 'contours', 'aerial', 'pin']);
+    expect(fakeMaps[0].layers[3]).toMatchObject({ type: 'circle', source: 'pin' });
   }, 15_000);
 
   /* Ortofoto ČR (CC BY 4.0): hidden, MapLibre fetches none of its tiles. */
@@ -173,7 +173,7 @@ describe('<LocationBody>', () => {
     expect(map.removed).toBe(false);
   }, 15_000);
 
-  it('offers Mapa / Letecká only once the map has loaded, with Mapa lit', async () => {
+  it('offers Mapa / Letecká / Terén only once the map has loaded, with Mapa lit', async () => {
     wrap(<LocationBody propertyId={7} />);
     await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
     expect(screen.queryByRole('group', { name: 'Podklad mapy' })).toBeNull();
@@ -182,8 +182,34 @@ describe('<LocationBody>', () => {
     expect(buttons.map((b) => [b.textContent, b.getAttribute('aria-pressed')])).toEqual([
       ['Mapa', 'true'],
       ['Letecká', 'false'],
+      ['Terén', 'false'],
     ]);
-    expect(fakeMaps[0].layout.get('aerial')).toEqual({ visibility: 'none' });
+    for (const id of ['aerial', 'relief', 'contours']) {
+      expect(fakeMaps[0].layout.get(id)).toEqual({ visibility: 'none' });
+    }
+  }, 15_000);
+
+  /* DMR 5G's shaded relief and ZABAGED's contours, both exports drawn on request. */
+  it('lays ČÚZK’s relief and contours hidden, and shows both on Terén with the photo hidden', async () => {
+    wrap(<LocationBody propertyId={7} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
+    const map = fakeMaps[0];
+    act(() => map.fire('load'));
+    expect(map.sources.get('relief')).toMatchObject({ type: 'raster', tileSize: 256, maxzoom: 18 });
+    expect(map.sources.get('contours')).toMatchObject({ type: 'raster', tileSize: 256, minzoom: 16 });
+    const [relief] = (map.sources.get('relief') as { tiles: string[] }).tiles;
+    const [contours] = (map.sources.get('contours') as { tiles: string[] }).tiles;
+    expect(relief).toContain('/dmr5g/ImageServer/exportImage?bbox={bbox-epsg-3857}');
+    expect(new URL(relief).searchParams.get('renderingRule')).toBe('{"rasterFunction":"GrayscaleHillshade"}');
+    expect(contours).toContain('/ZABAGED_VRSTEVNICE/MapServer/export?bbox={bbox-epsg-3857}');
+    expect(new URL(contours).searchParams.get('layerDefs')).toBe(`{"0":"ZOBRAZ_K='1'"}`);
+
+    await userEvent.click(within(bar()).getByRole('button', { name: 'Letecká' }));
+    await userEvent.click(within(bar()).getByRole('button', { name: 'Terén' }));
+    expect(map.layout.get('relief')).toEqual({ visibility: 'visible' });
+    expect(map.layout.get('contours')).toEqual({ visibility: 'visible' });
+    expect(map.layout.get('aerial')).toEqual({ visibility: 'none' });
+    expect(fakeCreateMap).toHaveBeenCalledTimes(1);
   }, 15_000);
 
   it('hides the aerial photo again on Mapa, on the same map', async () => {

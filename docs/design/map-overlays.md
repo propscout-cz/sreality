@@ -348,7 +348,10 @@ layer groups drawn), the per-m² pin labels, the price labels, Piny a ceny, zoom
 rail (a bottom sheet on a map under 520 px — a container query on the map, not the window) holding every
 toggle: Města + "Obarvit podle" + Min., Růst cen a nájmů + its settings, then each registry section as
 above, its toggle a plain row (`OverlayChip` without `compact`) and its settings indented under it
-(`OverlayPanel`). The legends left the panel: `MapOverlayLegends` (plus the growth and city-index keys)
+(`OverlayPanel`), then "Reliéf a vrstevnice" (#2494), drawn like a two-layer section: ČÚZK's shaded
+relief and contours, raster images from ČÚZK's own servers rather than geometry we ingest, so they sit
+in `lib/basemap` beside the aerial photo, not in this registry (URL `relief=1` / `contours=1`, view
+knobs like `labels`, not remembered). The legends left the panel: `MapOverlayLegends` (plus the growth and city-index keys)
 draws a card per layer group that is on in the map's bottom-left corner, so a choropleth reads with the
 panel closed; the stack folds to one button, remembered per browser.
 

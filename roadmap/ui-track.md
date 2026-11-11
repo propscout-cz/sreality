@@ -7,6 +7,15 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Terrain on the map: ČÚZK relief and contours (2026-11-11, no migration, #2494)
+- **Done** (operator ask 2026-11-11: turn on "relief" and "vrstevnice" to judge the terrain). OpenFreeMap
+  carries no elevation; ČÚZK, already the aerial photo's source, serves DMR 5G shaded relief and ZABAGED
+  contours (1 m base interval, thinned on steep slopes by ZABAGED's own `ZOBRAZ_K` pick, from zoom 16).
+  Browse: "Reliéf a vrstevnice" in Vrstvy, each switchable alone, URL `relief=1` / `contours=1`. Phone
+  Poloha: Mapa / Letecká / Terén. Not the listing-detail minimap (ruling 2026-10-23: no overlay toggles).
+- Next (unruled): both services draw each tile on request; if they turn slow under use, cache the tiles
+  on our side (R2) behind the API.
+
 ### Browse's circle is a true circle, placed on the main map (2026-10-30, migrations 694 + 695)
 - **Done** (operator report 2026-10-30: "I do not see pins for inactive properties" — the view held
   more than the pin limit, and a centre + radius with no centre filtered nothing). Rulings 2026-10-30:
