@@ -40,6 +40,7 @@ const baseDispatch: WatchdogDispatch = {
   seen_at: null,
   trigger_price_czk: null,
   prev_price_czk: null,
+  match_reason: null,
   category_main: 'byty',
   category_type: 'prodej',
   price_czk: 8_900_000,
@@ -150,6 +151,24 @@ describe('<Notifications> row names', () => {
   });
 });
 
+describe('<Notifications> New match rows', () => {
+  it('name why the property entered the slice, a price cut with its two prices', () => {
+    const cut: WatchdogDispatch = {
+      ...baseDispatch,
+      id: 'cut',
+      match_reason: 'price',
+      trigger_price_czk: 8_400_000,
+      prev_price_czk: 9_000_000,
+    };
+    renderPage({ ...feed, data: [cut, { ...baseDispatch, id: 'old', display_label: 'Kolín' }], total: 2 });
+    const row = screen.getByRole('link', { name: /^New match Praha 5/ });
+    expect(row).toHaveTextContent('Watchdog · Praha 2+kk · Price cut');
+    expect(row).toHaveTextContent(/9\s000\s000.*→.*8\s400\s000/);
+    /* Told before reasons existed: newly listed, as every New match then was. */
+    expect(screen.getByRole('link', { name: /^New match Kolín/ })).toHaveTextContent('Newly listed');
+  });
+});
+
 describe('<Notifications> listing rows', () => {
   it('open the property page by property_id, whatever portal the ad is on', () => {
     renderPage();
@@ -181,6 +200,23 @@ describe('<Notifications> listing rows', () => {
     await waitFor(() => expect(markWatchdogDispatchSeen).toHaveBeenCalledTimes(1));
   });
 
+  /* A watchdog's name alone read like the ad's title (operator, 2026-11-03), so the row says
+     what kind of source told it first. */
+  it('name their source by its kind, then its name', () => {
+    const monitored: WatchdogDispatch = {
+      ...baseDispatch, id: 'd3', source_kind: 'collection_monitor', subscription_id: null,
+      subscription_name: null, collection_id: 7, collection_name: 'Vinohrady', property_id: 77,
+      change_kind: 'price_drop', display_label: 'Praha 2',
+    };
+    const gone: WatchdogDispatch = { ...baseDispatch, id: 'd5', subscription_name: null, property_id: 78, display_label: 'Kladno' };
+    renderPage({ ...feed, data: [baseDispatch, monitored, gone], total: 3 });
+    expect(within(screen.getByRole('link', { name: /^New match Praha 5/ })).getByText('Watchdog · Praha 2+kk'))
+      .toBeInTheDocument();
+    expect(within(screen.getByRole('link', { name: /^Price drop Praha 2/ })).getByText('Collection · Vinohrady'))
+      .toBeInTheDocument();
+    expect(within(screen.getByRole('link', { name: /^New match Kladno/ })).getByText('Watchdog')).toBeInTheDocument();
+  });
+
   it('render a row with nothing to open as a button that only marks it read', async () => {
     vi.mocked(markWatchdogDispatchSeen).mockResolvedValue({ ...baseDispatch, property_id: null });
     renderPage({ ...feed, data: [{ ...baseDispatch, property_id: null }], total: 1 });
@@ -191,9 +227,9 @@ describe('<Notifications> listing rows', () => {
 });
 
 describe('<Notifications> source filter', () => {
-  it('offers All, Monitoring, Watchdogs and Shared, and no System option', () => {
+  it('offers All, Collections, Watchdogs and Shared, and no System option', () => {
     renderPage();
-    for (const name of ['Monitoring', 'Watchdogs', 'Shared']) {
+    for (const name of ['Collections', 'Watchdogs', 'Shared']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument();
     }
     expect(screen.queryByRole('button', { name: 'System' })).toBeNull();
@@ -216,7 +252,7 @@ describe('<Notifications> filters are the one joined bar', () => {
   it('draws Source and Read state as joined tracks, the chosen segment filled copper', () => {
     renderPage();
     for (const [name, labels] of [
-      ['Source', ['All', 'Monitoring', 'Watchdogs', 'Shared']],
+      ['Source', ['All', 'Collections', 'Watchdogs', 'Shared']],
       ['Read state', ['All', 'Unread']],
     ] as const) {
       const bar = screen.getByRole('group', { name });

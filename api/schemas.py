@@ -21,6 +21,7 @@ from pydantic import (
 from api.capabilities.subject import Point, unanchored
 from api.filter_args import agenda_ids, as_str_list, filter_model
 from api.location_filter import DistrictChip
+from api.notifications import CollectionNotifyKinds
 from toolkit import ComparableFilters
 from toolkit import stats_registry as sr
 from toolkit.filter_registry import Agenda
@@ -342,6 +343,8 @@ class CreateCollectionIn(BaseModel):
     name:               str = Field(min_length=1, max_length=200)
     description:        Annotated[str | None, AfterValidator(_blank_to_null)] = None
     monitoring_enabled: bool = False
+    # Left out = the column default, every event a collection can tell (migration 735).
+    notify_kinds:       CollectionNotifyKinds | None = None
 
 
 class UpdateCollectionIn(BaseModel):
@@ -349,6 +352,7 @@ class UpdateCollectionIn(BaseModel):
     # Sent as null or blank clears it, left out keeps it (`model_fields_set`).
     description:        Annotated[str | None, AfterValidator(_blank_to_null)] = None
     monitoring_enabled: bool | None = None
+    notify_kinds:       CollectionNotifyKinds | None = None
 
 
 class AddPropertiesToCollectionIn(BaseModel):

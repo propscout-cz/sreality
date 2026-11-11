@@ -341,7 +341,7 @@ def test_one_full_pass_over_the_real_schema(cur: Any) -> None:
     [push_] = sent
     note = push_["payload"]["notification"]
     assert note["title"] == "2 nová upozornění" and note["app_badge"] == 2 == push_["payload"]["app_badge"]
-    assert note["body"].split("\n")[0].startswith("Nový inzerát"), "newest first"
+    assert note["body"].split("\n")[0].startswith("Nová shoda"), "newest first"
     assert note["body"].split("\n")[1] == "Sdíleno s vámi"
     cur.execute("SELECT min(id) FROM notification_deliveries WHERE push_subscription_id = %s", (device,))
     assert note["navigate"] == f"{ORIGIN}/notifications?d={cur.fetchone()[0]}"

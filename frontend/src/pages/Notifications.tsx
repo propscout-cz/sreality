@@ -41,11 +41,11 @@ import { useUnreadCount } from '@/lib/unreadCount';
 import { useInfiniteList, type InfiniteListPage } from '@/lib/useInfiniteList';
 import { fmtAbsolute, fmtCount, fmtCzk, fmtRelative } from '@/lib/format';
 import { listingKindLabel } from '@/lib/enums';
+import { CHANGE_META, matchReasonLabel } from '@/lib/changeKinds';
 import ErrorBanner from '@/components/ErrorBanner';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
 import { SegmentedBar, type SegmentOption } from '@/components/controls';
 import type {
-  DispatchChangeKind,
   NotificationSourceKind,
   WatchdogDispatch,
   WatchdogSeenFilter,
@@ -59,25 +59,11 @@ const noop = () => {};
 /* dispatchTarget's answer for a row with nothing to open: the feed itself. */
 const FEED = ROUTES.notifications.build();
 
-/* change_kind → label + the colour of its leading dot (only design tokens that
- * are known to exist; the chip itself stays neutral). */
-const CHANGE_META: Record<DispatchChangeKind, { label: string; dot: string }> = {
-  new:               { label: 'New match',         dot: 'var(--color-copper)' },
-  price_drop:        { label: 'Price drop',        dot: 'var(--color-sage)' },
-  price_rise:        { label: 'Price rise',        dot: 'var(--color-brick)' },
-  inactive:          { label: 'Delisted',          dot: 'var(--color-ink-4)' },
-  reactivated:       { label: 'Relisted',          dot: 'var(--color-copper)' },
-  new_source:        { label: 'New source',        dot: 'var(--color-copper)' },
-  shared_collection: { label: 'Shared collection', dot: 'var(--color-ink-3)' },
-  shared_dashboard:  { label: 'Shared dashboard',  dot: 'var(--color-ink-3)' },
-  shared_pipeline:   { label: 'Shared pipeline',   dot: 'var(--color-ink-3)' },
-};
-
 /* The two filters each pick one: the one joined bar (SegmentedBar), in the phone
  * tone inside the phone frame (chosen = ink on the inset well, never copper). */
 const SOURCE_OPTS: ReadonlyArray<SegmentOption<SourceFilter>> = [
   { value: 'all', label: 'All' },
-  { value: 'collection_monitor', label: 'Monitoring' },
+  { value: 'collection_monitor', label: 'Collections' },
   { value: 'watchdog', label: 'Watchdogs' },
   { value: 'share', label: 'Shared' },
 ];
@@ -304,10 +290,12 @@ function StandardNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }
     dot: 'var(--color-ink-3)',
   };
   const place = d.display_label ?? '—';
-  const sourceLabel =
+  /* The kind of source first, so a watchdog's name never reads as the ad's title. */
+  const [sourceKind, sourceName] =
     d.source_kind === 'collection_monitor'
-      ? (d.collection_name ?? 'Monitoring')
-      : (d.subscription_name ?? 'Watchdog');
+      ? ['Collection', d.collection_name]
+      : ['Watchdog', d.subscription_name];
+  const sourceLabel = sourceName ? `${sourceKind} · ${sourceName}` : sourceKind;
   const to = dispatchTarget(d);
   const newTab = useNewTabProps();
   const control = {
@@ -351,6 +339,13 @@ function StandardNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }
         </p>
         <p className={`mt-0.5 text-[0.78rem] text-[var(--color-ink-3)] truncate ${PHONE_FIGURES}`}>
           {sourceLabel}
+          {/* A New match names why it entered the watchdog's slice (migration 735). */}
+          {d.change_kind === 'new' && (
+            <span className="whitespace-nowrap">
+              <span className="max-md:hidden">{' '}· </span>
+              {matchReasonLabel(d)}
+            </span>
+          )}
           {d.prev_price_czk != null && d.trigger_price_czk != null && (
             <span className="font-mono tabular-nums text-[var(--color-ink-4)] whitespace-nowrap">
               <span className="max-md:hidden">{' '}· </span>

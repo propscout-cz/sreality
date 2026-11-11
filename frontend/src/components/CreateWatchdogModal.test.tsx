@@ -11,7 +11,7 @@
  * on is watched unless unticked, and a centre+radius square always is.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -20,6 +20,7 @@ import { expectDialogContract } from '@/test/a11y';
 import { createWatchdogSubscription } from '@/lib/api';
 import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
 import CreateWatchdogModal, { MAP_AREA_LABEL } from './CreateWatchdogModal';
+import { NOTIFY_KINDS_EMPTY } from './NotifyKindsPicker';
 
 vi.mock('@/lib/api', async (orig) => ({
   ...(await orig<typeof import('@/lib/api')>()),
@@ -136,5 +137,43 @@ describe('<CreateWatchdogModal> map area', () => {
     const saved = await lastSavedSpec();
     expect(saved.circle).toEqual(circle);
     expect(saved.bounds).toBeNull();
+  });
+});
+
+describe('<CreateWatchdogModal> notify me about', () => {
+  const kind = (name: string) =>
+    within(screen.getByRole('group', { name: 'Notify me about' })).getByRole('button', { name });
+  const lastSavedKinds = async () => {
+    await waitFor(() => expect(vi.mocked(createWatchdogSubscription)).toHaveBeenCalled());
+    return vi.mocked(createWatchdogSubscription).mock.calls.at(-1)![0].notify_kinds;
+  };
+
+  it('starts on new matches and price drops, the default every watchdog told before', async () => {
+    renderHost();
+    open();
+    expect(kind('New match')).toHaveAttribute('aria-pressed', 'true');
+    expect(kind('Price drop')).toHaveAttribute('aria-pressed', 'true');
+    expect(kind('Left the market')).toHaveAttribute('aria-pressed', 'false');
+    create();
+    expect(await lastSavedKinds()).toEqual(['new', 'price_drop']);
+  });
+
+  it('saves the events picked, and offers no Back on the market: a return is a New match', async () => {
+    renderHost();
+    open();
+    fireEvent.click(kind('Price drop'));
+    fireEvent.click(kind('Left the market'));
+    expect(screen.queryByRole('button', { name: 'Back on the market' })).toBeNull();
+    create();
+    expect(await lastSavedKinds()).toEqual(['new', 'inactive']);
+  });
+
+  it('will not create a watchdog that notifies about nothing, and says why', () => {
+    renderHost();
+    open();
+    fireEvent.click(kind('New match'));
+    fireEvent.click(kind('Price drop'));
+    expect(screen.getByRole('alert')).toHaveTextContent(NOTIFY_KINDS_EMPTY);
+    expect(screen.getByRole('button', { name: 'Create watchdog' })).toBeDisabled();
   });
 });

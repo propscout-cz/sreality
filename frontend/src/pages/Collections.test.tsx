@@ -15,6 +15,7 @@ import { MemoryRouter } from 'react-router-dom';
 
 import Collections from './Collections';
 import * as api from '@/lib/api';
+import { COLLECTION_KINDS } from '@/lib/notifyKinds';
 
 vi.mock('@/lib/api', () => ({
   listCollections: vi.fn(),
@@ -41,7 +42,7 @@ const renderPage = () => {
 
 const BASE = {
   description: null, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
-  listing_count: 1, monitoring_enabled: false, is_system: false,
+  listing_count: 1, monitoring_enabled: false, is_system: false, notify_kinds: COLLECTION_KINDS.map((k) => k.kind),
 };
 const OWN = { ...BASE, id: 7, name: 'Šortlist', owner_email: null, shared_with: [] };
 const FROM_PETR = {
@@ -104,7 +105,7 @@ describe('<Collections>', () => {
   it('lists collections shared with me apart, and counts my recipients', async () => {
     const base = {
       description: null, created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
-      listing_count: 1, monitoring_enabled: false, is_system: false,
+      listing_count: 1, monitoring_enabled: false, is_system: false, notify_kinds: COLLECTION_KINDS.map((k) => k.kind),
     };
     vi.mocked(api.listCollections).mockResolvedValue({
       data: [

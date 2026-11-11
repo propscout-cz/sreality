@@ -61,7 +61,6 @@ import {
 } from '@/lib/filters';
 import { usePageTitle } from '@/lib/pageTitle';
 import { portalLabel } from '@/lib/portals';
-import CreateWatchdogModal from '@/components/CreateWatchdogModal';
 import MergeBar from '@/components/MergeBar';
 import AppliedFilterPills from '@/components/AppliedFilterPills';
 import FilterPresetBar from '@/components/FilterPresetBar';
@@ -100,6 +99,8 @@ import type { KeysetCursor } from '@/lib/keyset';
 import type { BrowseViewState, TabKey } from '@/lib/browseState';
 
 const ListingMap = lazyChunk(() => import('@/components/ListingMap'));
+/* Lazy: the dialog mounts only on "Create watchdog", so it stays out of the first visit. */
+const CreateWatchdogModal = lazyChunk(() => import('@/components/CreateWatchdogModal'));
 
 export interface BrowseFeatures {
   /* The saved-set bars (filter presets; the Stats tab's dashboards) — page only. */
@@ -805,7 +806,9 @@ export default function BrowseExperience({
 
       {f.watchdog && watchdogModalOpen
         ? (
-            <CreateWatchdogModal filters={filters} onClose={() => setWatchdogModalOpen(false)} />
+            <Suspense fallback={null}>
+              <CreateWatchdogModal filters={filters} onClose={() => setWatchdogModalOpen(false)} />
+            </Suspense>
           )
         : null}
     </div>

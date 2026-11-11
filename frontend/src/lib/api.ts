@@ -22,6 +22,7 @@ import type {
   BuildingAttachment,
   BuildingRun,
   Collection,
+  CollectionKind,
   CollectionWithProperties,
   ConfirmBuildingUnitsIn,
   UpdateBuildingInputsIn,
@@ -48,6 +49,7 @@ import type {
   WatchdogDispatch,
   WatchdogDispatchesResponse,
   WatchdogFilterSpec,
+  WatchdogKind,
   WatchdogSeenFilter,
   WatchdogSubscription,
   FilterPreset,
@@ -2416,6 +2418,7 @@ export const updateCollection = (
     name?: string | null;
     description?: string | null;
     monitoring_enabled?: boolean;
+    notify_kinds?: CollectionKind[];
   },
 ): Promise<Collection> =>
   request<Collection>(`/collections/${id}`, {
@@ -2785,6 +2788,7 @@ export const createWatchdogSubscription = (input: {
   name: string;
   filter_spec: WatchdogFilterSpec;
   is_active?: boolean;
+  notify_kinds?: WatchdogKind[];
 }): Promise<WatchdogSubscription> =>
   request<WatchdogSubscription>('/notifications/subscriptions', {
     method: 'POST',
@@ -2797,6 +2801,7 @@ export const updateWatchdogSubscription = (
     name?: string;
     filter_spec?: WatchdogFilterSpec;
     is_active?: boolean;
+    notify_kinds?: WatchdogKind[];
   },
 ): Promise<WatchdogSubscription> =>
   request<WatchdogSubscription>(

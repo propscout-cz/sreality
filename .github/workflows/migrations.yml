@@ -156,6 +156,17 @@ jobs:
             fi
             echo ">>> applying $f"
             psql -v ON_ERROR_STOP=1 -q -f "$f"
+            # Migration 656 (notifications W6, destructive) is re-runnable by contract: apply_migration.yml's
+            # lock-timeout retry re-runs the WHOLE file, possibly after its transaction committed (collections'
+            # ALTER comes after the COMMIT). A second run straight after the first, before any later migration
+            # and any live test, proves every $pre$ guard tolerates what the first run dropped (a read of a
+            # dropped object sits inside its own existence IF: PL/pgSQL prepares a whole IF condition at once)
+            # and that $post$ holds again. Straight after, not after the replay: its $post$ pins
+            # notification_dispatches' columns as 656 left them, which a later migration may add to (735).
+            if [[ "$(basename "$f")" == 656_* ]]; then
+              echo ">>> re-running $f (the lock-timeout retry contract)"
+              psql -v ON_ERROR_STOP=1 -q -f "$f"
+            fi
           done
 
       - name: Sanity check (key relations exist + queryable)
@@ -165,14 +176,6 @@ jobs:
             -c "select 'listings_public'::regclass, 'properties_public'::regclass;" \
             -c "select 'image_clip_embeddings'::regclass;" \
             -c "select count(*) as listings_rows from listings;"
-
-      # Migration 656 (notifications W6, destructive) is re-runnable by contract: apply_migration.yml's lock-timeout
-      # retry re-runs the WHOLE file, possibly after its transaction committed (collections' ALTER comes after the
-      # COMMIT). A second psql -f over the replayed schema, before any live test seeds rows, proves every $pre$ guard
-      # tolerates what the first run dropped (a read of a dropped object sits inside its own existence IF: PL/pgSQL
-      # prepares a whole IF condition at once) and that $post$ holds again.
-      - name: Migration 656 re-runs clean after it applied (the lock-timeout retry contract)
-        run: psql -v ON_ERROR_STOP=1 -q -f migrations/656_notifications_w6_prune.sql
 
       # Migration 707 (location W3 PR-2) is under the same retry contract: its drops and $post$ hold on a re-run.
       - name: Migration 707 re-runs clean after it applied (the lock-timeout retry contract)
@@ -895,6 +898,16 @@ jobs:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_property_carriers_live.py tests/test_652_notifications_live.py tests/test_notification_events_lock_live.py -q
+
+      # Migration 735: a watchdog tells the events it is set to -- its CHECK and restart, its slice (a start
+      # taken silently, an entry told once with its reason, a blink, a merge survivor) and the
+      # Left the market / price / new-portal detectors, for a watchdog and a watched collection, end to end.
+      - name: A watchdog tells the events it is set to
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_735_watchdog_notify_kinds_live.py -q
 
       # The broker book (migration 692): one row per (property, canonical broker), kept by the
       # property maintenance pass on every path that changes one -- a delist, a revival, a merge and

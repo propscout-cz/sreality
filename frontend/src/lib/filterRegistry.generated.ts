@@ -354,7 +354,7 @@ export const FILTER_REGISTRY: FilterRegistryPayload = {
       "type": "string",
       "pg_column": null,
       "default": "any",
-      "description": "Status filter for Browse, always the property's own: `any` shows both live and delisted properties; `active` = a live property (with a portal filter: with an active ad there); `inactive` = a delisted property, every ad ended. The Watchdog matcher ignores this (it fires on new properties only) — use `lifecycle` for the analytical surfaces.",
+      "description": "Status filter for Browse, always the property's own: `any` shows both live and delisted properties; `active` = a live property (with a portal filter: with an active ad there); `inactive` = a delisted property, every ad ended. A watchdog ignores this (it watches the properties on the market) — use `lifecycle` for the analytical surfaces.",
       "category": "Status",
       "ui_control": "pill_group",
       "agendas": [
