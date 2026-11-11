@@ -63,6 +63,11 @@ export class FakeMap {
     return this.layers.find((l) => l.id === id);
   }
 
+  /* The fake has no basemap style: its layers are only the ones a test's map added. */
+  getStyle(): { layers: Array<Record<string, unknown>> } {
+    return { layers: [...this.layers] };
+  }
+
   setLayoutProperty(id: string, name: string, value: unknown): this {
     const layout = this.layout.get(id);
     if (!layout) throw new Error(`Cannot style non-existing layer "${id}".`);

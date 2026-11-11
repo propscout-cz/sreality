@@ -222,6 +222,46 @@ describe('the remembered pin limit', () => {
   });
 });
 
+/* ČÚZK's relief and contours (`relief=1`, `contours=1`): view knobs like `labels`, off by
+ * default, nothing remembered per browser. */
+describe('the terrain switches', () => {
+  const urlState = (initial: string) =>
+    renderHook(() => ({ view: useUrlBrowseState(), search: useLocation().search }), {
+      wrapper: ({ children }: { children: ReactNode }) =>
+        createElement(MemoryRouter, { initialEntries: [initial] }, children),
+    });
+
+  it('are off by default and leave the URL plain', () => {
+    expect(urlState('/browse').result.current.view.overlay).toMatchObject({ relief: false, contours: false });
+    expect(browseUrlFromState({ filters: DEFAULT_FILTERS, sort: DEFAULT_SORT, tab: 'map', overlay: DEFAULT_OVERLAY }))
+      .toBe('/browse');
+  });
+
+  it('read each from its own key, write it, and delete it when switched off', () => {
+    const { result } = urlState('/browse?relief=1');
+    expect(result.current.view.overlay).toMatchObject({ relief: true, contours: false });
+    act(() => result.current.view.setOverlay({ contours: true }));
+    expect(new URLSearchParams(result.current.search).get('contours')).toBe('1');
+    act(() => result.current.view.setOverlay({ relief: false }));
+    expect(new URLSearchParams(result.current.search).has('relief')).toBe(false);
+    expect(result.current.view.overlay).toMatchObject({ relief: false, contours: true });
+  });
+
+  it('survive a filter change, serialise into the Browse link and stay out of the filter spec', () => {
+    const { result } = urlState('/browse?relief=1&contours=1');
+    act(() => result.current.view.setFilters({ ...DEFAULT_FILTERS, priceMax: 5_000_000 }));
+    expect(result.current.view.overlay).toMatchObject({ relief: true, contours: true });
+    const url = browseUrlFromState({
+      filters: DEFAULT_FILTERS,
+      sort: DEFAULT_SORT,
+      tab: 'map',
+      overlay: { ...DEFAULT_OVERLAY, relief: true, contours: true },
+    });
+    expect(url).toBe('/browse?relief=1&contours=1');
+    expect(fromSearchParams(new URLSearchParams('relief=1&contours=1'))).toEqual(fromSearchParams(new URLSearchParams('')));
+  });
+});
+
 /* `?tab=` names the stats tab, the brokers tab or nothing: an old `?tab=table` link opens the Properties tab, not a blank page. */
 describe('the tab in the URL', () => {
   const tabOf = (initial: string) =>

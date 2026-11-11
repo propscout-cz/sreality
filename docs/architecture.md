@@ -974,7 +974,16 @@ rules. Identify which one a task belongs to before you start.
   leaves its credit out of the (i). The bar flips the layer's visibility in its own effect, never
   building a new map; a map rebuilt for a moved point takes the pick once it has loaded. Abroad
   its tiles 404 and the map shows through: no abroad gate, no memory of the choice, no tile
-  stored, and the privacy page names ČÚZK. PhoneMap's zoom is `lib/zoomByLevel`'s by precision
+  stored, and the privacy page names ČÚZK. A third segment, "Terén" (#2494), shows ČÚZK's terrain
+  instead: `addTerrainLayers` adds DMR 5G's shaded relief (`dmr5g` ImageServer `exportImage`,
+  `GrayscaleHillshade`, 35 % with contrast 0.3 so flat ground stays light) and ZABAGED's contours
+  (`ZABAGED_VRSTEVNICE` MapServer `export`, `ZOBRAZ_K='1'` = ZABAGED's own pick that thins the base
+  lines on steep slopes, 512 px at 192 dpi so lines stay sharp, source `minzoom` 16 because ZABAGED
+  draws nothing coarser than 1:10 000), both hidden and under the basemap's first `transportation`
+  layer, so roads, buildings and names stay on top. Neither service is cached as tiles: each tile is
+  an export of its bbox, drawn on request (~0.3 s relief, ~0.5–1 s contours), transparent abroad.
+  Browse's map offers the same two in Vrstvy ("Reliéf a vrstevnice", URL `relief=1` / `contours=1`);
+  the listing-detail minimap keeps none (ruling 2026-10-23). PhoneMap's zoom is `lib/zoomByLevel`'s by precision
   (street 15, quarter 13, town 11, coarse 9); the links take one step more, since the map apps
   count 256 px tiles and MapLibre 512.
   The map degrades, the place does not: `MapSlot` (an `ErrorBoundary` with `fallback={null}` and

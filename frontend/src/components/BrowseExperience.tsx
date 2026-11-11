@@ -740,6 +740,9 @@ export default function BrowseExperience({
                     overlayRegistry={overlayRegistryQuery.data}
                     overlayLayers={overlay.layers}
                     onOverlayLayersChange={(layers) => view.setOverlay({ layers })}
+                    relief={overlay.relief}
+                    contours={overlay.contours}
+                    onTerrainChange={(patch) => view.setOverlay(patch)}
                     growthRows={psGrowthQuery.data ?? []}
                     growthShapes={psShapesQuery.data ?? []}
                     growthDatasets={psDatasetsQuery.data ?? []}

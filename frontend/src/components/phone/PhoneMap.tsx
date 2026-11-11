@@ -1,20 +1,38 @@
 /* Poloha's map on the phone: the location ad's point on the shared basemap, at the zoom
- * its precision allows, and a Mapa / Letecká bar that lays ČÚZK's aerial photo over it. A
- * lazy chunk (LocationBody), so MapLibre never joins the feed's first visit. */
+ * its precision allows, and a Mapa / Letecká / Terén bar that lays ČÚZK's aerial photo, or
+ * its shaded relief and contour lines, over it. A lazy chunk (LocationBody), so MapLibre
+ * never joins the feed's first visit. */
 
 import { useEffect, useRef, useState } from 'react';
 
 import { SegmentedBar, type SegmentOption } from '@/components/controls';
-import { AERIAL_LAYER, addAerialLayer, addPointPin, createMap, guardMap } from '@/lib/basemap';
+import {
+  AERIAL_LAYER,
+  CONTOURS_LAYER,
+  RELIEF_LAYER,
+  addAerialLayer,
+  addPointPin,
+  addTerrainLayers,
+  createMap,
+  guardMap,
+} from '@/lib/basemap';
 
 import { PHOTO_DARK } from './CardPhotoStrip';
 
-type Base = 'map' | 'aerial';
+type Base = 'map' | 'aerial' | 'terrain';
 
 const BASES: ReadonlyArray<SegmentOption<Base>> = [
   { value: 'map', label: 'Mapa' },
   { value: 'aerial', label: 'Letecká' },
+  { value: 'terrain', label: 'Terén' },
 ];
+
+/* The layers each pick shows; every other one of the three is hidden. */
+const SHOWN: Record<Base, readonly string[]> = {
+  map: [],
+  aerial: [AERIAL_LAYER],
+  terrain: [RELIEF_LAYER, CONTOURS_LAYER],
+};
 
 export default function PhoneMap({ lat, lon, zoom }: { lat: number; lon: number; zoom: number }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -40,6 +58,7 @@ export default function PhoneMap({ lat, lon, zoom }: { lat: number; lon: number;
     map.on('load', () => {
       // MapLibre opens the compact attribution; fold it to the (i), as on DetailMap.
       container.querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show');
+      addTerrainLayers(map);
       addAerialLayer(map);
       addPointPin(map, [lon, lat]);
       setLoaded(true);
@@ -52,12 +71,14 @@ export default function PhoneMap({ lat, lon, zoom }: { lat: number; lon: number;
     };
   }, [lat, lon, zoom]);
 
-  /* Its own effect: a tap flips the photo's visibility and never builds a new map; a new
+  /* Its own effect: a tap flips the layers' visibility and never builds a new map; a new
    * map (a moved point) takes the pick once it has loaded. */
   useEffect(() => {
     const map = mapRef.current;
     if (!loaded || !map?.getLayer(AERIAL_LAYER)) return;
-    map.setLayoutProperty(AERIAL_LAYER, 'visibility', base === 'aerial' ? 'visible' : 'none');
+    for (const id of [AERIAL_LAYER, RELIEF_LAYER, CONTOURS_LAYER]) {
+      map.setLayoutProperty(id, 'visibility', SHOWN[base].includes(id) ? 'visible' : 'none');
+    }
   }, [base, loaded]);
 
   /* Thrown here, after every hook, so MapSlot's boundary takes the map down. */

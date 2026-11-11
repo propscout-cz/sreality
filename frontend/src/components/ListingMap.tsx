@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useNewTabProps, useSpaLinkDelegation } from '@/lib/linkGestures';
 import { YmPicker, YM_SELECT_CLS } from '@/components/YmPicker';
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
-import { createMap } from '@/lib/basemap';
+import { CONTOURS_LAYER, CONTOURS_MINZOOM, RELIEF_LAYER, addTerrainLayers, createMap } from '@/lib/basemap';
 import type { HaloPoint } from '@/lib/hoverSync';
 import { haloFeatures, useMapFeatureHover } from '@/lib/useMapFeatureHover';
 import {
@@ -347,6 +347,11 @@ interface Props {
   overlayRegistry?: MapOverlayRegistry;
   overlayLayers?: string;
   onOverlayLayersChange?: (next: string) => void;
+  /* ČÚZK's terrain (lib/basemap addTerrainLayers): MapOverlayState.relief / .contours,
+   * URL keys `relief` / `contours`. Under the basemap's roads, so under every layer of ours. */
+  relief?: boolean;
+  contours?: boolean;
+  onTerrainChange?: (patch: { relief?: boolean; contours?: boolean }) => void;
   /* Price-stats growth overlay ("Růst cen a nájmů"). The Browse page hands in
    * the per-obec growth rows for the chosen dataset + window (price_stat_growth
    * RPC), the dataset list for the picker, and the active metric. Fill sits
@@ -406,6 +411,9 @@ export default function ListingMap({
   overlayRegistry,
   overlayLayers = '',
   onOverlayLayersChange,
+  relief = false,
+  contours = false,
+  onTerrainChange,
   growthRows,
   growthShapes,
   growthDatasets,
@@ -525,6 +533,7 @@ export default function ListingMap({
     mapRef.current = map;
 
     map.on('load', () => {
+      addTerrainLayers(map);
       /* Price-stats growth overlay — one fill layer per metric, all hidden
        * until the data-effect flips the active one on. Added FIRST: a
        * background layer, below the listing dots + city pins; the reference
@@ -1312,6 +1321,13 @@ export default function ListingMap({
     map.setLayoutProperty('point-price', 'visibility', priceLabels ? 'visible' : 'none');
   }, [priceLabels, ready]);
 
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map?.getLayer(RELIEF_LAYER)) return;
+    map.setLayoutProperty(RELIEF_LAYER, 'visibility', relief ? 'visible' : 'none');
+    map.setLayoutProperty(CONTOURS_LAYER, 'visibility', contours ? 'visible' : 'none');
+  }, [relief, contours, ready]);
+
   /* Imperative flyTo on each new command (identity-based via ts).
    * Marks didInitialFitRef so the rows-effect doesn't subsequently
    * fitBounds-over the freshly-flown viewport. The rows refetch from
@@ -1450,7 +1466,11 @@ export default function ListingMap({
     const sel = parseLayers(overlayLayers);
     return (overlayRegistry?.sections ?? []).filter((s) => s.layers.some((l) => sel.has(l.key))).length;
   }, [overlayRegistry, overlayLayers]);
-  const layersOn = (cities && cities.length > 0 && showCities ? 1 : 0) + (showGrowth ? 1 : 0) + overlaySectionsOn;
+  const layersOn =
+    (cities && cities.length > 0 && showCities ? 1 : 0) +
+    (showGrowth ? 1 : 0) +
+    (relief || contours ? 1 : 0) +
+    overlaySectionsOn;
   const cityKey = cities && cities.length > 0 && showCities ? colorByIndex ?? null : null;
   const legendsFolded = usePersistedFlag(LEGENDS_FOLDED_KEY, false);
   const countText = isLoading
@@ -1613,6 +1633,16 @@ export default function ListingMap({
                   />
                 </div>
               )}
+              {onTerrainChange && (
+                <div className="py-1">
+                  <TerrainControls
+                    relief={relief}
+                    contours={contours}
+                    zoom={zoomLevel}
+                    onChange={onTerrainChange}
+                  />
+                </div>
+              )}
             </div>
           </RailFlyout>
         )}
@@ -1683,6 +1713,69 @@ function CentreMark() {
 
 /* The settings of the "Růst cen a nájmů" layer in the Vrstvy panel; its key is
  * GrowthLegend, on the map. */
+/* ČÚZK's terrain in the Vrstvy panel, drawn like a registry section of two layers: one
+ * tri-state row turns both on, and while either is, the panel under it holds each one's
+ * own box, the contours' zoom hint and the source. */
+export function TerrainControls({
+  relief,
+  contours,
+  zoom,
+  onChange,
+}: {
+  relief: boolean;
+  contours: boolean;
+  zoom: number | null;
+  onChange: (patch: { relief?: boolean; contours?: boolean }) => void;
+}) {
+  const toggle = 'inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-ink-2)] cursor-pointer';
+  return (
+    <div className="flex flex-col">
+      <OverlayChip
+        label="Reliéf a vrstevnice"
+        checked={relief && contours}
+        indeterminate={relief !== contours}
+        onChange={(checked) => onChange({ relief: checked, contours: checked })}
+      />
+      {(relief || contours) && (
+        <OverlayPanel>
+          <div className="flex flex-col gap-1">
+            <label className={toggle}>
+              <input type="checkbox" checked={relief} onChange={(e) => onChange({ relief: e.target.checked })} />
+              <span>Stínovaný reliéf</span>
+            </label>
+            <label className={toggle}>
+              <input type="checkbox" checked={contours} onChange={(e) => onChange({ contours: e.target.checked })} />
+              <span>Vrstevnice</span>
+            </label>
+          </div>
+          <div className="flex flex-col gap-1">
+            {contours && zoom != null && zoom < CONTOURS_MINZOOM && (
+              <p
+                className="text-[0.68rem] font-medium text-[var(--color-ink-2)]"
+                title={`Vrstevnice se kreslí od přiblížení ${CONTOURS_MINZOOM}`}
+              >
+                Vrstevnice: přibližte mapu
+              </p>
+            )}
+            <p className="text-[0.62rem] text-[var(--color-ink-3)]">
+              Jen území ČR ·{' '}
+              <a
+                href="https://geoportal.cuzk.gov.cz/"
+                target="_blank"
+                rel="noreferrer"
+                title="CC BY 4.0"
+                className="underline-offset-2 hover:underline hover:text-[var(--color-ink-2)]"
+              >
+                © ČÚZK
+              </a>
+            </p>
+          </div>
+        </OverlayPanel>
+      )}
+    </div>
+  );
+}
+
 function GrowthMapControls({
   showGrowth, datasets, datasetId, metric, from, to,
   onToggle, onDatasetChange, onMetricChange, onFromChange, onToChange,
