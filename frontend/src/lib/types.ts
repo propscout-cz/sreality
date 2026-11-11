@@ -1200,6 +1200,9 @@ export interface WatchdogDispatch {
    * fired ('new' = newly matched the filter, 'price_drop' = a recent price
    * decrease). */
   property_id: number | null;
+  /* The ad the event fired on (listings.id), whose cover the feed row shows;
+   * null on a share. */
+  listing_id: number | null;
   change_kind: DispatchChangeKind;
   /* What a `share` row shares: the kind (the API reads it off change_kind,
    * migration 652), and its id off the row's own columns — the collection id, the

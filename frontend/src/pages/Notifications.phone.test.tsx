@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Shell from '@/components/Shell';
 import * as api from '@/lib/api';
 import * as auth from '@/lib/auth';
+import * as queries from '@/lib/queries';
 import { TitleController } from '@/lib/pageTitle';
 import { PHONE_SHELL_QUERY } from '@/lib/phoneShell';
 import type { WatchdogDispatch } from '@/lib/types';
@@ -29,6 +30,10 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   listNotifications: vi.fn(),
   getNotificationUnreadCount: vi.fn(),
 }));
+vi.mock('@/lib/queries', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/queries')>()),
+  fetchListingCovers: vi.fn(),
+}));
 
 const row: WatchdogDispatch = {
   id: 'd1',
@@ -38,6 +43,7 @@ const row: WatchdogDispatch = {
   collection_id: 7,
   collection_name: 'Vinohrady investice',
   property_id: 999,
+  listing_id: 501,
   change_kind: 'price_drop',
   actor_email: null,
   share_name: null,
@@ -75,6 +81,7 @@ const share: WatchdogDispatch = {
   collection_id: 42,
   collection_name: 'Vinohrady',
   property_id: null,
+  listing_id: null,
   display_label: null,
   price_czk: null,
   prev_price_czk: null,
@@ -100,6 +107,7 @@ function setNarrow(narrow: boolean) {
 
 beforeEach(() => {
   window.scrollTo = vi.fn() as unknown as typeof window.scrollTo;
+  vi.mocked(queries.fetchListingCovers).mockResolvedValue(new Map());
   vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 2 });
   vi.mocked(api.listNotifications).mockResolvedValue({
     data: [row, share],
@@ -175,9 +183,14 @@ describe('<Notifications> at phone width', () => {
     const list = rowLink.closest('ul')!;
     expect(list.className).toContain('max-md:-mx-4');
     expect(list.parentElement!.parentElement!.className).toContain('max-md:px-4');
-    /* A row turns into two lines: chip and time, then what it is about. */
-    expect(rowLink.className).toContain('max-md:flex-wrap');
+    /* A row turns into two lines beside its photo: chip and time, then what it is about. */
+    expect(rowLink.className).toContain('max-md:grid-cols-[0.375rem_4.5rem_minmax(0,1fr)_auto]');
     expect(rowLink.className).toContain('max-md:px-4');
+    const [, photo, chip, about, time] = Array.from(rowLink.children) as HTMLElement[];
+    expect(photo).toHaveClass('max-md:row-span-2');
+    expect(chip).toHaveClass('justify-self-start');
+    expect(about).toHaveClass('max-md:col-start-3', 'max-md:col-span-2', 'max-md:row-start-2');
+    expect(time).toHaveClass('max-md:col-start-4', 'max-md:row-start-1');
     /* The frame's header names the page and its bell carries the count; the
      * page adds no label above its title. */
     expect(screen.queryByText('Notifications', { selector: 'p' })).toBeNull();

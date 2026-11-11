@@ -12,13 +12,17 @@
  * phone's 16 px gutters (`max-md:`). The frame's header already names the page
  * and its bell carries the count, so the explanation steps aside (the empty
  * state still explains); the rows' hairlines run to the screen edge as the
- * roll's do, and a row turns into two lines — kind and time, then what it is
- * about — whose prices never split.
+ * roll's do, and a row turns into two lines beside its photo — kind and time,
+ * then what it is about — whose prices never split.
+ *
+ * A listing row leads with the cover of the ad it fired on (lib/hydration: one
+ * cover read per loaded page, never a gate on the row). The photo's box is fixed
+ * before the photo lands, so a row never reflows; a share has no ad and no box.
  *
  * A coalesced push opens this page as `/notifications?d={delivery}`: the open is
  * reported once and the parameter dropped (lib/push). */
 
-import { useId, useState, type MouseEvent } from 'react';
+import { useId, useMemo, useState, type MouseEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import {
@@ -42,8 +46,10 @@ import { useInfiniteList, type InfiniteListPage } from '@/lib/useInfiniteList';
 import { fmtAbsolute, fmtCount, fmtCzk, fmtRelative } from '@/lib/format';
 import { listingKindLabel } from '@/lib/enums';
 import { CHANGE_META, matchReasonLabel } from '@/lib/changeKinds';
+import { CardHydrationProvider, useCardHydration } from '@/lib/hydration';
 import ErrorBanner from '@/components/ErrorBanner';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
+import { PHOTO_DARK } from '@/components/phone/CardPhotoStrip';
 import { SegmentedBar, type SegmentOption } from '@/components/controls';
 import type {
   NotificationSourceKind,
@@ -55,6 +61,8 @@ type SourceFilter = NotificationSourceKind | 'all';
 
 const PAGE_SIZE = 50;
 const noop = () => {};
+/* The one decoration a row renders; every other is off (lib/hydration). */
+const COVERS = { covers: true } as const;
 
 /* dispatchTarget's answer for a row with nothing to open: the feed itself. */
 const FEED = ROUTES.notifications.build();
@@ -106,6 +114,11 @@ export default function Notifications() {
   });
 
   const rows = feed.rows;
+  const pages = useMemo(() => {
+    const out: WatchdogDispatch[][] = [];
+    for (let i = 0; i < rows.length; i += PAGE_SIZE) out.push(rows.slice(i, i + PAGE_SIZE));
+    return out;
+  }, [rows]);
   /* No poll comes back for a failed read, so it offers its own retry; a failed next
    * page or re-read keeps the rows already drawn, the banner under them. */
   const failed = feed.isError ? (
@@ -150,10 +163,8 @@ export default function Notifications() {
         ) : (
           <>
             <ul className="divide-y divide-[var(--color-rule-soft)] border-t border-b border-[var(--color-rule-soft)] max-md:-mx-4">
-              {rows.map((d) => (
-                <li key={d.id}>
-                  <NotificationRow dispatch={d} />
-                </li>
+              {pages.map((page, i) => (
+                <RowsPage key={i} rows={page} />
               ))}
             </ul>
             {/* Only while there is more: the list ends silently, as it did under the button. */}
@@ -213,6 +224,27 @@ function Header({
         {markAllPending ? 'Marking…' : 'Mark all read'}
       </button>
     </header>
+  );
+}
+
+/* A page of rows under its own cover read: the read is keyed on its cohort, so one
+ * cohort that grew with every page would re-read all earlier covers as each next
+ * page lands (Browse buckets its photos the same way, lib/hydration). The page is
+ * the key's index, never its first row: a new event at the top would otherwise
+ * remount every page. */
+function RowsPage({ rows }: { rows: WatchdogDispatch[] }) {
+  const listingIds = useMemo(
+    () => rows.flatMap((d) => (d.listing_id == null ? [] : [d.listing_id])),
+    [rows],
+  );
+  return (
+    <CardHydrationProvider listingIds={listingIds} renders={COVERS}>
+      {rows.map((d) => (
+        <li key={d.id}>
+          <NotificationRow dispatch={d} />
+        </li>
+      ))}
+    </CardHydrationProvider>
   );
 }
 
@@ -276,6 +308,36 @@ function UnreadDot({ unread, id, color }: { unread: boolean; id: string; color: 
   );
 }
 
+/* The ad's cover in a fixed 4:3 box that is there before the photo is (nothing
+ * reflows when it lands), and stays there, empty, for an ad with no photo or one
+ * that will not load (dashed, as the Valuo card's comparables show it). It names
+ * nothing: the row's own text is its name. A delisted ad's photo is muted, as
+ * Browse and the board mute it. */
+function RowThumb({ listingId, inactive }: { listingId: number | null; inactive: boolean }) {
+  const { coverFor } = useCardHydration();
+  const src = coverFor(listingId);
+  const [broken, setBroken] = useState<string | null>(null);
+  const failed = src != null && broken === src;
+  return (
+    <span
+      className={`relative isolate block aspect-[4/3] w-[4.5rem] overflow-hidden rounded-[var(--radius-sm)] border bg-[var(--color-inset)] max-md:row-span-2 ${
+        failed ? 'border-dashed border-[var(--color-rule-strong)]' : 'border-[var(--color-rule)]'
+      }`}
+    >
+      {src && !failed && (
+        <img
+          src={src}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          onError={() => setBroken(src)}
+          className={`block h-full w-full object-cover ${PHOTO_DARK} ${inactive ? 'saturate-[0.4] brightness-[0.97]' : ''}`}
+        />
+      )}
+    </span>
+  );
+}
+
 /* A wrapped line ends on " ·", never starts on one. */
 const NBSP = '\u00a0';
 /* A row line on the phone: text and figures as items that wrap whole. */
@@ -301,16 +363,21 @@ function StandardNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }
   const control = {
     onClick: markSeen,
     'aria-describedby': unread ? unreadId : undefined,
+    /* A grid so the photo can lead on both frames: one line of dot, photo, kind,
+     * what it is about, time on the desktop; below 768 px the photo spans two
+     * lines, kind and time on the first, what it is about on the second. */
     className:
-      'flex items-start gap-3 py-3.5 group w-full text-left max-md:flex-wrap max-md:gap-x-2.5 max-md:gap-y-1.5 max-md:px-4',
+      'grid grid-cols-[0.375rem_4.5rem_auto_minmax(0,1fr)_auto] items-start gap-x-3 py-3.5 group w-full text-left max-md:grid-cols-[0.375rem_4.5rem_minmax(0,1fr)_auto] max-md:gap-x-2.5 max-md:gap-y-1.5 max-md:px-4',
   };
 
   const body = (
     <>
       <UnreadDot unread={unread} id={unreadId} color="var(--color-copper)" />
 
+      <RowThumb listingId={d.listing_id} inactive={d.is_active === false} />
+
       {/* change-kind chip */}
-      <span className="mt-0.5 inline-flex items-center gap-1.5 shrink-0 px-2 py-0.5 text-[0.7rem] rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] text-[var(--color-ink-2)]">
+      <span className="mt-0.5 inline-flex items-center gap-1.5 justify-self-start px-2 py-0.5 text-[0.7rem] rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] text-[var(--color-ink-2)]">
         <span
           aria-hidden
           className="w-1.5 h-1.5 rounded-full"
@@ -322,7 +389,7 @@ function StandardNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }
       {/* On the phone this is the row's second line, under the chip. Its
         * figures are flex items there: one that does not fit starts the next
         * line whole, without the " · " (a dot opening a line reads as noise). */}
-      <div className="min-w-0 flex-1 max-md:order-last max-md:basis-full max-md:pl-4">
+      <div className="min-w-0 max-md:col-span-2 max-md:col-start-3 max-md:row-start-2">
         <p className={`text-sm text-[var(--color-ink)] group-hover:text-[var(--color-copper)] transition-colors truncate ${PHONE_FIGURES}`}>
           <span>
             <span className="font-medium">{place}</span>
@@ -370,7 +437,7 @@ function StandardNotificationRow({ dispatch: d }: { dispatch: WatchdogDispatch }
 function RowTime({ iso }: { iso: string }) {
   return (
     <span
-      className="shrink-0 text-[0.7rem] tracking-wide text-[var(--color-ink-4)] cursor-help mt-0.5 max-md:ml-auto max-md:mt-[5px] max-md:font-mono max-md:text-[11px] max-md:tracking-normal max-md:tabular-nums"
+      className="shrink-0 text-[0.7rem] tracking-wide text-[var(--color-ink-4)] cursor-help mt-0.5 max-md:col-start-4 max-md:row-start-1 max-md:ml-auto max-md:mt-[5px] max-md:font-mono max-md:text-[11px] max-md:tracking-normal max-md:tabular-nums"
       title={fmtAbsolute(iso)}
     >
       {fmtRelative(iso)}
