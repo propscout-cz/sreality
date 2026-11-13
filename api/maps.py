@@ -1,10 +1,9 @@
 """Mapy.cz proxy — autocomplete suggest + RÚIAN code resolve.
 
 The frontend never holds the Mapy.cz API key; it talks to these proxy
-routes instead. Suggest responses are cached in-process for a few
-minutes since identical queries don't change on that timescale and the
-free tier is rate-limited. Resolve responses are NOT cached because
-they depend on registry state which can change between deploys.
+routes instead. Nothing Mapy answers is kept: its terms forbid storing or
+caching an API result, so every suggest asks Mapy (the in-process cache
+went early, ruling 2026-11-13, #2454).
 
 WHAT YOU PICK IS WHAT YOU FILTER. A location chip is ONE RÚIAN unit at the
 level the operator picked — kraj, okres, obec, část obce or ulice
@@ -41,8 +40,8 @@ Suggestions are regional only (`type=regional`): a POI has no register unit.
 from __future__ import annotations
 
 import logging
+import os
 import re
-import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -69,7 +68,6 @@ from location_data.resolver.resolve_db import (
     SqlRegistryView,
 )
 from location_data.resolver.types import RegistryView, Street
-from scraper.geocoding import KEY_LEVEL_STATUS, MapyKeyRefused, mapy_api_keys, with_mapy_key_failover
 
 LOG = logging.getLogger(__name__)
 
@@ -93,50 +91,34 @@ _STREET_SLACK_M = 200.0
 _OKRES_PREFIX = re.compile(r"^\s*okres\s+", re.IGNORECASE)
 
 MAPY_SUGGEST_URL = "https://api.mapy.cz/v1/suggest"
-_SUGGEST_TTL_SECONDS = 300
-_SUGGEST_CACHE_MAX = 256
-
-_suggest_cache: dict[tuple[str, int, str], tuple[float, dict[str, Any]]] = {}
+# 401/403 = the key was rejected; 429 = it hit its rate limit. A different key may succeed, so a backup key is tried
+# at once. A 5xx or a lost connection is a Mapy outage, which a second key cannot fix.
+_KEY_LEVEL_STATUS: frozenset[int] = frozenset({401, 403, 429})
 
 
 def _api_keys() -> list[str]:
-    keys = mapy_api_keys()
+    """Mapy.cz keys in priority order: `MAPY_CZ_API_KEY`, then the backup `MAPY2_CZ_API_KEY`; a blank or a repeat
+    is no key."""
+    keys: list[str] = []
+    for name in ("MAPY_CZ_API_KEY", "MAPY2_CZ_API_KEY"):
+        value = (os.environ.get(name) or "").strip()
+        if value and value not in keys:
+            keys.append(value)
     if not keys:
         raise HTTPException(status_code=503, detail="geocoding not configured")
     return keys
 
 
-def _cache_evict_expired(now: float) -> None:
-    for k, (exp, _) in list(_suggest_cache.items()):
-        if exp <= now:
-            del _suggest_cache[k]
-
-
-def clear_suggest_cache() -> None:
-    _suggest_cache.clear()
-
-
 def suggest(query: str, *, limit: int = 10, lang: str = "cs") -> dict[str, Any]:
-    keys = _api_keys()
-    cache_key = (query, limit, lang)
-    now = time.monotonic()
-    hit = _suggest_cache.get(cache_key)
-    if hit is not None and hit[0] > now:
-        return hit[1]
-    _cache_evict_expired(now)
-    raw = _fetch_suggest(query, limit=limit, lang=lang, keys=keys)
-    items = raw.get("items") or []
-    payload = {"items": items}
-    if len(_suggest_cache) >= _SUGGEST_CACHE_MAX:
-        _suggest_cache.pop(next(iter(_suggest_cache)))
-    _suggest_cache[cache_key] = (now + _SUGGEST_TTL_SECONDS, payload)
-    return payload
+    raw = _fetch_suggest(query, limit=limit, lang=lang, keys=_api_keys())
+    return {"items": raw.get("items") or []}
 
 
 def _fetch_suggest(
     query: str, *, limit: int, lang: str, keys: list[str]
 ) -> dict[str, Any]:
-    def attempt(key: str, last: bool) -> dict[str, Any]:
+    """Asks Mapy with each key in turn while a key is refused (`_KEY_LEVEL_STATUS`); the last key's answer is final."""
+    for n, key in enumerate(keys, 1):
         try:
             return http_json.fetch_json(
                 "GET", MAPY_SUGGEST_URL, timeout=10,
@@ -146,8 +128,10 @@ def _fetch_suggest(
                 },
             )
         except http_json.HttpJsonError as exc:
-            if exc.status in KEY_LEVEL_STATUS and not last:
-                raise MapyKeyRefused(exc.status) from exc
+            if exc.status in _KEY_LEVEL_STATUS and n < len(keys):
+                LOG.warning("Mapy suggest key %d/%d rejected (status=%s); failing over to backup",
+                            n, len(keys), exc.status)
+                continue
             # A rejected key / throttle / outage from Mapy must NOT surface as a raw
             # 500: the typeahead says "Place search is unavailable" only on a 503, and
             # a 500 leaves a silent empty dropdown. Log the real upstream status.
@@ -155,10 +139,7 @@ def _fetch_suggest(
             raise HTTPException(
                 status_code=503, detail="geocoding temporarily unavailable",
             ) from exc
-
-    return with_mapy_key_failover(
-        attempt, keys, log=LOG, refused="Mapy suggest key %d/%d rejected (status=%s); failing over to backup",
-    )
+    raise AssertionError("unreachable: _api_keys returns at least one key")
 
 
 _CURRENT_VERSION_SQL = "SELECT id FROM registry_versions WHERE is_current LIMIT 1"
@@ -244,22 +225,6 @@ def _containing_chain(
         str(level): (int(unit_id), int(code), name)
         for unit_id, level, code, name in rows
     }
-
-
-def containing_obec_kod(conn: Any, *, lat: float | None, lng: float | None) -> int | None:
-    """The RÚIAN code of the obec covering a point, or None (outside every obec / no current
-    registry) -- the one containing-obec statement, for subjects with no stored location
-    (an estimation of a typed point). Any query error raises: read
-    as "no obec" it would become a confident `location_unknown` frozen into a run."""
-    if lat is None or lng is None:
-        return None
-    with conn.cursor() as cur:
-        cur.execute(_CURRENT_VERSION_SQL)
-        row = cur.fetchone()
-    if not row or row[0] is None:
-        return None
-    obec = _containing_chain(conn, version=int(row[0]), lat=lat, lng=lng).get("obec")
-    return obec[1] if obec else None
 
 
 def _lookup_part(

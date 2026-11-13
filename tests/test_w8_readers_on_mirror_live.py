@@ -10,6 +10,8 @@ import json
 import uuid
 from typing import Any
 
+import pytest
+
 from scraper import db as scraper_db
 from scraper import price_stats_db
 from tests._live_property import REQUIRED_DB, _mirror_unit
@@ -22,6 +24,12 @@ BOX = (14.40, 50.00, 14.50, 50.10)
 
 def _population(cur: Any, code: int, year: int, people: int) -> None:
     cur.execute("INSERT INTO obec_population (obec_kod, year, population) VALUES (%s, %s, %s)", (code, year, people))
+
+
+def _city(cur: Any, name: str, obec: int) -> int:
+    cur.execute("INSERT INTO curated_cities (name, kraj_name, obec_kod) VALUES (%s, 'w8', %s) RETURNING id",
+                (name, obec))
+    return cur.fetchone()[0]
 
 
 def _new_version(cur: Any, *, current: bool) -> int:
@@ -145,9 +153,7 @@ def test_a_curated_city_reads_its_population_polygon_and_rules_by_its_register_c
     _mirror_unit(cur, "obec", OBEC, "Obcov", BOX)
     _population(cur, OBEC, 2026, 23_344)
     index = f"w8_{uuid.uuid4().hex[:8]}"
-    cur.execute("INSERT INTO curated_cities (name, kraj_name, centroid, obec_kod) VALUES (%s, 'w8', "
-                "ST_SetSRID(ST_MakePoint(14.45, 50.05), 4326)::geography, %s) RETURNING id", (index, OBEC))
-    city = cur.fetchone()[0]
+    city = _city(cur, index, OBEC)
     cur.execute("INSERT INTO city_index_revisions (source_filename, row_count, raw_rows) VALUES ('w8.csv', 1, "
                 "'[]'::jsonb) RETURNING source_revision")
     cur.execute("INSERT INTO city_index_values (city_id, source_revision, index_name, value) VALUES (%s, %s, %s, 8)",
@@ -174,19 +180,56 @@ def test_the_population_loader_upserts_by_code_and_year_and_keeps_every_year(cur
     assert cur.fetchall() == [(2025, 900), (2026, 1_010)]
 
 
-def test_the_seed_binds_a_new_city_to_the_town_under_its_centroid_and_never_rebinds_one(cur: Any) -> None:
-    from scripts.seed_curated_cities import CsvRow, cache_key, upsert_cities
+def _revisions(cur: Any) -> int:
+    cur.execute("SELECT count(*) FROM city_index_revisions")
+    return cur.fetchone()[0]
+
+
+def test_the_seed_writes_a_revision_for_an_existing_city_read_back_with_its_towns_population(cur: Any) -> None:
+    """#2454: the seed writes index revisions for cities already in curated_cities, matched by name and kraj."""
+    from scripts.seed_curated_cities import CsvRow, seed
+
+    _mirror_unit(cur, "obec", OBEC, "Obcov", BOX)
+    _population(cur, OBEC, 2026, 23_344)
+    name = f"w8-{uuid.uuid4().hex[:8]}"
+    city = _city(cur, name, OBEC)
+
+    seed(cur.connection, [CsvRow(name=name, kraj_name="w8", values={"celkove_hodnoceni": 7.5, "exekuce": 3.0})],
+         source_filename="obce_v_datech_2026.csv", uploaded_by=None)
+    cur.execute("SELECT c.population, v.index_name, v.value FROM curated_cities_public c "
+                "JOIN city_index_values_public v ON v.city_id = c.city_id WHERE c.city_id = %s ORDER BY 2", (city,))
+    assert cur.fetchall() == [(23_344, "celkove_hodnoceni", 7.5), (23_344, "exekuce", 3.0)]
+
+
+def test_a_row_naming_no_existing_city_refuses_the_run_by_name_and_writes_nothing(cur: Any) -> None:
+    """Jinov is a town in the register but no curated city, so its row is refused, never bound by name: a new city
+    arrives as a one-line data migration checked against the register (Hodonín is two obce in one kraj)."""
+    from scripts.seed_curated_cities import CsvRow, SeedRefused, seed
 
     _mirror_unit(cur, "obec", OBEC, "Obcov", BOX)
     _mirror_unit(cur, "obec", OTHER, "Jinov", (14.50, 50.00, 14.60, 50.10))
-    row = CsvRow(name=f"w8-{uuid.uuid4().hex[:8]}", kraj_name="w8", values={})
-    key = (row.name, row.kraj_name)
+    known = f"w8-{uuid.uuid4().hex[:8]}"
+    _city(cur, known, OBEC)
+    before = _revisions(cur)
+    cur.execute("DELETE FROM city_index_definitions WHERE index_name = 'exekuce'")
+    cur.execute("SELECT count(*) FROM city_index_definitions")
+    (definitions,) = cur.fetchone()
 
-    city = upsert_cities(cur.connection, [row], {cache_key(*key): {"lat": 50.05, "lng": 14.45}})[key]
-    cur.execute("SELECT obec_kod FROM curated_cities WHERE id = %s", (city,))
-    assert cur.fetchone() == (OBEC,)
-    assert upsert_cities(cur.connection, [row], {cache_key(*key): {"lat": 50.05, "lng": 14.55}})[key] == city
-    cur.execute("SELECT obec_kod, round(ST_X(centroid::geometry)::numeric, 2)::float8 FROM curated_cities "
-                "WHERE id = %s", (city,))
-    assert cur.fetchone() == (OBEC, 14.55), "a re-seed moves the centroid and never the town"
+    with pytest.raises(SeedRefused, match="Jinov, w8"):
+        seed(cur.connection, [CsvRow(name=known, kraj_name="w8", values={"exekuce": 3.0}),
+                              CsvRow(name="Jinov", kraj_name="w8", values={"exekuce": 4.0})],
+             source_filename="obce_v_datech_2026.csv", uploaded_by=None)
+    assert _revisions(cur) == before
+    cur.execute("SELECT count(*) FROM city_index_definitions")
+    assert cur.fetchone() == (definitions,), "the refused run upserted no definition either"
 
+
+def test_an_estimation_of_a_typed_point_takes_the_town_under_it_for_the_mf_reference(cur: Any) -> None:
+    """#2454: a raw-spec subject has no stored location, so the MF hand-off asks the resolver's registry view at the
+    current version for the town covering its point; a point in no town has none."""
+    from api.estimation_runs import _typed_point_obec_kod
+    from toolkit import TargetSpec
+
+    _mirror_unit(cur, "obec", OBEC, "Obcov", BOX)
+    assert _typed_point_obec_kod(cur.connection, TargetSpec(lat=50.05, lng=14.45)) == OBEC
+    assert _typed_point_obec_kod(cur.connection, TargetSpec(lat=49.0, lng=17.0)) is None

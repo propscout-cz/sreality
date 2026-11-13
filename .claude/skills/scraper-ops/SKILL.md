@@ -177,7 +177,7 @@ these producers' OWN predicates, so they recompute on their own; it deletes no l
 **No drain geocodes, and no place columns.** W4-c dropped every location column from `listings`
 and `properties`, so a parser's coordinate/locality/street reading is evidence for the resolver,
 not a write; a listing's place is `listing_location` (join on `listing_id`).
-`scraper/geocoding.py` survives for `/maps/*` and the curated-city seed only.
+The Mapy geocoder is deleted (#2454); nothing in `scraper/` calls Mapy.
 
 One monitoring workflow watches the rest: the canary, `verify_pipeline.yml` ("Monitoring: health canary (hourly)"; GitHub
 delivers ~5 runs a day). Step 1, the poller `scripts/record_workflow_failures.py`, records PRODUCTION runs only (event

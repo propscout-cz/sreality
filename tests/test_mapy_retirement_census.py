@@ -22,15 +22,11 @@ NAMES = re.compile(r"api\.mapy\.(cz|com)|MAPY2?_CZ_API_KEY|MAPY_(GEOCODE|STATIC_
 _SELF = "tests/test_mapy_retirement_census.py"
 # Every code file that names Mapy today. A retiring PR removes its entries first (the census goes red), then the code.
 LEDGER: frozenset[str] = frozenset({
-    ".github/workflows/seed_curated_cities.yml",            # Stage A (#2454)
-    ".railway/railway.ts",                                  # the worker's key copy (#2454), the API's keys (#2455)
-    "api/maps.py",                                          # the suggest proxy: the switch-over (#2453)
+    ".railway/railway.ts",                                  # the API's keys (#2455)
+    "api/maps.py",                                          # the suggest proxy and its key failover: the switch-over (#2453)
     "frontend/src/components/filter-controls/LocationTypeahead.tsx",  # the place box: the switch-over (#2453)
-    "scraper/geocoding.py",                                 # Stage A (#2454); its key helpers move to the API first
-    "scripts/seed_curated_cities.py",                       # Stage A (#2454)
     "tests/api/test_http_json.py",                          # pins suggest's key-free log: the switch-over (#2453)
     "tests/api/test_maps.py",                               # the switch-over (#2453)
-    "tests/scraper/test_geocoding.py",                      # Stage A (#2454)
 })
 
 

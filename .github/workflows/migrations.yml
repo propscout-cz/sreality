@@ -1015,14 +1015,24 @@ jobs:
 
       # Location W8 (migrations 725-729): every reader of the legacy boundary table reads the RÚIAN mirror (one render
       # polygon per code through a close-and-reopen, the picker, choropleth, growth RPC, sold coverage, curated
-      # cities, the population loader and the seed's bind), 726's and 729's guards refuse a function still naming what
-      # they rename or drop, and the replayed catalog holds none of the retired relations, columns or readers.
+      # cities, the population loader and the seed's existing-city revisions), 726's and 729's guards refuse a function
+      # still naming what they rename or drop, and the replayed catalog holds none of the retired relations, columns or
+      # readers.
       - name: The legacy boundary table's readers read the RÚIAN mirror, and it is gone (migrations 725-729)
         timeout-minutes: 5
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_w8_readers_on_mirror_live.py tests/test_admin_boundaries_unread.py -q
+
+      # Mapy exit, Stage A (migration 739): curated_cities' Mapy geocode and backup_w4 are gone, curated_cities_public is
+      # unchanged, 739's guard refuses a function still naming what it drops, and a town holds one curated city.
+      - name: Curated cities hold no Mapy output and one city per town (migration 739)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_mapy_stage_a_drop_live.py -q
 
       # MF reference rent is ONE read-time measure (migration 565), read by the two serving
       # views (browse_projection, properties_public) with the stored KU (566/567, replayed

@@ -1383,6 +1383,14 @@ component is slimmed twice — each wave rewrites one component and slims its st
   `docs/design/location-quality/PROGRAM.md` § W1). `served/town` stores `grains`; Location Quality draws every
   published property once at its location ad's finest level, one table pinning gauge and page. The four unread
   `by_portal` facts on the served cells are deleted. **Next:** the settlement-unit view (#2460) after FILL places them.
+- **Mapy exit, Stage A — built 2026-11-13** (#2454; spec #2441 Part 6; rulings Q3 a, Q5, 2026-11-07 on `backup_w4`,
+  2026-11-13 on the suggest cache; migration 739, destructive, backup waived; as built: `docs/architecture.md` § rule 17
+  and § the Mapy-powered location search). The geocoder, its `MAPY_GEOCODE_ENABLED` switch and tests, the seed's Mapy
+  block and its workflow's write grant, inputs and Mapy secrets, the 300 s suggest cache, the duplicated
+  containing-obec helper (the MF hand-off reads the resolver's view) and the worker's Mapy key copy (wizard) are gone;
+  739 drops `curated_cities.centroid/source/source_confidence` and `backup_w4` uncopied, `obec_kod` unique. The seed
+  refuses an unknown city or CSV column by name. **Next:** Mapy's latency baseline for #2465 is read from 7 days after
+  the deploy (no cached answers); Stage B (#2455) after the switch-over's soak.
 - **The pick record — built 2026-11-08** (#2445; spec #2441 Part 1, ruling Q10; migration 737, additive; as built:
   `docs/architecture.md` § the pick record). Every place box's resolve carries `pick {text, rank}`; `/maps/resolve`
   records one row after the answer for a verified non-automation caller; 12-month pg_cron retention. **Next:** the

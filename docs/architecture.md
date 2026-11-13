@@ -1095,7 +1095,11 @@ rules. Identify which one a task belongs to before you start.
   regional_structure}` → ONE shape `{level, id, name, context}`: the RÚIAN unit at the picked
   level (an address binds its street), its register name, and `context` = the register obec
   name below obec. `level` or `id` null creates NO chip; the typeahead says why. The
-  `MAPY_CZ_API_KEY` is server-side only; a 503 (key unset) renders a hint, not suggestions.
+  `MAPY_CZ_API_KEY` is server-side only; a 503 (key unset) renders a hint, not suggestions. Nothing Mapy
+  answers is kept: its terms forbid storing or caching an API result, so the in-process suggest cache went
+  early (ruling 2026-11-13, #2454) and every suggest asks Mapy, failing over to `MAPY2_CZ_API_KEY` on a refused
+  key (`api.maps._fetch_suggest`). The geocoder that once wrote Mapy answers into the database, its
+  `MAPY_GEOCODE_ENABLED` switch and every stored Mapy answer are gone (#2454, migration 739).
 - **The pick record** (`place_picks`, migration 737; spec #2441 Part 1, ruling Q10). Own place search may
   replace Mapy only after a gate over questions its author did not write, so every place box's add sends
   `pick: {text, rank}` on its resolve (the text its list ANSWERED, not what was typed on after, and the 1-based
@@ -1277,7 +1281,8 @@ rules. Identify which one a task belongs to before you start.
   narrow: questions cluster by about four people) and Mapy's rank-based top-1 and top-5 from the stored rank, a
   repeat keeping its best, marked biased upward. **Latency**, by method from the API host's HTTP log: Mapy's
   `GET /maps/suggest`, every client, over the 7 days before the replay (or the 7 days from `--mapy-from`, once they
-  have passed; until then latency is incomplete), read FIRST so
+  have passed; until then latency is incomplete; since #2454 dropped the suggest cache, a window must start after
+  that deploy, as cached answers made Mapy look faster), read FIRST so
   retention cannot eat its oldest rows (the earliest row is printed); then the prefix replay (each numbered text,
   refused and not-live ones too, from two trimmed characters, 0.2 s between keystrokes, 30 s between texts; the last
   prefix's answer is the one scored); then its own rows, found by the run's agent and re-read every 30 s for up to
@@ -3422,7 +3427,13 @@ renumber.** Navigate by area:
     Postgres does not track column dependencies through a function body, so dropping one without
     the other leaves a function that compiles and fails on its first call. What it does NOT delete is the obec-keyed pair this pattern was
     modelled on: `home_obec_pop` and the eight `near_*` columns (migration 142) stay, because
-    they are population/proximity FACTS about the obec, not a membership cache.
+    they are population/proximity FACTS about the obec, not a membership cache. **A curated city is its RÚIAN code
+    and nothing Mapy made** (#2454, migration 739): the Mapy geocode each city once carried (`centroid`, `source`,
+    `source_confidence`) is dropped, `obec_kod` is unique, and a new city arrives as a one-line data migration
+    checked against the register, never by name (Hodonín is two obce in one kraj). The seed
+    (`scripts/seed_curated_cities.py`, `seed_curated_cities.yml`, read-only contents, no Mapy secret) writes the
+    index definitions and one revision of values for cities already there, matched by name and kraj, and refuses a
+    row naming no such city or an unknown CSV column by name, writing nothing.
     The one exception was `near_city_proximity` (an operator-chosen radius search, not curated-city
     membership): retired in W5 (migration 436); the SPA state and the RPCs' `city_proximity`
     parameter went in 597, and only the compiler's retired-loudly guard remains for stored specs.
@@ -5522,7 +5533,8 @@ and `ephemeral_display_only` (Mapy.cz-class) its poison value; `listing_location
 `position_licence_class` column because the read admits `portal` and `operator` claims only
 (`_claims_sql`) — such a coordinate is not refused at the winner, it is never READ (a partial index
 keeps the remediation set one indexed predicate away). Nothing mints one any more: the Mapy geocoder
-and the `mapy_affected` inventory that policed it are gone, so a coordinate claim comes only from a
+and the `mapy_affected` inventory that policed it are gone (`backup_w4`, which still held both, went
+uncopied in migration 739), so a coordinate claim comes only from a
 portal's payload or its own page, and every other stamp is class E outright.
 
 **THE RESOLVER IS FOUR STEPS** (v5, `location_data/resolver/`), and one answer row:
