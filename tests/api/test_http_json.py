@@ -71,10 +71,8 @@ def test_a_good_answer_is_its_json(monkeypatch):
 def test_the_mapy_suggest_proxy_logs_no_key_when_both_keys_fail(monkeypatch, caplog):
     monkeypatch.setenv("MAPY_CZ_API_KEY", SECRET)
     monkeypatch.setenv("MAPY2_CZ_API_KEY", SECRET + "-backup")
-    maps.clear_suggest_cache()
     _answer(monkeypatch, requests.HTTPError(f"403 Client Error: Forbidden for url: {LEAKY_URL}"))
     with caplog.at_level(logging.WARNING, logger=maps.LOG.name), pytest.raises(Exception) as err:
         maps.suggest("Praha")
     assert getattr(err.value, "status_code", None) == 503
     assert SECRET not in caplog.text and caplog.text
-    maps.clear_suggest_cache()
