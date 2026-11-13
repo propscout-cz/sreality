@@ -8,10 +8,10 @@ A row is a chip: level, RÚIAN code, register name, context (the parent's name) 
 or none. It answers kraj, okres, obec, část obce and street, never a cadastral area, cohesion region or the country
 (Q6 a, Q9). A městská část, no served level (#2380), answers as a place shortcut (#2450): its `places` are its
 quarters' chips, the register's `momc_cast_obce` pairs at the index's version, and it ranks by the sum of their served
-properties; with no pair at that version it answers nothing. It is also an exact match by its number, typed in
-Arabic or Roman numerals, with or without the register's suffix: "Pardubice 2" is Pardubice II and "Plzeň 2" is Plzeň
-2-Slovany, while "Praha 1" never makes Praha 10 exact (#2497; a numbered část obce, "Kolín III", is not covered). Never
-reads the place picks (migration 737): they are its holdout.
+properties; with no pair at that version it answers nothing. Any unit is also an exact match by its number, typed
+in Arabic or Roman numerals, with or without the register's suffix: "Pardubice 2" is Pardubice II, "Plzeň 2" is Plzeň
+2-Slovany and "Kolín 3" is Kolín III, while "Praha 1" never makes Praha 10 exact (#2497, #2499). Never reads the place
+picks (migration 737): they are its holdout.
 
 A street and a house number, or a village and its č.p., also answer RÚIAN doors (#2451; stories 44, 53): level
 `adresni_misto`, kód ADM, the one door label (which names no number for a streetless door, and for a č.ev. door only
@@ -84,25 +84,28 @@ _BOUNDS_SQL = (
 # it publishes); a street, which has no index, by the version's membership (location_data/ruian_boundaries.py). A NULL
 # prefix or fuzzy key switches its arm off. A městská část is a candidate only with pairs at that version, gated in both
 # unit arms so one without never counts toward `near` and switches fuzzy off; `unit_id` carries its row to the pairs.
-# A městská část is also exact by its number (#2497): named the key's twin (the number in the other numeral form), or
-# the key or the twin and then the register's suffix after a space ("Plzeň 2-Slovany"), never a longer number ("Praha
-# 10" for "Praha 1"). The twin's two arms are index conditions of their own; with no twin every such key is NULL.
-_SUGGEST_SQL = """
+# A unit is also exact by its number (#2497 a městská část, #2499 every level): named the key's twin (the number in the
+# other numeral form), or the key or the twin and then the register's suffix ("Plzeň 2-Slovany", "Liberec I-Staré
+# Město"), never a longer number ("Praha 10" for "Praha 1"). The register writes that suffix after a hyphen or a dot
+# ("Brusné 1.díl"), never a space: "v" is 5 and also "in", and "Jablonné v Podještědí" names no number. The index has
+# lost the hyphen, so `_NUMBERED` reads the unit's own name. The twin's two arms are index conditions of their own; with
+# no twin every such key is NULL.
+_NUMBERED = r"' ([IVX]+|[0-9]+)[-.]'"
+_SUGGEST_SQL = f"""
 WITH cur AS (SELECT id FROM registry_versions WHERE is_current),
 units AS (
   SELECT DISTINCT ON (u.level, u.code) u.level, u.code, u.name, u.parent_id, u.id AS unit_id,
          CASE WHEN n.name_kind <> 'qualifier_stripped'
-                   AND (n.name_norm = %(unit_key)s
-                        OR (n.entity_kind = 'momc' AND (n.name_norm = %(unit_twin)s
-                                                        OR n.name_norm LIKE %(unit_suffix)s
-                                                        OR n.name_norm LIKE %(unit_twin_suffix)s)))
+                   AND (n.name_norm = %(unit_key)s OR n.name_norm = %(unit_twin)s
+                        OR ((n.name_norm LIKE %(unit_suffix)s OR n.name_norm LIKE %(unit_twin_suffix)s)
+                            AND u.name ~ {_NUMBERED}))
               THEN 0 ELSE 1 END AS tier
     FROM ruian_name_index n
     JOIN ruian_admin_units u ON u.id = n.entity_id AND u.level = n.entity_kind
    WHERE n.registry_version_id = (SELECT id FROM cur)
      AND (n.name_norm LIKE %(unit_prefix)s
-          OR (n.entity_kind = 'momc' AND n.name_norm = %(unit_twin)s)
-          OR (n.entity_kind = 'momc' AND n.name_norm LIKE %(unit_twin_suffix)s))
+          OR n.name_norm = %(unit_twin)s
+          OR (n.name_norm LIKE %(unit_twin_suffix)s AND u.name ~ {_NUMBERED}))
      AND n.entity_kind IN ('kraj', 'okres', 'obec', 'momc', 'cast_obce')
      AND (SELECT id FROM cur) BETWEEN u.first_version_id AND u.last_version_id
      AND (u.level <> 'momc' OR EXISTS (SELECT 1 FROM ruian_admin_unit_relations rel
@@ -181,8 +184,8 @@ SELECT r.level::text, r.code, r.name, par.name, f.lat, f.lng,
 # use only its street_id. Labels are computed for the `top` rows alone.
 #
 # A typed town (#2485) is every obec, část obce and městská část of that name at the index's version, every name kind,
-# homonyms all kept, and a městská část also by its number as the name read takes it (#2497: "Plzeň 2" is Plzeň
-# 2-Slovany), each arm an index condition. The read narrows a list and binds nothing, so the resolver's whole-string
+# homonyms all kept, and also by its number as the name read takes it (#2497, #2499: "Plzeň 2" is Plzeň 2-Slovany,
+# "Kolín 3" is Kolín III), each arm an index condition. The read narrows a list and binds nothing, so the resolver's whole-string
 # ladder and its fail-closed rule do not apply, but its levels do (an okres or a kraj is a region, never the town).
 # Streets and villages narrow to its obce, and doors to those that lie in it: its obec or část by code, or its městská
 # část through every row of the code (a street runs through several of either). With no town each condition folds away
@@ -202,9 +205,9 @@ town AS (
     LEFT JOIN ruian_admin_units po ON po.id = u.parent_id AND po.level = 'obec'
    WHERE n.registry_version_id = (SELECT id FROM cur)
      AND (n.name_norm = %(town)s::text
-          OR (n.entity_kind = 'momc' AND n.name_norm = %(town_twin)s::text)
-          OR (n.entity_kind = 'momc' AND n.name_norm LIKE %(town_suffix)s::text)
-          OR (n.entity_kind = 'momc' AND n.name_norm LIKE %(town_twin_suffix)s::text))
+          OR n.name_norm = %(town_twin)s::text
+          OR (n.name_norm LIKE %(town_suffix)s::text AND u.name ~ {_NUMBERED})
+          OR (n.name_norm LIKE %(town_twin_suffix)s::text AND u.name ~ {_NUMBERED}))
      AND n.entity_kind IN ({_TOWN_LEVELS})
      AND (SELECT id FROM cur) BETWEEN u.first_version_id AND u.last_version_id),
 town_obce AS (SELECT o.id FROM ruian_admin_units o WHERE o.level = 'obec' AND o.code IN (SELECT obec_code FROM town)),
@@ -313,7 +316,7 @@ def _arm(key: str) -> tuple[str | None, str | None]:
 
 
 def _by_number(key: str | None) -> tuple[str | None, str | None, str | None]:
-    """A městská část's names by the key's number (#2497): the twin, the key with its last token, a number 1-39, in the
+    """A unit's names by the key's number (#2497, #2499): the twin, the key with its last token, a number 1-39, in the
     other numeral form ("pardubice 2" and "pardubice ii"), then the key and the twin each followed by the register's
     suffix, as LIKE patterns ("plzen 2 %"). All None when the key ends in no such number or is the number alone."""
     base, _, last = (key or "").rpartition(" ")

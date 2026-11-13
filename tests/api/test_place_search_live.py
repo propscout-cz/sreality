@@ -1282,10 +1282,10 @@ def test_a_mestska_cast_typed_by_its_number_as_the_town_answers_the_door_that_li
     assert _suggest(client, query) == [door[kod]]
 
 
-def test_a_numbered_cast_obce_is_not_named_by_its_number_in_the_other_form(mirror, client):
-    """#2497 covers a městská část only: the register also numbers části obce ("Kolín III", "Liberec I-Staré Město"),
-    and "Kolín 3" names none of them. As the address town it names nothing, so no door answers, not even Kolín III's;
-    typed alone, Kolín III answers only by similarity, by code after the okres and Kolín II."""
+def test_kolin_3_names_the_cast_obce_kolin_iii_as_its_exact_name_does_and_as_the_town_its_door(mirror, client):
+    """#2499: the register also numbers části obce in Roman numerals ("Kolín III"), and a number typed in the other
+    form is the same name: Kolín III answers first, then what "kolin 3" reaches by similarity, by code. As the address
+    town it narrows to the door that lies in Kolín III, never Kolín II's door 12 on the same street."""
     towns = _towns(mirror)
     nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
     kolin_ii = mirror.unit("cast_obce", KOLIN_II, "Kolín II", towns["kolin"])
@@ -1293,10 +1293,61 @@ def test_a_numbered_cast_obce_is_not_named_by_its_number_in_the_other_form(mirro
     mirror.house(21000121, towns["kolin"], street=nadrazni, part=kolin_ii, cp=12)
     mirror.house(21000122, towns["kolin"], street=nadrazni, part=kolin_iii, cp=12)
     mirror.publish()
-    assert _suggest(client, "Nádražní 12, Kolín 3") == []
+    assert _suggest(client, "Nádražní 12, Kolín 3") == [
+        {"level": "adresni_misto", "id": 21000122, "name": "Nádražní 12, Kolín", "context": "Kolín", "point": None,
+         "street": {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}},
+    ]
     assert _suggest(client, "Kolín 3") == [
+        {"level": "cast_obce", "id": KOLIN_III, "name": "Kolín III", "context": "Kolín", "point": None},
         {"level": "okres", "id": KOLIN_OKRES, "name": "Kolín", "context": "Středočeský kraj", "point": None},
         {"level": "cast_obce", "id": KOLIN_II, "name": "Kolín II", "context": "Kolín", "point": None},
-        {"level": "cast_obce", "id": KOLIN_III, "name": "Kolín III", "context": "Kolín", "point": None},
         {"level": "obec", "id": KOLIN, "name": "Kolín", "context": "Kolín", "point": None},
+    ]
+
+
+LIBEREC_OKRES, LIBEREC, LIBEREC_I, LIBEREC_IX = 3505, 563889, 408638, 408671
+JABLONNE, JABLONNE_CAST = 561631, 56219
+
+
+def test_liberec_1_names_liberec_i_stare_mesto_but_a_preposition_v_never_reads_as_a_number(mirror, client):
+    """#2499, the suffix half: the number in either form, then the register's suffix after a hyphen, is the exact name,
+    so "Liberec 1" names Liberec I-Staré Město and never Liberec IX-Janův Důl. A suffix follows the number after a
+    hyphen or a dot, never a space: in Czech "v" is 5 and also "in", and "Jablonné v Podještědí" is no numbered name.
+    Typed so far, "Jablonné v" starts the town's name and its část's alike, and the town, which has people, goes first.
+    One row for "Liberec 1", so nothing fuzzy follows."""
+    liberec_okres = mirror.unit("okres", LIBEREC_OKRES, "Liberec")
+    liberec = mirror.unit("obec", LIBEREC, "Liberec", liberec_okres)
+    mirror.unit("cast_obce", LIBEREC_I, "Liberec I-Staré Město", liberec)
+    mirror.unit("cast_obce", LIBEREC_IX, "Liberec IX-Janův Důl", liberec)
+    jablonne = mirror.unit("obec", JABLONNE, "Jablonné v Podještědí", liberec_okres)
+    mirror.unit("cast_obce", JABLONNE_CAST, "Jablonné v Podještědí", jablonne)
+    mirror.population(JABLONNE, 3700)
+    mirror.publish()
+    res = client.post("/places/suggest", json={"query": "Liberec 1", "limit": 1})
+    assert res.status_code == 200, res.text
+    assert res.json()["items"] == [
+        {"level": "cast_obce", "id": LIBEREC_I, "name": "Liberec I-Staré Město", "context": "Liberec", "point": None}]
+    assert _suggest(client, "Jablonné v") == [
+        {"level": "obec", "id": JABLONNE, "name": "Jablonné v Podještědí", "context": "Liberec", "point": None},
+        {"level": "cast_obce", "id": JABLONNE_CAST, "name": "Jablonné v Podještědí", "context": "Jablonné v Podještědí",
+         "point": None},
+    ]
+
+
+KUTNA_HORA_OKRES, HORKA_I, HORKA_I_CAST, HORKA_II, HORKA_II_CAST = 3205, 531430, 195766, 534056, 42030
+
+
+def test_horka_2_names_the_town_horka_ii_first_and_then_its_cast_of_the_same_name(mirror, client):
+    """#2499: the register numbers 11 obce too ("Horka II"), each beside a část of the same name, so the number names
+    the town as it names the část, and the town goes first (#2497, ruling 1). Horka I is no start of "horka 2" in
+    either form. Two rows, so nothing fuzzy follows."""
+    okres = mirror.unit("okres", KUTNA_HORA_OKRES, "Kutná Hora")
+    for obec, cast, name in ((HORKA_I, HORKA_I_CAST, "Horka I"), (HORKA_II, HORKA_II_CAST, "Horka II")):
+        mirror.unit("cast_obce", cast, name, mirror.unit("obec", obec, name, okres))
+    mirror.publish()
+    res = client.post("/places/suggest", json={"query": "Horka 2", "limit": 2})
+    assert res.status_code == 200, res.text
+    assert res.json()["items"] == [
+        {"level": "obec", "id": HORKA_II, "name": "Horka II", "context": "Kutná Hora", "point": None},
+        {"level": "cast_obce", "id": HORKA_II_CAST, "name": "Horka II", "context": "Horka II", "point": None},
     ]
