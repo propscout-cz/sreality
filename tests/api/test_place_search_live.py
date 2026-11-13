@@ -1252,3 +1252,31 @@ def test_plzen_2_and_plzen_ii_answer_plzen_2_slovany_exactly_and_plzen_1_never_m
         slovany, {"level": "obec", "id": PLZEN, "name": "Plzeň", "context": "Plzeň-město", "point": None}]
     assert suggest("Plzeň 1") == [_plzen_row(PLZEN_1, "Plzeň 1", BOLEVEC, "Bolevec"),
                                   _plzen_row(PLZEN_10, "Plzeň 10-Lhota", LHOTA_PLZEN, "Lhota")]
+
+
+PARDUBICE_I, NADRAZNI_PLZEN, NADRAZNI_PARDUBICE = 574716, 401021, 401022
+
+
+@pytest.mark.parametrize(("query", "kod"), [("Nádražní 12, Plzeň 2", 21000621), ("Nádražní 12, Pardubice 2", 21000623)])
+def test_a_mestska_cast_typed_by_its_number_as_the_town_answers_the_door_that_lies_in_it(mirror, client, query, kod):
+    """#2497, ruling 2 in the address town (#2485): "Plzeň 2" names Plzeň 2-Slovany and "Pardubice 2" Pardubice II, so
+    each narrows to the door in that městská část: Nádražní 12, never Nádražní 345/12 in Plzeň 1 or Pardubice I. The
+    streets' codes are invented. The whole text names nothing by similarity."""
+    plzen = mirror.unit("obec", PLZEN, "Plzeň", mirror.unit("okres", PLZEN_MESTO, "Plzeň-město"))
+    pardubice = mirror.unit("obec", PARDUBICE, "Pardubice", mirror.unit("okres", PARDUBICE_OKRES, "Pardubice"))
+    for town, street, door, inside, beside in (
+            (plzen, NADRAZNI_PLZEN, 21000621, (PLZEN_2, "Plzeň 2-Slovany"), (PLZEN_1, "Plzeň 1")),
+            (pardubice, NADRAZNI_PARDUBICE, 21000623, (PARDUBICE_II, "Pardubice II"), (PARDUBICE_I, "Pardubice I"))):
+        nadrazni = mirror.street(street, "Nádražní", town)
+        mirror.house(door, town, street=nadrazni, cp=12, momc=mirror.unit("momc", *inside, town))
+        mirror.house(door + 1, town, street=nadrazni, cp=345, co=12, momc=mirror.unit("momc", *beside, town))
+    mirror.publish()
+    door = {
+        21000621: {"level": "adresni_misto", "id": 21000621, "name": "Nádražní 12, Plzeň", "context": "Plzeň-město",
+                   "point": None,
+                   "street": {"level": "ulice", "id": NADRAZNI_PLZEN, "name": "Nádražní", "context": "Plzeň"}},
+        21000623: {"level": "adresni_misto", "id": 21000623, "name": "Nádražní 12, Pardubice",
+                   "context": "Pardubice", "point": None,
+                   "street": {"level": "ulice", "id": NADRAZNI_PARDUBICE, "name": "Nádražní", "context": "Pardubice"}},
+    }
+    assert _suggest(client, query) == [door[kod]]

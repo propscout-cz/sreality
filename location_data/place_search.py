@@ -8,8 +8,10 @@ A row is a chip: level, RÚIAN code, register name, context (the parent's name) 
 or none. It answers kraj, okres, obec, část obce and street, never a cadastral area, cohesion region or the country
 (Q6 a, Q9). A městská část, no served level (#2380), answers as a place shortcut (#2450): its `places` are its
 quarters' chips, the register's `momc_cast_obce` pairs at the index's version, and it ranks by the sum of their served
-properties; with no pair at that version it answers nothing. Never reads the place picks (migration 737): they are its
-holdout.
+properties; with no pair at that version it answers nothing. It is also an exact match by its number, typed in
+Arabic or Roman numerals, with or without the register's suffix: "Pardubice 2" is Pardubice II and "Plzeň 2" is Plzeň
+2-Slovany, while "Praha 1" never makes Praha 10 exact (#2497; a numbered část obce, "Kolín III", is not covered). Never
+reads the place picks (migration 737): they are its holdout.
 
 A street and a house number, or a village and its č.p., also answer RÚIAN doors (#2451; stories 44, 53): level
 `adresni_misto`, kód ADM, the one door label (which names no number for a streetless door, and for a č.ev. door only
@@ -19,8 +21,9 @@ rows go after the whole text's exact rows and before its similar ones.
 
 The address may carry its town (#2485): after a comma, before it, or as the words after the number ("Nádražní 12,
 Kolín", "Kolín, Nádražní 12", "Nádražní 12 Kolín"). Its doors are then only those in a town of that exact name, an obec,
-a část obce or a městská část, every homonym kept; a town that names nothing answers no door. Each reading is one
-statement, tried in order until one answers, the whole text's always last; the name read takes the whole text.
+a část obce or a městská část (a městská část also by its number, as above: "Nádražní 12, Plzeň 2"), every homonym
+kept; a town that names nothing answers no door. Each reading is one statement, tried in order until one answers, the
+whole text's always last; the name read takes the whole text.
 """
 
 from __future__ import annotations
@@ -178,11 +181,12 @@ SELECT r.level::text, r.code, r.name, par.name, f.lat, f.lng,
 # use only its street_id. Labels are computed for the `top` rows alone.
 #
 # A typed town (#2485) is every obec, část obce and městská část of that name at the index's version, every name kind,
-# homonyms all kept: the read narrows a list and binds nothing, so the resolver's whole-string ladder and its
-# fail-closed rule do not apply, but its levels do (an okres or a kraj is a region, never the town). Streets and
-# villages narrow to its obce, and doors to those that lie in it: its obec or část by code, or its městská část through
-# every row of the code (a street runs through several of either). With no town each condition folds away at plan
-# time: the statement is unnamed, its parameters planned in.
+# homonyms all kept, and a městská část also by its number as the name read takes it (#2497: "Plzeň 2" is Plzeň
+# 2-Slovany), each arm an index condition. The read narrows a list and binds nothing, so the resolver's whole-string
+# ladder and its fail-closed rule do not apply, but its levels do (an okres or a kraj is a region, never the town).
+# Streets and villages narrow to its obce, and doors to those that lie in it: its obec or část by code, or its městská
+# část through every row of the code (a street runs through several of either). With no town each condition folds away
+# at plan time: the statement is unnamed, its parameters planned in.
 _TOWN_LEVELS = ", ".join(f"'{level}'" for level in WHOLE_LEVELS)
 _DOOR_IN_TOWN = """
          AND (%(town)s::text IS NULL OR ap.obec_kod IN (SELECT code FROM town WHERE level = 'obec')
@@ -196,7 +200,11 @@ town AS (
     FROM ruian_name_index n
     JOIN ruian_admin_units u ON u.id = n.entity_id AND u.level = n.entity_kind
     LEFT JOIN ruian_admin_units po ON po.id = u.parent_id AND po.level = 'obec'
-   WHERE n.registry_version_id = (SELECT id FROM cur) AND n.name_norm = %(town)s::text
+   WHERE n.registry_version_id = (SELECT id FROM cur)
+     AND (n.name_norm = %(town)s::text
+          OR (n.entity_kind = 'momc' AND n.name_norm = %(town_twin)s::text)
+          OR (n.entity_kind = 'momc' AND n.name_norm LIKE %(town_suffix)s::text)
+          OR (n.entity_kind = 'momc' AND n.name_norm LIKE %(town_twin_suffix)s::text))
      AND n.entity_kind IN ({_TOWN_LEVELS})
      AND (SELECT id FROM cur) BETWEEN u.first_version_id AND u.last_version_id),
 town_obce AS (SELECT o.id FROM ruian_admin_units o WHERE o.level = 'obec' AND o.code IN (SELECT obec_code FROM town)),
@@ -304,12 +312,16 @@ def _arm(key: str) -> tuple[str | None, str | None]:
     return key + "%", key if len(key) >= _FUZZY_MIN_CHARS else None
 
 
-def _twin(key: str) -> str | None:
-    """The key with its last token, a number 1-39, in the other numeral form ("pardubice 2" and "pardubice ii"); None
-    when the key ends in no such number or is the number alone."""
-    base, _, last = key.rpartition(" ")
-    twin = _NUMBER_TWIN.get(last)
-    return f"{base} {twin}" if base and twin else None
+def _by_number(key: str | None) -> tuple[str | None, str | None, str | None]:
+    """A městská část's names by the key's number (#2497): the twin, the key with its last token, a number 1-39, in the
+    other numeral form ("pardubice 2" and "pardubice ii"), then the key and the twin each followed by the register's
+    suffix, as LIKE patterns ("plzen 2 %"). All None when the key ends in no such number or is the number alone."""
+    base, _, last = (key or "").rpartition(" ")
+    number = _NUMBER_TWIN.get(last)
+    if not base or number is None:
+        return None, None, None
+    twin = f"{base} {number}"
+    return twin, f"{key} %", f"{twin} %"
 
 
 def _street_keys(part: str) -> list[str]:
@@ -340,9 +352,11 @@ class _Reading:
     town: str | None
 
     def params(self, limit: int) -> dict[str, Any]:
+        town_twin, town_suffix, town_twin_suffix = _by_number(self.town)
         return {"street_keys": _street_keys(self.street), "part_key": normalize_name(self.street),
                 "domovni": self.domovni, "orientacni": self.orientacni, "znak": self.znak, "typ": self.typ or TYP_CP,
-                "bare": self.bare, "town": self.town, "limit": limit}
+                "bare": self.bare, "town": self.town, "town_twin": town_twin, "town_suffix": town_suffix,
+                "town_twin_suffix": town_twin_suffix, "limit": limit}
 
 
 def _address(text: str, town: str | None) -> _Reading | None:
@@ -384,11 +398,10 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
     if unit_prefix is None:
         return []
     street_prefix, street_fuzzy = _arm(street_key)
-    unit_twin = _twin(unit_key)
+    unit_twin, unit_suffix, unit_twin_suffix = _by_number(unit_key)
     params = {
-        "unit_key": unit_key, "unit_prefix": unit_prefix, "unit_fuzzy": unit_fuzzy, "unit_twin": unit_twin,
-        "unit_suffix": None if unit_twin is None else unit_key + " %",
-        "unit_twin_suffix": None if unit_twin is None else unit_twin + " %",
+        "unit_key": unit_key, "unit_prefix": unit_prefix, "unit_fuzzy": unit_fuzzy,
+        "unit_twin": unit_twin, "unit_suffix": unit_suffix, "unit_twin_suffix": unit_twin_suffix,
         "street_key": street_key, "street_prefix": street_prefix, "street_fuzzy": street_fuzzy,
         "limit": limit,
     }
