@@ -423,8 +423,7 @@ def _city_rule(cur: Any) -> list[dict[str, Any]]:
     """Town A as a curated city whose made-up index is 8: the rule `>= 6` selects it, and only it."""
     index = f"lp_{uuid.uuid4().hex[:8]}"
     _mirror_unit(cur, "obec", _TOWN_A, "Lp A", (12.2, 48.8, 12.5, 49.1))
-    cur.execute("INSERT INTO curated_cities (name, kraj_name, centroid, obec_kod) VALUES "
-                "(%s, 'Lp', ST_SetSRID(ST_MakePoint(12.35, 48.95), 4326)::geography, %s) RETURNING id",
+    cur.execute("INSERT INTO curated_cities (name, kraj_name, obec_kod) VALUES (%s, 'Lp', %s) RETURNING id",
                 (index, _TOWN_A))
     city = cur.fetchone()[0]
     cur.execute("INSERT INTO city_index_revisions (source_filename, row_count, raw_rows) VALUES ('lp.csv', 1, "

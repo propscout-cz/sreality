@@ -1,21 +1,13 @@
-"""Seed Phase QUAL data: curated cities + index definitions + values.
+"""Seed the city-quality indexes: the index definitions and one revision of values for the curated cities.
 
-Run from GitHub Actions (workflow .github/workflows/seed-curated-cities.yml)
-or from a local checkout that has both `MAPY_CZ_API_KEY` and
-`SUPABASE_DB_URL` in the env.
+Run from GitHub Actions (.github/workflows/seed_curated_cities.yml) or a local checkout with `SUPABASE_DB_URL` set.
 
-Steps:
-  1. Read data/obce_v_datech_2025.csv (the operator-supplied input).
-  2. Geocode each (Mesto, Kraj) pair via Mapy.cz; cache results in
-     data/curated_cities_geocoded.json so re-runs are deterministic and
-     auditable.
-  3. Connect to Supabase via SUPABASE_DB_URL and upsert. A NEW city is bound at
-     insert to the RÚIAN town whose polygon covers its centroid (obec_kod); an
-     existing city is never re-bound. Its population is obec_population's for that
-     code (scripts/load_obec_population.py), read through curated_cities_public.
-
-Idempotent: a second run with the same CSV bumps source_revision and
-adds a fresh batch of city_index_values; cities + definitions upsert in place.
+Reads data/obce_v_datech_2025.csv (the operator-supplied input) and writes, in one transaction, the index definitions
+(upserted by index_name) and a fresh city_index_revisions row with its city_index_values. Each row names a city
+already in curated_cities, by name and kraj; its population is its town's (obec_population by obec_kod), read through
+curated_cities_public. A row naming no such city, or an unknown CSV column, refuses the run by name and writes
+nothing: a new city arrives as a one-line data migration checked against the register, never by name (Hodonín is two
+obce in one kraj).
 """
 
 from __future__ import annotations
@@ -28,13 +20,11 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import psycopg
 
 ROOT = Path(__file__).resolve().parent.parent
 CSV_PATH = ROOT / "data" / "obce_v_datech_2025.csv"
-GEOCODE_CACHE_PATH = ROOT / "data" / "curated_cities_geocoded.json"
 
 LOG = logging.getLogger("seed_curated_cities")
 
@@ -124,6 +114,10 @@ INDEX_BY_HEADER: dict[str, dict[str, str]] = {
 }
 
 
+class SeedRefused(Exception):
+    """The input names something the seed must not guess at; the message names it, and nothing is written."""
+
+
 @dataclass
 class CsvRow:
     name: str
@@ -135,6 +129,9 @@ def read_csv(path: Path) -> list[CsvRow]:
     rows: list[CsvRow] = []
     with path.open(encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
+        unknown = [h for h in reader.fieldnames or [] if h not in ("Město", "Kraj") and h not in INDEX_BY_HEADER]
+        if unknown:
+            raise SeedRefused(f"unknown CSV column(s) {unknown}: add each to INDEX_METADATA in this script first")
         for row_idx, row in enumerate(reader, start=2):
             name = (row.get("Město") or "").strip()
             kraj = (row.get("Kraj") or "").strip()
@@ -143,16 +140,10 @@ def read_csv(path: Path) -> list[CsvRow]:
                 continue
             values: dict[str, float] = {}
             for header, cell in row.items():
-                if header in ("Město", "Kraj"):
-                    continue
-                meta = INDEX_BY_HEADER.get(header)
-                if meta is None:
-                    LOG.warning("Unknown column header %r in row %d", header, row_idx)
-                    continue
-                if cell is None or cell.strip() == "":
+                if header in ("Město", "Kraj") or cell is None or cell.strip() == "":
                     continue
                 try:
-                    values[meta["slug"]] = float(cell.replace(",", "."))
+                    values[INDEX_BY_HEADER[header]["slug"]] = float(cell.replace(",", "."))
                 except ValueError:
                     LOG.warning(
                         "Bad numeric value %r for %s in row %d",
@@ -161,77 +152,6 @@ def read_csv(path: Path) -> list[CsvRow]:
             rows.append(CsvRow(name=name, kraj_name=kraj, values=values))
     LOG.info("Read %d city rows from %s", len(rows), path)
     return rows
-
-
-# --- geocoding -----------------------------------------------------------
-
-
-def load_geocode_cache(path: Path) -> dict[str, dict[str, Any]]:
-    if not path.exists():
-        return {}
-    with path.open(encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save_geocode_cache(path: Path, cache: dict[str, dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(cache, f, ensure_ascii=False, indent=2, sort_keys=True)
-
-
-def cache_key(name: str, kraj: str) -> str:
-    return f"{name}||{kraj}"
-
-
-def geocode_one(name: str, kraj: str) -> dict[str, Any]:
-    """Geocode one (city, kraj) pair via Mapy.cz.
-
-    Returns the first item with type == 'regional.municipality' if any,
-    else the first item ranked by the source's relevance. Raises if no
-    items returned.
-    """
-    from scraper.geocoding import geocode, GeocodingError
-
-    query = f"{name}, {kraj}, Česká republika"
-    try:
-        result = geocode(query, lang="cs", limit=5)
-    except GeocodingError as exc:
-        raise RuntimeError(f"Geocoding failed for {query!r}: {exc}") from exc
-
-    # Prefer a municipality-level hit when available; the helper picks
-    # the highest-specificity item, which for a city query is usually
-    # `regional.municipality`. Confidence "low" is acceptable here
-    # because municipality is the maximum specificity for a city query.
-    is_muni = result.matched_type == "regional.municipality"
-    return {
-        "name": name,
-        "kraj_name": kraj,
-        "lat": result.lat,
-        "lng": result.lng,
-        "matched_type": result.matched_type,
-        "matched_address": result.matched_address,
-        "is_municipality": is_muni,
-        "raw_query": query,
-    }
-
-
-def geocode_all(rows: list[CsvRow], cache_path: Path) -> dict[str, dict[str, Any]]:
-    cache = load_geocode_cache(cache_path)
-    new_hits = 0
-    for row in rows:
-        key = cache_key(row.name, row.kraj_name)
-        if key in cache:
-            continue
-        LOG.info("Geocoding %s, %s ...", row.name, row.kraj_name)
-        cache[key] = geocode_one(row.name, row.kraj_name)
-        new_hits += 1
-        # Save after each hit so a network blip doesn't lose progress.
-        save_geocode_cache(cache_path, cache)
-    LOG.info("Geocoded %d new entries; cache now has %d", new_hits, len(cache))
-    return cache
-
-
-# --- DB writes -----------------------------------------------------------
 
 
 def upsert_definitions(conn: psycopg.Connection) -> None:
@@ -254,59 +174,22 @@ def upsert_definitions(conn: psycopg.Connection) -> None:
     LOG.info("Upserted %d index definitions", len(INDEX_METADATA))
 
 
-# A new city is bound to the RÚIAN town whose lossless pip pieces at the current registry
-# version cover its centroid; ON CONFLICT never touches obec_kod, so a re-seed never re-binds.
-_UPSERT_CITY_SQL = """
-insert into curated_cities (name, kraj_name, centroid, obec_kod, source, source_confidence)
-select %(name)s, %(kraj)s, pt::geography,
-       (select u.code
-          from registry_versions v
-          join ruian_admin_unit_geometries g on g.registry_version_id = v.id and g.purpose = 'pip'
-          join ruian_admin_units u on u.id = g.unit_id
-         where v.is_current and u.level = 'obec' and st_covers(g.geom, pt)
-         limit 1),
-       %(source)s, %(confidence)s
-  from (select st_setsrid(st_makepoint(%(lng)s, %(lat)s), 4326) as pt) p
-on conflict (name, kraj_name) do update set
-  centroid          = excluded.centroid,
-  source            = excluded.source,
-  source_confidence = excluded.source_confidence
-returning id
-"""
-
-
-def upsert_cities(
-    conn: psycopg.Connection,
-    rows: list[CsvRow],
-    geocodes: dict[str, dict[str, Any]],
-) -> dict[tuple[str, str], int]:
-    """Returns {(name, kraj): city_id}."""
-    ids: dict[tuple[str, str], int] = {}
+def city_ids(conn: psycopg.Connection, rows: list[CsvRow]) -> dict[tuple[str, str], int]:
+    """{(name, kraj): city_id} for every row; a row naming no curated city refuses the run, naming each such row."""
     with conn.cursor() as cur:
-        for row in rows:
-            geo = geocodes.get(cache_key(row.name, row.kraj_name))
-            if geo is None:
-                LOG.error("No geocode for %s, %s — skipping", row.name, row.kraj_name)
-                continue
-            cur.execute(
-                _UPSERT_CITY_SQL,
-                {
-                    "name": row.name, "kraj": row.kraj_name,
-                    "lng": geo["lng"], "lat": geo["lat"],
-                    "source": geo.get("source", "mapy_cz"),
-                    "confidence": geo.get("matched_type"),
-                },
-            )
-            (city_id,) = cur.fetchone()
-            ids[(row.name, row.kraj_name)] = city_id
-    LOG.info("Upserted %d curated cities", len(ids))
-    return ids
+        cur.execute("select name, kraj_name, id from curated_cities")
+        known = {(name, kraj): city_id for name, kraj, city_id in cur.fetchall()}
+    missing = sorted({(r.name, r.kraj_name) for r in rows} - known.keys())
+    if missing:
+        raise SeedRefused("no curated city named " + "; ".join(f"{name}, {kraj}" for name, kraj in missing)
+                          + ": a new city arrives as a data migration checked against the register")
+    return {(r.name, r.kraj_name): known[(r.name, r.kraj_name)] for r in rows}
 
 
 def insert_revision_and_values(
     conn: psycopg.Connection,
     rows: list[CsvRow],
-    city_ids: dict[tuple[str, str], int],
+    ids: dict[tuple[str, str], int],
     source_filename: str,
     uploaded_by: str | None,
 ) -> int:
@@ -324,13 +207,8 @@ def insert_revision_and_values(
         )
         (revision,) = cur.fetchone()
 
-        values_payload: list[tuple[int, int, str, float]] = []
-        for row in rows:
-            cid = city_ids.get((row.name, row.kraj_name))
-            if cid is None:
-                continue
-            for slug, value in row.values.items():
-                values_payload.append((cid, revision, slug, value))
+        values_payload = [(ids[(row.name, row.kraj_name)], revision, slug, value)
+                          for row in rows for slug, value in row.values.items()]
 
         with cur.copy(
             "copy city_index_values (city_id, source_revision, index_name, value) "
@@ -343,13 +221,18 @@ def insert_revision_and_values(
     return revision
 
 
+def seed(conn: psycopg.Connection, rows: list[CsvRow], *, source_filename: str, uploaded_by: str | None) -> int:
+    """Writes the definitions and one revision of `rows`' values in one transaction; returns the revision."""
+    with conn.transaction():
+        ids = city_ids(conn, rows)
+        upsert_definitions(conn)
+        return insert_revision_and_values(conn, rows, ids, source_filename=source_filename, uploaded_by=uploaded_by)
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="seed_curated_cities")
     p.add_argument("--csv", default=str(CSV_PATH),
                    help="Path to obce_v_datech_*.csv")
-    p.add_argument("--geocode-cache", default=str(GEOCODE_CACHE_PATH))
-    p.add_argument("--dry-run", action="store_true",
-                   help="Geocode + plan, but don't write to the DB")
     p.add_argument("--source-filename", default=None,
                    help="Override the source_filename written to "
                         "city_index_revisions (defaults to the CSV's basename)")
@@ -366,60 +249,24 @@ def main(argv: list[str] | None = None) -> int:
     if not csv_path.exists():
         LOG.error("CSV not found at %s", csv_path)
         return 2
-
-    sys.path.insert(0, str(ROOT))  # so `from scraper.geocoding import ...` works
-    rows = read_csv(csv_path)
-    if not rows:
-        LOG.error("CSV produced zero rows")
-        return 2
-
-    # Sanity: every column we found should be in INDEX_METADATA, else
-    # the operator added a new column without updating this script.
-    seen_slugs: set[str] = set()
-    for r in rows:
-        seen_slugs.update(r.values.keys())
-    known_slugs = {m["slug"] for m in INDEX_METADATA}
-    unknown = seen_slugs - known_slugs
-    if unknown:
-        LOG.error("CSV has unknown index slugs %s — update INDEX_METADATA "
-                  "in this script first", sorted(unknown))
-        return 2
-
-    cache_path = Path(args.geocode_cache)
-    try:
-        geocodes = geocode_all(rows, cache_path)
-    except RuntimeError as exc:
-        LOG.error("Geocoding failed: %s", exc)
-        return 2
-
-    missing = [r for r in rows
-               if cache_key(r.name, r.kraj_name) not in geocodes]
-    if missing:
-        LOG.error("Missing geocodes for %d rows: %s",
-                  len(missing), [(r.name, r.kraj_name) for r in missing[:5]])
-        return 2
-
-    if args.dry_run:
-        LOG.info("Dry-run: would seed %d cities, %d index values",
-                 len(rows), sum(len(r.values) for r in rows))
-        return 0
-
     dsn = os.environ.get("SUPABASE_DB_URL")
     if not dsn:
         LOG.error("SUPABASE_DB_URL is not set")
         return 2
 
-    with psycopg.connect(dsn, prepare_threshold=None) as conn:
-        with conn.transaction():
-            upsert_definitions(conn)
-            city_ids = upsert_cities(conn, rows, geocodes)
-            insert_revision_and_values(
-                conn, rows, city_ids,
-                source_filename=args.source_filename or csv_path.name,
-                uploaded_by=args.uploaded_by,
-            )
+    try:
+        rows = read_csv(csv_path)
+        if not rows:
+            LOG.error("CSV produced zero rows")
+            return 2
+        with psycopg.connect(dsn, prepare_threshold=None) as conn:
+            revision = seed(conn, rows, source_filename=args.source_filename or csv_path.name,
+                            uploaded_by=args.uploaded_by)
+    except SeedRefused as exc:
+        LOG.error("Refused, nothing written: %s", exc)
+        return 2
 
-    LOG.info("Done.")
+    LOG.info("Done: revision %d.", revision)
     return 0
 
 

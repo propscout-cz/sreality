@@ -2197,45 +2197,20 @@
     {
       "filename": "seed_curated_cities.yml",
       "name": "Data: seed curated cities",
-      "description": "One-shot workflow that geocodes the cities in data/obce_v_datech_2025.csv via Mapy.cz, then writes them into curated_cities + city_index_definitions + city_index_revisions + city_index_values. A new city is bound to the RÚIAN town under its centroid; its population is that town's, loaded by load_obec_population.yml.",
+      "description": "Writes the index definitions and one revision of index values from data/obce_v_datech_2025.csv into city_index_definitions + city_index_revisions + city_index_values, for cities already in curated_cities (matched by name and kraj). A row naming no such city, or an unknown CSV column, refuses the run by name and writes nothing: a new city arrives as a one-line data migration checked against the register. A city's population is its town's, loaded by load_obec_population.yml.",
       "manual": true,
       "schedules": [],
       "onPush": false,
       "onPullRequest": false,
       "paths": null,
-      "inputs": [
-        {
-          "name": "dry_run",
-          "description": "Plan only — geocode, but skip DB writes",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        },
-        {
-          "name": "commit_geocodes",
-          "description": "Commit data/curated_cities_geocoded.json back to the branch",
-          "required": false,
-          "type": "choice",
-          "default": "true",
-          "options": [
-            "true",
-            "false"
-          ]
-        }
-      ],
+      "inputs": [],
       "secrets": [
-        "MAPY2_CZ_API_KEY",
-        "MAPY_CZ_API_KEY",
         "SUPABASE_DB_URL"
       ],
       "concurrencyGroup": null,
       "cancelInProgress": null,
       "timeoutMinutes": 90,
-      "permissions": "contents: write",
+      "permissions": "contents: read",
       "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/seed_curated_cities.yml",
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/seed_curated_cities.yml"
     },
