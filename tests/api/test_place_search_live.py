@@ -1143,3 +1143,22 @@ def test_a_failed_read_of_a_text_with_a_town_is_the_same_503_with_one_line_namin
     assert not any(word in r.getMessage().lower() for word in ("kolín", "kolin", "nádražní", "nadrazni")
                    for r in caplog.records)
     assert not any(r.exc_info for r in caplog.records)
+
+
+VYSOCINA, JIHLAVA_OKRES, JIHLAVA, JIHLAVA_CAST = 108, 3707, 586846, 412317
+
+
+def test_jihlava_answers_the_town_before_its_namesake_okres_and_quarter_though_the_okres_serves_more(mirror, client):
+    """#2497, ruling 1 (town first): on an exact name tie the obec comes first, and every other place of that exact
+    name keeps the ruled order. 68 of 77 okresy share a town's exact name, and an okres serves at least what its town
+    does: here 2 against 1, the second property in another town of the okres."""
+    okres = mirror.unit("okres", JIHLAVA_OKRES, "Jihlava", mirror.unit("kraj", VYSOCINA, "Kraj Vysočina"))
+    mirror.unit("cast_obce", JIHLAVA_CAST, "Jihlava", mirror.unit("obec", JIHLAVA, "Jihlava", okres))
+    mirror.served(region=VYSOCINA, okres=JIHLAVA_OKRES, obec=JIHLAVA, part=JIHLAVA_CAST)
+    mirror.served(region=VYSOCINA, okres=JIHLAVA_OKRES)
+    mirror.publish()
+    assert _suggest(client, "Jihlava") == [
+        {"level": "obec", "id": JIHLAVA, "name": "Jihlava", "context": "Jihlava", "point": None},
+        {"level": "okres", "id": JIHLAVA_OKRES, "name": "Jihlava", "context": "Kraj Vysočina", "point": None},
+        {"level": "cast_obce", "id": JIHLAVA_CAST, "name": "Jihlava", "context": "Jihlava", "point": None},
+    ]
