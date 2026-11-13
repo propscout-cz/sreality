@@ -1187,3 +1187,22 @@ def test_praha_1_answers_its_mestska_cast_exactly_and_praha_10_only_by_its_start
         {"level": "obec", "id": PRAHA, "name": "Praha", "context": "území Hlavního města Prahy", "point": None},
         {"level": "kraj", "id": PRAHA_KRAJ, "name": "Hlavní město Praha", "context": None, "point": None},
     ]
+
+
+PARDUBICE_OKRES, PARDUBICE, PARDUBICE_II, POLABINY = 3606, 555134, 555126, 410632
+
+
+@pytest.mark.parametrize("query", ["Pardubice 2", "Pardubice II"])
+def test_pardubice_2_answers_the_mestska_cast_pardubice_ii_first_as_its_exact_name_does(mirror, client, query):
+    """#2497, ruling 2: the register numbers Pardubice's městské části in Roman numerals, and a number typed in the
+    other form is the same name. Then what "pardubice" reaches by similarity, the okres first by its lower code."""
+    pardubice = mirror.unit("obec", PARDUBICE, "Pardubice", mirror.unit("okres", PARDUBICE_OKRES, "Pardubice"))
+    mirror.quarters(mirror.unit("momc", PARDUBICE_II, "Pardubice II", pardubice),
+                    mirror.unit("cast_obce", POLABINY, "Polabiny", pardubice))
+    mirror.publish()
+    assert _suggest(client, query) == [
+        {"level": "momc", "id": PARDUBICE_II, "name": "Pardubice II", "context": "Pardubice", "point": None,
+         "places": [{"level": "cast_obce", "id": POLABINY, "name": "Polabiny", "context": "Pardubice"}]},
+        {"level": "okres", "id": PARDUBICE_OKRES, "name": "Pardubice", "context": None, "point": None},
+        {"level": "obec", "id": PARDUBICE, "name": "Pardubice", "context": "Pardubice", "point": None},
+    ]

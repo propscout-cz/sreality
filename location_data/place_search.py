@@ -46,6 +46,11 @@ _TOWN_AFTER = re.compile(r"(?<![\w./])(\d{1,6}(?:\s*/\s*\d{1,5}[a-zA-Z]?|[a-zA-Z
 # "Nádražní 12a", which the resolver's parser reads as no number: RÚIAN carries a letter on the č.o. alone.
 _LETTERED = re.compile(r"^(?P<street>.*\S)\s+(?P<co>\d{1,5})(?P<znak>[a-zA-Z])$")
 _DOOR_LEVEL = "adresni_misto"
+# A městská část's number as the register writes it, Arabic (Praha 6, Plzeň 2-Slovany) or Roman (Pardubice II), each
+# form to the other (#2497).
+_ROMAN = {n: ("", "x", "xx", "xxx")[n // 10] + ("", "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix")[n % 10]
+          for n in range(1, 40)}
+_NUMBER_TWIN = {**{str(n): r for n, r in _ROMAN.items()}, **{r: str(n) for n, r in _ROMAN.items()}}
 
 # The door's label: the ONE label (rule 25) over its register fields, as the row will read. Shared with the address
 # picker's preview (api/maps.py imports DOOR_LABEL_SQL until the switch-over, #2453, moves the picker to door rows, if
@@ -76,15 +81,19 @@ _BOUNDS_SQL = (
 # it publishes); a street, which has no index, by the version's membership (location_data/ruian_boundaries.py). A NULL
 # prefix or fuzzy key switches its arm off. A městská část is a candidate only with pairs at that version, gated in both
 # unit arms so one without never counts toward `near` and switches fuzzy off; `unit_id` carries its row to the pairs.
+# A městská část is also exact by its number typed in the other numeral form, the key's twin (#2497): its own arm, an
+# index condition, NULL with no twin.
 _SUGGEST_SQL = """
 WITH cur AS (SELECT id FROM registry_versions WHERE is_current),
 units AS (
   SELECT DISTINCT ON (u.level, u.code) u.level, u.code, u.name, u.parent_id, u.id AS unit_id,
-         CASE WHEN n.name_norm = %(unit_key)s AND n.name_kind <> 'qualifier_stripped' THEN 0 ELSE 1 END AS tier
+         CASE WHEN n.name_kind <> 'qualifier_stripped'
+                   AND (n.name_norm = %(unit_key)s OR (n.entity_kind = 'momc' AND n.name_norm = %(unit_twin)s))
+              THEN 0 ELSE 1 END AS tier
     FROM ruian_name_index n
     JOIN ruian_admin_units u ON u.id = n.entity_id AND u.level = n.entity_kind
    WHERE n.registry_version_id = (SELECT id FROM cur)
-     AND n.name_norm LIKE %(unit_prefix)s
+     AND (n.name_norm LIKE %(unit_prefix)s OR (n.entity_kind = 'momc' AND n.name_norm = %(unit_twin)s))
      AND n.entity_kind IN ('kraj', 'okres', 'obec', 'momc', 'cast_obce')
      AND (SELECT id FROM cur) BETWEEN u.first_version_id AND u.last_version_id
      AND (u.level <> 'momc' OR EXISTS (SELECT 1 FROM ruian_admin_unit_relations rel
@@ -289,6 +298,14 @@ def _arm(key: str) -> tuple[str | None, str | None]:
     return key + "%", key if len(key) >= _FUZZY_MIN_CHARS else None
 
 
+def _twin(key: str) -> str | None:
+    """The key with its last token, a number 1-39, in the other numeral form ("pardubice 2" and "pardubice ii"); None
+    when the key ends in no such number or is the number alone."""
+    base, _, last = key.rpartition(" ")
+    twin = _NUMBER_TWIN.get(last)
+    return f"{base} {twin}" if base and twin else None
+
+
 def _street_keys(part: str) -> list[str]:
     """The exact keys a door's street part names a street by: as typed, without the generic word ("Nádražní ulice"),
     and each in every spelling the resolver's abbreviation folds make equal, on both sides as the resolver folds them
@@ -362,7 +379,7 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
         return []
     street_prefix, street_fuzzy = _arm(street_key)
     params = {
-        "unit_key": unit_key, "unit_prefix": unit_prefix, "unit_fuzzy": unit_fuzzy,
+        "unit_key": unit_key, "unit_prefix": unit_prefix, "unit_fuzzy": unit_fuzzy, "unit_twin": _twin(unit_key),
         "street_key": street_key, "street_prefix": street_prefix, "street_fuzzy": street_fuzzy,
         "limit": limit,
     }
