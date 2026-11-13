@@ -1162,3 +1162,28 @@ def test_jihlava_answers_the_town_before_its_namesake_okres_and_quarter_though_t
         {"level": "okres", "id": JIHLAVA_OKRES, "name": "Jihlava", "context": "Kraj Vysočina", "point": None},
         {"level": "cast_obce", "id": JIHLAVA_CAST, "name": "Jihlava", "context": "Jihlava", "point": None},
     ]
+
+
+PRAHA_10, VRSOVICE = 500224, 490237
+
+
+def test_praha_1_answers_its_mestska_cast_exactly_and_praha_10_only_by_its_start_though_praha_10_serves_more(
+        mirror, client):
+    """#2497: the town Praha is no exact match for "Praha 1", so the městská část keeps the first row, and "Praha 1"
+    never makes Praha 10 exact: it serves 2 against none and still answers after, as a prefix row. The town and the
+    kraj follow by similarity, the town first as it serves Praha 10's properties."""
+    praha = _praha(mirror)
+    mirror.quarters(mirror.unit("momc", PRAHA_1, "Praha 1", praha), mirror.unit("cast_obce", JOSEFOV, "Josefov", praha))
+    mirror.quarters(mirror.unit("momc", PRAHA_10, "Praha 10", praha),
+                    mirror.unit("cast_obce", VRSOVICE, "Vršovice", praha))
+    for _ in range(2):
+        mirror.served(obec=PRAHA, part=VRSOVICE)
+    mirror.publish()
+    assert _suggest(client, "Praha 1") == [
+        {"level": "momc", "id": PRAHA_1, "name": "Praha 1", "context": "Praha", "point": None,
+         "places": [{"level": "cast_obce", "id": JOSEFOV, "name": "Josefov", "context": "Praha"}]},
+        {"level": "momc", "id": PRAHA_10, "name": "Praha 10", "context": "Praha", "point": None,
+         "places": [{"level": "cast_obce", "id": VRSOVICE, "name": "Vršovice", "context": "Praha"}]},
+        {"level": "obec", "id": PRAHA, "name": "Praha", "context": "území Hlavního města Prahy", "point": None},
+        {"level": "kraj", "id": PRAHA_KRAJ, "name": "Hlavní město Praha", "context": None, "point": None},
+    ]
