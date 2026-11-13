@@ -1280,3 +1280,23 @@ def test_a_mestska_cast_typed_by_its_number_as_the_town_answers_the_door_that_li
                    "street": {"level": "ulice", "id": NADRAZNI_PARDUBICE, "name": "Nádražní", "context": "Pardubice"}},
     }
     assert _suggest(client, query) == [door[kod]]
+
+
+def test_a_numbered_cast_obce_is_not_named_by_its_number_in_the_other_form(mirror, client):
+    """#2497 covers a městská část only: the register also numbers části obce ("Kolín III", "Liberec I-Staré Město"),
+    and "Kolín 3" names none of them. As the address town it names nothing, so no door answers, not even Kolín III's;
+    typed alone, Kolín III answers only by similarity, by code after the okres and Kolín II."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    kolin_ii = mirror.unit("cast_obce", KOLIN_II, "Kolín II", towns["kolin"])
+    kolin_iii = mirror.unit("cast_obce", KOLIN_III, "Kolín III", towns["kolin"])
+    mirror.house(21000121, towns["kolin"], street=nadrazni, part=kolin_ii, cp=12)
+    mirror.house(21000122, towns["kolin"], street=nadrazni, part=kolin_iii, cp=12)
+    mirror.publish()
+    assert _suggest(client, "Nádražní 12, Kolín 3") == []
+    assert _suggest(client, "Kolín 3") == [
+        {"level": "okres", "id": KOLIN_OKRES, "name": "Kolín", "context": "Středočeský kraj", "point": None},
+        {"level": "cast_obce", "id": KOLIN_II, "name": "Kolín II", "context": "Kolín", "point": None},
+        {"level": "cast_obce", "id": KOLIN_III, "name": "Kolín III", "context": "Kolín", "point": None},
+        {"level": "obec", "id": KOLIN, "name": "Kolín", "context": "Kolín", "point": None},
+    ]
