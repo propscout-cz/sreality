@@ -673,9 +673,13 @@ rules. Identify which one a task belongs to before you start.
 - **The propscout.cz landing page** (`frontend/landing/*.html`, vanilla TS in `src/landing/`, no React) is a second
   Vite build into the same `dist/` (`vite.landing.config.ts`, run after the SPA's in `npm run build`), so the SPA's
   chunk graph, entry name and zero modulepreload links never see it; its files carry a `landing-` prefix in
-  `dist/assets/`. The Caddyfile serves it on the bare domain only (`/`, `/dekujeme`, `/soukromi`; any other path 302s to
-  the app, as the Cloudflare redirect did) and redirects `/landing/*` away on the app host, because the service worker
-  keeps any 200 HTML page as its offline shell. Its waitlist form posts cross-origin to the API's open
+  `dist/assets/`. **Taken down 2026-11-09 (operator), still built and tested:** the bare domain serves only the privacy
+  page `/soukromi` (the Chrome Web Store listing and the extension's sign-in card link it; it is the notice for the app,
+  the extension and the waitlist already collected) and 302s every other path to the app, the landing's `/` and
+  `/dekujeme` included; `POST /waitlist` stays open with no form posting to it. To bring it back, restore the bare-domain
+  site block of the git tag `landing-page-v1` (the last commit that served it: `/`, `/dekujeme`, `/soukromi`). The app
+  host redirects `/landing/*` away, because the service worker keeps any 200 HTML page as its offline shell. Its
+  waitlist form posts cross-origin to the API's open
   `POST /waitlist` (honeypot, rate limit, a 303 back to the page; `waitlist_signups`, mig 700), so it needs no CORS and
   works without JavaScript; the consent wording it shows is pinned to `api/waitlist.py` CONSENT_TEXTS by a test.
   Admins read the list on the SPA's Sign-ups page (`pages/Signups.tsx`, Admin menu) through `GET /admin/waitlist`
@@ -1554,7 +1558,7 @@ on 2026-12-01, and until then a file of that name would override the applied set
   `api,clip,geo`) is the root Dockerfile's build argument: a service variable reaches the ARG of its name, and the
   build log echoes it.
 - **Domains stay dashboard-owned, custom and generated (`*.up.railway.app`)**: no plan diffs either, and IaC cannot
-  register one. The file names the custom domains that exist (`api.`, `app.` and, since 2026-10-31, the bare `propscout.cz`, the landing page), so removing one of those also takes it out of the
+  register one. The file names the custom domains that exist (`api.`, `app.` and, since 2026-10-31, the bare `propscout.cz`: the privacy page and a redirect to the app since the landing came down 2026-11-09), so removing one of those also takes it out of the
   file (a plan errors on a declared domain Railway lacks). `REPO` must equal the services' GitHub source, or the plan
   shows a source change.
 - **What a plan cannot see:** with one replica in one region, a region change; and a custom domain's port. Both are
