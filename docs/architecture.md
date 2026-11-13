@@ -1123,8 +1123,21 @@ rules. Identify which one a task belongs to before you start.
   (`LIKE`; each arm is gated on its own normalised key, so `ulice .` never becomes `LIKE '%'`), then fuzzy (pg_trgm
   word similarity at a pinned 0.6, ≥ 3 characters, only while the first two fall short of the limit). Within a tier:
   served properties of any deal type, then the town's latest population, then code. ONE ranking for every place box;
-  counts rank rows and are never returned. So on an exact tie an okres outranks its same-name town whenever it serves
-  more properties (68 of 77 okresy share a town's name); the gate (#2465) measures it. **Place shortcuts** (#2450;
+  counts rank rows and are never returned. **Town first** (#2497, ruling 2026-11-13): on an exact name tie the obec
+  answers before every other exact row, its namesake okres (68 of 77 okresy share a town's name, and an okres's served
+  count takes in its town's) or a část of that name included; the other exact rows, and the prefix and fuzzy tiers, keep
+  the order above. Both ORDER BYs carry it, the one that feeds the LIMIT and the final one; each row carries its level.
+  "Praha 6" keeps its městská část first, as the town Praha is no exact match for it. **A městská část by its number**
+  (#2497, ruling 2026-11-13). When the key's last token is a number 1–39, in Arabic or Roman numerals (I–XXXIX), after
+  at least one other token, its twin is the key with that number in the other form ("pardubice 2" and "pardubice ii"). A
+  městská část is then exact when its name is the key or the twin, or either followed by a space and the register's
+  suffix ("Plzeň 2-Slovany"), so "Pardubice 2" answers Pardubice II, and "Plzeň 2" and "Plzeň II" answer Plzeň
+  2-Slovany, in the exact tier, while "Praha 1" leaves Praha 10–19 prefix rows and "Plzeň 1" leaves Plzeň 10-Lhota one.
+  Never a část obce: the register's numbered části ("Kolín III", "Liberec I-Staré Město") are not covered. The twin's
+  two arms (its name, its name and a suffix) are index conditions of their own on `ruian_name_index_norm_prefix`; the
+  key's own suffix lies inside its prefix arm. A key with no twin binds them NULL and they fold away at plan time, so
+  its plan is unchanged. Query-side only: no migration, no registry reload, no resolver change.
+  **Place shortcuts** (#2450;
   #2380: městská část is no served level). A městská část answers one row, `{level: 'momc', id, name, context, point,
   places}`, its context its obec and its point its open doors' mean; `places` are its quarters' chips `{level, id,
   name, context}` (no point), in name order with ties by code, never itself. Only a shortcut carries `places`, so
@@ -1182,7 +1195,10 @@ rules. Identify which one a task belongs to before you start.
   text's reading alone; "Pod 5 Lipami 12" first tries "Pod 5" in a town "Lipami 12", which names nothing, then answers
   as the whole text. The town is every obec, část obce and městská část (the resolver's `composite.WHOLE_LEVELS`) whose
   `name_norm` is the piece's key at the gazetteer's version, every name kind (a `qualifier_stripped` one too, so
-  "Kostelec" is 25 places, Kostelec nad Orlicí among them), every homonym kept: the read narrows a list and binds
+  "Kostelec" is 25 places, Kostelec nad Orlicí among them), and a městská část also by its number as the name read
+  takes it (#2497: "Nádražní 12, Plzeň 2" narrows to Plzeň 2-Slovany, "Nádražní 12, Pardubice 2" to Pardubice II;
+  three momc-only index arms beside the exact one, NULL when the piece ends in no number), every homonym kept: the read
+  narrows a list and binds
   nothing, so the resolver's obec-first ladder and fail-closed rule are not reused, but its levels are: an okres or a
   kraj is never the town. Streets and villages narrow to the town's obec (the town, or a část's or městská část's parent
   obec, through every row of its code), and doors, in every arm, to where they lie: an obec by `obec_kod`, a část by
@@ -1194,7 +1210,8 @@ rules. Identify which one a task belongs to before you start.
   "Nádražní 12" gives it; "Lhota 25, Kladno" the streetless door of a Lhota inside Kladno; a name two obce share answers
   both towns' doors. A town that names nothing, or a town without the street, answers no door: the later readings still
   run, but the whole text's #2451 reading is none or keys on the town's words ("kolin nadrazni"), so in practice answers
-  nothing. Consequences, with no ruling (the okres question is pending; Q12 a's ranking is unchanged): production's
+  nothing. Consequences, with no ruling (#2497's town first orders the name read's exact tie, never the doors):
+  production's
   "Lhota 25, Kladno" answers none, as no Lhota lies inside either obec Kladno (okres Kladno's Lhota is its own obec);
   "Nádražní 12, Podolí" (5 obce and 19 části, one in Praha) answers the Podolí obce's doors and Praha's část Podolí's by
   served counts, so the Praha quarter can outrank a village. **A letter on a bare number** ("Nádražní 12a"), which the
@@ -1204,12 +1221,15 @@ rules. Identify which one a task belongs to before you start.
   text usually shows door rows only (a street door carries its street chip) and "Nádražní 12a" adds its street as a
   fuzzy row. Not read, so answering no door, for the gate (#2465) to weigh: a composite town ("Praha 6 - Dejvice"), a
   PSČ in the town ("280 02 Kolín"), two or more commas, "12 a", a town first with no comma ("Kolín Nádražní 12"), a dash
-  ("Nádražní 12 - Kolín"), and a městská část without its register suffix: seven of Plzeň's ten ("Plzeň 2" is "Plzeň
-  2-Slovany"; only 1, 3 and 4 are bare) and Pardubice's Roman numerals ("Pardubice 2" is "Pardubice II"). Measured on
-  production (2026-11-09): "Nádražní 12, Mladá Boleslav" 13.9 ms (planning 9.9 ms), every node index-backed
-  (`ruian_name_index_norm_prefix`; streets by a bitmap on `ruian_streets_name_norm` and a hashed town filter; the one
-  sequential scan `registry_versions`, 4 rows), no new index; with no town each town condition folds away at plan time,
-  as the route's statements are unnamed, their parameters planned in. Two read models (migration 738,
+  ("Nádražní 12 - Kolín"). Measured on production (2026-11-09): "Nádražní 12, Mladá Boleslav" 13.9 ms (planning 9.9
+  ms), every node index-backed (`ruian_name_index_norm_prefix`; streets by a bitmap on `ruian_streets_name_norm` and a
+  hashed town filter; the one sequential scan `registry_versions`, 4 rows), no new index; with no town each town
+  condition folds away at plan time, as the route's statements are unnamed, their parameters planned in. Measured again
+  for #2497 (2026-11-13): "Nádražní 12, Plzeň 2" 54 ms (planning 37 ms), its town a BitmapOr of four index scans; it
+  answers no door, as production's Nádražní in Plzeň has no number 12 ("Nádražní 9, Plzeň 2" answers Nádražní 102/9).
+  The name read of "Pardubice 2" reads its units by a BitmapOr of three index scans in 10 ms of 317 ms (the fuzzy arm,
+  unchanged, runs below 10 near rows); "Jihlava" keeps its single index scan, 24 ms warm.
+  Two read models (migration 738,
   service-role only): `place_served_counts` (level, code, n), GROUPING SETS over the kraj, okres, obec, část and street
   ids of active `browse_list` rows, refreshed hourly at :37 by pg_cron through `refresh_matview`; and `place_facts`
   (level, code, lat, lng): kraj, okres and obec copy the current version's authoritative representative point, street,

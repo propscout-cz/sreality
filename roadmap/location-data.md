@@ -1420,9 +1420,16 @@ component is slimmed twice — each wave rewrites one component and slims its st
   homonym kept; an okres or a kraj never), so the town, not the served counts, decides which same-named street
   answers; a town that names nothing answers no door; "12a" is the č.o.'s letter. Each reading is one statement, the
   whole text's always last, so a text with no town answers as before ("12a" aside). **Next:** the gate's run #2465
-  weighs the forms not read (a městská část without its register suffix, "Plzeň 2" for "Plzeň 2-Slovany"; a dash; a
-  PSČ); the okres question pending with the operator gains an input (an okres is never the town, so production's
-  "Lhota 25, Kladno" answers no door: its Lhota is an obec of okres Kladno, not inside obec Kladno).
+  weighs the forms not read (a dash; a PSČ; a městská část without its register suffix is read since #2497, below). An
+  okres is never the town, so production's "Lhota 25, Kladno" answers no door: its Lhota is an obec of okres Kladno, not
+  inside obec Kladno.
+- **Town first, a městská část by its number — built 2026-11-13** (#2497; operator rulings 2026-11-13; no migration,
+  no registry reload, no resolver change; as built: `docs/architecture.md` § own place search). On an exact name tie
+  the obec answers before its namesake okres or část ("Jihlava"). A městská část is exact by its number, Arabic or
+  Roman, with or without the register's suffix, in the name read and the address town: "Pardubice 2" answers Pardubice
+  II, "Plzeň 2" Plzeň 2-Slovany, "Nádražní 9, Plzeň 2" its door there; "Praha 1" never makes Praha 10–19 exact, and a
+  numbered část obce ("Kolín III") is not covered. Each new arm is an index condition (production EXPLAIN in the PR).
+  **Next:** the gate's run #2465, then the switch-over #2453, whose rows show each level.
 - **The gate's eval — built 2026-11-09** (#2452; spec #2441 Part 4 (1)–(4), Q2 c, ruling 2026-11-08; no migration; as
   built: `docs/architecture.md` § the gate's eval). `scripts/place_search_gate_eval.py`, read-only on production:
   picks only through `picks_between`, in one READ ONLY transaction closed before any request; only `POST
