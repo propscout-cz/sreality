@@ -1131,13 +1131,17 @@ rules. Identify which one a task belongs to before you start.
   answers before every other exact row, its namesake okres (68 of 77 okresy share a town's name, and an okres's served
   count takes in its town's) or a část of that name included; the other exact rows, and the prefix and fuzzy tiers, keep
   the order above. Both ORDER BYs carry it, the one that feeds the LIMIT and the final one; each row carries its level.
-  "Praha 6" keeps its městská část first, as the town Praha is no exact match for it. **A městská část by its number**
-  (#2497, ruling 2026-11-13). When the key's last token is a number 1–39, in Arabic or Roman numerals (I–XXXIX), after
-  at least one other token, its twin is the key with that number in the other form ("pardubice 2" and "pardubice ii"). A
-  městská část is then exact when its name is the key or the twin, or either followed by a space and the register's
-  suffix ("Plzeň 2-Slovany"), so "Pardubice 2" answers Pardubice II, and "Plzeň 2" and "Plzeň II" answer Plzeň
-  2-Slovany, in the exact tier, while "Praha 1" leaves Praha 10–19 prefix rows and "Plzeň 1" leaves Plzeň 10-Lhota one.
-  Never a část obce: the register's numbered části ("Kolín III", "Liberec I-Staré Město") are not covered. The twin's
+  "Praha 6" keeps its městská část first, as the town Praha is no exact match for it. **A unit by its number** (#2497
+  a městská část, #2499 every level; rulings 2026-11-13). When the key's last token is a number 1–39, in Arabic or
+  Roman numerals (I–XXXIX), after at least one other token, its twin is the key with that number in the other form
+  ("pardubice 2" and "pardubice ii"). A unit is then exact when its name is the key or the twin, or either followed by
+  the register's suffix ("Plzeň 2-Slovany", "Liberec I-Staré Město"), so "Pardubice 2" answers Pardubice II, "Plzeň 2"
+  and "Plzeň II" Plzeň 2-Slovany, "Kolín 3" the část Kolín III and "Horka 2" the obec Horka II before its namesake část,
+  in the exact tier, while "Praha 1" leaves Praha 10–19 prefix rows and "Plzeň 1" leaves Plzeň 10-Lhota one. The
+  register writes the suffix after a hyphen or a dot ("Brusné 1.díl"), never a space, and the index has lost the
+  hyphen, so a suffix arm also reads the unit's own name (`_NUMBERED`): "v" is 5 and also "in", and "Jablonné v
+  Podještědí" is no numbered name (production: 7 numbered městské části with a suffix, all hyphenated; 155
+  numbered-looking části obce, 106 hyphenated and 30 "N.díl"; 11 numbered obce, okresy and kraje none). The twin's
   two arms (its name, its name and a suffix) are index conditions of their own on `ruian_name_index_norm_prefix`; the
   key's own suffix lies inside its prefix arm. A key with no twin binds them NULL and they fold away at plan time, so
   its plan is unchanged. Query-side only: no migration, no registry reload, no resolver change.
@@ -1199,9 +1203,10 @@ rules. Identify which one a task belongs to before you start.
   text's reading alone; "Pod 5 Lipami 12" first tries "Pod 5" in a town "Lipami 12", which names nothing, then answers
   as the whole text. The town is every obec, část obce and městská část (the resolver's `composite.WHOLE_LEVELS`) whose
   `name_norm` is the piece's key at the gazetteer's version, every name kind (a `qualifier_stripped` one too, so
-  "Kostelec" is 25 places, Kostelec nad Orlicí among them), and a městská část also by its number as the name read
-  takes it (#2497: "Nádražní 12, Plzeň 2" narrows to Plzeň 2-Slovany, "Nádražní 12, Pardubice 2" to Pardubice II;
-  three momc-only index arms beside the exact one, NULL when the piece ends in no number), every homonym kept: the read
+  "Kostelec" is 25 places, Kostelec nad Orlicí among them), and also by its number as the name read takes it (#2497,
+  #2499: "Nádražní 12, Plzeň 2" narrows to Plzeň 2-Slovany, "Nádražní 12, Pardubice 2" to Pardubice II, "Nádražní 12,
+  Kolín 3" to Kolín III; three index arms beside the exact one, NULL when the piece ends in no number), every homonym
+  kept: the read
   narrows a list and binds
   nothing, so the resolver's obec-first ladder and fail-closed rule are not reused, but its levels are: an okres or a
   kraj is never the town. Streets and villages narrow to the town's obec (the town, or a část's or městská část's parent
