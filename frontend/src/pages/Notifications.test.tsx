@@ -30,6 +30,7 @@ const baseDispatch: WatchdogDispatch = {
   collection_id: null,
   collection_name: null,
   property_id: 999,
+  listing_id: 501,
   change_kind: 'new',
   share_kind: null,
   share_ref: null,
@@ -71,6 +72,7 @@ const share: WatchdogDispatch = {
   share_kind: 'collection',
   share_ref: '42',
   property_id: null,
+  listing_id: null,
   display_label: null,
   price_czk: null,
 };
@@ -83,6 +85,7 @@ const feed: WatchdogDispatchesResponse = {
       id: 'd2',
       // A bazos ad: no sreality id anywhere, and the row still opens its property.
       property_id: 4321,
+      listing_id: 502,
       source: 'bazos',
       display_label: 'Brno-střed',
       seen_at: '2026-05-12T11:00:00+00:00',
@@ -105,9 +108,16 @@ vi.mock('@/lib/api', async (orig) => ({
   markWatchdogDispatchSeen: vi.fn(),
 }));
 
+vi.mock('@/lib/queries', async (orig) => ({
+  ...(await orig<typeof import('@/lib/queries')>()),
+  fetchListingCovers: vi.fn(),
+}));
+
 import { getNotificationUnreadCount, listNotifications, markWatchdogDispatchSeen } from '@/lib/api';
 import { familyTargets } from '@/lib/curationSync';
+import { fetchListingCovers } from '@/lib/queries';
 import { revalidate } from '@/lib/revalidate';
+import { bareImage } from '@/lib/types';
 import { expectNoNestedInteractive } from '@/test/a11y';
 import Notifications from './Notifications';
 
@@ -135,6 +145,8 @@ function renderPage(page: WatchdogDispatchesResponse = feed) {
 beforeEach(() => {
   vi.mocked(listNotifications).mockReset();
   vi.mocked(markWatchdogDispatchSeen).mockReset();
+  vi.mocked(fetchListingCovers).mockReset();
+  vi.mocked(fetchListingCovers).mockResolvedValue(new Map());
 });
 
 describe('<Notifications> row names', () => {
@@ -166,6 +178,65 @@ describe('<Notifications> New match rows', () => {
     expect(row).toHaveTextContent(/9\s000\s000.*→.*8\s400\s000/);
     /* Told before reasons existed: newly listed, as every New match then was. */
     expect(screen.getByRole('link', { name: /^New match Kolín/ })).toHaveTextContent('Newly listed');
+  });
+});
+
+/* A row leads with the cover of the ad it fired on (lib/hydration). The photo is a
+   decoration: it never gates the row, never names it, and its box is there before it. */
+describe('<Notifications> row photos', () => {
+  const boxes = () => document.querySelectorAll('li [class*="aspect-[4/3]"]');
+
+  it('lead a listing row with its ad cover, and leave the row\'s name as its own text', async () => {
+    vi.mocked(fetchListingCovers).mockResolvedValue(
+      new Map([[501, bareImage(1, null, 'https://cdn.example/501.jpg')]]),
+    );
+    renderPage();
+    const row = screen.getByRole('link', { name: /^New match Praha 5/ });
+    await waitFor(() => expect(row.querySelector('img')).not.toBeNull());
+    const img = row.querySelector('img')!;
+    expect(img).toHaveAttribute('src', 'https://cdn.example/501.jpg');
+    expect(img).toHaveAttribute('alt', '');
+    expect(img).toHaveAttribute('loading', 'lazy');
+    /* Dot, then the photo, then the kind chip. */
+    expect(row.children[1]).toContainElement(img);
+    expect(row).toHaveAccessibleName(/^New match Praha 5/);
+  });
+
+  it('ask for the covers of the ads the rows fired on; a share has no ad and no box', async () => {
+    renderPage();
+    await waitFor(() => expect(fetchListingCovers).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(fetchListingCovers).mock.calls[0][0]).toEqual([501, 502]);
+    expect(boxes()).toHaveLength(2);
+    expect(screen.getByText(/owner@example\.com shared/).closest('li')!.querySelector('img')).toBeNull();
+  });
+
+  it('keep an empty box for an ad with no cover, and a dashed one for a photo that will not load', async () => {
+    vi.mocked(fetchListingCovers).mockResolvedValue(
+      new Map([[501, bareImage(1, null, 'https://cdn.example/501.jpg')]]),
+    );
+    renderPage();
+    const row = screen.getByRole('link', { name: /^New match Praha 5/ });
+    await waitFor(() => expect(row.querySelector('img')).not.toBeNull());
+
+    expect(screen.getByRole('link', { name: /^New match Brno-střed/ }).querySelector('img')).toBeNull();
+    expect(boxes()).toHaveLength(2);
+
+    fireEvent.error(row.querySelector('img')!);
+    expect(row.querySelector('img')).toBeNull();
+    expect(row.children[1]).toHaveClass('border-dashed');
+  });
+
+  it('read the covers once per loaded page, so the next page never re-reads the last', async () => {
+    const rows = Array.from({ length: 51 }, (_, i) => ({
+      ...baseDispatch,
+      id: `r${i}`,
+      listing_id: 1000 + i,
+      display_label: `Místo ${i}`,
+    }));
+    renderPage({ ...feed, data: rows, total: 51 });
+    await waitFor(() => expect(fetchListingCovers).toHaveBeenCalledTimes(2));
+    const sizes = vi.mocked(fetchListingCovers).mock.calls.map(([ids]) => ids.length);
+    expect(sizes.sort((a, b) => a - b)).toEqual([1, 50]);
   });
 });
 
