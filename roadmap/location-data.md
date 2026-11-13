@@ -1430,6 +1430,10 @@ component is slimmed twice — each wave rewrites one component and slims its st
   II, "Plzeň 2" Plzeň 2-Slovany, "Nádražní 9, Plzeň 2" its door there; "Praha 1" never makes Praha 10–19 exact, and a
   numbered část obce ("Kolín III") is not covered. Each new arm is an index condition (production EXPLAIN in the PR).
   **Next:** the gate's run #2465, then the switch-over #2453, whose rows show each level.
+- **Every unit by its number — built 2026-11-13** (#2499; operator ruling 2026-11-13; no migration). The #2497 rule
+  covers every level: "Kolín 3" answers the část Kolín III, "Liberec 1" Liberec I-Staré Město, "Horka 2" the obec Horka
+  II before its namesake část, "Nádražní 12, Kolín 3" the door in Kolín III. A suffix follows the number after a hyphen
+  or a dot, never a space, so "Jablonné v Podještědí" (a preposition "v") is no numbered name.
 - **The gate's eval — built 2026-11-09** (#2452; spec #2441 Part 4 (1)–(4), Q2 c, ruling 2026-11-08; no migration; as
   built: `docs/architecture.md` § the gate's eval). `scripts/place_search_gate_eval.py`, read-only on production:
   picks only through `picks_between`, in one READ ONLY transaction closed before any request; only `POST
