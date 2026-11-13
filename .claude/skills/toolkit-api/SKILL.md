@@ -412,16 +412,11 @@ LLM + maps (FastAPI service + scoring jobs):
   Read lazily by a lane pointed at qwen: an Actions secret there, Railway only to call it here.
 - `OSS_LLM_BASE_URL` / `OSS_LLM_API_KEY` — a self-hosted vLLM pod (`oss:<hf id>` ids, `provider='oss'`):
   an EPHEMERAL RunPod proxy root the autodedup judge lane exports per pass, re-read per call and never stored; the key defaults to `none` (vLLM serves unauthenticated).
-- `MAPY_GEOCODE_ENABLED` — **the Mapy kill switch, default OFF.** Mapy.com's terms prohibit
-  storing/caching API results, so `scraper.geocoding.geocode()` raises unless this is
-  explicitly `1`/`true`/`yes`. No caller stores a result any more: what is left is
-  `scripts/seed_curated_cities.py`. Display (`/maps/suggest`) is not gated: the prohibition
-  is on persistence.
-  Do not enable without an operator decision recorded against the Mapy remediation plan.
-- `MAPY_CZ_API_KEY` — Mapy.cz REST key; geocodes locality strings, powers `/maps/*` (not `/maps/sreality-price-map`: key-free sreality suggest proxy, no CORS upstream).
-- `MAPY2_CZ_API_KEY` (optional backup) — a second Mapy.cz key. Geocoding and `/maps/suggest` fail over
-  to it in ONE loop (`scraper.geocoding.with_mapy_key_failover`) **only** on a rejected (401/403) or rate-limited (429)
-  primary, never on a 5xx. GitHub Actions secret (`seed_curated_cities.yml`) + the **Railway API env var**. Unset → no-op.
+- `MAPY_CZ_API_KEY` — Mapy.cz REST key, the **Railway API env var** only; its one caller is `/maps/suggest` until the
+  switch-over (#2453), whose answers are never stored or cached (Mapy's terms; the geocoder and its
+  `MAPY_GEOCODE_ENABLED` switch went in #2454). Not `/maps/sreality-price-map`: key-free sreality suggest proxy, no CORS upstream.
+- `MAPY2_CZ_API_KEY` (optional backup) — a second Mapy.cz key, on the API only. `/maps/suggest` fails over to it
+  (`api.maps._fetch_suggest`) **only** on a rejected (401/403) or rate-limited (429) primary, never on a 5xx. Unset → no-op.
 - `VALUO_SANDBOX_API_TOKEN` / `VALUO_API_TOKEN` (Railway API, and agent-worker for `valuo_valuation`; never local, never `VITE_*`) — Valuo's paid API v3 at `https://api.valuo.com/v1`
   (`api/valuo_client.py`: `market-value/{type}` + one `advert/detail` for photos); production wins, neither = `GET /properties/{id}/valuo` says
   so and the POST 503s. A row stamps `token_sha` + the environment that ANSWERED (`ver` `-sandbox` = sandbox); tests delete both (`tests/conftest.py`).
