@@ -81,19 +81,25 @@ _BOUNDS_SQL = (
 # it publishes); a street, which has no index, by the version's membership (location_data/ruian_boundaries.py). A NULL
 # prefix or fuzzy key switches its arm off. A městská část is a candidate only with pairs at that version, gated in both
 # unit arms so one without never counts toward `near` and switches fuzzy off; `unit_id` carries its row to the pairs.
-# A městská část is also exact by its number typed in the other numeral form, the key's twin (#2497): its own arm, an
-# index condition, NULL with no twin.
+# A městská část is also exact by its number (#2497): named the key's twin (the number in the other numeral form), or
+# the key or the twin and then the register's suffix after a space ("Plzeň 2-Slovany"), never a longer number ("Praha
+# 10" for "Praha 1"). The twin's two arms are index conditions of their own; with no twin every such key is NULL.
 _SUGGEST_SQL = """
 WITH cur AS (SELECT id FROM registry_versions WHERE is_current),
 units AS (
   SELECT DISTINCT ON (u.level, u.code) u.level, u.code, u.name, u.parent_id, u.id AS unit_id,
          CASE WHEN n.name_kind <> 'qualifier_stripped'
-                   AND (n.name_norm = %(unit_key)s OR (n.entity_kind = 'momc' AND n.name_norm = %(unit_twin)s))
+                   AND (n.name_norm = %(unit_key)s
+                        OR (n.entity_kind = 'momc' AND (n.name_norm = %(unit_twin)s
+                                                        OR n.name_norm LIKE %(unit_suffix)s
+                                                        OR n.name_norm LIKE %(unit_twin_suffix)s)))
               THEN 0 ELSE 1 END AS tier
     FROM ruian_name_index n
     JOIN ruian_admin_units u ON u.id = n.entity_id AND u.level = n.entity_kind
    WHERE n.registry_version_id = (SELECT id FROM cur)
-     AND (n.name_norm LIKE %(unit_prefix)s OR (n.entity_kind = 'momc' AND n.name_norm = %(unit_twin)s))
+     AND (n.name_norm LIKE %(unit_prefix)s
+          OR (n.entity_kind = 'momc' AND n.name_norm = %(unit_twin)s)
+          OR (n.entity_kind = 'momc' AND n.name_norm LIKE %(unit_twin_suffix)s))
      AND n.entity_kind IN ('kraj', 'okres', 'obec', 'momc', 'cast_obce')
      AND (SELECT id FROM cur) BETWEEN u.first_version_id AND u.last_version_id
      AND (u.level <> 'momc' OR EXISTS (SELECT 1 FROM ruian_admin_unit_relations rel
@@ -378,8 +384,11 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
     if unit_prefix is None:
         return []
     street_prefix, street_fuzzy = _arm(street_key)
+    unit_twin = _twin(unit_key)
     params = {
-        "unit_key": unit_key, "unit_prefix": unit_prefix, "unit_fuzzy": unit_fuzzy, "unit_twin": _twin(unit_key),
+        "unit_key": unit_key, "unit_prefix": unit_prefix, "unit_fuzzy": unit_fuzzy, "unit_twin": unit_twin,
+        "unit_suffix": None if unit_twin is None else unit_key + " %",
+        "unit_twin_suffix": None if unit_twin is None else unit_twin + " %",
         "street_key": street_key, "street_prefix": street_prefix, "street_fuzzy": street_fuzzy,
         "limit": limit,
     }

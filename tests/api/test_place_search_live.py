@@ -1206,3 +1206,49 @@ def test_pardubice_2_answers_the_mestska_cast_pardubice_ii_first_as_its_exact_na
         {"level": "okres", "id": PARDUBICE_OKRES, "name": "Pardubice", "context": None, "point": None},
         {"level": "obec", "id": PARDUBICE, "name": "Pardubice", "context": "Pardubice", "point": None},
     ]
+
+
+PLZEN_1, BOLEVEC, PLZEN_2, BOZKOV, PLZEN_10, LHOTA_PLZEN = 545970, 122122, 545988, 122297, 557978, 80942
+PLZEN_20_INVENTED, NOVA_CTVRT_INVENTED = 599920, 499920
+
+
+def _plzen(m: _Mirror) -> None:
+    """Plzeň's městské části as the register names them, each with one quarter: Plzeň 1, Plzeň 2-Slovany and Plzeň
+    10-Lhota, which serves 2 properties. Plzeň 20 and its quarter Nová Čtvrť are invented (production has no Plzeň 20;
+    Praha has Praha 2 beside Praha 20-22): a name that starts with "Plzeň 2" and serves 1."""
+    plzen = m.unit("obec", PLZEN, "Plzeň", m.unit("okres", PLZEN_MESTO, "Plzeň-město"))
+    for momc, name, part, quarter in ((PLZEN_1, "Plzeň 1", BOLEVEC, "Bolevec"),
+                                      (PLZEN_2, "Plzeň 2-Slovany", BOZKOV, "Božkov"),
+                                      (PLZEN_10, "Plzeň 10-Lhota", LHOTA_PLZEN, "Lhota"),
+                                      (PLZEN_20_INVENTED, "Plzeň 20", NOVA_CTVRT_INVENTED, "Nová Čtvrť")):
+        m.quarters(m.unit("momc", momc, name, plzen), m.unit("cast_obce", part, quarter, plzen))
+    for part in (LHOTA_PLZEN, LHOTA_PLZEN, NOVA_CTVRT_INVENTED):
+        m.served(obec=PLZEN, part=part)
+
+
+def _plzen_row(momc: int, name: str, part: int, quarter: str) -> dict[str, Any]:
+    return {"level": "momc", "id": momc, "name": name, "context": "Plzeň", "point": None,
+            "places": [{"level": "cast_obce", "id": part, "name": quarter, "context": "Plzeň"}]}
+
+
+def test_plzen_2_and_plzen_ii_answer_plzen_2_slovany_exactly_and_plzen_1_never_makes_plzen_10_lhota_exact(
+        mirror, client):
+    """#2497, ruling 2, the suffix half: the number, in either form, followed by the register's suffix is the exact
+    name, so Plzeň 2-Slovany answers before Plzeň 20, which only starts so and serves more, and before the town, which
+    "plzen ii" reaches by similarity and serves the most. A suffix follows a space: "Plzeň 1" is no start of Plzeň
+    10-Lhota's name, which stays a prefix row though it serves more. Two rows a question, so nothing fuzzy follows a
+    full list."""
+    _plzen(mirror)
+    mirror.publish()
+
+    def suggest(query: str) -> list[dict[str, Any]]:
+        res = client.post("/places/suggest", json={"query": query, "limit": 2})
+        assert res.status_code == 200, res.text
+        return res.json()["items"]
+
+    slovany = _plzen_row(PLZEN_2, "Plzeň 2-Slovany", BOZKOV, "Božkov")
+    assert suggest("Plzeň 2") == [slovany, _plzen_row(PLZEN_20_INVENTED, "Plzeň 20", NOVA_CTVRT_INVENTED, "Nová Čtvrť")]
+    assert suggest("Plzeň II") == [
+        slovany, {"level": "obec", "id": PLZEN, "name": "Plzeň", "context": "Plzeň-město", "point": None}]
+    assert suggest("Plzeň 1") == [_plzen_row(PLZEN_1, "Plzeň 1", BOLEVEC, "Bolevec"),
+                                  _plzen_row(PLZEN_10, "Plzeň 10-Lhota", LHOTA_PLZEN, "Lhota")]
