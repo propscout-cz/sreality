@@ -15,8 +15,8 @@
 -- or naming curated_cities with a whole-word centroid or source (0 today). $post$ verifies on every replay and apply.
 -- DESTRUCTIVE, backup waived (spec #2441 Part 6: no Mapy output is kept; backup_w4's sources are held). Applied by
 -- apply_migration.yml while its PR is open, after the operator read the evidence query and said "yes, apply it", then
--- the PR merges (the new seed needs the new schema; the deployed seed exits before it connects). One transaction: a
--- lock_timeout trip rolls it all back; rerun as is.
+-- the PR merges. Neither seed writes a dropped column after the apply: the deployed one exits before it connects, the
+-- new one never names them. One transaction: a lock_timeout trip rolls it all back; rerun as is.
 -- VERIFY: select to_regnamespace('backup_w4'), to_regclass('public.curated_cities_centroid_idx');  -- both NULL
 
 begin;

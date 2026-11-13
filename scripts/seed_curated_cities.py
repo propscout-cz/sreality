@@ -4,9 +4,8 @@ Run from GitHub Actions (.github/workflows/seed_curated_cities.yml) or a local c
 
 Reads data/obce_v_datech_2025.csv (the operator-supplied input) and writes, in one transaction, the index definitions
 (upserted by index_name) and a fresh city_index_revisions row with its city_index_values. Each row names a city
-already in curated_cities, by name and kraj; its population is its town's (obec_population by obec_kod), read through
-curated_cities_public. A row naming no such city, or an unknown CSV column, refuses the run by name and writes
-nothing: a new city arrives as a one-line data migration checked against the register, never by name (Hodonín is two
+already in curated_cities, by name and kraj (no population is written: curated_cities_public reads the town's from
+obec_population). A row naming no such city, or an unknown CSV column, refuses the run by name and writes nothing: a new city arrives as a one-line data migration checked against the register, never by name (Hodonín is two
 obce in one kraj).
 """
 

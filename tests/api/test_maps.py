@@ -217,13 +217,13 @@ def test_suggest_uses_backup_when_primary_unset(client, monkeypatch, primary):
     assert state["keys"] == ["backup-key"]
 
 
-
 def test_a_backup_that_repeats_the_primary_is_no_second_key(client, monkeypatch):
     monkeypatch.setenv("MAPY2_CZ_API_KEY", "test-key")
     state = _mock_http_sequence(monkeypatch, [_http_error(401), _MOCK_SUGGEST])
     res = client.get("/maps/suggest", params={"query": "Vinohrady"})
     assert res.status_code == 503
     assert state["keys"] == ["test-key"]
+
 
 # ---------------- /maps/resolve ----------------
 

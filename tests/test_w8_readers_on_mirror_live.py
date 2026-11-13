@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import uuid
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -203,29 +202,34 @@ def test_the_seed_writes_a_revision_for_an_existing_city_read_back_with_its_town
 
 
 def test_a_row_naming_no_existing_city_refuses_the_run_by_name_and_writes_nothing(cur: Any) -> None:
-    """A new city arrives as a one-line data migration checked against the register, never by name: Hodonín is two
-    obce in one kraj."""
+    """Jinov is a town in the register but no curated city, so its row is refused, never bound by name: a new city
+    arrives as a one-line data migration checked against the register (Hodonín is two obce in one kraj)."""
     from scripts.seed_curated_cities import CsvRow, SeedRefused, seed
 
     _mirror_unit(cur, "obec", OBEC, "Obcov", BOX)
+    _mirror_unit(cur, "obec", OTHER, "Jinov", (14.50, 50.00, 14.60, 50.10))
     known = f"w8-{uuid.uuid4().hex[:8]}"
     _city(cur, known, OBEC)
     before = _revisions(cur)
+    cur.execute("DELETE FROM city_index_definitions WHERE index_name = 'exekuce'")
+    cur.execute("SELECT count(*) FROM city_index_definitions")
+    (definitions,) = cur.fetchone()
 
     with pytest.raises(SeedRefused, match="Jinov, w8"):
         seed(cur.connection, [CsvRow(name=known, kraj_name="w8", values={"exekuce": 3.0}),
                               CsvRow(name="Jinov", kraj_name="w8", values={"exekuce": 4.0})],
              source_filename="obce_v_datech_2026.csv", uploaded_by=None)
     assert _revisions(cur) == before
-    cur.execute("SELECT count(*) FROM curated_cities WHERE name = 'Jinov'")
-    assert cur.fetchone() == (0,)
+    cur.execute("SELECT count(*) FROM city_index_definitions")
+    assert cur.fetchone() == (definitions,), "the refused run upserted no definition either"
 
 
-def test_an_unknown_csv_column_refuses_the_run_by_name_before_anything_is_read(tmp_path: Path) -> None:
-    from scripts.seed_curated_cities import SeedRefused, read_csv
+def test_an_estimation_of_a_typed_point_takes_the_town_under_it_for_the_mf_reference(cur: Any) -> None:
+    """#2454: a raw-spec subject has no stored location, so the MF hand-off asks the resolver's registry view at the
+    current version for the town covering its point; a point in no town has none."""
+    from api.estimation_runs import _typed_point_obec_kod
+    from toolkit import TargetSpec
 
-    csv_file = tmp_path / "obce_v_datech_2026.csv"
-    csv_file.write_text("Město,Kraj,Index exekucí,Index kaváren\nObcov,w8,3,9\n", encoding="utf-8")
-    with pytest.raises(SeedRefused, match="Index kaváren"):
-        read_csv(csv_file)
-
+    _mirror_unit(cur, "obec", OBEC, "Obcov", BOX)
+    assert _typed_point_obec_kod(cur.connection, TargetSpec(lat=50.05, lng=14.45)) == OBEC
+    assert _typed_point_obec_kod(cur.connection, TargetSpec(lat=49.0, lng=17.0)) is None

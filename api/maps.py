@@ -139,7 +139,7 @@ def _fetch_suggest(
             raise HTTPException(
                 status_code=503, detail="geocoding temporarily unavailable",
             ) from exc
-    raise HTTPException(status_code=503, detail="geocoding not configured")
+    raise AssertionError("unreachable: _api_keys returns at least one key")
 
 
 _CURRENT_VERSION_SQL = "SELECT id FROM registry_versions WHERE is_current LIMIT 1"

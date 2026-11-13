@@ -11,7 +11,7 @@ from typing import Any
 import psycopg
 import pytest
 
-from tests._live_property import REQUIRED_DB, _mirror_unit
+from tests._live_property import REQUIRED_DB
 from tests.test_admin_boundaries_unread import _plant, _pre
 
 pytestmark = REQUIRED_DB
@@ -44,7 +44,6 @@ def test_the_guard_refuses_a_function_that_still_names_what_739_drops(cur: Any, 
 
 
 def test_a_second_curated_city_on_one_town_is_refused(cur: Any) -> None:
-    _mirror_unit(cur, "obec", OBEC, "Obcov", (14.40, 50.00, 14.50, 50.10))
     first = f"w739-{uuid.uuid4().hex[:8]}"
     cur.execute("INSERT INTO curated_cities (name, kraj_name, obec_kod) VALUES (%s, 'w739', %s)", (first, OBEC))
     with pytest.raises(psycopg.errors.UniqueViolation):
