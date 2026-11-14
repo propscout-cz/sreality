@@ -42,10 +42,6 @@ PHOTO_TOKENS_MAX = COMPARISON_MAX_EDGE ** 2 // 750 + 1
 PLAN_TOKENS_MAX = DOCUMENT_MAX_EDGE ** 2 // 750 + 1
 # The file asks for 200: a note a little over is still a note, and refusing it would throw a paid judgement away.
 EVIDENCE_MAX_CHARS = 300
-# scraper.db.pending_image_downloads stops trying here, so a photo counts as on its way only below it and only on a live
-# ad: what is counted always arrives or stops counting, and a property is never held back for good.
-DOWNLOAD_GIVES_UP_AT = 5
-
 _FACET_HEADING = re.compile(r"^### (.*)$", re.M)
 _FACET_KEY = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _REPLY_RULE = (f"\n\n---\nAnswer only by calling {TOOL_NAME}, once, with every facet above and nothing else. Its score "
@@ -183,10 +179,11 @@ class PhotoSet:
         return self.pending > 0 and len(self.photos) < MAX_PHOTOS
 
 
+# On its way = what scraper.db.pending_image_downloads still claims (no terminal unavailable_reason, which the last
+# failed attempt sets) on a live ad: what is counted always arrives or stops counting, so nothing is held back for good.
 _ADS_SQL = """
 SELECT l.id, count(i.storage_path),
-       count(i.id) FILTER (WHERE l.is_active AND i.storage_path IS NULL AND i.unavailable_reason IS NULL
-                                 AND i.download_attempts < %(gives_up_at)s)
+       count(i.id) FILTER (WHERE l.is_active AND i.storage_path IS NULL AND i.unavailable_reason IS NULL)
 FROM listings l
 JOIN properties p ON p.id = l.property_id
 LEFT JOIN images i ON i.listing_id = l.id
@@ -232,7 +229,7 @@ def photo_set(conn: "psycopg.Connection", property_id: int) -> PhotoSet | None:
     if survivor is None:
         return None
     with conn.cursor() as cur:
-        cur.execute(_ADS_SQL, {"property_id": survivor, "gives_up_at": DOWNLOAD_GIVES_UP_AT})
+        cur.execute(_ADS_SQL, {"property_id": survivor})
         ads = cur.fetchall()
         chosen = next((ad for ad in ads if ad[1]), None)
         if chosen is None:

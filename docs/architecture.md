@@ -1995,7 +1995,10 @@ renumber.** Navigate by area:
 6. **Images are downloaded to Cloudflare R2.** v1 only stored URLs; v1.5 downloads the
    bytes to an R2 bucket (S3-compatible) so the data survives the CDN expiring listing
    photos. The `images` table tracks per-image download state via `storage_path`,
-   `download_attempts`, and `last_download_attempt_at`. Image-download is a separate phase
+   `download_attempts`, and `last_download_attempt_at`; a row the download no longer tries carries a terminal
+   `unavailable_reason` (`listing_taken_down`, `source_unavailable`, `not_an_image`, or `download_given_up`, which
+   `db.mark_image_attempt` writes on the fifth failed attempt, migration 742), and a detail refetch re-arms any
+   unstored row. Image-download is a separate phase
    after the scrape phase; it's a no-op if R2 env vars are missing, so a partial deploy
    never breaks the scrape. **The bucket key is unique per `images` ROW:**
    `img/{listing_id}/{images.id}.jpg` (`image_storage.image_key`, 2026-10-25). Both earlier shapes drew

@@ -6,9 +6,8 @@ Three concerns:
      The per-run gone/alive caches prevent repeat freshness calls.
   2. `_suspicious_stop` only fires when the window is full AND the
      transient ratio exceeds the threshold.
-  3. `pending_image_downloads` SQL respects the new
-     `unavailable_reason IS NULL` exclusion and the active_only
-     ordering knob.
+  3. `pending_image_downloads` SQL claims only unstored rows with no
+     terminal `unavailable_reason`, active ads first.
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ import pytest
 import requests
 
 from scraper import db as scraper_db
+from scraper import listing_write
 from scraper import main as scraper_main
 
 
@@ -360,14 +360,24 @@ def _pending_row(image_id: int) -> tuple[Any, ...]:
     return (image_id, image_id * 10, 0, f"https://cdn/{image_id}.jpg", "byty", "prodej", None)
 
 
-def test_pending_image_downloads_excludes_unavailable_and_given_up():
+def test_pending_image_downloads_excludes_stored_and_terminal_rows_only():
+    # A given-up download is the terminal 'download_given_up' (mark_image_attempt), so the
+    # claim reads exactly images_pending_actionable_idx's predicate and no attempt count.
     conn = _ScriptedConn()
     scraper_db.pending_image_downloads(conn, limit=500)
     sql, params = conn.cursor_obj.executed[0]
     assert "storage_path IS NULL" in sql
     assert "unavailable_reason IS NULL" in sql
-    assert "download_attempts < %s" in sql
-    assert params == (5, 500)
+    assert "download_attempts" not in sql
+    assert params == (500,)
+
+
+def test_a_detail_refetch_rearms_an_unstored_photo_whatever_its_terminal_reason():
+    # 'download_given_up' is terminal only until the ad is refetched: the payload write
+    # (and db.record_images, its heal twin) zeroes the attempts and clears the reason.
+    sql = " ".join(listing_write._IMAGES_SQL.split())
+    assert ("download_attempts = 0, last_error = NULL, unavailable_reason = NULL "
+            "WHERE images.storage_path IS NULL") in sql
 
 
 def test_pending_image_downloads_reads_active_newest_first_without_a_sort_key():
@@ -391,11 +401,11 @@ def test_pending_image_downloads_fills_the_rest_from_the_inactive_residue():
     out = scraper_db.pending_image_downloads(conn, limit=5)
     assert out == active + residue
     (sql_a, params_a), (sql_r, params_r) = conn.cursor_obj.executed
-    assert "l.is_active = true" in sql_a and params_a == (5, 5)
+    assert "l.is_active = true" in sql_a and params_a == (5,)
     # The residue: inactive ads AND images whose listing row is missing.
     assert "l.is_active IS NOT TRUE" in sql_r
     assert "ORDER BY i.id DESC" in sql_r
-    assert params_r == (5, 3)
+    assert params_r == (3,)
 
 
 def test_pending_image_downloads_returns_an_image_once_when_its_ad_flips_between_tiers():
@@ -412,7 +422,7 @@ def test_pending_image_downloads_sources_filter_scopes_both_tiers():
     assert len(conn.cursor_obj.executed) == 2
     for sql, params in conn.cursor_obj.executed:
         assert "l.source = ANY(%s)" in sql
-        assert params == (5, ["idnes", "bazos"], 500)
+        assert params == (["idnes", "bazos"], 500)
 
 
 # ---- _run_image_downloads gates --------------------------------------------

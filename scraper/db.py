@@ -1265,7 +1265,6 @@ PendingImage = tuple[int, int, int | None, str, str | None, str | None, int | No
 
 def pending_image_downloads(
     conn: psycopg.Connection,
-    max_attempts: int = 5,
     limit: int = 1000,
     *,
     sources: tuple[str, ...] | None = None,
@@ -1279,10 +1278,10 @@ def pending_image_downloads(
     freshness check is a sreality portal fetch, so it is inherently legacy-keyed
     and simply does not apply to a listing without one.
 
-    Filters out images already stored (storage_path IS NOT NULL),
-    images we have given up on (download_attempts >= max_attempts), and
-    images terminally classified as unavailable (unavailable_reason IS
-    NOT NULL — e.g. the parent listing was taken down).
+    Filters out images already stored (storage_path IS NOT NULL) and
+    images in a terminal state (unavailable_reason IS NOT NULL — e.g. the
+    parent listing was taken down, or `mark_image_attempt` gave the
+    download up), which is exactly images_pending_actionable_idx.
 
     Active listings come first, newest first; the inactive residue fills
     whatever of `limit` the active tier leaves, so it drains only when the
@@ -1293,7 +1292,7 @@ def pending_image_downloads(
     (category_main, category_type) on the scrape_runs row.
     """
     extra = ""
-    params: list[Any] = [max_attempts]
+    params: list[Any] = []
     if sources:
         extra = " AND l.source = ANY(%s)"
         params.append(list(sources))
@@ -1311,7 +1310,6 @@ def pending_image_downloads(
                 LEFT JOIN listings l ON l.id = i.listing_id
                 WHERE i.storage_path IS NULL
                   AND i.unavailable_reason IS NULL
-                  AND i.download_attempts < %s
                   AND {tier}{extra}
                 ORDER BY i.id DESC
                 LIMIT %s
@@ -1369,16 +1367,17 @@ def mark_image_stored(
         cur.execute(_MARK_IMAGE_STORED_SQL.format(extra=extra), tuple(params))
 
 
+IMAGE_GIVE_UP_ATTEMPTS = 5
+
+
 def mark_image_attempt(
     conn: psycopg.Connection,
     image_id: int,
     error: str | None = None,
 ) -> None:
-    """Record one failed image-download attempt.
-
-    Persists the exception text on `images.last_error` (truncated to
-    500 chars) so post-hoc diagnosis works without scraping CI logs.
-    """
+    """Record one failed image-download attempt; the IMAGE_GIVE_UP_ATTEMPTS-th gives the
+    download up in the same write (the terminal 'download_given_up', cleared only by a
+    detail refetch's re-arm). `last_error` keeps the exception text (500 chars)."""
     truncated = (error or "")[:500] if error is not None else None
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(
@@ -1386,10 +1385,12 @@ def mark_image_attempt(
             UPDATE images
             SET last_download_attempt_at = now(),
                 download_attempts = download_attempts + 1,
-                last_error = COALESCE(%s, last_error)
+                last_error = COALESCE(%s, last_error),
+                unavailable_reason = CASE WHEN download_attempts + 1 >= %s
+                                          THEN 'download_given_up' ELSE unavailable_reason END
             WHERE id = %s
             """,
-            (truncated, image_id),
+            (truncated, IMAGE_GIVE_UP_ATTEMPTS, image_id),
         )
 
 
