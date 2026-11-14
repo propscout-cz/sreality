@@ -447,9 +447,10 @@ def test_the_position_matview_is_registered_and_indexed() -> None:
 def test_the_position_snapshot_runs_four_times_a_day_outside_the_night_within_its_budget() -> None:
     """#2506: the newest call site is the live schedule (cron.schedule upserts by name). Four runs a day, none in
     00-07Z, off the old pin-audit job's :25, 733's command verbatim; the registry names that schedule and its budget
-    outlasts the longest gap plus a 900 s run."""
-    newest = sorted(p for p in (ROOT / "migrations").glob("*.sql")
-                    if "'refresh-location-position'," in p.read_text(encoding="utf-8"))[-1]
+    outlasts any ONE missed run (the longest two gaps in a row) plus a 900 s run."""
+    newest = max((p for p in (ROOT / "migrations").glob("*.sql")
+                  if "'refresh-location-position'," in p.read_text(encoding="utf-8")),
+                 key=lambda p: int(p.name.split("_", 1)[0]))
     code = _squeeze(re.sub(r"--[^\n]*", "", newest.read_text(encoding="utf-8")))
     cron = re.search(r"cron\.schedule\(\s*'refresh-location-position',\s*'([^']+)',\s*\$\$(.+?)\$\$", code)
     assert cron, f"{newest.name}: pg_cron refresh-location-position"
@@ -459,8 +460,9 @@ def test_the_position_snapshot_runs_four_times_a_day_outside_the_night_within_it
     assert len(hours) == 4 and not set(hours) & set(range(7)), hours
     assert cron.group(2).strip() == ("set statement_timeout='900s'; "
                                      "select public.refresh_matview('location_position_mv');")
-    budget = re.search(r"set cadence = '([^']+)', staleness_budget = interval '(\d+) hours' "
+    budget = re.search(r"set cadence = '([^']+)', staleness_budget = interval '(\d+) hours (\d+) minutes' "
                        r"where name = 'location_position_mv'", code)
     assert budget and budget.group(1) == cron.group(1), "the registry row names the live schedule"
-    longest_gap = max((b - a) % 24 for a, b in zip(hours, hours[1:] + hours[:1]))
-    assert longest_gap + 1 <= int(budget.group(2)) < 24
+    gaps = [(b - a) % 24 for a, b in zip(hours, hours[1:] + hours[:1])]
+    one_miss = max(g + h for g, h in zip(gaps, gaps[1:] + gaps[:1]))
+    assert one_miss * 3600 + 900 <= int(budget.group(2)) * 3600 + int(budget.group(3)) * 60 < 24 * 3600

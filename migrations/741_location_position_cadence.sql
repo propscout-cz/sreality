@@ -14,12 +14,14 @@
 --      the jobs check measures a job's lateness against its median start gap over its newest 7 days, so keeping job 36's
 --      hourly history would read "no start for 3 h, over 3x its 1 h gap" for about six days. The new job id starts that
 --      history fresh ("not measured" until 5 starts). A re-run finds the target schedule and changes nothing.
---   2. derived_artifacts.location_position_mv: the cadence names the schedule; the budget 130 min -> 13 h covers the 9 h
---      night gap and one missed daytime run (10 h), each plus a run of at most 900 s. A failed 08:07 run (14 h) reads
---      stale until the 13:07 one lands.
+--   2. derived_artifacts.location_position_mv: the cadence names the schedule; the budget 130 min -> 14 h 30 min covers
+--      any ONE missed run: the longest two gaps in a row are 14 h (a missed 23:07 leaves 18:07 -> 08:07, a missed 08:07
+--      leaves 23:07 -> 13:07), plus a run of at most 900 s. Two missed runs in a row read stale, as two did before.
 --
 -- APPLY. Through apply_migration.yml (psql -f, statement autocommit; both statements idempotent). Independent of the code
--- deploy: either order. ROLLBACK (forward, a new migration): schedule '7 * * * *' again and restore 130 minutes.
+-- deploy: either order. Apply outside :07-:22: a running refresh stamps the same derived_artifacts row, and if the UPDATE
+-- meets lock_timeout the schedule is already changed while the budget is still 130 min; re-run it then (the cron half
+-- is a no-op). ROLLBACK (forward, a new migration): schedule '7 * * * *' again and restore 130 minutes.
 -- VERIFY:
 --   select jobid, schedule, command from cron.job where jobname = 'refresh-location-position';  -- a new jobid
 --   select cadence, staleness_budget from derived_artifacts where name = 'location_position_mv';
@@ -45,6 +47,6 @@ $cron$;
 
 update public.derived_artifacts
    set cadence          = '7 8,13,18,23 * * *',
-       staleness_budget = interval '13 hours'
+       staleness_budget = interval '14 hours 30 minutes'
  where name = 'location_position_mv'
-   and (cadence, staleness_budget) is distinct from ('7 8,13,18,23 * * *', interval '13 hours');
+   and (cadence, staleness_budget) is distinct from ('7 8,13,18,23 * * *', interval '14 hours 30 minutes');

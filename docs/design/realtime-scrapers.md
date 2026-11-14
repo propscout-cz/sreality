@@ -291,8 +291,13 @@ lag, a 45 s budget and 2 000-row batches. Env knobs on the Railway service:
 **Location-refetch lane (location simplification W8; W2 of the quality programme made its tick a
 constant):** every 6 h (`LOCATION_REFETCH_TICK_SECONDS` = 21600, #2506), queue the active ads with no town
 (rule 25) whose newest page or payload is at least `LOCATION_REFETCH_MIN_AGE_S` (6 h) old for ONE
-more detail fetch, at most `LOCATION_REFETCH_CAP_PER_SOURCE` (500) per portal — so a townless ad is
-re-read every 6 h or more while it stays townless. The predicate bounds the traffic, not the tick.
+more detail fetch, at most `LOCATION_REFETCH_CAP_PER_SOURCE` (500) per portal. The predicate and the
+tick bound the traffic together: a townless ad is queued for its second look 6-12 h after its
+discovery fetch, and while it stays townless it is re-read about every 12 h, not 6 — the drain's
+fetch lands after the tick that queued it, so the next tick finds that page a little under 6 h old
+(a worker boot runs one pass too). Health reads the lane late after 18 h without a completed pass,
+and only once the worker has been up 18 h (backend merges redeploy it, so that cell is mostly
+quiet; a failed pass is a Problem at once).
 
 - **Why.** ceskereality and realitymix geocode an ad after publishing it; our detail fetch ran at
   discovery, read empty location fields, and the index card never changed, so no re-fetch was ever
@@ -307,7 +312,10 @@ re-read every 6 h or more while it stays townless. The predicate bounds the traf
 - **Bounded per portal, oldest-fetched first.** `LOCATION_REFETCH_CAP_PER_SOURCE` (500) rows per
   portal per tick, so bazos's dead ads (their page answers with the category listing →
   `ListingGoneError` → delisted by the same fetch) drain over days instead of flooding one drain
-  pass. The heartbeat's `last` carries the UNCAPPED per-portal backlog beside what it queued.
+  pass. At four ticks a day that is a ceiling of 2,000 rows per portal per day plus one pass per
+  worker boot (12,000 at the hourly tick before #2506): kept, because these rows share
+  `QUEUE_PRIORITY_VERIFY` and its reserve with the presence checks, and the backlog was 0 when the
+  tick changed. The heartbeat's `last` carries the UNCAPPED per-portal backlog beside what it queued.
 - **It enqueues and nothing else.** `db.enqueue_location_refetch` writes at
   `QUEUE_PRIORITY_VERIFY` with `LEAST` on priority and `given_up=false, attempts=0` (the rows it
   most wants are the ones the drain gave up on; nothing else re-arms them). `claim_detail_batch`

@@ -2183,7 +2183,9 @@ def test_location_refetch_lane_ticks_every_six_hours_on_a_constant(
         monkeypatch: pytest.MonkeyPatch) -> None:
     # W2: one constant tick, no flag, no interval knob, no first delay — the predicate (a page
     # at least MIN_AGE old) bounds the traffic. #2506: the tick is that predicate's own 6 h, a
-    # code constant (no Railway variable), so liveness reads the lane late after 18 h.
+    # code constant (no Railway variable), so liveness reads the lane late after 18 h. The
+    # equality is pinned because the worker and realtime-scrapers.md derive the ~12 h re-read of a
+    # still-townless ad from it: change one value and that statement must change too.
     src = inspect.getsource(rw._amain)
     assert '("location_refetch"' in src
     assert rw.LOCATION_REFETCH_TICK_SECONDS == 21600.0 == float(rw.LOCATION_REFETCH_MIN_AGE_DEFAULT)
