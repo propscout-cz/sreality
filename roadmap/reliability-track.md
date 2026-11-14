@@ -1144,7 +1144,14 @@ Migration drift reads 643 and 663 Not measured (a drop declares nothing it can p
   entry for every property the 6 h cap publishes; new-property freshness must not get worse than the ~22 min of before.
 - **Shipped:** migration 740 (`browse-list-rebuild` at `45 * * * *` as a fresh pg_cron job, so Health judges it on
   hourly history; `derived_artifacts.browse_list` 130 min) and the maintenance pass's `_enqueue_published`: a cap
-  release is in Browse ~30 s after its 6 h mark. Apply 740 only after the code is live on the worker.
+  release is in Browse ~30 s after its 6 h mark. The daily sweep, which holds the lease the pass needs (up to its
+  6,000 s budget on Large), runs the same enqueue and drain after each batch. Apply 740 only after the code is live
+  on the worker.
 - **Cost:** what reaches Browse only through the rebuild (a resolver re-place of an older property, the operator's
   location corrections included; city proximity; `tom_days`; a non-new patch a swap superseded) waits up to ~65 min
   instead of ~22.
+- **Next:** let Health see a failed enqueue. A property published over ~10 min ago and still missing from
+  `browse_list` reads as the expected `unpublished` stage until the next rebuild starts (up to ~65 min), so a broken
+  `_enqueue_published` would only warn in the worker log. Proposal: judge `unpublished` at
+  `greatest(<newest rebuild start>, now() - 10 min)` in `scripts/checks/publishing.py`, or count the enqueue in the
+  pass result and heartbeat.

@@ -36,7 +36,9 @@
 
 set lock_timeout = '5s';
 
--- Guarded like 620: the CI replay has no pg_cron. A real failure here is caught by the post-condition below.
+-- Guarded like 620 only where pg_cron is absent (the CI replay). Where it exists a failure re-raises: psql's
+-- ON_ERROR_STOP then halts before the registry UPDATE below (statements autocommit, so a notice here would let the
+-- row read hourly over a */15 job), and a lock timeout keeps the text apply_migration.yml's retry looks for.
 do $cron$
 begin
   perform cron.unschedule(jobid) from cron.job
@@ -47,6 +49,9 @@ begin
     $$set statement_timeout='1800s'; select public.rebuild_browse_list();$$
   );
 exception when others then
+  if to_regclass('cron.job') is not null then
+    raise;
+  end if;
   raise notice 'pg_cron unavailable; browse-list-rebuild not rescheduled (%)', sqlerrm;
 end
 $cron$;

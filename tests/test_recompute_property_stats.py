@@ -265,6 +265,8 @@ class _DrainCur:
             self._rows = []
         elif "scheduled_jobs" in s:  # a renewal or the fence, granted
             self._rows = [(1,)]
+        elif s == "SELECT now()":
+            self._rows = [("CUTOFF",)]
         else:
             self._rows = []
 
@@ -741,8 +743,9 @@ def test_full_sweep_renews_lease_every_batch(monkeypatch: Any) -> None:
     assert _run_sweep(monkeypatch, conn, []) == 0
     assert len([s for s in _sqls(conn) if s.startswith(_TAKE)]) == 1
     # one renewal before the first attach + one per batch + one before each batch's straggler
-    # attach + one each before the reconcile and the finalize
-    assert len(_renewals(conn)) == 1 + 2 + 2 + 1 + 1
+    # attach + two for each batch's drain (its step, then its one empty claim) + one each before
+    # the reconcile and the finalize
+    assert len(_renewals(conn)) == 1 + 2 + 2 + 2 * 2 + 1 + 1
     # complete walk → the swept-range clear over its whole range
     assert _dirty_clears(conn) == [{"cutoff": "CUTOFF", "lo": 1, "hi": 4001}]
     # ...and the property_sweep artifact stamp the jobs check reads (O(1) liveness signal),
@@ -756,36 +759,51 @@ def test_full_sweep_renews_lease_every_batch(monkeypatch: Any) -> None:
 
     one = (f"SET LOCAL statement_timeout = '{rps._BATCH_STATEMENT_TIMEOUT}'", "WITH batch AS",
            f"SET LOCAL statement_timeout = '{rps._BOOK_STATEMENT_TIMEOUT}'", "WITH spells AS")
+    # (each batch's drain then opens its enqueue under the batch ceiling too)
     assert [next(p for p in one if s.startswith(p)) for s in _sqls(conn)
-            if s.startswith(one)] == list(one) * 2
+            if s.startswith(one)] == [*one, one[0]] * 2
     assert [p for s, p in conn.executed if s.startswith("WITH spells AS")] == [
         {"lo": 1, "hi": 2001}, {"lo": 2001, "hi": 4001}]
-    # ...and keeps the session's lock wait: only the drain slice bounds its own
-    assert not any("lock_timeout" in s for s in _sqls(conn))
+    # ...and keeps the session's lock wait: only the per-batch drain's statements bound their own
+    sqls = _sqls(conn)
+    bounded = [sqls[i + 1] for i, s in enumerate(sqls) if "lock_timeout" in s]
+    assert bounded == [" ".join(rps._ENQUEUE_PUBLISHED_SQL.split())] * 2
 
 
 def test_the_full_sweep_patches_no_browse_row(monkeypatch: Any) -> None:
     """It recomputes every property, and the hourly wholesale rebuild is already that job's
-    read-model half: only births (the attach), the dirty drain (fed the cap's releases by the
-    incremental pass's published enqueue), the settle step and the identity writers patch Browse.
-    Nor does it stamp `settled_at`: settling is the incremental pass's."""
+    read-model half: its batches touch no Browse row. Only the lane's own steps do, which it runs
+    between batches because it holds their lease: births (the attach), and the published enqueue
+    feeding the dirty drain (`_drain_published`). Nor does it stamp `settled_at`: settling is the
+    incremental pass's."""
+    import scripts.recompute_property_stats as rps
+
     conn = _SweepConn(max_id=4000)
     assert _run_sweep(monkeypatch, conn, []) == 0
-    assert not any("browse_list" in s or "settled_at" in s for s in _sqls(conn))
+    enqueue = " ".join(rps._ENQUEUE_PUBLISHED_SQL.split())
+    assert {s for s in _sqls(conn) if "browse_list" in s or "settled_at" in s} == {enqueue}
 
 
-def test_the_full_sweep_births_stragglers_after_every_batch(monkeypatch: Any, caplog: Any) -> None:
-    """The sweep holds the maintenance lease for its whole run (13-59 min a day) and the worker's
-    lane skips meanwhile, so an ad written during it waited for its property until the sweep let
-    go (10 min median, 16 max, measured 2026-10-20). Each batch is now followed by one attach on
-    the lease the sweep already holds, renewed first; the run's births are counted in its log."""
+def test_the_full_sweep_births_stragglers_and_drains_after_every_batch(monkeypatch: Any, caplog: Any) -> None:
+    """The sweep holds the maintenance lease for its whole run (20 min on 2XL, its whole 6,000 s budget
+    on Large) and the worker's lane skips meanwhile, so an ad written during it waited for its property
+    until the sweep let go (10 min median, 16 max, measured 2026-10-20), and with the rebuild hourly a cap
+    release or a queued change would wait for its end too (#2505). Each batch is now followed by one
+    attach and one published enqueue plus drain on the lease the sweep already holds, each step renewed
+    first; the run's births and drained properties are counted in its log."""
     import scripts.recompute_property_stats as rps
 
     def attach(c: Any, **_: Any) -> int:
         c.executed.append(("ATTACH", None))
         return 1
 
+    def drain(c: Any, batch_size: int, hold: Any) -> int:
+        assert batch_size == 2000 and hold is not None
+        c.executed.append(("DRAIN", None))
+        return 2
+
     monkeypatch.setattr(rps, "_attach_stragglers", attach)
+    monkeypatch.setattr(rps, "_drain_published", drain)
     conn = _SweepConn(max_id=6000)  # 3 batches at the default size
     with caplog.at_level("INFO", logger="recompute_property_stats"):
         assert _run_sweep(monkeypatch, conn, []) == 0
@@ -795,15 +813,60 @@ def test_the_full_sweep_births_stragglers_after_every_batch(monkeypatch: Any, ca
             return "lease"
         if "WITH batch AS" in s:
             return "batch"
-        return "attach" if s == "ATTACH" else None
+        return {"ATTACH": "attach", "DRAIN": "drain"}.get(s)
 
     steps = [k for k in (kind(s) for s in _sqls(conn)) if k]
     assert steps == ["lease", "lease", "attach",
-                     "lease", "batch", "lease", "attach",
-                     "lease", "batch", "lease", "attach",
-                     "lease", "batch", "lease", "attach",
+                     "lease", "batch", "lease", "attach", "lease", "drain",
+                     "lease", "batch", "lease", "attach", "lease", "drain",
+                     "lease", "batch", "lease", "attach", "lease", "drain",
                      "lease", "lease"]
-    assert "attached=4 " in caplog.text
+    assert "attached=4 drained=6 " in caplog.text
+
+
+def test_the_sweeps_drain_is_the_passes_queue_then_cutoff_then_drain() -> None:
+    """`_drain_published` is the incremental pass's Browse half in its order: the enqueue commits
+    before the cutoff is read, so the drain claims what it queued."""
+    from scripts.recompute_property_stats import _ENQUEUE_PUBLISHED_SQL, _drain_published
+
+    conn = _DrainConn([[(7, "t1")], []])
+    assert _drain_published(conn, batch_size=500, hold=_hold()) == 1
+    sqls = _sqls(conn)
+    at = sqls.index(" ".join(_ENQUEUE_PUBLISHED_SQL.split()))
+    claims = [i for i, s in enumerate(sqls) if s.startswith("SELECT property_id, marked_at FROM dirty_properties")]
+    assert at < sqls.index("SELECT now()") < claims[0] and len(claims) == 2
+    assert {conn.executed[i][1]["cutoff"] for i in claims} == {"CUTOFF"}
+    assert conn.recomputed == [[7]]
+
+
+def test_a_failed_drain_never_stops_the_backstop_sweep(monkeypatch: Any, caplog: Any) -> None:
+    """Like a failed birth: the lane drains once the lease is free, so the sweep logs it and goes on to
+    finish and stamp its cycle; a lost lease still stops it."""
+    import scripts.recompute_property_stats as rps
+
+    calls = {"n": 0}
+
+    def drain(c: Any, batch_size: int, hold: Any) -> int:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise ValueError("deadlock detected")
+        return 0
+
+    monkeypatch.setattr(rps, "_drain_published", drain)
+    conn = _SweepConn(max_id=6000)  # 3 batches at the default size
+    with caplog.at_level("WARNING", logger="recompute_property_stats"):
+        assert _run_sweep(monkeypatch, conn, []) == 0
+    assert len([s for s in _sqls(conn) if "WITH batch AS" in s]) == 3
+    assert calls["n"] == 3
+    assert "RECOMPUTE sweep.drain failed after batch=2001-4001: deadlock detected" in caplog.text
+    assert [s[0] for s in _stamps(conn)] == ["property_sweep"]
+
+    def lost(c: Any, batch_size: int, hold: Any) -> int:
+        raise job_lease.LeaseLost("lease lost")
+
+    monkeypatch.setattr(rps, "_drain_published", lost)
+    with pytest.raises(job_lease.LeaseLost):
+        _run_sweep(monkeypatch, _SweepConn(max_id=6000), [])
 
 
 def test_a_failed_birth_never_stops_the_backstop_sweep(monkeypatch: Any, caplog: Any) -> None:
@@ -1281,9 +1344,9 @@ def test_batch_retry_renews_the_lease_on_every_attempt(monkeypatch: Any) -> None
     grants = [i for i, s in enumerate(order) if s.startswith((_TAKE, _RENEWAL))]
     recomputes = [i for i, s in enumerate(order) if "WITH batch AS" in s]
     # acquisition + one before the first attach + one renewal per ATTEMPT (2), not per
-    # loop iteration (1), then the batch's straggler attach, the reconcile and the
-    # finalize renew once each
-    assert len(grants) == 7
+    # loop iteration (1), then the batch's straggler attach, its drain (the step and its
+    # one empty claim), the reconcile and the finalize renew once each
+    assert len(grants) == 9
     # the failed attempt never recorded its statement; the replay did, and its
     # own renewal came first
     assert len(recomputes) == 1

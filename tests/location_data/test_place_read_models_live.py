@@ -1,8 +1,8 @@
 """Own place search's read models (migration 738, #2449), EXECUTED against the replayed schema (CI's migrations lane,
 `TEST_DATABASE_URL`; locally `scripts/local_pg.sh test`). Every test rolls back.
 
-  * THE REBUILD STILL RUNS. rebuild_browse_list() drops browse_list and renames its successor into place every 15
-    minutes (658). A matview that named browse_list in its FROM would depend on it and refuse every rebuild, and Browse
+  * THE REBUILD STILL RUNS. rebuild_browse_list() drops browse_list and renames its successor into place every hour
+    (658; hourly since 740). A matview that named browse_list in its FROM would depend on it and refuse every rebuild, and Browse
     would freeze. place_served_counts reads it through place_served_rows(), so the rebuild swaps the table under it
     and the next refresh counts the NEW table. RED by: the matview reading browse_list directly (the DROP refuses), or
     an unqualified table in the function's body (PG17 runs a matview's refresh under search_path pg_catalog, pg_temp).

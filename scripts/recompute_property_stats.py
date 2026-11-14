@@ -30,7 +30,8 @@
    property the pipeline is done with and patch its Browse row at once (`_settle_fresh`,
    migrations 668/669). A property is published once settled or 6 h old (`toolkit/publication.py`);
    the incremental pass opens by queueing what the cap published (`_enqueue_published`), so its
-   drain patches it into Browse.
+   drain patches it into Browse. The full sweep, which holds the lease the pass needs, queues and
+   drains after each batch (`_drain_published`).
 
 Batched by property-id range so each statement stays well under the
 transaction-pooler statement timeout. autocommit=True means each batch
@@ -573,6 +574,18 @@ def _enqueue_published(conn: Any, hold: job_lease.Hold | None = None) -> None:
         LOG.warning("MAINTENANCE published enqueue failed, the next pass retries: %s", exc)
 
 
+def _drain_published(conn: Any, batch_size: int, hold: job_lease.Hold | None = None) -> int:
+    """The full sweep's Browse half, run after each of its batches: the sweep holds the maintenance
+    lease for its whole run (20 min on 2XL, its whole 6,000 s budget on Large, 2026-11-13) and the
+    lane skips meanwhile, so a cap release, and every change the drain carries, would otherwise wait
+    for the run's end or the hourly rebuild. The pass's order: queue, cut off, drain."""
+    _enqueue_published(conn, hold)
+    with conn.cursor() as cur:
+        cur.execute("SELECT now()")
+        cutoff = cur.fetchone()[0]
+    return _drain_dirty(conn, batch_size, cutoff, hold)
+
+
 def _drain_dirty(
     conn: Any, batch_size: int, cutoff: Any,
     hold: job_lease.Hold | None = None,
@@ -1020,6 +1033,9 @@ def main() -> int:
             def attach(c: Any) -> int:
                 return _attach_stragglers(c, hold=hold)
 
+            def drain(c: Any) -> int:
+                return _drain_published(c, args.batch_size, hold)
+
             # attempts=2, like sweep.batch: a doomed attach reds in ~4 min instead of ~8.
             # Bounded batches until one comes back short: each is its own transaction.
             attached = 0
@@ -1059,7 +1075,7 @@ def main() -> int:
                 start_lo, runs, cycle_started_at = 1, 0, cutoff
             ranges = list(_batch_ranges(max_id, args.batch_size, start_lo))
             total_batches = len(ranges)
-            batches = recomputed = 0
+            batches = recomputed = drained = 0
 
             for lo, hi in ranges:
                 # Budget clean-stop (the detail drains' --max-seconds pattern):
@@ -1102,6 +1118,15 @@ def main() -> int:
                     raise
                 except Exception as exc:  # noqa: BLE001 - see above
                     LOG.warning("RECOMPUTE sweep.attach failed after batch=%d-%d: %s", lo, hi, exc)
+                # The lane's Browse half, on the same terms (`_drain_published`): what the cap
+                # published and every queued change reach Browse within a batch, not at the run's
+                # end or the hourly rebuild (#2505).
+                try:
+                    drained += step(renewed(drain), "sweep.drain", attempts=2)
+                except job_lease.LeaseLost:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - as the attach above
+                    LOG.warning("RECOMPUTE sweep.drain failed after batch=%d-%d: %s", lo, hi, exc)
 
             # The finalize block is wrapped too: a drop here would throw away an
             # otherwise-complete sweep's completion stamp and red the health check.
@@ -1198,9 +1223,9 @@ def main() -> int:
         return 1
     LOG.info(
         "RECOMPUTE done max_property_id=%d from_id=%d cycle_runs=%d batches=%d "
-        "avg_batch_s=%.1f attached=%d elapsed=%.1fs",
+        "avg_batch_s=%.1f attached=%d drained=%d elapsed=%.1fs",
         max_id, start_lo, runs + 1, batches, elapsed / batches if batches else 0.0,
-        attached, elapsed,
+        attached, drained, elapsed,
     )
     return 0
 

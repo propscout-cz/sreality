@@ -384,7 +384,7 @@ jobs:
         run: pytest tests/api/test_place_search_gate_eval_live.py -q
 
       # Own place search's read models (migration 738): place_served_counts reads browse_list through a function, so
-      # the */15 rebuild still drops and renames the table under it and the next refresh counts the new rows (a matview
+      # the hourly rebuild still drops and renames the table under it and the next refresh counts the new rows (a matview
       # naming browse_list would refuse the DROP and freeze Browse); place_facts copies the current polygon points and
       # averages the open doors; the text_pattern_ops name index bounds both `=` and `LIKE 'p%'`. Only a real schema
       # can run the rebuild, the refreshes or the planner.
@@ -452,7 +452,7 @@ jobs:
       # only columns that index holds, target list AND WHERE: a new always-on conjunct off
       # the index changes no result anywhere, so nothing else goes red. The rail reads the
       # columns out of the planner (auto_explain, VERBOSE) on the shipped function, after
-      # running the */15 rebuild once so the index exists. Portal chips and the other
+      # running the hourly rebuild once so the index exists. Portal chips and the other
       # filters visit the heap by design.
       #
       # BEHAVIOUR: the cell count is bounded BY CONSTRUCTION (migration 602: the finest

@@ -3964,7 +3964,11 @@ renumber.** Navigate by area:
     publication rule) on the fresh properties the pipeline is done with; the stamp commits alone,
     then the Browse patch (`sync_browse_list`). New listings (`property_id` NULL) are born by straggler-attach, not the queue (≤ 2000 a pass,
     brought current by `properties_changed`), every 30 s on the worker's lane and after each batch
-    of the daily full sweep, under the lease that sweep already holds. The
+    of the daily full sweep, under the lease that sweep already holds. After each batch's attach the
+    sweep also runs the pass's Browse half, the published enqueue and the dirty drain
+    (`_drain_published`, #2505): the lane skips for the sweep's whole run (20 min on 2XL, its whole
+    6,000 s budget on Large, 2026-11-13), and with the rebuild hourly a cap release or a queued change
+    would otherwise wait for the run's end. A failed drain is logged and the sweep goes on. The
     **daily full sweep** (the job runner's `property_sweep`, no `--incremental`, 03:00 UTC, #2027) is the
     reconcile backstop — it recomputes every property and clears the queue, so a missed enqueue
     self-heals within one cycle (24h when one run covers it) *provided the cycle completes*:
