@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from jsonschema import Draft202012Validator
 
 from scraper import image_storage
+from scraper.db import IMAGE_GIVE_UP_ATTEMPTS
 from toolkit.property_identity import resolve_active_property_id
 from toolkit.vision_images import COMPARISON_MAX_EDGE, DOCUMENT_MAX_EDGE, image_block
 
@@ -180,10 +181,12 @@ class PhotoSet:
 
 
 # On its way = what scraper.db.pending_image_downloads still claims (no terminal unavailable_reason, which the last
-# failed attempt sets) on a live ad: what is counted always arrives or stops counting, so nothing is held back for good.
+# failed attempt sets; under the attempt limit, for rows given up before migration 742) on a live ad: what is counted
+# always arrives or stops counting, so nothing is held back for good.
 _ADS_SQL = """
 SELECT l.id, count(i.storage_path),
-       count(i.id) FILTER (WHERE l.is_active AND i.storage_path IS NULL AND i.unavailable_reason IS NULL)
+       count(i.id) FILTER (WHERE l.is_active AND i.storage_path IS NULL AND i.unavailable_reason IS NULL
+                                 AND i.download_attempts < %(gives_up_at)s)
 FROM listings l
 JOIN properties p ON p.id = l.property_id
 LEFT JOIN images i ON i.listing_id = l.id
@@ -229,7 +232,7 @@ def photo_set(conn: "psycopg.Connection", property_id: int) -> PhotoSet | None:
     if survivor is None:
         return None
     with conn.cursor() as cur:
-        cur.execute(_ADS_SQL, {"property_id": survivor})
+        cur.execute(_ADS_SQL, {"property_id": survivor, "gives_up_at": IMAGE_GIVE_UP_ATTEMPTS})
         ads = cur.fetchall()
         chosen = next((ad for ad in ads if ad[1]), None)
         if chosen is None:

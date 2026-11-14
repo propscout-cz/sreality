@@ -7,7 +7,7 @@ Three concerns:
   2. `_suspicious_stop` only fires when the window is full AND the
      transient ratio exceeds the threshold.
   3. `pending_image_downloads` SQL claims only unstored rows with no
-     terminal `unavailable_reason`, active ads first.
+     terminal `unavailable_reason` under the attempt limit, active ads first.
 """
 
 from __future__ import annotations
@@ -360,16 +360,17 @@ def _pending_row(image_id: int) -> tuple[Any, ...]:
     return (image_id, image_id * 10, 0, f"https://cdn/{image_id}.jpg", "byty", "prodej", None)
 
 
-def test_pending_image_downloads_excludes_stored_and_terminal_rows_only():
-    # A given-up download is the terminal 'download_given_up' (mark_image_attempt), so the
-    # claim reads exactly images_pending_actionable_idx's predicate and no attempt count.
+def test_pending_image_downloads_excludes_stored_terminal_and_given_up_rows():
+    # A given-up download is the terminal 'download_given_up' (mark_image_attempt); the
+    # attempt limit stays for rows given up before migration 742 labelled them, so the
+    # code and 742 land in either order without a given-up photo being fetched again.
     conn = _ScriptedConn()
     scraper_db.pending_image_downloads(conn, limit=500)
     sql, params = conn.cursor_obj.executed[0]
     assert "storage_path IS NULL" in sql
     assert "unavailable_reason IS NULL" in sql
-    assert "download_attempts" not in sql
-    assert params == (500,)
+    assert "download_attempts < %s" in sql
+    assert params == (scraper_db.IMAGE_GIVE_UP_ATTEMPTS, 500)
 
 
 def test_a_detail_refetch_rearms_an_unstored_photo_whatever_its_terminal_reason():
@@ -401,11 +402,11 @@ def test_pending_image_downloads_fills_the_rest_from_the_inactive_residue():
     out = scraper_db.pending_image_downloads(conn, limit=5)
     assert out == active + residue
     (sql_a, params_a), (sql_r, params_r) = conn.cursor_obj.executed
-    assert "l.is_active = true" in sql_a and params_a == (5,)
+    assert "l.is_active = true" in sql_a and params_a == (5, 5)
     # The residue: inactive ads AND images whose listing row is missing.
     assert "l.is_active IS NOT TRUE" in sql_r
     assert "ORDER BY i.id DESC" in sql_r
-    assert params_r == (3,)
+    assert params_r == (5, 3)
 
 
 def test_pending_image_downloads_returns_an_image_once_when_its_ad_flips_between_tiers():
@@ -422,7 +423,7 @@ def test_pending_image_downloads_sources_filter_scopes_both_tiers():
     assert len(conn.cursor_obj.executed) == 2
     for sql, params in conn.cursor_obj.executed:
         assert "l.source = ANY(%s)" in sql
-        assert params == (["idnes", "bazos"], 500)
+        assert params == (5, ["idnes", "bazos"], 500)
 
 
 # ---- _run_image_downloads gates --------------------------------------------

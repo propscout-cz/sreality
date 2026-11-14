@@ -1260,6 +1260,8 @@ def active_count(conn: psycopg.Connection, source: str, scope: Mapping[str, Any]
 # pending set instead (#2011).
 _PENDING_IMAGE_TIERS = ("l.is_active = true", "l.is_active IS NOT TRUE")
 
+IMAGE_GIVE_UP_ATTEMPTS = 5
+
 PendingImage = tuple[int, int, int | None, str, str | None, str | None, int | None]
 
 
@@ -1281,7 +1283,9 @@ def pending_image_downloads(
     Filters out images already stored (storage_path IS NOT NULL) and
     images in a terminal state (unavailable_reason IS NOT NULL — e.g. the
     parent listing was taken down, or `mark_image_attempt` gave the
-    download up), which is exactly images_pending_actionable_idx.
+    download up), which is images_pending_actionable_idx. The attempts
+    filter only covers rows given up before migration 742 labelled them,
+    so the code and 742 can land in either order.
 
     Active listings come first, newest first; the inactive residue fills
     whatever of `limit` the active tier leaves, so it drains only when the
@@ -1292,7 +1296,7 @@ def pending_image_downloads(
     (category_main, category_type) on the scrape_runs row.
     """
     extra = ""
-    params: list[Any] = []
+    params: list[Any] = [IMAGE_GIVE_UP_ATTEMPTS]
     if sources:
         extra = " AND l.source = ANY(%s)"
         params.append(list(sources))
@@ -1310,6 +1314,7 @@ def pending_image_downloads(
                 LEFT JOIN listings l ON l.id = i.listing_id
                 WHERE i.storage_path IS NULL
                   AND i.unavailable_reason IS NULL
+                  AND i.download_attempts < %s
                   AND {tier}{extra}
                 ORDER BY i.id DESC
                 LIMIT %s
@@ -1367,17 +1372,15 @@ def mark_image_stored(
         cur.execute(_MARK_IMAGE_STORED_SQL.format(extra=extra), tuple(params))
 
 
-IMAGE_GIVE_UP_ATTEMPTS = 5
-
-
 def mark_image_attempt(
     conn: psycopg.Connection,
     image_id: int,
     error: str | None = None,
 ) -> None:
     """Record one failed image-download attempt; the IMAGE_GIVE_UP_ATTEMPTS-th gives the
-    download up in the same write (the terminal 'download_given_up', cleared only by a
-    detail refetch's re-arm). `last_error` keeps the exception text (500 chars)."""
+    download up in the same write (the terminal 'download_given_up': a detail refetch's
+    re-arm clears it, a gone sreality ad's relabels it). `last_error` keeps the exception
+    text (500 chars)."""
     truncated = (error or "")[:500] if error is not None else None
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(
@@ -1447,7 +1450,7 @@ def mark_image_listing_taken_down(
     conn: psycopg.Connection,
     sreality_id: int,
 ) -> int:
-    """Mark every pending image of a gone listing as terminally unavailable.
+    """Mark every pending or given-up image of a gone listing as terminally unavailable.
 
     Called by the image-download phase after a freshness check confirms
     the parent listing returns 404/410 from sreality. The reason
@@ -1462,7 +1465,7 @@ def mark_image_listing_taken_down(
                 last_download_attempt_at = now()
             WHERE sreality_id = %s
               AND storage_path IS NULL
-              AND unavailable_reason IS NULL
+              AND (unavailable_reason IS NULL OR unavailable_reason = 'download_given_up')
             """,
             (sreality_id,),
         )

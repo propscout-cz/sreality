@@ -9,17 +9,20 @@
 --
 -- WHAT. From the code in the same PR, scraper.db.mark_image_attempt writes unavailable_reason = 'download_given_up' in
 -- the update that records the fifth failed attempt, beside the reasons already in use (listing_taken_down,
--- source_unavailable, not_an_image), and the readers drop their `download_attempts < 5`. This file labels the rows
--- already given up. A labelled row leaves the partial index, as every other terminal row does. No schema change: the
+-- source_unavailable, not_an_image). This file labels the rows already given up. A labelled row leaves the partial
+-- index, as every other terminal row does; that is the speed-up, so the readers keep `download_attempts < 5`, now
+-- redundant for every labelled row, only so that this file and the code can land in either order. No schema change: the
 -- column is free text with no CHECK. The re-arm is unchanged: a detail refetch (listing_write._IMAGES_SQL,
 -- db.record_images; refresh_stale_image_urls enqueues active ads with any unstored photo) resets download_attempts and
 -- clears unavailable_reason on an unstored row, whatever the reason.
 --
--- APPLY BEFORE THE MERGE, through apply_migration.yml --ref the branch (psql -f, statement autocommit). The new claim
--- no longer filters on attempts, so code deployed ahead of this file would give each of the 26.6k rows one more fetch.
--- A row that reaches five attempts between the apply and the deploy gets one more attempt and is then labelled.
--- Idempotent: a second run updates nothing. Not destructive. The new value existed nowhere before, so the inverse is
--- exact: update images set unavailable_reason = null where unavailable_reason = 'download_given_up'.
+-- APPLY through apply_migration.yml (psql -f, statement autocommit), in either order with the merge; neither order
+-- fetches a given-up photo again. Preferred: the code live first, then this file, which labels every give-up from
+-- before the deploy while the writer labels every one after; until then the claim is as slow as before. Applied
+-- first, a row that reaches five attempts before the deploy stays unlabelled (skipped by its attempts, still in the
+-- index) until a second run. Idempotent: a second run updates only such rows. Not destructive. The new value existed
+-- nowhere before, so the inverse is exact: update images set unavailable_reason = null where unavailable_reason =
+-- 'download_given_up'.
 --
 -- COST. One UPDATE of ~26.6k rows of a hot table. The planner reaches them through images_storage_path_idx (the
 -- matching SELECT: 9.4 s, 39.7k blocks read, 171k index rows). Row locks only (ROW EXCLUSIVE on the table), and only the
