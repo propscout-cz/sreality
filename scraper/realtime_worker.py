@@ -535,9 +535,9 @@ HEALTH_TICK_SECONDS = 60.0
 # The watcher's health_lane cell fails a pass in flight past 600 s and a lane with no completed
 # pass for 600 s (migration 621, c_lane_dead in 682's health_liveness): 500 s plus the 60 s tick and
 # the heartbeat's 30 s lag stays under both, so the pass cannot grow to hold every alarm at once.
-# Every hosted ALARM due at once owes scripts.verify_pipeline.WORKER_ALARMS_DUE_AT_ONCE_S, 670 s
-# since the Large-compute budgets (2026-11-05; the arithmetic is there): all but the last alarm
-# (parsing, 300 s) fit, 370 s, and it, like a gauge that does not fit the rest, is deferred to the
+# Every hosted ALARM due at once owes scripts.verify_pipeline.WORKER_ALARMS_DUE_AT_ONCE_S, 730 s
+# since #2512 (the arithmetic is there): all but the last alarm
+# (parsing, 300 s) fit, 430 s, and it, like a gauge that does not fit the rest, is deferred to the
 # next 60 s tick, never started short (run_due); due alone, its 300 s fits. The harness stays a lazy
 # import of `_health_sync`, so the figure is read there.
 HEALTH_PASS_BUDGET_SECONDS = 500.0

@@ -77,8 +77,8 @@ select distinct on (c ->> 'subject') c ->> 'subject' as subject, c -> 'facts' ->
 # re-check of an ad files one more); its key is unique, so the rows are one per ad as before. The
 # probe itself, one heap row an ad, is the read's cost, so a verdict older than the ad's latest flip
 # is dropped first: every reactivation stamps last_seen_at = now() (db._touch_chunk_by_id,
-# listing_write), so such a verdict stands only behind a touch transaction open from before it to
-# after the flip, 12 h or more. 42k ads probed fell to 11k, 171k buffers to 49k, with the same 6,050
+# listing_write; pinned by the census in tests/scraper/test_listing_write_census.py), so such a
+# verdict stands only behind a touch transaction open from before it to after the flip. 42k ads probed fell to 11k, 171k buffers to 49k, with the same 6,050
 # ads in dwell (11-14, #2512). The flips are aggregated per ad and hash-joined, never a correlated
 # NOT EXISTS, which may plan a probe per verdict. `{scope}` is an extra `and ...` on both reads.
 _IN_DWELL_CTES = """flips as (

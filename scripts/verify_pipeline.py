@@ -750,9 +750,9 @@ def lane_budget_for(checks: Sequence[Check]) -> float:
 
 # What the worker's pass owes when every alarm it hosts falls due at once: the one figure the worker's pass budget
 # (scraper/realtime_worker.HEALTH_PASS_BUDGET_SECONDS), its test and the two docs that state it are weighed against.
-# 670 s since the Large-compute budgets: jobs, capacity, llm, publishing, delisting and dedup 6 x 45 = 270, scraping 90,
+# 730 s since #2512: jobs, capacity, llm and dedup 4 x 45 = 180, publishing and delisting 2 x 75 = 150, scraping 90,
 # notifications and curation sync 2 x 5 = 10, parsing 300. Past the 500 s pass, so the last alarm (parsing) defers one
-# 60 s tick when every alarm is due at once, the tested `defer_unfit` path; the other nine (370 s) always fit.
+# 60 s tick when every alarm is due at once, the tested `defer_unfit` path; the other nine (430 s) always fit.
 WORKER_ALARMS_DUE_AT_ONCE_S = lane_budget_for([c for c in CHECKS if c.host == _WORKER and c.cls == "alarm"])
 
 

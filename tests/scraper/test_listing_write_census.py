@@ -25,6 +25,10 @@ Blind spots — a green run does NOT prove these:
 `REPOINTS` ledgers every `UPDATE broker_identities SET broker_id` (the broker book is per canonical
 broker, migration 692): its file dirties the moved properties through `dirty_repointed` once per
 re-point. Same blind spots; a DB-side re-point is invisible.
+
+`REACTIVATIONS` pins every statement that sets `listings.is_active` true (db.py included): each stamps
+`last_seen_at = now()` in the same SET, the invariant scripts/checks/common.py's in-dwell read drops a gone verdict
+older than the ad's latest flip on (#2512). Blind spots (b) and (c) apply; no migration holds such a statement today.
 """
 
 from __future__ import annotations
@@ -47,6 +51,12 @@ _LAST_SEEN = re.compile(r"\blast_seen_at\s*=", re.I)
 _SET_BROKER = re.compile(
     r"\bUPDATE\s+(?:public\.)?broker_identities(?:\s+(?:AS\s+)?\w+)?\s+SET\s+broker_id\s*=", re.I)
 _DIRTY_REPOINTED = re.compile(r"\bdirty_repointed\(cur,")
+_LISTINGS_SET = re.compile(
+    r"(?:\bUPDATE\s+(?:public\.)?listings\b(?!_)(?:\s+(?:AS\s+)?(?!SET\b)\w+)?\s+SET\b"
+    r"|\bINSERT\s+INTO\s+(?:public\.)?listings\b(?!_)(?:(?!;|\"\"\").)*?\bDO\s+UPDATE\s+SET\b)"
+    r"(?P<set>(?:(?!\bWHERE\b|\bFROM\b|\bRETURNING\b|;|\"\"\").)*)", re.I | re.S)
+_ACTIVATES = re.compile(r"\bis_active\s*=\s*(?:true\b|%|EXCLUDED\.is_active\b)", re.I)
+_STAMPS_SEEN = re.compile(r"\blast_seen_at\s*=\s*now\(\)", re.I)
 
 WRITER = "scraper/listing_write.py"
 EXEMPT = {"scraper/db.py", WRITER}   # lifecycle/identity owners; the writer
@@ -95,6 +105,9 @@ LEDGER: dict[str, Site] = {
 # Every writer of broker_identities.broker_id, by file and count: the singleton attach and the auto-merge, the
 # operator's merge and unmerge.
 REPOINTS = {"scripts/resolve_brokers.py": 2, "api/broker_review.py": 2}
+
+# Every statement that reactivates a listing, by file: the walk's two touch statements and the writer's upsert.
+REACTIVATIONS = {"scraper/db.py": 2, WRITER: 1}
 
 
 def _runtime_files() -> dict[str, str]:
@@ -166,3 +179,13 @@ def test_every_broker_re_point_is_ledgered_and_dirties_its_properties() -> None:
         "ledger the new UPDATE broker_identities SET broker_id in REPOINTS and dirty its properties through "
         "toolkit.broker_sources.dirty_repointed in the same transaction")
     assert _sites(_DIRTY_REPOINTED) == REPOINTS
+
+
+def test_every_reactivation_stamps_last_seen_at_in_the_same_set() -> None:
+    """A reactivation that skipped the stamp would leave an older gone verdict standing: db.gone_evidence would
+    count it while the delisting check's in-dwell read drops it, so the check would disagree with the decision."""
+    sets = {path: [m["set"] for m in _LISTINGS_SET.finditer(text) if _ACTIVATES.search(m["set"])]
+            for path, text in FILES.items()}
+    sets = {path: found for path, found in sets.items() if found}
+    assert {path: len(found) for path, found in sets.items()} == REACTIVATIONS
+    assert all(_STAMPS_SEEN.search(clause) for found in sets.values() for clause in found), sets
