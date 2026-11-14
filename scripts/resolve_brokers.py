@@ -90,7 +90,9 @@ _ATTRIBUTION_SQL = attribution_statements()
 # --- Firm resolution (global; %(free)s / %(franchise)s are text[] params). ---
 # Only a new or changed row reaches the INSERT: a conflict arm locks, WAL-logs and
 # dirties every row it meets even when it changes nothing, and every pass met them
-# all. last_seen_at is written at birth only; nothing reads it (#2513).
+# all. So firms.last_seen_at and firm_identities.last_seen_at hold the birth time
+# only and nothing reads them (#2513): the real "last seen" is
+# broker_firm_memberships.last_seen_at and broker_identities.last_seen_at.
 
 _FIRMS_UPSERT = """
 INSERT INTO firms (canonical_domain, is_franchise, first_seen_at, last_seen_at)
