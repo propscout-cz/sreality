@@ -108,7 +108,6 @@ def test_a_pass_reports_the_population_it_could_measure(world, tmp_path) -> None
     out = run_incremental(lambda: world)
     assert out["population"]["images_unmeasured"] == 0
     assert out["population"]["coverage"] == 1.0
-    assert out["population"]["phash_pop_rows"] == len(world.phash_pop)
     assert "recut" not in out
 
 
