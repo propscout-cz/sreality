@@ -3151,7 +3151,7 @@ renumber.** Navigate by area:
     events (the canonical ad's 7-day steps, `_CANONICAL_PRICE_STEPS`; the recent delistings; the ads
     that brought a new portal) and the source says who is told, a collection or a slice by joining its members (from
     `monitor_since` / entry; its delistings and new portals are read for its members only, `within`, #2504: the
-    market-wide read held the events lock 11–25 s a pass and timed out merges), a watchdog by joining its spec to
+    market-wide read held the events lock SHARED 11–25 s a pass, past a merge's 5 s lock_timeout), a watchdog by joining its spec to
     each event directly (from `active_since`; behind a CTE of matching properties the planner scanned a broad
     watchdog's cohort once per step). `inactive` waits out 24 h gone (a
     portal blink sends neither Left the market nor Back on the market). Every row writes `event_ref` (the discriminator within
