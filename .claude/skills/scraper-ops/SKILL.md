@@ -352,7 +352,7 @@ Per-lane notes:
   Projects the portal contracts from the image once at lane start (warn, never fail); no `R2_*` =
   warn once, JSON only. Heartbeat `details.location_intake_fast.last` = `{listings,
   written, enqueued, bodies_mined, bodies_complete, seconds, cursor, bodies_cursor}`.
-- **Location-refetch lane** (W8) — hourly (a constant tick) queue the active ads rule 25 calls town-less
+- **Location-refetch lane** (W8) — 6-hourly (constant tick) queue the active ads rule 25 calls town-less
   (`location_steps.town_missing_sql()`, the town-coverage check's fragment, verbatim in `db.py`)
   whose newest stored page/payload is older than `LOCATION_REFETCH_MIN_AGE_S` (6 h) into
   `listing_detail_queue` at VERIFY, ≤`LOCATION_REFETCH_CAP_PER_SOURCE` (500)/portal/tick,

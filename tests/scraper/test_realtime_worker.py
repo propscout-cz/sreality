@@ -2179,14 +2179,14 @@ def _patch_refetch(
     return captured
 
 
-def test_location_refetch_lane_ticks_hourly_on_a_constant(
+def test_location_refetch_lane_ticks_every_six_hours_on_a_constant(
         monkeypatch: pytest.MonkeyPatch) -> None:
     # W2: one constant tick, no flag, no interval knob, no first delay — the predicate (a page
-    # at least MIN_AGE old) bounds the traffic, and an hourly tick is what lets liveness judge
-    # the lane (Watch after 3 h, not 3 days).
+    # at least MIN_AGE old) bounds the traffic. #2506: the tick is that predicate's own 6 h, a
+    # code constant (no Railway variable), so liveness reads the lane late after 18 h.
     src = inspect.getsource(rw._amain)
     assert '("location_refetch"' in src
-    assert rw.LOCATION_REFETCH_TICK_SECONDS == 3600.0
+    assert rw.LOCATION_REFETCH_TICK_SECONDS == 21600.0 == float(rw.LOCATION_REFETCH_MIN_AGE_DEFAULT)
     assert "LOCATION_REFETCH_TICK_SECONDS" in src
     for gone in ("LOCATION_REFETCH_ENABLED_ENV", "LOCATION_REFETCH_INTERVAL_ENV",
                  "LOCATION_REFETCH_INTERVAL_DEFAULT", "LOCATION_REFETCH_FIRST_DELAY_SECONDS",

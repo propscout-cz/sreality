@@ -289,7 +289,7 @@ lag, a 45 s budget and 2 000-row batches. Env knobs on the Railway service:
   the slowest hop, not the claim lane.
 
 **Location-refetch lane (location simplification W8; W2 of the quality programme made its tick a
-constant):** every hour (`LOCATION_REFETCH_TICK_SECONDS` = 3600), queue the active ads with no town
+constant):** every 6 h (`LOCATION_REFETCH_TICK_SECONDS` = 21600, #2506), queue the active ads with no town
 (rule 25) whose newest page or payload is at least `LOCATION_REFETCH_MIN_AGE_S` (6 h) old for ONE
 more detail fetch, at most `LOCATION_REFETCH_CAP_PER_SOURCE` (500) per portal — so a townless ad is
 re-read every 6 h or more while it stays townless. The predicate bounds the traffic, not the tick.
