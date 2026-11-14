@@ -573,7 +573,8 @@ jobs:
       # 655 no API lease is judged (the API runs no matcher), and 655's post-condition runs here, refusing a body
       # that still reads the lease. Since 682 each registered job-runner job and the fleet get a cell (a raising
       # arm keeps its incidents open through the teller), and 682's post-condition and fail-closed precondition
-      # run here too. The replay has no pg_cron, so this lane runs the function itself, in a
+      # run here too; since 745 a gauge past its own budget is stale like an alarm, and 745's post-condition and
+      # precondition run here as well. The replay has no pg_cron, so this lane runs the function itself, in a
       # transaction that always rolls back. Migration 633's own statements run in their step, below.
       - name: The pg_cron watcher judges the watchers (migration 620)
         env:

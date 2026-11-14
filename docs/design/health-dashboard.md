@@ -82,7 +82,7 @@ Poison sreality ad 615387212 re-armed forever by the walk's re-arm; the bazos ra
 **Three measurers, one teller, one results table, one incident table, one view.**
 
 - **The registry** (`scripts/verify_pipeline.py`) declares every check once: key, class (alarm or gauge), host, cadence, time budget, label, unit, owner page. Check bodies move into `scripts/checks/` by domain and import the shared predicates they need (the served-location predicate, the dedup backlog SQL, the delisting constants) instead of re-spelling them; no file there names a portal (rule 21). A check returns a status, a value and *cells*: one verdict per portal, job, lane, provider or file, each with its own message. Each host projects its own keys into a small `health_checks` registry table, so pg_cron and the page know every key's class, cadence and staleness budget, and a retired key leaves at once.
-- **Measurer 1, the worker:** a `health` lane in the realtime worker (a constant 60-second tick like the text lane, no settings knob) runs the checks that are due: alarms every 10 minutes, gauges hourly or six-hourly, each in its own transaction under its budget. A check that cannot be measured writes *Not measured* with the reason.
+- **Measurer 1, the worker:** a `health` lane in the realtime worker (a constant 60-second tick like the text lane, no settings knob) runs the checks that are due: alarms every 10 minutes (publishing and delisting every 30 since #2512), gauges hourly or six-hourly, each in its own transaction under its budget. A check that cannot be measured writes *Not measured* with the reason.
 - **Measurer 2, the GitHub canary:** the one remaining monitoring workflow, hourly (GitHub delivers about five runs a day). It runs the workflow-failure poller, the two checks that need GitHub (`migration_drift` needs the repository checkout; the weekly URL probe needs an address other than the scrapers'), and then asserts four things: the database answers, the worker's checks are fresh, every failing liveness cell has an incident, and every notice of the last window was delivered or seen. Only those assertions turn the run red, so GitHub's failure email becomes a true signal that needs neither Supabase's scheduler nor Railway.
 - **Measurer 3, pg_cron liveness:** a five-minute SQL function judges what must not be judged from inside itself: the worker's heartbeat age, the health lane, every alarm's staleness, the API's background loops (from the watchdog matcher's lease). It writes a result row and nothing else.
 - **The teller:** `toolkit/system_alerts.reconcile`, run every 60 seconds by the API beside the delivery outbox (telling already lives there: the outbox delivers and the bell is an API route). One `ops_incidents` row per failing cell, alarm or gauge. A measured Problem opens it, Watch keeps it open, a measured OK held for at least two cadences (and at least 30 minutes) closes it with one recovery notice; Not measured is inert. An alarm reminds at 6 h, 24 h, 72 h and weekly until you acknowledge on Health; a gauge sends one notice when it first reads Problem and one reminder a day while it stays non-OK; acknowledging silences its reminders like an alarm's; the page's Open-incidents tile counts alarm incidents only. Each notice is one `notification_dispatches` row, delivered by the existing outbox to the channel you choose.
@@ -146,7 +146,7 @@ Budget 180 s. The ~12 s plausibility read is shared with data_quality through ru
 
 **Replaces.** field_fill_matrix; ppm2_measure_coverage; ppm2_median_shift; location_payload_shape_drift, with SREALITY_SHAPE_CASE_SQL and _LOCATION_SHAPE_REMEDY (portal literals in shared code); SQL snapshot_churn and snapshot_churn_24h_mv; SQL field_null_drift (self-eroding 8-day baseline)
 
-### `publishing` — portals, alarm, every 10 min
+### `publishing` — portals, alarm, every 30 min
 
 **Measures.** Do discovered ads reach Browse quickly, with their photos, and does Browse keep holding what is servable? Cells per portal and arm, plus fleet cells.
 - Ingest: age of the oldest NEW-priority queue row that is not given up, claimed or not.
@@ -181,7 +181,7 @@ Fleet:
 
 **Replaces.** acquisition_lag; property_maintenance (its dirty arm here; its sweep arm becomes the property_sweep artifact cell in jobs); SQL detail_queue_lag and detail_queue_backlog (both read '0 min' on an empty queue); SQL e2e_latency; SQL property_attach_lag; sreality_image_template (a live CDN probe outside the shared rate budget) and sreality_image_canary.yml; Image mirror and Image failures panels (stored share and top reason kept as facts); health_summary active counts and portal_health_mv held counts; CategoryTable Queue proxy; detail_latency_recent view
 
-### `delisting` — portals, alarm, every 10 min
+### `delisting` — portals, alarm, every 30 min
 
 **Measures.** Are ads that left their portal made inactive on time, at normal volume, and correctly? Cells per portal and arm.
 - Outflow: ads made inactive in the trailing 24 h (inactive_at) against the median of the same window 7, 14, 21 and 28 days earlier (as built: each week's quietest 24 h within ±3 h of this hour for a drop, its busiest for a spike; the As built note).
@@ -313,7 +313,7 @@ Share arms are judged on each cell's Wilson LB. Each cell carries a rolling 30-d
 
 **Replaces.** ppm2_basis_floor_share; area_vs_usable_divergence; outbound_url_coverage; floor_convention (deleted per Q4: 0 fails in 90 runs, the costliest check, an idnes literal); data_quality_by_source and the capture-data-quality job. As built: migration 633 unschedules capture-data-quality in this wave (24 failures in 30 d, each ringing the jobs check's cron cell for a job this gauge supersedes); `data_quality_snapshots` stays frozen for wave 9 (Q5).
 
-### `text_extraction` — data_quality, gauge, every 60 min
+### `text_extraction` — data_quality, gauge, every 360 min
 
 **Measures.** Are new ads' descriptions read promptly, and when will the archive re-read finish?
 - Flow: the share of ACTIVE eligible ads first seen 1-24 h ago with no reading yet, using the lane's own eligibility predicate (imported from toolkit.description_extraction), and p95 minutes from first_seen to reading beside the lane's 20-min SLO.
@@ -430,7 +430,7 @@ Added with curation sync (`docs/design/curation-sync.md` § 3.9, migration 696, 
 **Data.** pg_trigger (12 rows); the board ledger's last 24 h (~10 events a day) against `curation_clock`'s primary key; one aggregate over `pg_stat_statements` (+ `pg_stat_statements_info`'s reset time) and the check's own previous result. On the worker, after `notifications`, budget 5 s, no owner page.
 
 **Thresholds and their basis.** - Any departure of `triggers` or `board_bumps` is a Problem: both should never happen. The writer kill switch (§ 3.9 of the curation-sync design) turns `triggers` red by intent while it is in force. `reads` and `load` are Watch at worst, never paged: a quiet day or a heavy read is a question, not an outage.
-- Every worker alarm due at once now owes `WORKER_ALARMS_DUE_AT_ONCE_S` (`scripts/verify_pipeline.py`, computed from the registry: 505 s; 670 s since the Large-compute budgets of 2026-11-05, which raised parsing to 300 s and scraping to 90 s), past the worker's 500 s pass: the last of them (parsing) is deferred one 60 s tick, the capped pass's tested path. The pass cannot grow to hold them all: `liveness`'s 10-min `health_lane` line caps it (§ The pass).
+- Every worker alarm due at once now owes `WORKER_ALARMS_DUE_AT_ONCE_S` (`scripts/verify_pipeline.py`, computed from the registry: 505 s; 670 s since the Large-compute budgets of 2026-11-05, which raised parsing to 300 s and scraping to 90 s; 730 s since #2512, which gave publishing and delisting 75 s each), past the worker's 500 s pass: the last of them (parsing) is deferred one 60 s tick, the capped pass's tested path. The pass cannot grow to hold them all: `liveness`'s 10-min `health_lane` line caps it (§ The pass).
 
 **Replaces.** Nothing; new with curation sync.
 
@@ -455,7 +455,7 @@ Added with curation sync (`docs/design/curation-sync.md` § 3.9, migration 696, 
 **Measures.** Are the watchers alive? Judged by pg_cron, outside the worker and the API; it writes a result row and nothing else.
 - worker: the heartbeat's age.
 - health_lane: judged once health_checks holds realtime-worker rows; no completed pass in 10 min after boot, or failing for 10 min.
-- stale:<key>: every registered alarm whose newest measured result is past its staleness_budget (public.health_stale on greatest(last measured, declared_at)). While the heartbeat is stale, worker-hosted keys fold into the one worker cell.
+- stale:<key>: every registered check, alarm or gauge (gauges since migration 745, #2512), whose newest measured result is past its staleness_budget (public.health_stale on greatest(last measured, declared_at)). While the heartbeat is stale, worker-hosted keys fold into the one worker cell.
 - api: the API's background loops, read from notification_matcher_lease. A NULL lease (clean shutdown) is unknown until it has stayed NULL for 20 min (null_since carried in its own result); off at interval 0.
 - unalerted:<key>: an alarm cell measured fail now and at least 2 cadences ago with no open incident (the teller is not telling).
 Facts for the page: system_health_channels, last delivered alert, undelivered alerts, oldest unseen alert, the canary's median gap.

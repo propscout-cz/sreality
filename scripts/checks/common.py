@@ -75,12 +75,23 @@ select distinct on (c ->> 'subject') c ->> 'subject' as subject, c -> 'facts' ->
 # stands. Delisting's stuck arm and coverage's residual read it. The verdicts are grouped per ad off
 # the partial gone index first, so listings is probed once per ad, never once per verdict (each
 # re-check of an ad files one more); its key is unique, so the rows are one per ad as before. The
-# probe itself, one heap row an ad, is the read's cost: 43k verdicts of 42k ads, 177k buffers, 11-05.
-# `{scope}` is an extra `and ...` on the verdicts.
-_IN_DWELL_CTES = """gone as (
+# probe itself, one heap row an ad, is the read's cost, so a verdict older than the ad's latest flip
+# is dropped first: every reactivation stamps last_seen_at = now() (db._touch_chunk_by_id,
+# listing_write), so such a verdict stands only behind a touch transaction open from before it to
+# after the flip, 12 h or more. 42k ads probed fell to 11k, 171k buffers to 49k, with the same 6,050
+# ads in dwell (11-14, #2512). The flips are aggregated per ad and hash-joined, never a correlated
+# NOT EXISTS, which may plan a probe per verdict. `{scope}` is an extra `and ...` on both reads.
+_IN_DWELL_CTES = """flips as (
+    select c.source, c.native_id, max(c.completed_at) as flipped_at
+      from detail_queue_completions c
+     where c.outcome = 'flipped'{scope}
+     group by c.source, c.native_id),
+gone as (
     select c.source, c.native_id, array_agg(c.completed_at) as gone_at
       from detail_queue_completions c
+      left join flips f on f.source = c.source and f.native_id = c.native_id
      where c.outcome = 'gone'{scope}
+       and (f.flipped_at is null or c.completed_at > f.flipped_at)
      group by c.source, c.native_id),
 pending as (
     select l.source, l.category_main, l.category_type, l.id, v.first_gone_at
@@ -94,7 +105,8 @@ pending as (
 
 
 def in_dwell_ctes(scope: str = "") -> str:
-    """The `gone` and `pending` CTEs above, `scope` (an `and ...` on the verdicts) spliced in."""
+    """The `flips`, `gone` and `pending` CTEs above, `scope` (an `and ...` on the completions)
+    spliced in."""
     return _IN_DWELL_CTES.format(scope=scope)
 
 

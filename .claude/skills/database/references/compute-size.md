@@ -58,6 +58,8 @@ recommended size.
 
 Fixed so that nothing loops or stalls: the engine's row census (#2404), location refetch (#2405), the Health
 checks' budgets and scans (#2406), and text extraction's walk (#2408: the newest 24 h whole, then 25,000 older ads a
-pass, 215 k buffers at most). Still open: the publishing check's tag-cohort read (~1.2 M buffers;
-`image_clip_embeddings` not autovacuumed since 10-15) may still run past its 45 s on Large.
-Health cells can read "Not measured" during warm-up: that is a budget running out, not a fault.
+pass, 215 k buffers at most). Publishing and delisting run every 30 min on 75 s and description reading every 6 h
+on 120 s (#2512). Still open: the publishing check's tag-cohort read (~1.2 M buffers;
+`image_clip_embeddings` not autovacuumed since 10-15) may still run past 75 s on Large.
+Health cells can read "Not measured" during warm-up: that is a budget running out, not a fault. A check unmeasured
+for three cadences, gauge or alarm, opens a `stale:<key>` incident (migration 745).

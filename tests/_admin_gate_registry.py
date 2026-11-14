@@ -206,7 +206,8 @@ UNGATED: dict[str, Ungated] = {
     "health_liveness": Ungated(
         "function", "acl",
         ("620_health_liveness.sql", "621_platform_checks.sql", "633_health_explicit_cells.sql",
-         "655_health_liveness_without_api_cell.sql", "675_scheduled_jobs_expand.sql", "682_health_job_cells.sql"),
+         "655_health_liveness_without_api_cell.sql", "675_scheduled_jobs_expand.sql", "682_health_job_cells.sql",
+         "745_health_stale_gauges.sql"),
         "Reads the health ledgers and the worker heartbeat, writes one pipeline_check_results row; EXECUTE revoked "
         "from public, anon and authenticated."),
     "health_job_cells": Ungated(
