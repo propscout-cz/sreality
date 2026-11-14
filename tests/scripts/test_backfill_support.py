@@ -124,9 +124,9 @@ def test_the_resume_cursor_never_advances_past_a_page_that_was_not_written() -> 
 # --- waiting for a read-model rebuild gap ------------------------------------
 #
 # The first live dispatch of a sibling heal exited 3 because a rebuild_% was running, which
-# paints a red X on correct behaviour. rebuild_browse_list() runs every 15 minutes and holds
-# its locks for 5-10 of them, so refusing outright means colliding about half the time and
-# never running.
+# paints a red X on correct behaviour. rebuild_browse_list() then ran every 15 minutes and held
+# its locks for 5-10 of them (hourly since migration 740), so refusing outright meant colliding
+# about half the time and never running.
 
 
 class _FakeRebuildCursor:
@@ -186,6 +186,6 @@ def test_an_expired_budget_proceeds_anyway_rather_than_failing(
 
 def test_the_wait_never_returns_a_nonzero_exit_path() -> None:
     # Pins the contract: the helper reports whether it found a gap, and main() proceeds
-    # either way. Reintroducing `return 3` would make a routine 15-minute rebuild look
+    # either way. Reintroducing `return 3` would make a routine rebuild look
     # like a failed heal.
     assert "return 3" not in pathlib.Path(mod.__file__).read_text(encoding="utf-8")

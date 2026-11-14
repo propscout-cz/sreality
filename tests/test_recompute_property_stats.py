@@ -507,6 +507,64 @@ def test_run_incremental_pass_unlocks_on_failure():
     assert _find(conn, _RELEASE)
 
 
+def test_the_pass_opens_by_queueing_what_the_cap_published_ahead_of_its_cutoff():
+    """Rule 20's mark for the clock: the enqueue runs first, alone in its transaction under the drain's
+    lock-wait ceiling (it reads browse_list, which a rebuild's swap locks) and fenced, so the drain
+    after the cutoff claims what it queued, on this pass."""
+    from scripts.recompute_property_stats import _ENQUEUE_PUBLISHED_SQL, run_incremental_pass
+
+    conn = _FakeConn(script=_PASS_SCRIPT)
+    run_incremental_pass(conn, batch_size=500)
+    sqls = _sqls(conn)
+    at = sqls.index(" ".join(_ENQUEUE_PUBLISHED_SQL.split()))
+    assert sqls[at - 2:at] == ["SET LOCAL statement_timeout = '10min'", "SET LOCAL lock_timeout = '5s'"]
+    assert "FOR UPDATE" in sqls[at + 1], "the enqueue's commit is fenced"
+    claim = next(i for i, s in enumerate(sqls) if "FROM dirty_properties" in s)
+    assert at < sqls.index("SELECT now()") < claim
+
+
+def test_the_published_enqueue_is_browse_projections_where_less_browse_list():
+    """The served rule and the publication rule rendered from their one definitions, as browse_projection
+    carries them; bounded on the first-seen index to what the cap published within two hours."""
+    import scripts.recompute_property_stats as rps
+    from location_data.claims_common import served_location_predicate
+    from toolkit.publication import CAP_SQL, published_predicate
+
+    flat = " ".join(rps._ENQUEUE_PUBLISHED_SQL.split())
+    assert flat.startswith("INSERT INTO dirty_properties (property_id) SELECT p.id FROM properties p WHERE ")
+    assert f"p.first_seen_at > now() - {CAP_SQL} - interval '2 hours'" in flat
+    for clause in ("p.status = 'active'", served_location_predicate("p.location_listing_ref_id"),
+                   published_predicate("p"), "NOT EXISTS (SELECT 1 FROM browse_list b WHERE b.property_id = p.id)"):
+        assert f"AND {clause}" in flat, clause
+    assert flat.endswith("ON CONFLICT (property_id) DO NOTHING")
+
+
+def test_a_failed_published_enqueue_is_logged_and_the_pass_still_drains(caplog: Any) -> None:
+    import psycopg
+
+    from scripts.recompute_property_stats import run_incremental_pass
+
+    class _EnqueueFails(_FakeConn):
+        def cursor(self):
+            cur = super().cursor()
+            orig = cur.execute
+
+            def execute(sql, params=None):
+                if sql.lstrip().startswith("INSERT INTO dirty_properties"):
+                    raise psycopg.errors.LockNotAvailable("lock timeout")
+                return orig(sql, params)
+
+            cur.execute = execute  # type: ignore[method-assign]
+            return cur
+
+    conn = _EnqueueFails(script=_PASS_SCRIPT)
+    with caplog.at_level("WARNING", logger="recompute_property_stats"):
+        stats = run_incremental_pass(conn, batch_size=500)
+    assert stats == {"skipped": False, "attached": 2, "recomputed": 0, "settled": 0}
+    assert "MAINTENANCE published enqueue failed" in caplog.text and "lock timeout" in caplog.text
+    assert _find(conn, "FROM dirty_properties") and _find(conn, _RELEASE)
+
+
 _SETTLED = (lambda s: s.startswith("WITH settled AS"), [(41,), (42,)])
 
 
@@ -707,9 +765,10 @@ def test_full_sweep_renews_lease_every_batch(monkeypatch: Any) -> None:
 
 
 def test_the_full_sweep_patches_no_browse_row(monkeypatch: Any) -> None:
-    """It recomputes every property, and the */15 wholesale rebuild is already that job's
-    read-model half: only births (the attach), the dirty drain, the settle step and the identity
-    writers patch Browse. Nor does it stamp `settled_at`: settling is the incremental pass's."""
+    """It recomputes every property, and the hourly wholesale rebuild is already that job's
+    read-model half: only births (the attach), the dirty drain (fed the cap's releases by the
+    incremental pass's published enqueue), the settle step and the identity writers patch Browse.
+    Nor does it stamp `settled_at`: settling is the incremental pass's."""
     conn = _SweepConn(max_id=4000)
     assert _run_sweep(monkeypatch, conn, []) == 0
     assert not any("browse_list" in s or "settled_at" in s for s in _sqls(conn))

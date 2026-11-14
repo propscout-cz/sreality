@@ -3048,7 +3048,7 @@ renumber.** Navigate by area:
     another property, or on none yet (`autodedup.cluster_members`). The stamp commits ALONE (it
     row-locks what it stamps, and the engine's merges run under a 5 s lock timeout, so a merge waits
     behind one statement at most); then `sync_browse_list` patches the stamped properties' Browse
-    rows in its own transaction, best-effort (a miss waits for the */15 rebuild). The stamper reads
+    rows in its own transaction, best-effort (the next pass's published enqueue re-queues a miss). The stamper reads
     the engine's own tables and decides nothing — no second opinion on duplicates anywhere. A merge
     passes a settled retired property's stamp to an unsettled survivor only when that publishes the
     survivor earlier (`r.settled_at < s.first_seen_at + 6 h`, `toolkit/property_identity._CARRY_SETTLED_SQL`;
@@ -3072,8 +3072,12 @@ renumber.** Navigate by area:
     extension, the boards, push rendering), the collection monitor, estimation subjects and
     comparables, broker lists and the engine's candidates — the gate is about a property's FIRST
     APPEARANCE; a change on a property a user already curates is not one, and a direct link must
-    open (rule 25 keeps the same boundary for location). A cap-released property enters
-    `browse_list` at the */15 rebuild after its 6 h mark (mean ~9 min, worst measured ~40 min);
+    open (rule 25 keeps the same boundary for location). Crossing the cap writes nothing, so the
+    maintenance pass opens by queueing into `dirty_properties` every active, served, published
+    property first seen within the cap plus two hours that `browse_list` lacks
+    (`recompute_property_stats._enqueue_published`, browse_projection's WHERE rendered from the two
+    rules); its drain patches the row in, ~30 s after the 6 h mark (before #2505: the */15 rebuild,
+    up to ~22 min on Large), and a patch a rebuild's swap superseded is re-queued the pass after;
     the publishing health check counts a held property in its expected `unpublished` stage, judged
     at the newest rebuild's start, never as a blocker. **A false 'new' withdraws itself (ruling 5):** `VISIBLE_SQL` (the feed, the badge,
     push) = `REACHABLE_SQL` (not a repeat, not dismissed, its watchdog not retired) AND NOT
@@ -3944,12 +3948,13 @@ renumber.** Navigate by area:
     the `browse_list` snapshot: since field-capture W6 the drain patches `browse_list` for exactly
     the ids it recomputed — each slice runs `properties_changed` (recompute, the broker book,
     and `sync_browse_list`) in ONE transaction under
-    the 10-min ceiling, then dequeues — so a change usually no longer waits for the `*/15`
-    wholesale rebuild — which was a measured mean of 11.7 min, worst 36.6 (94 rebuilds / 24 h,
-    2026-09-21). A fast path, not a guarantee: the rebuild snapshots `browse_projection` at its
-    start and renames the new table in at its end, so a patch committed inside that window is
-    superseded silently, and a rebuild is in flight ~26 % of wall-clock (283 runs / 72 h, mean
-    237 s against a 900 s cadence). The drain is race-free +
+    the 10-min ceiling, then dequeues — so a change usually no longer waits for the wholesale
+    rebuild (then `*/15`, a measured mean of 11.7 min, worst 36.6, 94 rebuilds / 24 h,
+    2026-09-21; hourly at :45 since migration 740). A fast path, not a guarantee: the rebuild
+    snapshots `browse_projection` at its start and renames the new table in at its end, so a
+    patch committed inside that window is superseded silently until the next rebuild (a new
+    property's is re-queued by the published enqueue). The pass OPENS by queueing what the 6 h cap
+    published (rule 16; the clock is the one change no writer marks). The drain is race-free +
     terminating: it claims rows dirtied at/before a run cutoff and deletes each only while it
     still carries the `marked_at` it was claimed with (a compare-and-set, 2026-10-29), so a mid-run
     re-dirty survives — even one stamped at/before the cutoff by a writer whose transaction began
@@ -4013,7 +4018,7 @@ renumber.** Navigate by area:
     (migration 588), and that, a rung change or a foreign determination re-ranks the location
     advert (migration 635), at that property's next recompute, at worst the daily sweep. Until
     then every property surface keeps reading the stored location advert, whose point, label and
-    codes still refresh at every */15 list rebuild; only WHICH advert it is waits.
+    codes still refresh at every hourly list rebuild; only WHICH advert it is waits.
 21. **Every portal runs through ONE shared framework (Phase 4); per-portal code is a client
     (fetch + pacing) + a parser + a `Portal` adapter + a config row — and shared code grows no new
     portal-name branch.** The parser's outputs
@@ -5378,7 +5383,8 @@ that cursor up by lane and the fast lane never runs `--mode full`), and it proje
 contracts from the image once at startup — a failure there is a warning, because
 `location_claims_intake.yml` is the authoritative projector. **Expected latency, detail write to
 Browse:** ≤2 min lag → ≤1 min tick → the resolver drain's own worker lane (~15 s) → `browse_list`'s
-pg_cron rebuild, `*/15`. So a claim and a verdict land within ~3–4 minutes, and the read model — not
+pg_cron rebuild, hourly at :45 (the maintenance pass's published enqueue first, for a property first
+seen within the 6 h cap plus two hours). So a claim and a verdict land within ~3–4 minutes, and the read model — not
 the claim lane — is what the operator now waits on. **A batch that loses a LOCK runs again (W12):**
 55P03 and 40P01 roll the transaction back without moving the keyset cursor and the batch is
 idempotent, so both loops retry THE SAME batch (2 s doubling to 30 s, counters rolled back with the
@@ -5848,7 +5854,8 @@ was retired by 513 because it read five `properties` place columns 508 drops, an
 name on inputs that cannot expire the same way.
 
 **THE REBUILD BUDGET SCALES WITH THE CORPUS** (W13, migration 522, after the 2026-09-14 freeze).
-`browse_list` is a whole-relation rebuild of `browse_projection` on pg_cron (`*/15`; the map's
+`browse_list` is a whole-relation rebuild of `browse_projection` on pg_cron (`*/15`, hourly at :45 since
+migration 740; the map's
 `properties_map_mv`, rebuilt at `7,37`, was dropped in migration 631), so its cost tracks the corpus
 and its `statement_timeout` must too. It did
 not: as the location store recovered to 712,932 rows with a town the list rebuild grew 173 s → 257 s

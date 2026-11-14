@@ -1136,3 +1136,15 @@ Migration drift reads 643 and 663 Not measured (a drop declares nothing it can p
     text change, a reparse heal included, is still re-read, within ~45 min (ruling 2026-11-05).
 - **Next:**
   - One supervised Large trial on a quiet day; until it holds, Large is unproven on the current data.
+
+## 2026-11-14 — Browse rebuild hourly; the cap's releases reach Browse through the dirty queue (#2505, spec #2503)
+
+- **Why:** on Large the */15 Browse rebuild was the largest reader measured (96 runs a day at 320–400 s; 23.5 % of
+  shared-block reads in the 11-13 one-hour diff). Operator ruling 2026-11-14: hourly, paired with a `dirty_properties`
+  entry for every property the 6 h cap publishes; new-property freshness must not get worse than the ~22 min of before.
+- **Shipped:** migration 740 (`browse-list-rebuild` at `45 * * * *` as a fresh pg_cron job, so Health judges it on
+  hourly history; `derived_artifacts.browse_list` 130 min) and the maintenance pass's `_enqueue_published`: a cap
+  release is in Browse ~30 s after its 6 h mark. Apply 740 only after the code is live on the worker.
+- **Cost:** what reaches Browse only through the rebuild (a resolver re-place of an older property, the operator's
+  location corrections included; city proximity; `tom_days`; a non-new patch a swap superseded) waits up to ~65 min
+  instead of ~22.

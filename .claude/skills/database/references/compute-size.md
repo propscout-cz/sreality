@@ -35,8 +35,8 @@ recommended size.
 
 - `LOAD`: engine backlog > 2,000 unread, or the detail queue holds > 20,000 pending, or its oldest row is
   > 6 h old. The thresholds are first guesses: 2,000 unread is ~3 h of engine reading on 2XL.
-- `STRAINED`: the Browse rebuild averaged > 300 s over the last hour (2XL ~65 s; the rebuild runs every
-  900 s), or a lane that is on has not passed for 15 min.
+- `STRAINED`: the newest Browse rebuild took > 300 s (2XL ~65 s; it runs hourly at :45 since migration
+  740), or a lane that is on has not passed for 15 min.
 - `QUIET`: neither.
 
 ## Switching

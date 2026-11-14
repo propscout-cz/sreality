@@ -28,7 +28,9 @@
    one view beside every rollup, in the same transaction.
 3. Settle (the incremental pass only, after the drain): stamp `settled_at` once on each fresh
    property the pipeline is done with and patch its Browse row at once (`_settle_fresh`,
-   migrations 668/669). A property is published once settled or 6 h old (`toolkit/publication.py`).
+   migrations 668/669). A property is published once settled or 6 h old (`toolkit/publication.py`);
+   the incremental pass opens by queueing what the cap published (`_enqueue_published`), so its
+   drain patches it into Browse.
 
 Batched by property-id range so each statement stays well under the
 transaction-pooler statement timeout. autocommit=True means each batch
@@ -77,10 +79,11 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
+from location_data.claims_common import served_location_predicate
 from scraper import db, job_lease
 from toolkit.browse_read_model import sync_browse_list
 from toolkit.filter_registry import PORTAL_OPTIONS
-from toolkit.publication import CAP_SQL
+from toolkit.publication import CAP_SQL, published_predicate
 
 LOG = logging.getLogger("recompute_property_stats")
 
@@ -447,10 +450,11 @@ def properties_changed(conn: Any, property_ids: Iterable[int]) -> None:
     book selects adverts by their property AFTER the writer moved them (an identity writer
     passes both sides, so the side an advert left loses its book row). The Browse
     patch is best-effort (`sync_browse_list` unwinds only itself) and a fast path, not a guarantee:
-    without it a recompute waited a measured mean 11.7 min (worst 36.6) for the */15 wholesale
-    rebuild, and a patch committed while a rebuild is in flight (61.9 s of every 900 s, measured
-    2026-10-19) lands on the doomed table: since migration 630 the rebuild re-patches identity
-    changes before its swap, and any other patch is superseded until the next rebuild. A full
+    without it a recompute waited a measured mean 11.7 min (worst 36.6) for the then */15 wholesale
+    rebuild (hourly since migration 740), and a patch committed while a rebuild is in flight (61.9 s
+    of every 900 s, measured 2026-10-19) lands on the doomed table: since migration 630 the rebuild
+    re-patches identity changes before its swap, and any other patch is superseded until the next
+    rebuild (a new property's until the next pass's `_enqueue_published`). A full
     drain slice (2000 ids, only after a backlog;
     the live depth is a couple of dozen) costs ~100-270 ms of ROW EXCLUSIVE on `browse_list`, the
     lock the rebuild's drop waits behind. That is the uncontended cost. The rebuild's drop runs
@@ -524,14 +528,49 @@ def _attach_stragglers(conn: Any, limit: int = STRAGGLER_BATCH, hold: job_lease.
     return len(born)
 
 
-# The drain slice's ceiling on any one lock wait. Its Browse patch can queue behind a */15
+# The drain slice's ceiling on any one lock wait. Its Browse patch can queue behind a
 # rebuild's swap, holding the slice's `properties` row locks (properties_changed's docstring),
 # and the slice is mostly recently-dirtied properties — the ones the autodedup lane (5 s
 # lock_timeout) and a split (5 s, busy 409) are likeliest to touch. A patch that times out
 # unwinds only its savepoint and the next rebuild carries the row; a recompute that times out
-# rolls the slice back and the next pass replays it. The drain and the settle step only: the full
-# sweep and the straggler attach share `_bounded` and keep the session default.
+# rolls the slice back and the next pass replays it. The drain, the published enqueue and the
+# settle step only: the full sweep and the straggler attach share `_bounded` and keep the session
+# default.
 _DRAIN_LOCK_TIMEOUT = "5s"
+
+
+# Rule 20's mark for the one change no writer makes, the clock: the cap publishes a property with
+# nothing written, so nothing told the drain. This is browse_projection's WHERE (status, the served
+# rule on the location ad, the publication rule) less what browse_list already holds, over properties
+# first seen within the cap plus two hours. No watermark: a row drops out once its patch lands, and a
+# patch a rebuild's swap superseded comes back on the pass after the swap. Anything older was
+# published before the newest hourly rebuild began (pg_cron, migration 740), which carries it.
+_ENQUEUE_PUBLISHED_SQL = f"""
+    INSERT INTO dirty_properties (property_id)
+    SELECT p.id FROM properties p
+     WHERE p.first_seen_at > now() - {CAP_SQL} - interval '2 hours'
+       AND p.status = 'active'
+       AND {served_location_predicate("p.location_listing_ref_id")}
+       AND {published_predicate("p")}
+       AND NOT EXISTS (SELECT 1 FROM browse_list b WHERE b.property_id = p.id)
+    ON CONFLICT (property_id) DO NOTHING
+"""
+
+
+def _enqueue_published(conn: Any, hold: job_lease.Hold | None = None) -> None:
+    """Queue every property published but not yet in Browse (`_ENQUEUE_PUBLISHED_SQL`), ahead of the
+    pass's cutoff, so this pass's drain patches it in. It reads `browse_list`, so it waits behind a
+    rebuild's swap no longer than the drain does. A database error costs this step only (the next pass
+    retries, the hourly rebuild meanwhile); a lost lease still stops it."""
+    import psycopg
+
+    try:
+        with _bounded(conn), conn.cursor() as cur:
+            cur.execute(f"SET LOCAL lock_timeout = '{_DRAIN_LOCK_TIMEOUT}'")
+            cur.execute(_ENQUEUE_PUBLISHED_SQL)
+            _fence(conn, hold)
+    except psycopg.Error as exc:
+        LOG.warning("MAINTENANCE published enqueue failed, the next pass retries: %s", exc)
 
 
 def _drain_dirty(
@@ -629,9 +668,10 @@ def _settle_fresh(conn: Any, hold: job_lease.Hold | None = None) -> int:
     rows in; returns how many it stamped. The stamp commits ALONE: it row-locks what it stamps, and
     the engine's reconcile merges under a 5 s lock_timeout, so a merge waits behind one statement at
     most (autodedup session, 2026-10-23). The patch is `sync_browse_list` on its own -- no recompute
-    (a stamp changes no rolled-up fact), no row lock, best-effort (the next rebuild carries a lost
-    patch). A database error in the stamp costs this step only (the next pass retries, and the cap
-    publishes a property meanwhile), never the pass; a lost lease still stops it."""
+    (a stamp changes no rolled-up fact), no row lock, best-effort (the next pass's
+    `_enqueue_published` carries a lost patch). A database error in the stamp costs this step only
+    (the next pass retries, and the cap publishes a property meanwhile), never the pass; a lost lease
+    still stops it."""
     import psycopg
 
     from autodedup.incremental import EVIDENCE_HOLD_REASON, GENERATION
@@ -803,10 +843,11 @@ def _maintenance_lease(
 def run_incremental_pass(conn: Any, batch_size: int = 2000) -> dict[str, Any]:
     """ONE incremental property-maintenance pass — THE shared implementation
     behind `--incremental` and the realtime worker's
-    maintenance lane: attach new stragglers, then bring the dirty set current through
-    `properties_changed` (recompute, broker book, `browse_list` patch), so a change reaches
-    Browse on this lane's cadence rather than at the next */15 wholesale rebuild, then settle
-    the fresh properties the pipeline is done with (`_settle_fresh`).
+    maintenance lane: queue what the cap published (`_enqueue_published`), attach new stragglers,
+    then bring the dirty set current through `properties_changed` (recompute, broker book,
+    `browse_list` patch), so a change reaches Browse on this lane's cadence rather than at the
+    next hourly wholesale rebuild, then settle the fresh properties the pipeline is done with
+    (`_settle_fresh`).
     Serialized by the maintenance lease; a caller that
     finds the lease held returns {"skipped": True} — the concurrent pass is
     doing the same work, and the next tick is seconds away. A pass normally
@@ -816,6 +857,7 @@ def run_incremental_pass(conn: Any, batch_size: int = 2000) -> dict[str, Any]:
     with _maintenance_lease(conn, "incremental") as hold:
         if hold is None:
             return {"skipped": True, "attached": 0, "recomputed": 0, "settled": 0}
+        _enqueue_published(conn, hold)
         with conn.cursor() as cur:
             cur.execute("SELECT now()")
             cutoff = cur.fetchone()[0]
