@@ -116,11 +116,15 @@ def test_the_scope_from_the_llm_text_portals_unions_the_open_gates() -> None:
 
 def test_a_delisted_advert_is_read_once_per_schema_and_an_active_one_on_every_change() -> None:
     """Q1 (2026-09-30). The delisted arm is hash-free and runs FIRST; the CASE also fences the
-    anti-join into a per-row probe (a new version pulled up into a join grew towards 120 s)."""
+    anti-join into a per-row probe (a new version pulled up into a join grew towards 120 s).
+    The delisted arm is a scalar LIMIT 1 probe: as an EXISTS the planner still hashed it, a
+    full scan of the cache every pass (2026-11-13). EXISTS is true exactly when that
+    subquery returns a row, and `SELECT 1` is never NULL, so the result is the same."""
     where = tx._eligible_where(OPEN_GATES)
-    arm = where[where.index("CASE WHEN l.is_active OR NOT EXISTS"):where.index("   THEN NOT EXISTS")]
+    arm = where[where.index("CASE WHEN l.is_active OR ("):where.index("   THEN NOT EXISTS")]
     assert f"d.extractor_version LIKE '{tx.SCHEMA_VERSION}:%%'" in arm
     assert "d.extracted -> 'error' IS NULL" in arm
+    assert "EXISTS" not in arm and arm.rstrip().endswith("LIMIT 1) IS NULL")
     assert "text_hash" not in arm and where.endswith(")) END")
     assert tx.SCHEMA_VERSION == "2"
 

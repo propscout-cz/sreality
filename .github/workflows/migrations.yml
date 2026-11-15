@@ -1035,6 +1035,15 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_mapy_stage_a_drop_live.py -q
 
+      # A given-up photo download is the terminal 'download_given_up' (#2510; migration 742): the fifth failed attempt
+      # writes it, the images claim stops reading it, a detail refetch re-arms it, and 742 labels the earlier ones.
+      - name: A given-up photo download is terminal (migration 742)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_742_images_download_given_up_live.py -q
+
       # MF reference rent is ONE read-time measure (migration 565), read by the two serving
       # views (browse_projection, properties_public) with the stored KU (566/567, replayed
       # above). Executed over a seeded rent map: every status code, the range for a

@@ -1148,3 +1148,16 @@ Migration drift reads 643 and 663 Not measured (a drop declares nothing it can p
   `stale:<key>` cell on its own budget (three cadences on the worker: 18 h for a 6-hourly gauge).
 - **Next:** read each key's timed-out share and the `stale:` onsets for 24 h after the deploy; move the photo-tags
   cohort to its own key only if publishing stays above 10 % timed out.
+
+## 2026-11-15 — a given-up photo download is terminal; the images claim stops walking it (#2510, spec #2503)
+
+- **Why:** a photo whose download failed 5 times kept `unavailable_reason` NULL, so it stayed in
+  `images_pending_actionable_idx` and every images claim walked it: 26,648 of the index's 26,680 rows (99 % iDNES on
+  inactive ads), 23,232 buffers to return 24 rows, a 4.7 s mean in a cold hour on Large.
+- **Shipped:** `db.mark_image_attempt` writes the terminal `unavailable_reason = 'download_given_up'` on the fifth
+  failed attempt, and migration 742 labels the rows already given up; a labelled row leaves the partial index. The
+  claim and `photo_assessment` keep their `download_attempts < 5`, so the code and 742 land in either order without a
+  given-up photo being fetched again. A gone sreality ad still relabels its given-up photos `listing_taken_down`, and a
+  detail refetch re-arms any unstored photo, as before.
+- **Next:** after 742 is applied, confirm in an hour-later `pg_stat_statements` diff that the claim's buffers fell,
+  and again after images autovacuum empties the index's leaf pages (n_dead_tup 3.11M of a ~3.39M threshold on 11-15).

@@ -162,7 +162,7 @@ class _Conn:
                           and b["cursor_after_id"] is not None
                           and b["outcome"] in ("ok", "stopped", "failed")]
             if candidates:
-                last = max(candidates, key=lambda b: (b["started_at"], b["id"]))
+                last = max(candidates, key=lambda b: b["id"])
                 cur._result = [(last["outcome"], last["cursor_after_id"],
                                 last["cursor_after_ts"])]
             return

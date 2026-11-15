@@ -15,6 +15,7 @@ from api.capabilities.entry import Caller
 from api.capabilities.errors import ToolError, ToolErrorCode
 from api.llm_client import LLMClient
 from api.providers import ModelPrice
+from scraper import db as scraper_db
 from scraper import image_storage
 from tests._live_property import REQUIRED_DB, _advert, _property
 from tests.api._agent_fixtures import reply
@@ -69,14 +70,16 @@ def test_a_photo_set_is_the_canonical_ads_stored_pictures_in_its_order(cur: Any)
     assert photos.stored == 3 and photos.pending == 1
 
 
-def test_a_photo_is_on_its_way_only_on_a_live_ad_and_below_the_attempts_the_download_gives_up_at(cur: Any) -> None:
+def test_a_photo_is_on_its_way_only_on_a_live_ad_until_the_download_gives_it_up(cur: Any) -> None:
     pid, ad = _placed(cur)
     _image(cur, ad, 1)
     waiting = _image(cur, ad, 2, stored=False)
     assert pa.photo_set(cur.connection, pid).pending == 1
-    cur.execute("UPDATE images SET download_attempts = %s WHERE id = %s", (pa.DOWNLOAD_GIVES_UP_AT, waiting))
+    for _ in range(scraper_db.IMAGE_GIVE_UP_ATTEMPTS):
+        scraper_db.mark_image_attempt(cur.connection, waiting, error="timeout")
     assert pa.photo_set(cur.connection, pid).pending == 0, "given up: it is never coming"
-    cur.execute("UPDATE images SET download_attempts = 0 WHERE id = %s", (waiting,))
+    cur.execute("UPDATE images SET download_attempts = 0, unavailable_reason = NULL WHERE id = %s", (waiting,))
+    assert pa.photo_set(cur.connection, pid).pending == 1, "a refetch's re-arm puts it back on its way"
     cur.execute("UPDATE listings SET is_active = false WHERE id = %s", (ad,))
     assert pa.photo_set(cur.connection, pid).pending == 0, "an ended ad holds nothing back"
 
