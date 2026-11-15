@@ -539,3 +539,66 @@ def test_a_collection_that_left_out_new_portal_is_not_told_one(cur: Any) -> None
     cur.execute("SELECT collection_id, change_kind, event_ref FROM notification_dispatches WHERE property_id = %s",
                 (pid,))
     assert cur.fetchall() == [(every, "new_source", str(joined))], f"collection {quiet} tells price drops only"
+
+
+def test_a_source_with_members_reads_only_theirs_and_writes_what_the_market_read_wrote(cur: Any) -> None:
+    """#2504: the monitor and a slice read only their members' delistings and new portals. Rendered over the market
+    (`within` cleared, the shape before), each statement writes the very same rows: every window and group there is
+    one property's, so a member's row cannot change, and a stranger's event never had anyone to tell. A property in
+    two collections is told once per collection (the narrowing is a semi-join)."""
+    from dataclasses import replace
+
+    from api import notifications as nf
+
+    acc = _account(cur)
+    now = datetime.now(timezone.utc)
+    gone_at = now - timedelta(days=2)
+    sid = _watchdog(cur, acc, ["new", "new_source"])
+    sliced, _ = _old(cur)
+    nf.match_once(cur.connection)
+    slice_joined = _advert(cur, sliced, source="sreality", first_seen_at=now - timedelta(days=1))
+    cur.execute("UPDATE watchdog_slice_members SET entered_at = now() - interval '2 days' "
+                "WHERE subscription_id = %s AND property_id = %s", (sid, sliced))
+
+    def left() -> int:
+        pid = _property(cur)
+        _served(cur, pid, _advert(cur, pid, source="bezrealitky", active=False, inactive_at=gone_at))
+        return pid
+
+    def joined() -> tuple[int, int]:
+        pid = _property(cur)
+        first = _advert(cur, pid, source="sreality", first_seen_at=now - timedelta(days=20))
+        lid = _advert(cur, pid, source="bezrealitky", first_seen_at=now - timedelta(days=1))
+        _served(cur, pid, first)
+        return pid, lid
+
+    # Strangers: a delisting and a new portal in no collection and no slice, on the market read only.
+    watched_left, _stranger_left = left(), left()
+    (watched, watched_lid), _stranger = joined(), joined()
+    one, two = _watched(cur, acc, watched_left, None), _watched(cur, acc, watched_left, None)
+    cur.execute("INSERT INTO collection_properties (collection_id, property_id, added_at) "
+                "VALUES (%s, %s, %s), (%s, %s, %s)", (one, watched, _AGED, two, watched, _AGED))
+    cur.execute("SELECT active_since FROM notification_subscriptions WHERE id = %s", (sid,))
+    monitor = {"monitor_window": nf.MONITOR_WINDOW, "inactive_dwell": nf.INACTIVE_DWELL}
+    sliced_params = {**monitor, "subscription_id": str(sid), "active_since": cur.fetchone()[0],
+                     "kinds": ["new", "new_source"]}
+
+    def written(sql: str, params: dict[str, Any]) -> list[tuple[Any, ...]]:
+        cur.execute("SAVEPOINT shape")
+        cur.execute(sql + " RETURNING collection_id, subscription_id, property_id, change_kind, event_ref", params)
+        rows = sorted(cur.fetchall(), key=str)
+        cur.execute("ROLLBACK TO SAVEPOINT shape")
+        return rows
+
+    epoch = str(int(gone_at.timestamp()))
+    market_monitor, market_slice = replace(nf._MONITOR, within=""), replace(nf._WATCHDOG_SLICE, within="")
+    for narrowed, market, params, told in (
+        (nf._MONITOR_INACTIVE_SQL, nf._inactive_sql(market_monitor), monitor,
+         [(one, None, watched_left, "inactive", epoch), (two, None, watched_left, "inactive", epoch)]),
+        (nf._MONITOR_NEW_SOURCE_SQL, nf._new_source_sql(market_monitor), monitor,
+         [(one, None, watched, "new_source", str(watched_lid)), (two, None, watched, "new_source", str(watched_lid))]),
+        (nf._WATCHDOG_SLICE_NEW_SOURCE_SQL, nf._new_source_sql(market_slice), sliced_params,
+         [(None, sid, sliced, "new_source", str(slice_joined))]),
+    ):
+        assert narrowed != market
+        assert written(narrowed, params) == written(market, params) == sorted(told, key=str), narrowed

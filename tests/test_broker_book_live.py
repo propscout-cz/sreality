@@ -19,7 +19,7 @@ from scripts.recompute_property_stats import (
     _drain_dirty,
     properties_changed,
 )
-from scripts.resolve_brokers import _apply_merges, _attach_singletons
+from scripts.resolve_brokers import _apply_merges, _attach_singletons, _resolve_firms
 from tests._live_property import OP, REQUIRED_DB, _advert, _property
 from toolkit.broker_sources import BROKER_SOURCES
 from toolkit.property_identity import detach_listings, merge_property_set
@@ -309,3 +309,28 @@ def test_tom_observed_follows_the_brokers_first_ad_in_the_projection_order(cur: 
 
     properties_changed(cur.connection, [pid])
     assert _book(cur, pid)[broker][3:] == (datetime.fromisoformat("2026-03-01T12:00:00+00:00"), None, False)
+
+
+def test_a_repeat_firm_pass_leaves_every_firm_row_untouched(cur: Any) -> None:
+    """#2513: the firm upserts reach only a new or changed row, so a repeat pass leaves the firm and its identities
+    where they were (same tuple, same xmax); a franchise ruling and a lost firm link still land."""
+    domain = f"lp-{uuid.uuid4().hex[:8]}.cz"
+    for source in ("idnes", "sreality"):
+        cur.execute("INSERT INTO broker_identities (source, source_broker_id_native, email) VALUES (%s, %s, %s)",
+                    (source, f"lp-{uuid.uuid4()}", f"agent@{domain}"))
+    rows = ("SELECT 'firm', ctid::text, xmax::text, is_franchise::text FROM firms WHERE canonical_domain = %(d)s "
+            "UNION ALL SELECT source, ctid::text, xmax::text, firm_id::text FROM firm_identities "
+            "WHERE email_domain = %(d)s ORDER BY 1")
+    _resolve_firms(cur.connection, [], [])
+    before = cur.execute(rows, {"d": domain}).fetchall()
+    firm = cur.execute("SELECT id::text FROM firms WHERE canonical_domain = %s", (domain,)).fetchone()[0]
+    assert [(r[0], r[3]) for r in before] == [("firm", "false"), ("idnes", firm), ("sreality", firm)]
+
+    _resolve_firms(cur.connection, [], [])
+    assert cur.execute(rows, {"d": domain}).fetchall() == before
+
+    cur.execute("UPDATE firm_identities SET firm_id = NULL WHERE email_domain = %s AND source = 'idnes'", (domain,))
+    _resolve_firms(cur.connection, [], [domain])
+    after = cur.execute(rows, {"d": domain}).fetchall()
+    assert [(r[0], r[3]) for r in after] == [("firm", "true"), ("idnes", firm), ("sreality", firm)]
+    assert after[2] == before[2]

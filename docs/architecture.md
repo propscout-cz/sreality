@@ -1995,7 +1995,10 @@ renumber.** Navigate by area:
 6. **Images are downloaded to Cloudflare R2.** v1 only stored URLs; v1.5 downloads the
    bytes to an R2 bucket (S3-compatible) so the data survives the CDN expiring listing
    photos. The `images` table tracks per-image download state via `storage_path`,
-   `download_attempts`, and `last_download_attempt_at`. Image-download is a separate phase
+   `download_attempts`, and `last_download_attempt_at`; a row the download no longer tries carries a terminal
+   `unavailable_reason` (`listing_taken_down`, `source_unavailable`, `not_an_image`, or `download_given_up`, which
+   `db.mark_image_attempt` writes on the fifth failed attempt, migration 742), and a detail refetch re-arms any
+   unstored row. Image-download is a separate phase
    after the scrape phase; it's a no-op if R2 env vars are missing, so a partial deploy
    never breaks the scrape. **The bucket key is unique per `images` ROW:**
    `img/{listing_id}/{images.id}.jpg` (`image_storage.image_key`, 2026-10-25). Both earlier shapes drew
@@ -3148,10 +3151,12 @@ renumber.** Navigate by area:
     while watching restamps `monitoring_enabled_at`, its start), and
     every detector tells a kind only to a source whose `m.kinds` holds it. `price` and `lifecycle` are **one detector per kind for both producers**
     (`_price_sql`, `_inactive_sql`, `_reactivated_sql`, `_new_source_sql`, each rendered for a `_Source`): it reads its
-    events off the market (the canonical ad's 7-day steps, `_CANONICAL_PRICE_STEPS`; the recent delistings; the ads
-    that brought a new portal) and the source says who is told, a collection by joining its members (from
-    `monitor_since`), a watchdog by joining its spec to each event directly (from `active_since`; behind a CTE of
-    matching properties the planner scanned a broad watchdog's cohort once per step). `inactive` waits out 24 h gone (a
+    events (the canonical ad's 7-day steps, `_CANONICAL_PRICE_STEPS`; the recent delistings; the ads
+    that brought a new portal) and the source says who is told, a collection or a slice by joining its members (from
+    `monitor_since` / entry; its delistings and new portals are read for its members only, `within`, #2504: the
+    market-wide read held the events lock SHARED 11–25 s a pass, past a merge's 5 s lock_timeout), a watchdog by joining its spec to
+    each event directly (from `active_since`; behind a CTE of matching properties the planner scanned a broad
+    watchdog's cohort once per step). `inactive` waits out 24 h gone (a
     portal blink sends neither Left the market nor Back on the market). Every row writes `event_ref` (the discriminator within
     source, kind and property: snapshot id, inactive epoch, for `reactivated` the epoch of the
     inactive dispatch it answers, introducing listing, dashboard id, pipeline mode) and a share its

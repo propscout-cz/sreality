@@ -802,8 +802,6 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
     if sql == S.RT_PHASH_POP_SQL:
         wanted = set(p["hashes"])
         return sorted((h, n) for h, n in db.phash_pop.items() if h in wanted)
-    if sql == S.RT_PHASH_POP_COUNT_SQL:
-        return [(len(db.phash_pop),)]
     if sql == S.RT_PHASH_POP_WRITE_SQL:
         # The `is distinct from` limb is READ from the statement (E964 review F6): an upsert that
         # stopped skipping an unmoved count rewrites it here, as it would in Postgres.

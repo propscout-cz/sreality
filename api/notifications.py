@@ -1212,8 +1212,10 @@ def match_once(conn: "psycopg.Connection") -> dict[str, int]:
 # --- the property events: one detector per kind, for both producers (program § 3.3) --------
 #
 # Each detector is written once and rendered for both producers, so 'Left the market' (or any kind) means
-# one thing whichever producer tells it. It reads its events `e` off the market (the canonical
-# ad's price steps, the recent delistings, the ads that brought a new portal), never off a cohort,
+# one thing whichever producer tells it. It reads its events `e` (the canonical ad's price steps,
+# the recent delistings, the ads that brought a new portal) off the market for a watchdog's spec; a
+# source with members reads its members' delistings and new portals only (`within`: the same rows,
+# as every window and group there is one property's, #2504),
 # and a `_Source` says who is told: `join` gives each event row `e` its `m` (source_id, listing_id
 # — the canonical advert —, since and kinds), so a detector fires only for a change after `since`,
 # of a kind in `kinds` (migration 735: what that watchdog or collection is set to tell), and a
@@ -1228,7 +1230,11 @@ class _Source:
     ctes: str    # what `join` reads, each CTE followed by ", "
     join: str    # the event row `e` -> its `m`, one per source told about it
     scope: str   # this statement's own dispatches, on notification_dispatches
+    within: str  # narrows the lifecycle reads to the source's members ({pid}); "" reads the market
 
+
+# A semi-join, never a JOIN: a property in two monitored collections is two members.
+_MEMBERS_ONLY = " AND {pid} IN (SELECT property_id FROM members)"
 
 # A collection with monitoring_enabled tells each property it holds the kinds it is set to
 # (collections.notify_kinds, migration 735), from the later of when it was added
@@ -1257,6 +1263,7 @@ _MONITOR = _Source(
     ),
     join="JOIN members m ON m.property_id = e.property_id",
     scope="source_kind = 'collection_monitor'",
+    within=_MEMBERS_ONLY,
 )
 # A watchdog tells each published property its spec matches NOW (`{where}`, rule 16) from when it
 # last started (`active_since`), the kinds the step passes it (`%(kinds)s`: those of its own
@@ -1274,6 +1281,7 @@ _WATCHDOG = _Source(
         "                           %(active_since)s::timestamptz AS since, %(kinds)s::text[] AS kinds) m"
     ),
     scope="source_kind = 'watchdog' AND subscription_id = %(subscription_id)s::uuid",
+    within="",
 )
 # A watchdog telling 'new' tells its Price drop / Price rise and New portal only about a member of its
 # slice as its last pass took it, of a change after the property entered (ruling Q13): the change that
@@ -1297,6 +1305,7 @@ _WATCHDOG_SLICE = _Source(
     ),
     join="JOIN members m ON m.property_id = e.property_id",
     scope="source_kind = 'watchdog' AND subscription_id = %(subscription_id)s::uuid",
+    within=_MEMBERS_ONLY,
 )
 
 # THE canonical-ad price-step fragment (program § 3.3, step price): a step of the property's
@@ -1345,7 +1354,8 @@ def _inactive_sql(src: _Source) -> str:
         "  SELECT g.property_id, max(g.inactive_at) AS inactive_at "
         "  FROM listings g "
         "  JOIN properties p ON p.id = g.property_id AND p.is_active = false "
-        "  WHERE g.inactive_at > now() - %(monitor_window)s::interval "
+        "  WHERE g.inactive_at > now() - %(monitor_window)s::interval"
+        f"{src.within.format(pid='g.property_id')} "
         "  GROUP BY g.property_id "
         "  HAVING max(g.inactive_at) < now() - %(inactive_dwell)s::interval"
         ") "
@@ -1413,6 +1423,7 @@ def _new_source_sql(src: _Source) -> str:
         "    FROM listings l "
         "    WHERE l.property_id IN (SELECT r.property_id FROM listings r "
         "                            WHERE r.first_seen_at > now() - %(monitor_window)s::interval)"
+        f"{src.within.format(pid='l.property_id')}"
         "  ) x "
         "  WHERE x.rn = 1 AND x.first_seen_at > x.prop_first "
         "    AND x.first_seen_at > now() - %(monitor_window)s::interval"

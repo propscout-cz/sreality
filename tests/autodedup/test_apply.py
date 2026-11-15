@@ -1220,6 +1220,71 @@ def test_an_engine_merge_ruled_different_afterwards_is_reported_not_counted_away
     assert f"generation={GEN},cluster_key=10" in text
 
 
+def _asked(db: FakeDb, *sqls: str) -> dict[str, list[list[int]]]:
+    """The `listing_ids` each of `sqls` is read with, call by call."""
+    asked: dict[str, list[list[int]]] = {sql: [] for sql in sqls}
+    dispatch = db.dispatch
+
+    def spy(sql: str, p: dict[str, Any]) -> list[tuple]:
+        if sql in asked:
+            asked[sql].append(list(p["listing_ids"]))
+        return dispatch(sql, p)
+
+    db.dispatch = spy  # type: ignore[method-assign]
+    return asked
+
+
+def _consulting_world(db: FakeDb) -> A.Scope:
+    """g11 merged 12 onto 200 with 11; GEN merged 50 with 51 (settled, a merge behind it) and
+    holds 40 + 41 on one property (settled, none) and candidate 10 + 11, which carries 12."""
+    _engine_merged(db, 11, [11, 12], [200, 250])
+    _engine_merged(db, 50, [50, 51], [800, 900], gen=GEN)
+    _pair_group(db, 40, [40, 41], [700, 700])
+    _pair_group(db, 10, [10, 11], [100, 200])
+    return A.effective_scope(db.settings[A.SCOPE_SETTING], {}, live=True)
+
+
+def test_the_plan_reads_engine_merges_only_for_the_listings_a_group_consults() -> None:
+    """#2508: a settled group no negative covers consults no engine merge, so none is read for
+    it; a candidate's whole carried set is, a group ruled after it merged its members, and the
+    refusal history only the candidates' members."""
+    db = FakeDb()
+    scope = _consulting_world(db)
+    asked = _asked(db, S.ENGINE_MERGES_SQL, S.LEDGER_HISTORY_SQL)
+    plan = A.plan_apply(db, GEN, scope)
+    assert asked == {S.ENGINE_MERGES_SQL: [[10, 11, 12]], S.LEDGER_HISTORY_SQL: [[10, 11]]}
+    assert [(g.cluster_key, g.reasons, g.listing_ids) for g in plan.groups] == [
+        (10, [], [10, 11, 12])]
+    assert plan.counts["already_one_property"] == 2
+
+    db.verdicts.append({"kind": "cluster", "cluster_key": 50, "verdict": "different",
+                        "generation": GEN, "member_ids": [50, 51]})
+    asked[S.ENGINE_MERGES_SQL].clear()
+    ruled = {g.cluster_key: g for g in A.plan_apply(db, GEN, scope).groups}
+    assert asked[S.ENGINE_MERGES_SQL] == [[10, 11, 12, 50, 51]]
+    assert ruled[50].reasons == [A.RULED_AFTER_MERGE]
+    assert list(ruled[50].detail) == ["group_verdicts", "negatives", "engine_merges"]
+    assert [m["unapply"] for m in ruled[50].detail["engine_merges"]] == [
+        f"generation={GEN},cluster_key=50"]
+    assert ruled[10].reasons == [] and ruled[10].listing_ids == [10, 11, 12]
+
+
+def test_engine_merges_read_in_chunks_plan_what_one_read_plans(monkeypatch: Any) -> None:
+    db = FakeDb()
+    scope = _consulting_world(db)
+    db.verdicts.append({"kind": "cluster", "cluster_key": 50, "verdict": "different",
+                        "generation": GEN, "member_ids": [50, 51]})
+    whole = A.plan_apply(db, GEN, scope)
+    monkeypatch.setattr(A, "MERGES_CHUNK", 1)
+    asked = _asked(db, S.ENGINE_MERGES_SQL)
+    chunked = A.plan_apply(db, GEN, scope)
+    assert asked[S.ENGINE_MERGES_SQL] == [[10], [11], [12], [50], [51]]
+    assert [g.to_json() for g in chunked.groups] == [g.to_json() for g in whole.groups]
+    assert chunked.counts == whole.counts
+    # g11's merge names 11 and 12: read through both chunks, it is one merge
+    assert [m.cluster_key for m in A._engine_merges(db, [11, 12])] == [11]
+
+
 def test_the_live_stream_is_planned_here_never_applied(tmp_path: Path) -> None:
     """One stream, one writer (A9): the lane reconciles `rt` itself, under its lease. A dry run
     may PLAN it — that is G3's prediction of the lane's first reconcile — and nothing here
