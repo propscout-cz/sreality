@@ -36,7 +36,7 @@ import { filtersBeyond } from '@/components/phone/filterRows';
 import { RollEmpty, RollSkeleton } from '@/components/phone/RollParts';
 import { usePhoneHeaderAside } from '@/components/phone/PhoneShell';
 import PushNotice from '@/components/phone/PushNotice';
-import { SlidersIcon } from '@/components/phone/phoneIcons';
+import { CheckIcon, SlidersIcon, SortIcon } from '@/components/phone/phoneIcons';
 import { AlertIcon, EyeOffIcon } from '@/components/icons';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
 import { listFilterPresets } from '@/lib/api';
@@ -71,6 +71,7 @@ import { lazyChunk } from '@/lib/lazyChunk';
 import { cyclePortal, portalShort, type PortalChoice } from '@/lib/portals';
 import {
   CARD_PAGE_SIZE,
+  CARD_SORTS,
   DEFAULT_SORT,
   dismissalKeys,
   fetchBrowseCount,
@@ -79,6 +80,7 @@ import {
   fetchListingsForCards,
   filterPresetKeys,
   orderPortal as orderPortalOf,
+  sortToParam,
   type CardRow,
   type DismissedCardRow,
 } from '@/lib/queries';
@@ -105,6 +107,7 @@ export default function Feed() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [hidden, setHidden] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [sortOpen, setSortOpen] = useState(false);
 
   const presetsQ = useQuery({ queryKey: filterPresetKeys.all, queryFn: listFilterPresets });
   const presets = useMemo(() => presetsQ.data?.data ?? [], [presetsQ.data]);
@@ -326,6 +329,17 @@ export default function Feed() {
             <span className="font-mono text-[11px] tabular-nums text-[var(--color-ink)]">{shownBeyond}</span>
           )}
         </button>
+        {/* The order on the roll itself (operator's ask, 2026-11-15); the sheet's Řazení row stays, one menu. */}
+        <button
+          type="button"
+          onClick={() => setSortOpen(true)}
+          aria-haspopup="dialog"
+          aria-label={`Řazení: ${sortLabel(sort)}`}
+          className={`${CHIP} ${CHIP_MD} ${chipState(!newestFirst)}`}
+        >
+          <SortIcon className="h-3.5 w-3.5" />
+          {newestFirst ? 'Řazení' : sortLabel(sort)}
+        </button>
         <span aria-hidden className={CHIP_DIVIDER} />
         {scopeChip(FEED_ALL_SCOPE, 'Vše')}
         {presets.map((p) => scopeChip(p.id, p.name))}
@@ -418,6 +432,36 @@ export default function Feed() {
           )}
         </div>
       </CardHydrationProvider>
+
+      {sortOpen && (
+        <BottomSheet label="Řazení" closeLabel="Zavřít" onClose={() => setSortOpen(false)}>
+          <div role="radiogroup" aria-label="Řazení" className="pb-2">
+            {CARD_SORTS.map((o) => {
+              const on = sortToParam(o.spec) === sortToParam(sort);
+              return (
+                <button
+                  key={sortToParam(o.spec)}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  onClick={() => {
+                    /* The roll in view keeps its place in the app (Skryté too); only its order changes. */
+                    setView({ ...view, sort: o.spec });
+                    window.scrollTo(0, 0);
+                    setSortOpen(false);
+                  }}
+                  className={`flex h-11 w-full items-center justify-between gap-3 px-4 text-left text-[15px] active:bg-[var(--color-inset)] ${
+                    on ? 'font-medium text-[var(--color-ink)]' : 'text-[var(--color-ink-2)]'
+                  }`}
+                >
+                  {o.label}
+                  {on && <CheckIcon className="h-4 w-4 shrink-0" />}
+                </button>
+              );
+            })}
+          </div>
+        </BottomSheet>
+      )}
 
       {sheetOpen && (
         <Suspense

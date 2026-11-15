@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ImagePublic } from '@/lib/types';
 
-import { CARD_STRIP_CAP, cardPhotos } from './cardPhotos';
+import { cardPhotos } from './cardPhotos';
 
 const photo = (sequence: number | null, id: number, over: Partial<ImagePublic> = {}): ImagePublic => ({
   id,
@@ -40,23 +40,21 @@ describe('cardPhotos', () => {
     expect(seqs(strip.photos)).toEqual([4, 1, 2, 3, 5, 6]);
   });
 
-  it('caps the strip at eight and counts every photo', () => {
+  it('holds every photo, uncapped', () => {
     const all = Array.from({ length: 12 }, (_, i) => photo(i + 1, i + 1));
     const strip = cardPhotos(all, 'default');
-    expect(CARD_STRIP_CAP).toBe(8);
-    expect(strip.photos).toHaveLength(8);
-    expect(seqs(strip.photos)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(seqs(strip.photos)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     expect(strip.total).toBe(12);
   });
 
-  it('leads with a cover found past the cap — the reason the read is not position-capped', () => {
+  it('leads with a cover found deep in the set — the reason the read is not position-capped', () => {
     /* The trained head (DINOv3-first) says the façade is photo 11. */
     const all = Array.from({ length: 12 }, (_, i) =>
       photo(i + 1, i + 1, i + 1 === 11 ? { tag_head_scores: { '3': 0.93 } } : {}),
     );
     const strip = cardPhotos(all, 'exterior_facade');
     expect(strip.cover?.sequence).toBe(11);
-    expect(seqs(strip.photos)).toEqual([11, 1, 2, 3, 4, 5, 6, 7]);
+    expect(seqs(strip.photos)).toEqual([11, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12]);
     expect(strip.total).toBe(12);
   });
 

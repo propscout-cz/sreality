@@ -13,8 +13,8 @@ import FeedCard from './FeedCard';
 import { RollEmpty, RollSkeleton } from './RollParts';
 
 /* Every photo the Browse carousel would hold, so the cover choice is the same and
- * the hydration cache is shared with Browse (BrowseExperience's perId). The card
- * shows the first eight (CARD_STRIP_CAP) and counts them all. */
+ * the hydration cache is shared with Browse (BrowseExperience's perId). The card's
+ * strip shows them all. */
 export const PHOTOS_PER_CARD = 50;
 
 export interface CardRollList {

@@ -280,6 +280,23 @@ describe('<Feed>', () => {
     await waitFor(() => expect(lastAside()).toBe('1\u00a0234 nemovitostí'));
   });
 
+  it('re-orders the roll from the Řazení chip, in one tap', async () => {
+    const user = userEvent.setup();
+    renderFeed();
+    await screen.findByText('Místo 1', { exact: false });
+    await user.click(screen.getByRole('button', { name: 'Řazení: Newest first' }));
+    const sheet = screen.getByRole('dialog', { name: 'Řazení' });
+    expect(within(sheet).getByRole('radio', { name: 'Newest first' })).toBeChecked();
+    await user.click(within(sheet).getByRole('radio', { name: 'Price: low → high' }));
+    expect(screen.queryByRole('dialog', { name: 'Řazení' })).toBeNull();
+    await waitFor(() => {
+      const calls = vi.mocked(queries.fetchListingsForCards).mock.calls;
+      expect(calls[calls.length - 1][1]).toEqual({ field: 'price_czk', direction: 'asc' });
+    });
+    /* The chip names the order once it is not the default. */
+    expect(screen.getByRole('button', { name: 'Řazení: Price: low → high' })).toHaveTextContent('Price: low → high');
+  });
+
   it('opens the Filtry sheet and applies its draft to the roll', async () => {
     const user = userEvent.setup();
     renderFeed();

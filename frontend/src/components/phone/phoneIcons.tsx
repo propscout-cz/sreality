@@ -122,6 +122,15 @@ export function SlidersIcon(p: IconProps) {
   );
 }
 
+/* The feed's order: one arrow up, one down. */
+export function SortIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M8 19V5M4.5 8.5 8 5l3.5 3.5M16 5v14M12.5 15.5 16 19l3.5-3.5" />
+    </Svg>
+  );
+}
+
 /* A place filter. */
 export function PinIcon(p: IconProps) {
   return (

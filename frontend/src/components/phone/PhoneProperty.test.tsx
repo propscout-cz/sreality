@@ -391,7 +391,8 @@ describe('the phone property page', () => {
     expect(gallery.getAllByRole('button')).toHaveLength(3);
     expect(gallery.queryByText('P1')).toBeNull();
     expect(gallery.queryByText('Prohlídka')).toBeNull();
-    expect(screen.getByRole('group', { name: 'Fotky' }).querySelector('[aria-hidden="true"]')).toBeNull();
+    /* Nothing laid over a photo (the round swiper's two end copies are slides themselves, hidden from readers). */
+    expect(screen.getByRole('group', { name: 'Fotky' }).querySelector('button [aria-hidden="true"]')).toBeNull();
     /* A live deal is never hidden. */
     expect(screen.getByRole('button', { name: 'Rozpracovaný obchod nelze skrýt' })).toHaveAttribute(
       'aria-disabled',
