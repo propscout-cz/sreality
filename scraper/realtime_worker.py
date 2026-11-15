@@ -69,7 +69,7 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              under its own `claims_intake.FAST_LANE` cursor. LIVE by default
              (`LOCATION_INTAKE_FAST_ENABLED=0` idles it). One lane, two
              schedules: see the constant block below.
-- location_refetch: every hour (`LOCATION_REFETCH_TICK_SECONDS`, a constant), queue
+- location_refetch: every 6 h (`LOCATION_REFETCH_TICK_SECONDS`, a constant), queue
              the active ads with no town
              (rule 25, `location_steps.town_missing_sql`) for ONE more detail fetch, at
              db.QUEUE_PRIORITY_VERIFY and capped at
@@ -78,8 +78,8 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              so a listing fetched at discovery carried no location and nothing
              ever re-read it; the drain does the rest (a bazos category page
              raises ListingGoneError: a gone verdict, rule #3). The predicate (a
-             page at least `LOCATION_REFETCH_MIN_AGE_S` old) bounds the traffic,
-             not the tick.
+             page at least `LOCATION_REFETCH_MIN_AGE_S` old) and the tick bound the
+             traffic together: see the constant block below.
 - sold_comps: every `realtime_sold_comps_interval_seconds` (DARK: the seeded row is
              0), fetch registered sales from reas.cz for up to 5 obec cells — the
              towns where the deal pipeline holds a live card, stalest first, minus
@@ -465,18 +465,20 @@ _INTAKE_FAST_CONTRACTS_PROJECTED = False
 # database is what lets the lane ship LIVE.
 LOCATION_REFETCH_MIN_AGE_ENV = "LOCATION_REFETCH_MIN_AGE_S"
 LOCATION_REFETCH_CAP_ENV = "LOCATION_REFETCH_CAP_PER_SOURCE"
-# One constant tick (W2). The predicate bounds traffic per listing (a page younger than
-# MIN_AGE is skipped), so the tick rate costs one ~1 s SELECT an hour and nothing else; an
-# hourly tick is what makes the lane's liveness judgeable (Watch after 3 h, not 3 days).
-LOCATION_REFETCH_TICK_SECONDS = 3600.0
+# One constant tick (W2), the predicate's own 6 h (#2506): a page younger than MIN_AGE is
+# skipped, so an hourly tick re-read every active ad's location (25-120 s on Large) to find
+# almost nothing. Tick == MIN_AGE means a STILL-townless ad is re-read about every 12 h, not 6:
+# the drain's fetch lands after the tick that queued it, so the next tick finds its page a little
+# under 6 h old (a worker boot runs a pass too). Liveness reads it late after 18 h, and only once
+# the worker has been up 18 h.
+LOCATION_REFETCH_TICK_SECONDS = 21600.0
 # The candidates read joins every active ad to its location row. That is seconds on an instance
 # whose memory holds the listings heap and minutes on one that reads it from disk (Supabase Large,
-# 2026-11-04: the 120 s default cancelled it, and at an hourly tick one miss is a Jobs Problem).
-# One read-only SELECT an hour that touches no Browse table can afford the wait.
+# 2026-11-04: the 120 s default cancelled it, and one failed pass is a Jobs Problem).
+# One read-only SELECT every 6 h that touches no Browse table can afford the wait.
 LOCATION_REFETCH_STATEMENT_TIMEOUT_S = 600
 # Older than this and the page is worth re-reading. Six hours, not a day: it is well past
-# the portals' geocoding lag, and it means a listing discovered today gets its second look
-# on TOMORROW's tick rather than waiting for the day after.
+# the portals' geocoding lag, and a listing discovered now is queued for its second look 6-12 h later.
 LOCATION_REFETCH_MIN_AGE_DEFAULT = 21600
 LOCATION_REFETCH_CAP_DEFAULT = 500
 
@@ -1859,10 +1861,10 @@ async def _location_intake_fast_pass(
 
 
 def _location_refetch_sync() -> dict[str, Any]:
-    """One hourly tick: read the active ads with no town whose newest page or payload is at
+    """One tick: read the active ads with no town whose newest page or payload is at
     least LOCATION_REFETCH_MIN_AGE_S old, and queue them for one more detail fetch at VERIFY
     priority, at most LOCATION_REFETCH_CAP_PER_SOURCE per portal — so a townless ad is re-read
-    every 6 h or more while it stays townless.
+    about every 12 h while it stays townless (the constant block says why).
 
     No lease and no in-process lock: the pass is one SELECT plus one INSERT per portal,
     the enqueue is idempotent on (source, native_id), and a second caller would at worst
@@ -2981,9 +2983,9 @@ async def _amain() -> int:
             lambda: _location_intake_fast_pass(stop_event, state),
             state,
             default_interval=LOCATION_INTAKE_FAST_INTERVAL_DEFAULT)),
-        # Hourly, a constant (W2): the predicate bounds the traffic, the tick only decides
-        # how soon a townless ad's second look is queued and how soon liveness notices a
-        # dead lane (Watch after 3 h).
+        # Every 6 h, a constant (W2, #2506): with the 6 h page-age predicate it sets how often a
+        # townless ad is re-read (about every 12 h) and how soon liveness notices a dead lane
+        # (late after 18 h, once the worker has been up that long).
         ("location_refetch", lambda: _lane_loop(
             "location_refetch", stop_event, lambda: LOCATION_REFETCH_TICK_SECONDS,
             lambda: _location_refetch_pass(stop_event, state),
