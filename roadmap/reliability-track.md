@@ -1156,6 +1156,18 @@ Migration drift reads 643 and 663 Not measured (a drop declares nothing it can p
   `greatest(<newest rebuild start>, now() - 10 min)` in `scripts/checks/publishing.py`, or count the enqueue in the
   pass result and heartbeat.
 
+## 2026-11-15 — Health budgets that fit Large, a cheaper delisting read, a stale alarm for gauges (#2512 of #2503; shipped with this PR)
+
+- **Why:** on Large (11-11 to 11-13) publishing timed out in 74 % of runs, delisting in 29 %, description reading in
+  83 %, and the location scorecard went 34.8 h unmeasured with no incident: the watcher's `stale:<key>` judged alarms
+  only.
+- **Shipped:** publishing and delisting every 30 min on 75 s, description reading every 6 h on 120 s (registry
+  constants); the in-dwell read drops a gone verdict older than the ad's latest flip before probing listings (42k probes
+  to 11k, 171k buffers to 49k, the same 6,050 ads, read on production 11-14); migration 745 gives every gauge a
+  `stale:<key>` cell on its own budget (three cadences on the worker: 18 h for a 6-hourly gauge).
+- **Next:** read each key's timed-out share and the `stale:` onsets for 24 h after the deploy; move the photo-tags
+  cohort to its own key only if publishing stays above 10 % timed out.
+
 ## 2026-11-15 — a given-up photo download is terminal; the images claim stops walking it (#2510, spec #2503)
 
 - **Why:** a photo whose download failed 5 times kept `unavailable_reason` NULL, so it stayed in
