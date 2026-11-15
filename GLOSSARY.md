@@ -650,7 +650,7 @@ _Avoid_: unknown (in prose), skipped, pending, OK
 
 **Watcher**:
 A check that judges whether the rest of the health system is alive: the realtime worker's
-heartbeat, every alarm measured on time, the API's background loops, every measured Problem given an
+heartbeat, every check measured on time, the API's background loops, every measured Problem given an
 incident. It runs on the database's own scheduler, outside the worker and the API it judges; the one
 watcher is the liveness check, shown as "Watchers".
 _Avoid_: monitor, meta-check, dead-man switch, heartbeat check

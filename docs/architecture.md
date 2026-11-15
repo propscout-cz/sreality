@@ -3315,8 +3315,8 @@ renumber.** Navigate by area:
     the teller tells it like any check): a `worker/<name>` cell per heartbeat row (heartbeat over 10 min
     old; migration 675), a `job/<name>` cell per job-runner job and a `job-runner` fleet cell (migration 682,
     `health_job_cells()`; the `jobs` check's `job-runner/registry` census covers a job with no row), a
-    `health_lane` cell (the worker's health lane, silent for 10 min), a `stale:<key>` cell per alarm
-    past its staleness budget (worker keys fold into a failing `worker/<name>` cell) and an `unalerted` cell
+    `health_lane` cell (the worker's health lane, silent for 10 min), a `stale:<key>` cell per check
+    (alarm or gauge, migration 745) past its staleness budget (worker keys fold into a failing `worker/<name>` cell) and an `unalerted` cell
     (an alarm cell measured failing now and two cadences ago with no open incident; the `api` cell,
     which judged the watchdog matcher's lease, went with the matcher in W2b, migration 655); a
     subject that stops failing reads `ok` while its incident is open, so it recovers on a measured OK. It replaced the `worker_liveness` check and migration 274's 24 h
