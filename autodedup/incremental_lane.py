@@ -164,7 +164,6 @@ from autodedup.incremental_sql import (
     RT_GENERATION_BYTES_SQL,
     RT_IDLE_GUARD_SQL,
     RT_LOCK_GUARD_SQL,
-    RT_PHASH_POP_COUNT_SQL,
     RT_PHASH_POP_SQL,
     RT_PHASH_POP_WRITE_SQL,
     RT_KEY_DELETE_SQL,
@@ -2654,10 +2653,6 @@ def pass_config(recorded: Any, model_version: Any, generation: str
     return settings, model_of_version(str(model_version) if model_version else None)
 
 
-def phash_pop_rows(conn: Any) -> int:
-    return int(_rows(conn, RT_PHASH_POP_COUNT_SQL)[0][0] or 0)
-
-
 def _stamp(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
@@ -3637,7 +3632,6 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         coverage = (None if not facts.images_with_phash else round(
             1.0 - facts.images_unmeasured / float(facts.images_with_phash), 6))
         summary["population"] = {
-            "phash_pop_rows": phash_pop_rows(conn),
             "images_with_phash": facts.images_with_phash,
             "images_unmeasured": facts.images_unmeasured,
             "hashes_unmeasured": len(facts.hashes_unmeasured),

@@ -1155,3 +1155,16 @@ Migration drift reads 643 and 663 Not measured (a drop declares nothing it can p
   `_enqueue_published` would only warn in the worker log. Proposal: judge `unpublished` at
   `greatest(<newest rebuild start>, now() - 10 min)` in `scripts/checks/publishing.py`, or count the enqueue in the
   pass result and heartbeat.
+
+## 2026-11-15 — a given-up photo download is terminal; the images claim stops walking it (#2510, spec #2503)
+
+- **Why:** a photo whose download failed 5 times kept `unavailable_reason` NULL, so it stayed in
+  `images_pending_actionable_idx` and every images claim walked it: 26,648 of the index's 26,680 rows (99 % iDNES on
+  inactive ads), 23,232 buffers to return 24 rows, a 4.7 s mean in a cold hour on Large.
+- **Shipped:** `db.mark_image_attempt` writes the terminal `unavailable_reason = 'download_given_up'` on the fifth
+  failed attempt, and migration 742 labels the rows already given up; a labelled row leaves the partial index. The
+  claim and `photo_assessment` keep their `download_attempts < 5`, so the code and 742 land in either order without a
+  given-up photo being fetched again. A gone sreality ad still relabels its given-up photos `listing_taken_down`, and a
+  detail refetch re-arms any unstored photo, as before.
+- **Next:** after 742 is applied, confirm in an hour-later `pg_stat_statements` diff that the claim's buffers fell,
+  and again after images autovacuum empties the index's leaf pages (n_dead_tup 3.11M of a ~3.39M threshold on 11-15).
