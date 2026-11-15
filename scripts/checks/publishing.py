@@ -24,8 +24,8 @@ from toolkit.measures import wilson_lower
 from toolkit.publication import visible_since_sql
 
 # A new ad gets its property within ~2 min, its location within ~10 min (p95 9.5 min) and its Browse
-# row once published (settled, or at the 6 h cap -- the 'unpublished' stage below) and then at the next
-# */15 rebuild, so one first written under 30 min ago is still on its way.
+# row once published (settled, or at the 6 h cap -- the 'unpublished' stage below), on the next
+# maintenance pass, so one first written under 30 min ago is still on its way.
 _VISIBLE_GRACE_MIN = 30
 _WINDOW_H = NEW_AD_H
 _WIDE_WINDOW_H = 72
@@ -52,7 +52,8 @@ _REBUILT_CTE = """rebuilt as materialized (
 # (toolkit/publication.py, migrations 668/669) had not published when the newest rebuild started
 # is unpublished: still held, or released since, judged on that start, never on now(). A property
 # born, or whose location ad's location was resolved, after that start cannot be in it yet:
-# the resolver never patches browse_list, so such an ad waits for the next */15 rebuild.
+# the resolver never patches browse_list, so such an ad waits for the next hourly rebuild (the
+# maintenance pass queues it sooner while it is first seen within the cap plus two hours).
 _STAGE_TAIL = f"""
             when not {served_location_predicate("p.location_listing_ref_id")}
                 then 'location_not_served'

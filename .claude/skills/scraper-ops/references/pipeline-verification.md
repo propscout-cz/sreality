@@ -914,8 +914,8 @@ whose `host` is `github-actions` is stale only past the budget plus `GITHUB_DELI
 (18 h), because GitHub delivers a cron late by hours (54 of the canary's last 65 scheduled gaps
 exceeded 6 h: median 7.2 h, longest 13.5 h, 09-28..10-18); Not measured ("never succeeded") while `last_succeeded_at` is NULL. Facts: `producer`, `host`,
 `cadence`, `last_succeeded_at`, `last_rows`, `last_duration_ms`, `budget_s`, `slack_s` and
-`is_serving` (a fact, never a verdict). Each budget is at least 3 cadences (`browse_list` 45 min on
-`*/15`) except `rent_map_cells` (40 days on a monthly job, migration 565) and `property_sweep` (wave 4, migration 622, the daily full sweep's completed cycle):
+`is_serving` (a fact, never a verdict). Each budget is at least 2 cadences (`browse_list` 130 min on
+its hourly cron, migration 740) except `rent_map_cells` (40 days on a monthly job, migration 565) and `property_sweep` (wave 4, migration 622, the daily full sweep's completed cycle):
 38 h on a daily cron, so with the slack it read Problem at 56 h, the retired `property_maintenance`
 sweep arm's fail line (migration 731 moved it to `job-runner` at 56 h, no slack, #2027), and its 52 h Watch has no equivalent; 622 seeded it from
 `app_settings.property_sweep_last_complete`, so its verdict is continuous across the deploy. Every
@@ -1191,7 +1191,8 @@ a promotion keeps `enqueued_at`. Births no longer wait for the daily full proper
 the maintenance lease for up to its 6,000 s budget (`recompute_property_stats._MAX_BUDGET_SECONDS`)
 while the worker's 30 s maintenance lane skips, so since 2026-10-20 it attaches stragglers after
 every batch under that lease (a failed attach is logged and the sweep goes on), and a new ad waits
-one batch at most. Before, it attached only at its start, and on a sweep day longer than about
+one batch at most; since #2505 the published enqueue and the dirty drain follow each attach, so a cap
+release or a queued change waits one batch too, not for the sweep's end or the hourly rebuild. Before, it attached only at its start, and on a sweep day longer than about
 40 min visible read Problem for the sweep's duration: the 28-day replay holds five such onsets on
 four days (ceskereality and sreality 10-02, ceskereality 10-05, sreality 10-08, bezrealitky 10-09;
 new ads held 41-100 min, each closed within 80 min). Those ads really were out of Browse past the

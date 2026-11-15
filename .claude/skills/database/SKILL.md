@@ -152,7 +152,7 @@ where a caller needs it. Exception for a hot function: `references/tenancy.md` �
 - **Open with `set local lock_timeout = '5s';` when a migration GRANT/REVOKEs or
   CREATE-OR-REPLACEs a hot or cron-refreshed relation** (any matview, `browse_list`, `listings`).
   Those take ACCESS EXCLUSIVE and a whole-transaction loop holds every lock it already took —
-  without a timeout it queues behind, or blocks, the `*/15` list rebuild or an hourly matview refresh.
+  without a timeout it queues behind, or blocks, the hourly list rebuild (:45) or a matview refresh.
 - **Destructive migrations** (`DROP TABLE`/`COLUMN`, type-changing `ALTER`, `DELETE`
   without `WHERE`, `TRUNCATE`) — **pause for explicit operator OK** ("yes, apply it") and
   back up the affected data *first* (`backup_before_drop.yml`, to R2). There's no staging
@@ -258,7 +258,7 @@ allowlisted with a reason) + `tests/api/test_account_scope_census.py` (no nullab
 **Browse read model** (migrations 275–278, 283; PRs #705/#707/#711/#714/#724): a
 `properties_public`-style view is fed from `browse_projection` (the column contract,
 defined once) into `browse_list` — an **UNLOGGED
-table**, blue-green rebuilt every 15 minutes by a `SECURITY DEFINER` pg_cron function
+table**, blue-green rebuilt hourly at :45 (mig 740) by a `SECURITY DEFINER` pg_cron function
 (`rebuild_browse_list()`, `pg_try_advisory_xact_lock` guards overlapping runs, `ANALYZE`
 *before* the swap is mandatory or the planner uses stale stats on the fresh table). Since 630 it lays the table out by category, lat, lng, builds `browse_list_map_idx` (the map index is only cheap on a heap in its own order) and, once its DROP holds the lock, re-patches every property a `property_merge_events` row created or undid since the previous run (less 15 min).
 The map reads `browse_list` too: 631 dropped the 30-min `properties_map_mv` matview and its rebuild. (The legacy publication-gate predicate went in migration
@@ -470,7 +470,7 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
 - **`place_picks` (mig 737, Q10): service-role-only telemetry**, one INSERT per `/maps/resolve` pick; pg_cron
   `place-picks-retention` deletes rows >12 months daily. Architecture § the pick record.
 - **`place_served_counts` + `place_facts` (mig 738): `/places/suggest`'s service-role-only read models.** The first
-  refreshes at :37 (pg_cron), reading `browse_list` via `place_served_rows()` (a dependent matview fails the */15
+  refreshes at :37 (pg_cron), reading `browse_list` via `place_served_rows()` (a dependent matview fails the hourly
   DROP); the second, facts and not a location store, in `ruian_load.finish`.
 - **Location-data relations (`location_*`, `ruian_*`, `portal_contract*`; migs 380+) are
   service-role-only** — RLS on + explicit `anon`/`authenticated` REVOKEs on every table, sequence

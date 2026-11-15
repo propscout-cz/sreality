@@ -285,7 +285,9 @@ lag, a 45 s budget and 2 000-row batches. Env knobs on the Railway service:
   WARNING, never a dead lane: the projection raises by design when a contract's governed bytes moved
   without a version bump, and `location_claims_intake.yml` is the authoritative projector.
 - **Latency, detail write to Browse:** ≤2 min lag → ≤1 min tick → the resolve lane (~15 s) →
-  `browse_list`'s `*/15` pg_cron rebuild. Claim and verdict in ~3–4 minutes; the read model is now
+  `browse_list`'s pg_cron rebuild, hourly at :45 since migration 740 (the maintenance pass's published
+  enqueue first, for a property first seen within the 6 h cap plus two hours). Claim and verdict in
+  ~3–4 minutes; the read model is now
   the slowest hop, not the claim lane.
 
 **Location-refetch lane (location simplification W8; W2 of the quality programme made its tick a

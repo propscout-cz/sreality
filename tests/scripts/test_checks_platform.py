@@ -148,8 +148,8 @@ def _lane(**over: Any) -> dict[str, Any]:
 def _artifact(name: str = "browse_list", *, last_ok: _dt.datetime | None = None,
               stale: bool = False, never: bool = False) -> tuple[Any, ...]:
     """A _ARTIFACTS_SQL row: a pg_cron artifact, so no GitHub delivery slack."""
-    return (name, "rebuild_browse_list", "pg_cron", "*/15 * * * *",
-            None if never else (last_ok or _ago(minutes=10)), 41_000, 41_700, 2700.0, 0.0, True,
+    return (name, "rebuild_browse_list", "pg_cron", "45 * * * *",
+            None if never else (last_ok or _ago(minutes=10)), 41_000, 41_700, 7800.0, 0.0, True,
             True if never else stale)
 
 
@@ -627,10 +627,10 @@ def test_a_stale_heartbeat_leaves_the_lanes_to_the_watcher() -> None:
 
 
 def test_an_artifact_past_its_budget_is_a_problem_with_its_facts() -> None:
-    out, _ = _jobs(artifacts=[_artifact(last_ok=_ago(minutes=50), stale=True)])
+    out, _ = _jobs(artifacts=[_artifact(last_ok=_ago(minutes=140), stale=True)])
     cell = _cells(out)["artifact/browse_list"]
-    assert cell["status"] == "fail" and cell["value"] == 50
-    assert cell["message"] == ("stale: last succeeded 50 min ago, past its 45 min budget "
+    assert cell["status"] == "fail" and cell["value"] == 140
+    assert cell["message"] == ("stale: last succeeded 2.3 h ago, past its 2.2 h budget "
                                "(rebuild_browse_list, on pg_cron)")
     assert {"producer", "host", "cadence", "last_rows", "last_duration_ms", "budget_s",
             "slack_s", "is_serving"} <= set(cell["facts"])

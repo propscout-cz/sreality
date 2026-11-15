@@ -65,6 +65,8 @@ SERVED_RULE_SITES: dict[tuple[str, str, str], tuple[str, str]] = {
         ("property", "the watchdog matcher over properties_public, served as browse_projection serves"),
     ("scripts/checks/publishing.py", "_STAGE_TAIL", "p.location_listing_ref_id"):
         ("property", "publishing's not-in-Browse stages, judged as browse_projection judges"),
+    ("scripts/recompute_property_stats.py", "_ENQUEUE_PUBLISHED_SQL", "p.location_listing_ref_id"):
+        ("property", "the maintenance pass queues what browse_projection serves and browse_list lacks"),
 }
 
 # Bodies of the replayed schema allowed to key a place on the canonical ad: none (the two dead MF functions left in 631).
@@ -545,6 +547,10 @@ PUBLISHED_RULE_SITES: dict[tuple[str, str, str], tuple[str, str]] = {
         ("property", "an entry into a slice is 'newly listed' when it became visible since the last pass"),
     ("scripts/recompute_property_stats.py", "_SETTLE_SQL", "CAP_SQL"):
         ("property", "the stamper reads only properties the cap has not yet published"),
+    ("scripts/recompute_property_stats.py", "_ENQUEUE_PUBLISHED_SQL", 'published_predicate("p")'):
+        ("property", "the maintenance pass queues what the cap published and browse_list lacks"),
+    ("scripts/recompute_property_stats.py", "_ENQUEUE_PUBLISHED_SQL", "CAP_SQL"):
+        ("property", "that queue reads properties first seen within the cap plus two hours"),
     ("scripts/checks/publishing.py", "_STAGE_TAIL", 'visible_since_sql("p")'):
         ("property", "publishing's 'unpublished' stage, judged at the newest rebuild's start"),
     ("toolkit/property_identity.py", "_CARRY_SETTLED_SQL", "CAP_SQL"):
