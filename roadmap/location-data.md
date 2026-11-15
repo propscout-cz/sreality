@@ -1332,7 +1332,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
   crons), the `location_full_resolve` job, the drain CLI's writing modes (`--dry-run` stays), the
   `realtime_location_resolve_enabled` flag (the interval is the one control), five dead queue reasons,
   the three refetch knobs and the red-line sweep arm (13,224 no-op re-resolves a day, 99.8 % inactive).
-  The refetch lane ticks hourly, a constant.
+  The refetch lane ticks hourly, a constant (every 6 h since #2506).
 - **W7 — RÚIAN loader, full partitions, read levels only — built 2026-11-01, not rolled out** (#2342; migration 718
   NOT applied; rulings Q1, Q10, Q13 and three of 2026-11-01; as built + rollout: `docs/design/location-quality/w7-registry.md`).
   Praha's okres is 9999, read from the pack like every obec's; the loader stages 8 levels (SO, ZSJ, ORP, POU out, 24,225
@@ -1369,7 +1369,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
   Owed: ~20 real Mapy address picks on production before the merge (the 300 m door slack).
 - **W6-c1 — where every point came from — built 2026-11-06** (#2361; rulings Q2 and Q3 of 2026-11-02; migration 733,
   additive; as built: `docs/architecture.md`, the scorecard's red line paragraph). `location_position_mv` (hourly at
-  :07) gives every active ad, and every ad the consumer rule refuses in any status, its point KIND by geometric
+  :07; 4× a day since #2506) gives every active ad, and every ad the consumer rule refuses in any status, its point KIND by geometric
   identity (`location_steps.position_kind_sql`; `unexplained` shown, not judged) and its grain class; a DB-lane replay
   over the mini mirror holds each kind to the resolver's `Position.origin`. The scorecard gains the `position` metric,
   stored on each `{p}/town` cell as `positions` (the street cell's grain mix went: nothing read it); Location Quality

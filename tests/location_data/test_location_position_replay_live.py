@@ -231,7 +231,7 @@ def _cells(conn: Any) -> dict[str, int]:
 def test_a_cells_list_keeps_the_readings_cohort_where_the_snapshot_differs(
     conn: Any, written: dict[str, tuple[int, Position]],
 ) -> None:
-    """Decision A: an ad first written under 24 h ago is in the hourly snapshot and out of the reading, so out of a
+    """Decision A: an ad first written under 24 h ago is in the snapshot and out of the reading, so out of a
     cell's list; an ad reactivated since the refresh is in the reading as `unclassified`, so in the list as that."""
     fresh, back = _listing(conn), written["town_point"][0]
     conn.execute("UPDATE listings SET first_seen_at = now() - interval '1 hour' WHERE id = %s", (fresh,))

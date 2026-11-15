@@ -1029,7 +1029,11 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
                if row["id"] > int(p["after_id"]) and row["listing_id"] is not None
                and (row["scraped_at"] is None or row["scraped_at"] <= cut)
                ][:int(p["window"])]
-        keep = [row for row in win if _in_scope(db, row[1], p)]
+        first: dict[int, int] = {}
+        for row in db.snapshots:
+            if row["listing_id"] is not None:
+                first[row["listing_id"]] = min(first.get(row["listing_id"], row["id"]), row["id"])
+        keep = [row for row in win if row[0] > first[row[1]] and _in_scope(db, row[1], p)]
         return [(max((row[0] for row in win), default=int(p["after_id"])), len(win),
                  [row[1] for row in keep], [row[2] for row in keep],
                  [row[0] for row in keep])]

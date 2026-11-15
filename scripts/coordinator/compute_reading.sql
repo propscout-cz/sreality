@@ -22,7 +22,7 @@ with engine as (
    where j.jobname = 'browse-list-rebuild'
      and d.start_time > now() - interval '2 hours' and d.end_time is not null
 ), lanes as (
-  -- A lane whose interval is 0 is off (or braked); the two hourly lanes pass once an hour.
+  -- A lane whose interval is 0 is off (or braked); the two slow lanes pass hours apart.
   select string_agg(e.k, ', ' order by e.k) as stale
     from public.worker_heartbeats w, jsonb_each(w.details) e(k, v)
    where w.worker = 'realtime-worker' and jsonb_typeof(e.v) = 'object'

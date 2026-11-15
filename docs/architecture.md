@@ -5414,14 +5414,14 @@ fetched again: our one detail fetch read the page while its location fields were
 index card never changed afterwards, so nothing ever re-enqueued them and the listing had no claims
 for ever. Checked live the same day, ceskereality 3876635 now carries "Zlín, ulice Mlýnská" and
 coordinates — so the fix is a re-fetch, not a contract change. The `location_refetch` lane in
-`scraper/realtime_worker.py` ticks hourly (`LOCATION_REFETCH_TICK_SECONDS`, a constant), selects the active ads rule 25 calls town-less
+`scraper/realtime_worker.py` ticks every 6 h (`LOCATION_REFETCH_TICK_SECONDS`, a constant, #2506), selects the active ads rule 25 calls town-less
 — `location_steps.town_missing_sql()`, the fragment the scorecard view (migration 698) splits the town cells with,
 carried verbatim in `scraper/db.py` (which imports `location_data` lazily) and pinned by the
 vocabulary rail — so an ad holding only a kraj or okres claim, or one no property represents, is
 re-read too (until 2026-10-22 the lane read the pin-audit matview's `active_no_claims` bucket and
 missed both). It keeps the ones whose newest stored page or payload is older than
-`LOCATION_REFETCH_MIN_AGE_S` (6 h, so a listing discovered today gets its second look on tomorrow's
-tick; there is no first-seen term, so the lane acts before the check judges), and enqueues at most
+`LOCATION_REFETCH_MIN_AGE_S` (6 h, so a listing discovered now is queued for its second look 6-12 h
+later; there is no first-seen term, so the lane acts before the check judges), and enqueues at most
 `LOCATION_REFETCH_CAP_PER_SOURCE` (500) per portal, longest-unfetched first, into
 `listing_detail_queue` at `QUEUE_PRIORITY_VERIFY`. An ad the drain gave up on rests
 `delist_policy.RECHECK_THROTTLE` (24 h) unless a page or payload has landed since the give-up, read from
@@ -5763,7 +5763,7 @@ missing at the registry version; KÚ coverage of the coarser grains is a fact, n
 
 **Where each point came from** (W6-c1, migration 733; rulings Q2 and Q3 of 2026-11-02): `location_position_mv`
 (listing grain, every active ad plus every ad in any status the consumer rule refuses; pg_cron
-`refresh-location-position` at :07 through `refresh_matview`) decides each point's KIND by geometric identity within
+`refresh-location-position` at 08:07, 13:07, 18:07 and 23:07 UTC through `refresh_matview`, migration 741) decides each point's KIND by geometric identity within
 1e-7° against the points the resolver could have used, in its own precedence (`location_steps.position_kind_sql`:
 RÚIAN door, street point, own pin, část point, town point, unit point; `foreign` and `none` have no point; anything
 else is `unexplained`, shown and not judged until ruled); a DB-lane replay over the mini mirror holds each kind to the

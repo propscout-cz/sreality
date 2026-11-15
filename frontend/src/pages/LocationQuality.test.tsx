@@ -256,7 +256,7 @@ describe('LocationQuality positions (W6-c)', () => {
     /* The column totals are the grain counts; the corner is the cell's ads. */
     expect(within(grid()).getByRole('button', { name: 'Every kind · street: 33' })).toBeInTheDocument();
     expect(within(grid()).getByRole('button', { name: 'Every kind · every grain: 100' })).toBeInTheDocument();
-    /* A row re-resolved since the hourly refresh reads unclassified, in the reading as in its list. */
+    /* A row re-resolved since the snapshot reads unclassified, in the reading as in its list. */
     const later = within(grid()).getByRole('row', { name: /Not yet classified/ });
     expect(within(later).getByRole('button', { name: 'Not yet classified · street: 3' })).toBeInTheDocument();
     /* The list is not read until a number is chosen. */

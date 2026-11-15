@@ -6,10 +6,10 @@
  * `location_position_audit_public`: a keyset page of 100 rows, the first page carrying the exact count. A grid cell's
  * list is the READING's (decision A, 2026-11-06): the scorecard's cohort (`in_reading`), its kind rule and the live
  * grain, computed over that portal's live cohort, so it differs from the cell's number only by churn since the
- * reading. The no-answer entry lists the hourly snapshot's `none` rows in every status (`snapshot_kind`).
+ * reading. The no-answer entry lists the snapshot's `none` rows in every status (`snapshot_kind`).
  *
  * A kind is decided by geometric identity (location_steps.position_kind_sql); `unexplained` is shown, not judged, and
- * `unclassified` is a row re-resolved since the hourly refresh, in the reading and its list alike.
+ * `unclassified` is a row re-resolved since the snapshot, in the reading and its list alike.
  * The approximate label is the map's own rule (`pinPrecisionShort`, ruling Q3), never a second definition.
  */
 
@@ -46,7 +46,7 @@ export const KIND_LABEL: Record<string, { label: string; title: string }> = {
   foreign: { label: 'Abroad', title: 'Determined abroad, with no point' },
   none: { label: 'No position', title: 'No point and not determined abroad (rule 25’s broken set)' },
   unexplained: { label: 'Unexplained', title: 'A point none of the resolver’s points explains: a finding' },
-  [UNCLASSIFIED]: { label: 'Not yet classified', title: 'Re-resolved since the hourly refresh' },
+  [UNCLASSIFIED]: { label: 'Not yet classified', title: 'Re-resolved since the snapshot' },
 };
 
 /* location_steps.POSITION_GRAINS: the scorecard's four classes, then the rung of the rest. Each head carries the
@@ -161,7 +161,7 @@ export interface PositionAuditRow {
   /* The live grain class and the READING's kind (the snapshot's while not re-resolved since, else unclassified). */
   grain: string;
   position_kind: string;
-  /* The hourly snapshot's own kind; null for a row it does not hold. */
+  /* The snapshot's own kind; null for a row it does not hold. */
   snapshot_kind: string | null;
   /* In the scorecard's listing cohort: active, first written more than 24 h ago. */
   in_reading: boolean;

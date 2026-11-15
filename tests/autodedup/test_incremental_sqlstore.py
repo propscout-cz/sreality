@@ -451,6 +451,36 @@ def test_each_feed_advances_only_its_own_cursor() -> None:
     assert CURSOR_FLIPPED not in out
 
 
+def test_the_changed_feed_skips_a_listings_first_snapshot_and_still_crosses_it() -> None:
+    """#2509: a listing's first snapshot is its arrival, written with the row, and the new feed
+    claims that arrival; the changed feed claims only a snapshot that follows another."""
+    db = FakePg()
+    stamp = db.now - timedelta(hours=2)
+    for listing_id in (5, 6):
+        db.listings[listing_id] = {"first_seen_at": stamp, "inactive_at": None,
+                                   "is_active": True}
+    _place(db, 5, 6)
+    db.snapshots.extend([{"id": 90, "listing_id": 5, "scraped_at": stamp},
+                         {"id": 91, "listing_id": 6, "scraped_at": stamp},
+                         {"id": 92, "listing_id": 5, "scraped_at": stamp},
+                         {"id": 93, "listing_id": 6, "scraped_at": stamp}])
+
+    def changed(work: SqlWork, limit: int) -> list[int]:
+        items = work.claim(limit)
+        work.commit(items)
+        return [item.listing_id for item in items if item.feed == "changed"]
+
+    work = SqlWork(db, SCOPE, GEN, revive_slice=0, enter_slice=0, evidence_slice=0)
+    assert changed(work, 5) == [5], "a share of one: 92, never the arrival at 90"
+    assert db.cursors[CURSOR_CHANGED]["last_snapshot_id"] == 92, "stops at the row it took"
+    assert changed(work, 5) == [6]
+    assert db.cursors[CURSOR_CHANGED]["last_snapshot_id"] == 93
+    db.cursors.pop(CURSOR_CHANGED)
+    db.snapshots[2:] = []
+    assert changed(work, 5) == [], "two arrivals alone: nothing changed"
+    assert db.cursors[CURSOR_CHANGED]["last_snapshot_id"] == 91, "the window is still crossed"
+
+
 def test_a_refused_pass_advances_no_cursor() -> None:
     db = FakePg()
     db.listings[5] = {"first_seen_at": db.now - timedelta(hours=2), "inactive_at": None,
