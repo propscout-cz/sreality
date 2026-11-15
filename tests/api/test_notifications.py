@@ -1049,6 +1049,24 @@ def test_every_detector_is_one_definition_gated_on_its_sources_since(source: str
             assert "AND w.left_at IS NULL" in s and "{where}" not in s
 
 
+def test_a_source_with_members_reads_only_their_delistings_and_new_portals() -> None:
+    """#2504: the monitor and a slice narrow the lifecycle reads to their members, inside the window and the group
+    (each one property's, so a member's row is what the market read gave it); a watchdog's spec reads the market,
+    and price and Back on the market are untouched."""
+    from api import notifications as nf
+
+    narrows = "IN (SELECT property_id FROM members)"
+    for source, narrowed in ((nf._MONITOR, True), (nf._WATCHDOG_SLICE, True), (nf._WATCHDOG, False)):
+        portal = " ".join(nf._new_source_sql(source).split())
+        gone = " ".join(nf._inactive_sql(source).split())
+        window = portal.split("intro AS (", 1)[1].split(") x WHERE", 1)[0]
+        group = gone.split("gone AS (", 1)[1].split(" GROUP BY g.property_id", 1)[0]
+        assert (f"AND l.property_id {narrows}" in window) is narrowed, source.ctes
+        assert (f"AND g.property_id {narrows}" in group) is narrowed, source.ctes
+        assert portal.count(narrows) == gone.count(narrows) == int(narrowed), "the events only, a semi-join"
+        assert narrows not in nf._price_sql(source) + nf._reactivated_sql(source)
+
+
 def test_a_watchdog_tells_only_the_kinds_it_is_set_to() -> None:
     """notify_kinds (migration 735) picks each watchdog's statements: step price passes its kinds
     to the one CASE, step lifecycle runs only its detectors, inactive first, and a watchdog that

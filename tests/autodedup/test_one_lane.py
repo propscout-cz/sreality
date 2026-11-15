@@ -2472,11 +2472,11 @@ def test_a_restart_after_the_commit_releases_the_lease_on_a_new_connection(
     clock = _no_wall_clock(monkeypatch)
     conn, new = _Session(world), _Session(world)
 
-    def restart(_conn: object) -> int:
+    def restart(_conn: object, _generation: str, _bytes_now: int) -> None:
         conn.dead = True
         raise ConnectionError("terminating connection due to administrator command")
 
-    monkeypatch.setattr(incremental_lane, "phash_pop_rows", restart)
+    monkeypatch.setattr(incremental_lane, "record_storage", restart)
     with pytest.raises(ConnectionError, match="administrator command") as raised:
         run_incremental(lambda: conn, fresh_conn=lambda: new)
 
@@ -2896,10 +2896,9 @@ def test_a_signal_mid_pass_rolls_it_back_on_its_own_connection(tmp_path, monkeyp
         return original(self, *args, **kwargs)
 
     monkeypatch.setattr(incremental_lane.SqlFacts, "facts", signal_during_the_first_read)
-    from autodedup.incremental_sql import (RT_FP_COUNT_SQL, RT_PHASH_POP_COUNT_SQL,
-                                           RT_SCHEMA_SIZE_SQL)
+    from autodedup.incremental_sql import RT_FP_COUNT_SQL, RT_SCHEMA_SIZE_SQL
 
-    tail = (RT_FP_COUNT_SQL, RT_PHASH_POP_COUNT_SQL, RT_SCHEMA_SIZE_SQL)
+    tail = (RT_FP_COUNT_SQL, RT_SCHEMA_SIZE_SQL)
     before = [world.statements.count(sql) for sql in tail]
 
     out = run_incremental(lambda: world, holder="worker:1:1",
@@ -2907,8 +2906,7 @@ def test_a_signal_mid_pass_rolls_it_back_on_its_own_connection(tmp_path, monkeyp
 
     # Only the storage guard's schema read, before the pass: nothing between the rollback and
     # the release (the pass returns at once and its `finally` releases).
-    assert [world.statements.count(sql) for sql in tail] == [before[0], before[1],
-                                                               before[2] + 1]
+    assert [world.statements.count(sql) for sql in tail] == [before[0], before[1] + 1]
     assert world.statements[-1] == _END_LANE_SQL
 
     assert out["aborted"] == "stopping" and out["reconcile"] == {"skipped": "pass_stopping"}
