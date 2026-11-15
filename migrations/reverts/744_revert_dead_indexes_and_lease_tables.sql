@@ -6,7 +6,7 @@
 -- Each index is its live pg_get_indexdef of 2026-11-14 (the definitions of migrations 001, 099, 142, 185, 195, 198,
 -- 381), rebuilt CONCURRENTLY: psql -f, statement autocommit, never inside a transaction block. A build reads its
 -- whole table twice (properties 659 MB, listing_snapshots 2 GB) and takes minutes on a busy instance; a cancelled
--- build leaves an INVALID index: drop it CONCURRENTLY and re-run. Each table is its live shape (columns, RLS on with no
+-- build leaves an INVALID index: drop it CONCURRENTLY and re-run. Each table is its live shape (columns, comment, RLS on with no
 -- policy, grants) holding the one row it held when 744 dropped it.
 
 set lock_timeout = '5s';
@@ -20,6 +20,8 @@ alter table public.property_maintenance_lease enable row level security;
 revoke all on public.property_maintenance_lease from anon, authenticated;
 grant select on public.property_maintenance_lease to authenticated;
 grant all on public.property_maintenance_lease to service_role;
+comment on table public.property_maintenance_lease is
+  'Single-row lease serializing property-maintenance writers (worker lane, GH cron, daily full sweep) across pooled connections — migration 279. Claimed by one atomic UPDATE ... RETURNING (scripts/recompute_property_stats.py); expiry self-heals a crashed holder. Replaces the #716 advisory lock, which is unsound over the transaction pooler.';
 insert into public.property_maintenance_lease (id, holder, expires_at) values (1, null, null)
 on conflict (id) do nothing;
 

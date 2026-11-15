@@ -465,8 +465,8 @@ def properties_changed(conn: Any, property_ids: Iterable[int]) -> None:
     the live depth is a couple of dozen) costs ~100-270 ms of ROW EXCLUSIVE on `browse_list`, the
     lock the rebuild's drop waits behind. That is the uncontended cost. The rebuild's drop runs
     with lock_timeout 0, so it queues behind any in-flight `browse_list` reader (up to 120 s on
-    the API role), and the patch queues behind it while the caller still holds these
-    properties' row locks; a merge or split of one of them waits too. The drain bounds that wait
+    the API role), and the patch queues behind it while the caller still holds the row locks of
+    the properties its rollup changed; a merge or split of one of them waits too. The drain bounds that wait
     (`_DRAIN_LOCK_TIMEOUT`); the identity writers inherit their caller's lock_timeout.
     """
     ids = sorted({int(p) for p in property_ids if p is not None})
@@ -535,7 +535,7 @@ def _attach_stragglers(conn: Any, limit: int = STRAGGLER_BATCH, hold: job_lease.
 
 
 # The drain slice's ceiling on any one lock wait. Its Browse patch can queue behind a */15
-# rebuild's swap, holding the slice's `properties` row locks (properties_changed's docstring),
+# rebuild's swap, holding the row locks of the slice's properties its rollup changed (properties_changed's docstring),
 # and the slice is mostly recently-dirtied properties — the ones the autodedup lane (5 s
 # lock_timeout) and a split (5 s, busy 409) are likeliest to touch. A patch that times out
 # unwinds only its savepoint and the next rebuild carries the row; a recompute that times out
@@ -596,7 +596,7 @@ def _drain_dirty(
 # Only active, unsettled properties first seen within the cap are candidates: past it a stamp
 # changes nothing, so the cap bounds the statement (~1.7k rows, 134 ms measured) and it takes no
 # LIMIT. ONE query judges and locks: the row lock lands only on the rows that settle (a few per
-# pass), never on every candidate; a property a merge, split or drain slice holds is skipped
+# pass), never on every candidate; a property a merge, a split or a drain slice's changed rollup holds is skipped
 # (SKIP LOCKED) and taken next pass; the engine's tables are read, never locked. Stamped once: no
 # later change takes it back.
 _SETTLE_SQL = f"""
