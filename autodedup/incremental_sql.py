@@ -178,9 +178,17 @@ select w.id, w.first_seen_at
  limit %(limit)s
 """
 
+# A listing's first snapshot is its arrival, written in the transaction that inserts the row
+# (`listing_write.write_listings`), so the new feed already claims it: the changed feed skips it
+# (#2509) and claims only a snapshot that follows another. It stays in the window, so the cursor
+# still crosses it.
 RT_CHANGED_LISTINGS_SQL = """
 with win as (
-  select s.id as snapshot_id, s.listing_id as listing_id, s.scraped_at as scraped_at
+  select s.id as snapshot_id, s.listing_id as listing_id, s.scraped_at as scraped_at,
+         exists (select 1
+                   from public.listing_snapshots p
+                  where p.listing_id = s.listing_id
+                    and p.id < s.id)                      as follows
     from public.listing_snapshots s
    where s.id > %(after_id)s::bigint
      and s.listing_id is not null
@@ -192,13 +200,16 @@ with win as (
 select coalesce(max(w.snapshot_id), %(after_id)s::bigint) as window_max,
        count(*)                                           as window_size,
        coalesce(array_agg(w.listing_id order by w.snapshot_id)
-                filter (where %(all_scope)s::boolean or ll.listing_id is not null),
+                filter (where w.follows
+                          and (%(all_scope)s::boolean or ll.listing_id is not null)),
                 '{}'::bigint[])                           as ids,
        coalesce(array_agg(w.scraped_at order by w.snapshot_id)
-                filter (where %(all_scope)s::boolean or ll.listing_id is not null),
+                filter (where w.follows
+                          and (%(all_scope)s::boolean or ll.listing_id is not null)),
                 '{}'::timestamptz[])                      as stamps,
        coalesce(array_agg(w.snapshot_id order by w.snapshot_id)
-                filter (where %(all_scope)s::boolean or ll.listing_id is not null),
+                filter (where w.follows
+                          and (%(all_scope)s::boolean or ll.listing_id is not null)),
                 '{}'::bigint[])                           as cursors
   from win w
   left join public.listing_location ll

@@ -221,6 +221,8 @@ def _feeds_db() -> FakePg:
                                    "inactive_at": None, "is_active": True}
         _place(db, listing_id, obec=obec)
         db.rt_fp[(GEN, listing_id)] = _fp_row()
+        db.snapshots.append({"id": listing_id, "listing_id": listing_id,
+                             "scraped_at": db.now - timedelta(days=9)})
         db.snapshots.append({"id": 100 + listing_id, "listing_id": listing_id,
                              "scraped_at": old})
     for listing_id, obec in ((31, 563510), (32, 999999)):          # flipped
