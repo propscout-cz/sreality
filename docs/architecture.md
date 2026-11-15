@@ -3148,10 +3148,12 @@ renumber.** Navigate by area:
     while watching restamps `monitoring_enabled_at`, its start), and
     every detector tells a kind only to a source whose `m.kinds` holds it. `price` and `lifecycle` are **one detector per kind for both producers**
     (`_price_sql`, `_inactive_sql`, `_reactivated_sql`, `_new_source_sql`, each rendered for a `_Source`): it reads its
-    events off the market (the canonical ad's 7-day steps, `_CANONICAL_PRICE_STEPS`; the recent delistings; the ads
-    that brought a new portal) and the source says who is told, a collection by joining its members (from
-    `monitor_since`), a watchdog by joining its spec to each event directly (from `active_since`; behind a CTE of
-    matching properties the planner scanned a broad watchdog's cohort once per step). `inactive` waits out 24 h gone (a
+    events (the canonical ad's 7-day steps, `_CANONICAL_PRICE_STEPS`; the recent delistings; the ads
+    that brought a new portal) and the source says who is told, a collection or a slice by joining its members (from
+    `monitor_since` / entry; its delistings and new portals are read for its members only, `within`, #2504: the
+    market-wide read held the events lock SHARED 11–25 s a pass, past a merge's 5 s lock_timeout), a watchdog by joining its spec to
+    each event directly (from `active_since`; behind a CTE of matching properties the planner scanned a broad
+    watchdog's cohort once per step). `inactive` waits out 24 h gone (a
     portal blink sends neither Left the market nor Back on the market). Every row writes `event_ref` (the discriminator within
     source, kind and property: snapshot id, inactive epoch, for `reactivated` the epoch of the
     inactive dispatch it answers, introducing listing, dashboard id, pipeline mode) and a share its
