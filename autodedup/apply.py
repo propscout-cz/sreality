@@ -102,6 +102,9 @@ EXTERNAL_UNDO: str = "external"
 SAME_MERGE_TOLERANCE: timedelta = timedelta(seconds=1)
 SUMMARY_LIST_CAP: int = 200
 ID_CHUNK: int = 5000
+# ENGINE_MERGES_SQL's array: up to 150 ids it stays on the ledger's partial GIN index (EXPLAIN
+# 2026-11-14, the 150 most-merged adverts included); ~1,000 flips it to a scan of the whole ledger.
+MERGES_CHUNK: int = 150
 
 # `retire_legacy`: A2's pre-step (autodedup/legacy_retire.py), temporary; alone under
 # `generation=rt` (W8, E953).
@@ -396,15 +399,16 @@ class EngineMerge:
 
 
 def _engine_merges(conn: Any, listing_ids: Iterable[int]) -> list[EngineMerge]:
-    ids = sorted(set(listing_ids))
-    if not ids:
-        return []
-    return [
-        EngineMerge(str(gen), int(key), str(group), int(surv) if surv is not None else None,
-                    frozenset(int(x) for x in (members or ())))
+    # Every ledger row of a group carries its one member set (`_rows_for`), so a group read
+    # through two chunks is the same merge twice.
+    merges: dict[str, EngineMerge] = {}
+    for chunk in _chunks(listing_ids, MERGES_CHUNK):
         for gen, key, group, surv, members in _rows(
-            conn, S.ENGINE_MERGES_SQL, {"listing_ids": ids})
-    ]
+                conn, S.ENGINE_MERGES_SQL, {"listing_ids": chunk}):
+            merges.setdefault(str(group), EngineMerge(
+                str(gen), int(key), str(group), int(surv) if surv is not None else None,
+                frozenset(int(x) for x in (members or ()))))
+    return [merges[group] for group in sorted(merges)]
 
 
 def _set_reasons(
@@ -552,10 +556,6 @@ def plan_groups(
         listing_group = {**dict(group_of(every_listing)), **listing_group}
     negatives = Negatives.read(conn, every_listing,
                                [int(c["cluster_key"]) for c, _m in everyone])
-    merges_by_listing: dict[int, list[EngineMerge]] = {}
-    for merge in _engine_merges(conn, every_listing):
-        for lid in merge.member_ids:
-            merges_by_listing.setdefault(lid, []).append(merge)
     held: set[int] = set()
     if generation == GENERATION:
         held = {int(lid) for (lid,) in _rows(conn, S.RT_FINGERPRINTED_SQL, {
@@ -566,10 +566,11 @@ def plan_groups(
     refused_sets: set[frozenset[int]] = set()
     if candidates:
         refused_sets = {frozenset(int(x) for x in (members or ())) for (members,) in _rows(
-            conn, S.LEDGER_HISTORY_SQL, {"generation": generation,
-                                         "listing_ids": sorted(every_listing)})}
+            conn, S.LEDGER_HISTORY_SQL, {"generation": generation, "listing_ids": sorted(
+                {m.listing_id for _c, ms in candidates for m in ms})})}
 
     groups: list[GroupPlan] = []
+    ruled: list[tuple[GroupPlan, int]] = []
     for cluster, members in settled:
         # Already one property: nothing to merge. But an operator negative over what that
         # property holds means production and the operator disagree — reported, with the
@@ -582,13 +583,33 @@ def plan_groups(
         if not hit_reasons:
             counts["already_one_property"] += 1
             continue
-        behind = sorted({mg for lid in member_ids for mg in merges_by_listing.get(lid, ())
+        detail.update(negatives=hit_reasons)
+        counts[RULED_AFTER_MERGE] += 1
+        group = _group_plan(cluster, members, [pid], pid, [], [RULED_AFTER_MERGE], detail,
+                            extended)
+        groups.append(group)
+        ruled.append((group, pid))
+
+    # A merge moves EVERY listing of a property, so every check below reads the whole set it
+    # would put on the survivor.
+    extended_of: dict[int, set[int]] = {}
+    for cluster, members in candidates:
+        extended = {m.listing_id for m in members}
+        for pid in {m.property_id for m in members if m.property_id is not None}:
+            extended |= children.get(pid, set())
+        extended_of[int(cluster["cluster_key"])] = extended
+    # Only the engine merges a group below consults: those naming a listing a candidate's merge
+    # would put on its survivor, or a member of a group ruled different after it merged.
+    merges_by_listing: dict[int, list[EngineMerge]] = {}
+    for merge in _engine_merges(conn, set().union(
+            *extended_of.values(), *(group.member_ids for group, _pid in ruled))):
+        for lid in merge.member_ids:
+            merges_by_listing.setdefault(lid, []).append(merge)
+    for group, pid in ruled:
+        behind = sorted({mg for lid in group.member_ids for mg in merges_by_listing.get(lid, ())
                          if mg.survivor_id == pid},
                         key=lambda mg: (mg.generation, mg.cluster_key))
-        detail.update(negatives=hit_reasons, engine_merges=[mg.to_json() for mg in behind])
-        counts[RULED_AFTER_MERGE] += 1
-        groups.append(_group_plan(cluster, members, [pid], pid, [], [RULED_AFTER_MERGE],
-                                  detail, extended))
+        group.detail["engine_merges"] = [mg.to_json() for mg in behind]
 
     for cluster, members in candidates:
         key = int(cluster["cluster_key"])
@@ -604,11 +625,7 @@ def plan_groups(
         if inactive:
             reasons.append(SKIP_INACTIVE_PROPERTY)
             detail["inactive_property_ids"] = inactive
-        # A merge moves EVERY listing of a property, so every check below reads the whole
-        # set it would put on the survivor.
-        extended = set(member_set)
-        for pid in property_ids:
-            extended |= children.get(pid, set())
+        extended = extended_of[key]
         carried = extended - member_set
 
         hit_reasons, hit_detail = negatives.hits(extended, key)

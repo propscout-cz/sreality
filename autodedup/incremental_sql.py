@@ -845,10 +845,6 @@ on conflict (phash) do update set
  where autodedup.phash_pop.n_listings is distinct from excluded.n_listings
 """
 
-RT_PHASH_POP_COUNT_SQL = """
-select count(*) as n from autodedup.phash_pop
-"""
-
 # ------------------------------------------------------------------ probe postings
 #
 # One statement per PASS rather than per probe key (E74): a listing carries 17.3 index keys and
