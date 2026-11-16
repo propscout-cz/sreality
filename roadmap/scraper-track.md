@@ -5,6 +5,53 @@
 Scraper-specific evolution beyond Phase 1's nightly index walk.
 Independent of the analytical, UI, and map tracks.
 
+### ceskereality behind a JS proof-of-work wall — headless-browser fetch (2026-11-16, #2529 / #2479)
+- **Found:** on 2026-10-31 the portal put an Anubis v1.28.2 interstitial (`fast`, difficulty 2) in
+  front of every page. It answers **200 with challenge HTML**, so the `requests` fetch collected the
+  challenge, the parser found zero cards and each page read as EMPTY — an our-stop, so no walk
+  reached the portal's end and nominations stopped (#2479). Pages/walk ~2,400 → ~140 the same day;
+  0 new ads for 16 days; 50,224 ads stuck active. A datacenter IP is refused by nginx *before* the
+  interstitial, so the residential proxy stays mandatory.
+- **Done:** ONE seam — `BasePortalClient._send` (default `requests`), overridden by
+  `CeskerealityClient` to drive `scraper/browser_fetch.py` (Python Playwright, lazy import, the
+  `browser` extra, chromium baked by `EXTRAS=api,browser` and installed in the walk workflow). One
+  context per phase solves the interstitial ONCE and carries its ~7-day cookie on ONE pinned
+  residential exit IP (the gateway rotates per request, which would re-challenge every page);
+  `PortalDefaults.close()` + the walk/probe/drain teardown release it; `detail_workers` 1. A
+  still-challenged page is classified **403 — a failed fetch, never content** — so a difficulty bump
+  reads red (#2376) instead of looking like a page with no ads. Pacing, retry, penalize, gone
+  detection, `walk_reached_end` and nomination are untouched and portal-generic (rule #21); the
+  parser is untouched.
+- **Caught in review, fixed before merge:** Playwright's sync API is thread-AFFINE, not merely
+  thread-unsafe — its dispatcher is a greenlet owned by the starting thread, so a cross-thread call
+  raises `greenlet.error: Cannot switch to a different thread` (reproduced against real chromium).
+  The first cut guarded it with a lock, which does nothing for affinity: the drain builds a NEW pool
+  per claim chunk, so chunk 2 would have failed every claim, and its teardown runs on a third thread,
+  so `close()` raised, was swallowed as best-effort, and leaked a chromium every ~30 s pass. Now
+  every browser call runs on ONE owner thread inside the fetcher (verified: 16 fetches across two
+  pools + a foreign-thread close, no leak). Also from the review: browser errors are raised as a
+  `requests.RequestException` subclass so the shared retry still applies (otherwise one flaky page
+  load ended a walk slice — the very symptom this fixes); the post-solve status is read from the
+  last document response, so a 404 served after the solve is not reported as the challenge's 200;
+  the solve-wait re-raises `stop.StopRequested`; and the browser budget comes from the client's
+  `timeout_s` instead of a fixed 45 s + 45 s.
+- **Deploy ordering:** the worker skips this portal's lanes while playwright is absent
+  (`_skip_for_browser`, symmetrical to `_skip_for_proxy`). Without it, the window between the code
+  deploy and the operator's `.railway/` apply would have burned all five attempts on every queue row.
+- **Measured live 2026-11-16** through the production client: 4 index pages × 20 items parsed, one
+  solve, ~1.3 s / ~30 KB per steady page; a real detail page parsed (price, area, disposition,
+  coordinates). Projection for a ~2,500-page walk: ~73 MB, inside the 150-min budget.
+- **Rejected, with evidence:** a pure-Python proof-of-work solver (no browser). The cookie is
+  coupled to the browser that earned it — a plain-HTTP client reusing one was tar-pitted after a
+  single page — so it is unproven and an arms race.
+- **Next:** the operator's wizard apply for `.railway/` (`EXTRAS=api,browser` on the worker), then
+  the first live walk must collect > 0 and `walk_reached_end` return to near its 96 % baseline — the
+  gate that closes #2479. Optional config tidy: the live `portals.operational_limits` row still says
+  `detail_workers: 4`, which overrides the code default; the owner thread makes that correct, it just
+  leaves three threads queueing on one browser.
+- **Maintenance note:** this is now a cat-and-mouse surface. A difficulty bump or added
+  fingerprinting surfaces as red walks and needs a response.
+
 ### bazos / web floor 0 from a stray 'přízemí' — flat grammar in `floor_from_text` (2026-10-26, PR open)
 - **Found:** `floor_from_text` ended with "any 'přízemí' → 0", so "v šestém podlaží … sklep v přízemí domu"
   read 0; 373 bazos flats (116 active) carried floor 0 while their text names a higher storey

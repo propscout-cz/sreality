@@ -275,8 +275,12 @@ def test_the_api_and_the_worker_pass_their_extras_to_the_root_dockerfile_build()
     assert "ARG EXTRAS\n" in dockerfile
     assert 'echo "EXTRAS=${EXTRAS:-unset}"' in dockerfile
     assert 'pip install ".[${EXTRAS:-api}]"' in dockerfile
-    for name in ("api", "worker"):
-        assert 'EXTRAS: "api"' in iac_entry(name), name
+    assert 'EXTRAS: "api"' in iac_entry("api")
+    # The worker also takes `browser`: it drains ceskereality, whose pages sit behind a JS
+    # proof-of-work interstitial, so that image bakes chromium (#2529). The API never
+    # scrapes, so it must NOT carry the extra (and the weight).
+    assert 'EXTRAS: "api,browser"' in iac_entry("worker")
+    assert "browser" not in iac_entry("api")
     assert 'EXTRAS: "api,clip,geo"' in iac_entry("jobRunner")
     assert 'EXTRAS: "api"' not in iac_entry("jobRunner")
 

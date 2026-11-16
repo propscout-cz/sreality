@@ -646,8 +646,13 @@ _DEFAULTS: dict[str, PortalConfig] = {
         # Routed through a residential proxy (ceskereality_client.USE_PROXY) at
         # normal speed. The region ×
         # facet split means ~thousands of small index queries — the proxy absorbs them.
+        # detail_workers=1 since 2026-11-16: this portal's bytes arrive through ONE
+        # headless-browser context (its pages sit behind a JS interstitial), which is
+        # serial by construction, and one context is what keeps the interstitial solved
+        # once per phase. Concurrency here would need a context per worker (~0.3–0.7 GB
+        # each) and is deliberately not taken (#2529).
         limits=PortalLimits(
-            index_rate=2.0, detail_workers=4, detail_rate=2.0,
+            index_rate=2.0, detail_workers=1, detail_rate=2.0,
         ),
     ),
     "realitymix": PortalConfig(

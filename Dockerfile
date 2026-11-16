@@ -74,6 +74,17 @@ COPY autodedup/ ./autodedup/
 COPY skills/ ./skills/
 
 RUN echo "EXTRAS=${EXTRAS:-unset}" && pip install --upgrade pip && pip install ".[${EXTRAS:-api}]"
+# ONE portal is fetched through a real browser (ceskereality: a JS proof-of-work
+# interstitial since 2026-10-31, #2529), so the image that runs the scrapers bakes
+# chromium and its system libraries. Only the service whose EXTRAS names `browser` pays
+# the weight — the API never scrapes. Baked at build time on purpose: a runtime download
+# would make the first walled fetch of a fresh container fail.
+RUN case ",${EXTRAS}," in *,browser,*) \
+      playwright install --with-deps chromium \
+      && python -c 'from playwright.sync_api import sync_playwright; \
+        p = sync_playwright().start(); b = p.chromium.launch(); \
+        print("BROWSER baked", b.version); b.close(); p.stop()' ;; \
+    esac
 # The job runner's proof, offline: CPU torch at its pin, the vector stack at the manifest's versions (a resolver that
 # replaced one fails the build), and Tagger.load reads only the baked checkpoint (a missing file fails the build after
 # Tagger.load's retries, and the old deployment stays live).

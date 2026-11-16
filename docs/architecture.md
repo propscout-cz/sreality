@@ -400,7 +400,35 @@ on-demand LLM URL parser itself was deleted on 2026-10-20 (`docs/design/new-prop
 ruling 3): a pasted link of any portal becomes an ad through `POST /listings/ingest` and the drain.
 
 **Data source (ceskereality.cz).** A scheduled scraper (`scraper/ceskereality_client.py`,
-`ceskereality_parser.py`, `ceskereality_main.py`) tagged `source='ceskereality'`. It is large
+`ceskereality_parser.py`, `ceskereality_main.py`) tagged `source='ceskereality'`. **Its bytes
+arrive through a HEADLESS BROWSER, not `requests` (since 2026-11-16, #2529).** On 2026-10-31 the
+portal put an Anubis v1.28.2 JS proof-of-work interstitial in front of every page: it answers
+**HTTP 200 with challenge HTML**, so a plain fetch collected the challenge, the parser found zero
+cards, and each page read as EMPTY — an our-stop, so walks never reached the portal's end and
+stopped nominating (pages/walk fell ~2,400 → ~140 the day the wall went up; #2479). The one seam is
+`BasePortalClient._send`, which `CeskerealityClient` overrides to drive `scraper/browser_fetch.py`
+(Python Playwright, imported lazily, the `browser` pyproject extra, chromium baked into the scraper
+image by `EXTRAS=api,browser`): one chromium context per phase solves the interstitial ONCE and
+carries its ~7-day cookie, pinned to ONE residential exit IP (the gateway rotates per request and a
+rotating IP re-challenges every page). Everything around that call — pacing, `penalize()`, the
+retry/backoff, gone detection, `walk_reached_end`, nomination — stays shared and portal-generic
+(rule #21); the parser is untouched. **A page still challenged after the solve is a FAILED FETCH
+(classified 403), never content**, so a difficulty bump reads red (the empty-walk check, #2376)
+instead of masquerading as a page with no ads. The residential proxy is still mandatory: a
+datacenter IP is refused by nginx *before* the interstitial runs. **Every browser call — launch,
+fetch and close — runs on ONE owner thread inside the fetcher**, because Playwright's sync API is
+thread-AFFINE, not merely thread-unsafe: its dispatcher is a greenlet owned by the starting thread,
+so touching (or closing) a page from another thread raises `greenlet.error: Cannot switch to a
+different thread` — a lock does not help. The drain builds a new pool per claim chunk and tears down
+on a third thread, so without the owner thread its second chunk failed every claim and a chromium
+leaked every pass. `detail_workers` is 1, but the owner thread is what makes a config asking for
+more merely queue rather than corrupt. A browser failure is raised as a `requests.RequestException`
+subclass so the shared retry loop still backs off and retries it; without that, one flaky page load
+ended a whole walk slice. The worker skips this portal's lanes when playwright is absent
+(`_skip_for_browser`), so a code deploy that lands before the image's extra does not spend every
+queue row's attempts. Measured live 2026-11-16: 20 index pages, one solve, ~1.3 s and ~30 KB per
+steady page.
+It is large
 (~49k listings), so — like sreality/idnes — it is **cadence-split**: `ceskereality_index_walk.yml`
 (every 6h, full walk + presence nomination + enqueue) feeds the realtime worker's drain
 lane. The index walk partitions each

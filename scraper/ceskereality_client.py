@@ -6,9 +6,16 @@ feed), so this returns raw HTML for `scraper.ceskereality_parser`. The shared
 retry/backoff + adaptive throttle (`RateLimiter` + `penalize()` on 429/403) +
 `ListingGoneError` on a 404/410 all live in `scraper.portal_base.BasePortalClient`.
 
-Three ceskereality specifics live here:
+Four ceskereality specifics live here:
+  - **Headless-browser fetch** (`_send`): since 2026-10-31 every page sits behind a JS
+    proof-of-work interstitial that answers 200 with challenge HTML, so `requests`
+    collects nothing and a walk reads each page as empty (#2479). `scraper.browser_fetch`
+    solves it once per session and the context carries the cookie; an unsolved page comes
+    back as a retryable 403, never as content. The browser is launched on the first fetch
+    and released by `close()`.
   - **Residential egress** (`USE_PROXY`): every request routes through the
-    residential proxy in `SCRAPER_PROXY_URL`, with the shared BROWSER User-Agent.
+    residential proxy in `SCRAPER_PROXY_URL`, with the shared BROWSER User-Agent. Still
+    mandatory with the browser: a datacenter IP is refused before the interstitial runs.
   - **Client hints** (`CLIENT_HINTS`): this client sends the sec-ch-ua client
     hints, derived from the shared UA.
   - **The kraj search URLs**: the 12-page cap is NOT site-wide — it applies to
@@ -23,7 +30,11 @@ Three ceskereality specifics live here:
 from __future__ import annotations
 
 import logging
+import os
+from typing import Any
+from urllib.parse import urlencode, urlsplit
 
+from scraper.browser_fetch import BrowserFetcher, BrowserResponse, classify_status
 from scraper.portal import CZ_KRAJ_SLUGS
 from scraper.portal_base import BasePortalClient, ListingGoneError
 
@@ -213,6 +224,66 @@ class CeskerealityClient(BasePortalClient):
     USE_PROXY = True
     # Send the sec-ch-ua hints derived from that UA.
     CLIENT_HINTS = True
+    # Read by the worker (`_skip_for_browser`): this portal's bytes arrive through a
+    # headless browser, so without playwright installed its lanes must be skipped rather
+    # than spend every queue row's attempts on a fetch that can only raise.
+    USE_BROWSER = True
+
+    def __init__(self, *, fetcher: Any | None = None, **kwargs: Any) -> None:
+        """`fetcher` replaces the headless browser (tests inject a fake; nothing else
+        does). Left None it is built on the first fetch, so a run that never reaches this
+        portal launches no browser."""
+        super().__init__(**kwargs)
+        self._fetcher = fetcher
+
+    def _browser(self) -> Any:
+        if self._fetcher is None:
+            # The same Chrome UA the session advertises: the interstitial records the UA
+            # it issued its cookie to, so the two must not disagree.
+            self._fetcher = BrowserFetcher(
+                proxy_url=os.environ.get(self.PROXY_ENV),
+                user_agent=self._session.headers.get("User-Agent"),
+                timeout_s=self.timeout_s,
+            )
+        return self._fetcher
+
+    def _send(
+        self,
+        url: str,
+        *,
+        method: str = "GET",
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+    ) -> Any:
+        """Fetch through the headless browser instead of `requests`: every page of this
+        portal sits behind a JS proof-of-work interstitial (`scraper.browser_fetch`). The
+        shared loop still does the pacing, retrying, penalizing and gone detection — a
+        page that stays challenged comes back as a 403 and is retried, then fails, so it
+        can never reach the parser as a page with no ads."""
+        if method != "GET" or json_body is not None:
+            raise ValueError("ceskereality is fetched with GET only")
+        if params:
+            url = f"{url}{'&' if urlsplit(url).query else '?'}{urlencode(params)}"
+        response = self._browser().fetch(url)
+        # Belt and braces: the fetcher classifies too, but the invariant that an
+        # interstitial is a FAILED FETCH and never content is enforced here, at the seam
+        # every caller goes through, whatever fetcher is in place.
+        status = classify_status(response.status_code, response.text)
+        if status != response.status_code:
+            LOG.warning(
+                "CHALLENGE unsolved url=%s served=%d -> retryable %d",
+                url, response.status_code, status,
+            )
+            return BrowserResponse(
+                status_code=status, text=response.text,
+                url=getattr(response, "url", url) or url,
+            )
+        return response
+
+    def close(self) -> None:
+        if self._fetcher is not None:
+            self._fetcher.close()
+            self._fetcher = None
 
     def fetch_search(self, url: str) -> tuple[str, int]:
         """Fetch one search-results page (any region host / facet path / page)."""
