@@ -630,31 +630,6 @@ def create_singleton_properties(
         return [int(r[0]) for r in cur.fetchall()]
 
 
-def mark_properties_dirty(
-    conn: psycopg.Connection,
-    property_ids: Iterable[int],
-) -> int:
-    """Enqueue property ids for the incremental maintenance job (Phase 3).
-
-    Idempotent set-based insert; nests in the caller's transaction so the dirty
-    mark is atomic with the child-listing change that caused it. NULL ids are
-    dropped. Returns rows newly enqueued.
-    """
-    ids = [int(p) for p in property_ids if p is not None]
-    if not ids:
-        return 0
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO dirty_properties (property_id)
-            SELECT DISTINCT u FROM unnest(%s::bigint[]) AS u
-            ON CONFLICT (property_id) DO UPDATE SET marked_at = now()
-            """,
-            (ids,),
-        )
-        return cur.rowcount or 0
-
-
 def record_images(
     conn: psycopg.Connection,
     listing_id: int,

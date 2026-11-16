@@ -214,6 +214,33 @@ def test_property_with_no_area_at_all_is_still_recomputed(cur):
     assert active is False, "the row must still have been updated"
 
 
+def test_a_recompute_that_changes_nothing_writes_nothing(cur):
+    """#2514: the guard compares what the rollup would write with what the row holds, as values, so
+    a second recompute of an unchanged property matches no row (the numeric(9,1) area, the price
+    percentages and the portal lists included) and a changed advert is written again."""
+    pid = _new_property(cur)
+    lid = _add_child(cur, pid, source="sreality", price=5_000_000, area=78.0, usable=72.5)
+    _add_child(cur, pid, source="idnes", price=4_900_000, area=None, active=False)
+    for price, hours_ago in ((5_400_000, 72), (5_100_000, 48), (5_000_000, 24)):
+        cur.execute(
+            "INSERT INTO listing_snapshots (listing_id, scraped_at, price_czk, content_hash, raw_json) "
+            "VALUES (%s, now() - %s * interval '1 hour', %s, %s, '{}'::jsonb)",
+            (lid, hours_ago, price, f"w3-{uuid.uuid4()}"),
+        )
+    _recompute(cur, pid)
+    assert cur.rowcount == 1
+    cur.execute("SELECT max_price_drop_pct, total_price_change_pct FROM properties WHERE id = %s", (pid,))
+    assert None not in cur.fetchone(), "the percentages must be part of what is compared"
+
+    _recompute(cur, pid)
+    assert cur.rowcount == 0, "an unchanged property was rewritten"
+
+    cur.execute("UPDATE listings SET price_czk = %s WHERE id = %s", (4_800_000, lid))
+    _recompute(cur, pid)
+    assert cur.rowcount == 1
+    assert _rollup(cur, pid)[0] == 4_800_000
+
+
 def test_a_changed_rewrite_dirty_marks_and_the_drain_recomputes(cur):
     """A brand-new listing lands bare and the straggler attach births its singleton; after that
     a content change reaches the property through dirty_properties (rule 20) and the drain's
