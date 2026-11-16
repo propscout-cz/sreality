@@ -1188,11 +1188,13 @@ Migration drift reads 643 and 663 Not measured (a drop declares nothing it can p
   2026-11-16: drop it.
 - **Shipped:** migration 743, `drop index concurrently`, no code change. Apply first (workflow, `--ref` the branch),
   then merge.
-- **Cost (read on production 11-16, 2XL, warm):** the delisting orphan nomination (`db.orphan_candidates`) goes from
-  ~0.1 s to ~0.4 s a call, the same rows, a few calls a day. Five reads that used the index only as an `is_active`
-  index (Health's unnominated count, Coverage's held count, the `location_position_mv` refresh, comparables with
-  `max_age_days`, the parked admin condition-scoring count) take the partial `listings_subtype_active_idx` instead: about
-  the same time, and the whole-set reads touch half the buffers.
+- **Cost (read on production 11-16, 2XL):** the delisting orphan nomination (`db.orphan_candidates`) goes from ~0.1 s
+  to ~0.4 s a call warm (~1.3 s partly cold), the same rows, a few calls a day. Every other reader used the index only
+  as an `is_active` index, i.e. read the whole active set; each such read takes the partial
+  `listings_subtype_active_idx` instead, in about the same time and, where measured, half the buffers. The ones read
+  in the plans: Health's unnominated count, Coverage's held count, the `location_position_mv` refresh, comparables
+  with `max_age_days`, the location-refetch lane (`db.location_refetch_candidates`), the parked admin
+  condition-scoring count. That list is what a search found, not a census.
 - **Next:** a day after the apply, read listings' `n_tup_hot_upd / n_tup_upd` delta (0.4 % cumulative before) and the
   touch statement's mean in `pg_stat_statements`. If HOT stays low because pages are full, a listings fillfactor below
   100 is a separate ticket.
