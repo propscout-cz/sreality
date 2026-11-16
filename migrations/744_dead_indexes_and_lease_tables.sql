@@ -3,7 +3,7 @@
 -- 1. FIFTEEN INDEXES, 643 MB, idx_scan 0 and last_idx_scan NULL (pg_stat_database.stats_reset is NULL: the index
 --    counters were never reset; the oldest last_idx_scan of any index is 2026-08-12 16:03, so the window is at least
 --    that long; the counters survived the 11-11 and 11-14 restarts: 293 indexes still carry a last scan from before
---    11-11, read 2026-11-15). Each is a
+--    11-11, read 2026-11-15; all fifteen re-read at 0 scans, valid and constraint-free on 2026-11-16 08:35Z). Each is a
 --    plain btree (not unique, no constraint, no foreign key), created by 2026-08-10, and named by no code path, view
 --    or function body (grep + pg_proc + pg_depend, 2026-11-14). Every write to its table still maintains it:
 --      listing_snapshots_content_hash_idx  281 MB  the snapshot append compares the latest hash as a value (rule 2)
@@ -23,11 +23,10 @@
 -- 2. TWO LEASE TABLES, retired since 2026-11-03 (#2267, #2273: the maintenance lane and the broker resolve hold their
 --    `scheduled_jobs` rows through scraper/job_lease.py): property_maintenance_lease (279) and broker_resolution_lock
 --    (192). One released row each, last written about 2.9M transactions ago; no code, view, function, cron job or
---    foreign key names them. DESTRUCTIVE (database skill): applied only after the operator's "yes, apply it" AND
---    the R2 backup, run first: gh workflow run backup_before_drop.yml -f label=lease-tables-744
+--    foreign key names them. DESTRUCTIVE (database skill): the operator said yes to the drop on 2026-11-16 (#2524);
+--    the R2 backup still runs first: gh workflow run backup_before_drop.yml -f label=lease-tables-744
 --    -f targets="property_maintenance_lease broker_resolution_lock" (or the operator's explicit waiver of it in
---    favour of the revert file, which holds the two rows verbatim). If the operator declines this half, delete the two
---    DROP TABLE statements (and the pre-check that names them) before the apply. autodedup.rt_lease, the third table of #2113, stays.
+--    favour of the revert file, which holds the two rows verbatim). autodedup.rt_lease, the third table of #2113, stays.
 --
 -- APPLY through apply_migration.yml (--ref the branch), never the MCP: DROP INDEX CONCURRENTLY cannot run in a
 -- transaction block. ORDER: the operator's OK (and the backup) -> apply -> the receipt reads OK -> merge. Never merge
