@@ -1216,3 +1216,13 @@ Migration drift reads 643 and 663 Not measured (a drop declares nothing it can p
 - **Next:** a day after the apply, read listings' `n_tup_hot_upd / n_tup_upd` delta (0.4 % cumulative before) and the
   touch statement's mean in `pg_stat_statements`. If HOT stays low because pages are full, a listings fillfactor below
   100 is a separate ticket.
+
+## 2026-11-16 — the engine's refused-set read gets a partial index; E41 stays (#2525, spec #2503)
+
+- **Why:** `LEDGER_HISTORY_SQL` (E41) ran once a pass as a parallel seq scan of `autodedup.applied_merges` (339 MB,
+  344k rows) to find 0 rows: 1.0 s a call warm on 2XL (gate #2527, ~113 s/h); since 2026-08-11 14,244 calls, 141,221 s,
+  23.1M blocks read from disk. Operator ruling 2026-11-16: keep the mechanism, make the read free.
+- **Shipped:** migration 746, `create index concurrently` on `(generation) where outcome = 'refused' and not dry_run`
+  (one empty page), no code change. Apply first (workflow, `--ref` the branch, after the compute resize), then merge.
+- **Next:** after the apply, the read's `pg_stat_statements` mean (queryid -8415569063472714520) should fall from ~1 s
+  to well under 1 ms. `RC_OUTCOME_HISTORY_SQL` is the remaining once-a-pass scan of the ledger.

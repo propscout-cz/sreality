@@ -201,9 +201,9 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   200): with Prague's 34k clusters the hand-on ran dry at 12:00Z and the merges fell to a third; a cycle
   is ~2 h now and the discovery matches the re-claim. One constant, no decision module, digest unchanged.
   Since #2508 `ENGINE_MERGES` reads only the adverts a group consults, 150 a read on the partial GIN, and
-  `LEDGER_HISTORY` only the candidates' members. Owed: `LEDGER_HISTORY` and `RC_OUTCOME_HISTORY` still scan
-  `applied_merges` once a pass each (a full GIN on `member_ids`, or E41's refused-set read deleted on an
-  operator ruling: 0 refused rows ever, 2026-11-14).
+  `LEDGER_HISTORY` only the candidates' members; since #2525 (operator ruling 2026-11-16: E41 kept) it reads
+  migration 746's partial index on the refused rows. Owed: `RC_OUTCOME_HISTORY` still scans `applied_merges`
+  once a pass (a full GIN on `member_ids`).
 - **E976 (2026-10-22, the build reads live adverts first):** during a build the entrant feed orders the
   snapshot's unread adverts live first, then inactive, ids ascending within each, under no id cursor (the
   `rt_fp` anti-join advances it); outside a build nothing changes. Praha's 11,864 live unread adverts are
