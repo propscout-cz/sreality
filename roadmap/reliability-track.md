@@ -1180,3 +1180,21 @@ Migration drift reads 643 and 663 Not measured (a drop declares nothing it can p
   detail refetch re-arms any unstored photo, as before.
 - **Next:** after 742 is applied, confirm in an hour-later `pg_stat_statements` diff that the claim's buffers fell,
   and again after images autovacuum empties the index's leaf pages (n_dead_tup 3.11M of a ~3.39M threshold on 11-15).
+
+## 2026-11-16 — the sweep rewrites only a changed row; 744 drops 15 never-read indexes and two retired lease tables (#2514, spec #2503)
+
+- **Why:** the property rollup rewrote every row it recomputed, the ~470k inactive properties the daily sweep reaches
+  among them, whether or not a value moved. Fifteen indexes (645 MB) were never read in at least 95 days while every
+  write still maintained them, and two lease tables stayed behind after the 11-03 move to `scheduled_jobs` (#2267,
+  #2273).
+- **Shipped:** `scripts/recompute_property_stats.py` renders the rollup's SET list and its IS DISTINCT FROM guard from
+  one dict, so a batch writes only the rows whose rollup changed (ids 600001–601000: 650 rows to 97, read on
+  production); the dirty-set drain runs the same text. The unused `db.mark_properties_dirty` goes. Migration 744 drops
+  the fifteen indexes CONCURRENTLY and the two tables (destructive half: the operator's yes, 2026-11-16); it applies
+  before the merge, through `apply_migration.yml`; revert: `migrations/reverts/744_revert_dead_indexes_and_lease_tables.sql`.
+- **Cost:** `properties.stats_computed_at` now dates the last change, not the last recompute (nothing reads it), and
+  the `property_sweep` artifact's `last_rows` counts rewritten rows (displayed, never judged).
+- **Next:** measure the WAL, full-page-write and vacuum saving: snapshot pg_stat_wal and the properties table's
+  n_tup_upd / n_tup_hot_upd around the 03:00 sweep the night before the deploy and the night after.
+  `listings_is_active_last_seen_at_idx` stays for #2511: the delisting orphan nomination still reads it, so it drops
+  only after that query's plan without it is measured off production.

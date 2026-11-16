@@ -1,11 +1,12 @@
 -- 744_dead_indexes_and_lease_tables.sql -- hygiene (#2514, spec #2503): what nothing reads goes.
 --
--- 1. FIFTEEN INDEXES, 643 MB, idx_scan 0 and last_idx_scan NULL (pg_stat_database.stats_reset is NULL: the index
---    counters were never reset; the oldest last_idx_scan of any index is 2026-08-12 16:03, so the window is at least
---    that long; the counters survived the 11-11 and 11-14 restarts: 293 indexes still carry a last scan from before
---    11-11, read 2026-11-15; all fifteen re-read at 0 scans, valid and constraint-free on 2026-11-16 08:35Z). Each is a
---    plain btree (not unique, no constraint, no foreign key), created by 2026-08-10, and named by no code path, view
---    or function body (grep + pg_proc + pg_depend, 2026-11-14). Every write to its table still maintains it:
+-- 1. FIFTEEN INDEXES, 645 MB (pg_relation_size, 2026-11-16 08:55Z), idx_scan 0 and last_idx_scan NULL
+--    (pg_stat_database.stats_reset is NULL: the index counters were never reset; the oldest last_idx_scan of any
+--    index is 2026-08-12 16:03, so the window is at least that long; the counters survived the 11-11 and 11-14
+--    restarts: 293 indexes still carry a last scan from before 11-11, read 2026-11-15; all fifteen re-read at 0 scans,
+--    valid and constraint-free on 2026-11-16 08:35Z, at 0 scans again at 08:55Z). Each is a plain btree (not unique,
+--    no constraint, no foreign key), created by 2026-08-10, and named by no code path, view or function body (grep +
+--    pg_proc + pg_depend, 2026-11-14). Every write to its table still maintains it:
 --      listing_snapshots_content_hash_idx  281 MB  the snapshot append compares the latest hash as a value (rule 2)
 --      properties_near_{pop,jobs,youth,overall}_{5,15}km_idx  318 MB  Browse filters these on browse_list; only a
 --                                          watchdog renders over properties, and no watchdog sets one
@@ -22,19 +23,25 @@
 --    tick, so their counters say nothing), and every index read at all, however rarely.
 -- 2. TWO LEASE TABLES, retired since 2026-11-03 (#2267, #2273: the maintenance lane and the broker resolve hold their
 --    `scheduled_jobs` rows through scraper/job_lease.py): property_maintenance_lease (279) and broker_resolution_lock
---    (192). One released row each, last written about 2.9M transactions ago; no code, view, function, cron job or
---    foreign key names them. DESTRUCTIVE (database skill): the operator said yes to the drop on 2026-11-16 (#2524);
---    the R2 backup still runs first: gh workflow run backup_before_drop.yml -f label=lease-tables-744
+--    (192). One released row each, last written at the 11-03 cutover (age(xmin) 3.16M on 2026-11-16); no code, view,
+--    function, cron job or foreign key names them. DESTRUCTIVE (database skill): the operator said yes to the drop on
+--    2026-11-16 (#2524); the R2 backup still runs first:
+--    gh workflow run backup_before_drop.yml -f label=lease-tables-744
 --    -f targets="property_maintenance_lease broker_resolution_lock" (or the operator's explicit waiver of it in
---    favour of the revert file, which holds the two rows verbatim). autodedup.rt_lease, the third table of #2113, stays.
+--    favour of the revert file, which holds the two rows verbatim). autodedup.rt_lease, the third table of #2113,
+--    stays.
 --
 -- APPLY through apply_migration.yml (--ref the branch), never the MCP: DROP INDEX CONCURRENTLY cannot run in a
 -- transaction block. ORDER: the operator's OK (and the backup) -> apply -> the receipt reads OK -> merge. Never merge
 -- it unapplied: the hourly migration_drift alarm expects every object a recent migration drops to be gone. A concurrent drop
 -- takes SHARE UPDATE EXCLUSIVE (no read or write waits on it) and then waits for every transaction holding a lock on
 -- the table (the Browse rebuild reads properties for minutes), so the drops run with lock_timeout 0 under a 1900 s
--- budget (730's idiom). A cancelled drop leaves an INVALID index that writes still maintain, no worse than today; the
--- re-run finishes it. Every statement is idempotent. $pre$ refuses on production if an index here was read since.
+-- budget (730's idiom). idle_in_transaction_session_timeout is 0 on production, so one idle-in-transaction session
+-- holds a drop for its whole budget (nine of the fifteen are on properties): start just after a :45 Browse rebuild
+-- ends, away from the 03:00 sweep, once pg_stat_activity shows no old xact_start and no idle-in-transaction session.
+-- A cancelled drop leaves an INVALID index that writes still maintain, no worse than today; after any failure
+-- `select count(*) from pg_index where not indisvalid` (0 on 2026-11-16) counts what the re-run finishes. Every
+-- statement is idempotent. $pre$ refuses on production if an index here was read since.
 --
 -- ROLLBACK: migrations/reverts/744_revert_dead_indexes_and_lease_tables.sql (the original definitions, live
 -- pg_get_indexdef, rebuilt CONCURRENTLY; the two tables with their grants, comment and rows).

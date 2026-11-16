@@ -1,5 +1,6 @@
 """Own place search's read models (migration 738, #2449), EXECUTED against the replayed schema (CI's migrations lane,
-`TEST_DATABASE_URL`; locally `scripts/local_pg.sh test`). Every test rolls back.
+`TEST_DATABASE_URL`; locally `scripts/local_pg.sh test`). Every test rolls back (bar the name-index test's ANALYZE
+counts, named there).
 
   * THE REBUILD STILL RUNS. rebuild_browse_list() drops browse_list and renames its successor into place every hour
     (658; hourly since 740). A matview that named browse_list in its FROM would depend on it and refuse every rebuild, and Browse
@@ -143,7 +144,10 @@ def test_the_text_pattern_ops_name_index_serves_equality_and_a_prefix(conn, pred
     """No seq scan and no bitmap scan (the trigram GIN serves only bitmaps), so a btree must answer, and the name has
     to bound its scan: the old (name_norm, registry_version_id) btree walks the whole version and filters a LIKE.
     Over a table holding rows the planner has counted: an empty one autovacuum has visited (0 tuples on 2 pages, after
-    the earlier lanes' rolled-back inserts) prices every btree alike and picked the unique key, CI 2026-11-15."""
+    the earlier lanes' rolled-back inserts) prices every btree alike and picked the unique key, CI 2026-11-15.
+    Not fully rolled back: ANALYZE writes the table's relpages/reltuples in pg_class in place (its pg_statistic rows do
+    roll back), so later tests in the same database see ~8k rows on this empty table until autovacuum recounts it. No
+    other test plans over it."""
     versions = [_version(conn, current=False) for _ in range(4)]
     conn.execute(
         "INSERT INTO ruian_name_index (entity_kind, entity_id, registry_version_id, name, name_norm, name_kind)"
