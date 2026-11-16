@@ -424,6 +424,15 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_listing_location_index_plan.py -q
 
+      # The engine's refused-set read (E41) is served by migration 746's partial index only while
+      # its text implies the index predicate; the text test cannot see a type or cast drift, the
+      # planner can, for the bound read and its generic plan.
+      - name: The engine's refused-set read can use its partial index (migration 746)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_autodedup_refused_read_plan.py -q
+
       # The admin gate is SECURITY DEFINER and, in all 10 tenancy policies, sits inside an
       # OR with column references — so it is not pseudoconstant and the executor calls it
       # once per candidate row (llm_calls: 293,551 rows). Migration 431 hoists it into an
