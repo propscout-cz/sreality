@@ -384,7 +384,7 @@ jobs:
         run: pytest tests/api/test_place_search_gate_eval_live.py -q
 
       # Own place search's read models (migration 738): place_served_counts reads browse_list through a function, so
-      # the */15 rebuild still drops and renames the table under it and the next refresh counts the new rows (a matview
+      # the hourly rebuild still drops and renames the table under it and the next refresh counts the new rows (a matview
       # naming browse_list would refuse the DROP and freeze Browse); place_facts copies the current polygon points and
       # averages the open doors; the text_pattern_ops name index bounds both `=` and `LIKE 'p%'`. Only a real schema
       # can run the rebuild, the refreshes or the planner.
@@ -452,7 +452,7 @@ jobs:
       # only columns that index holds, target list AND WHERE: a new always-on conjunct off
       # the index changes no result anywhere, so nothing else goes red. The rail reads the
       # columns out of the planner (auto_explain, VERBOSE) on the shipped function, after
-      # running the */15 rebuild once so the index exists. Portal chips and the other
+      # running the hourly rebuild once so the index exists. Portal chips and the other
       # filters visit the heap by design.
       #
       # BEHAVIOUR: the cell count is bounded BY CONSTRUCTION (migration 602: the finest
@@ -573,7 +573,8 @@ jobs:
       # 655 no API lease is judged (the API runs no matcher), and 655's post-condition runs here, refusing a body
       # that still reads the lease. Since 682 each registered job-runner job and the fleet get a cell (a raising
       # arm keeps its incidents open through the teller), and 682's post-condition and fail-closed precondition
-      # run here too. The replay has no pg_cron, so this lane runs the function itself, in a
+      # run here too; since 745 a gauge past its own budget is stale like an alarm, and 745's post-condition and
+      # precondition run here as well. The replay has no pg_cron, so this lane runs the function itself, in a
       # transaction that always rolls back. Migration 633's own statements run in their step, below.
       - name: The pg_cron watcher judges the watchers (migration 620)
         env:
@@ -854,6 +855,15 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: pytest tests/test_rt_scope_paging_live.py -q
+
+      # #2509, EXECUTED: the changed feed skips a listing's first snapshot (the new feed claims
+      # the arrival) and its window still crosses it. The fakes re-implement the predicate.
+      - name: The changed feed skips a listing's first snapshot (#2509)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_rt_changed_feed_live.py -q
 
       # The Judge page (migration 576), EXECUTED: which pairs its population holds (every judged
       # pair, oss excluded, and every sealed sample pair), each pair's headline, what each of the

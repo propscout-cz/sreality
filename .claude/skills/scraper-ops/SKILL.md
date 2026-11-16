@@ -315,8 +315,8 @@ Per-lane notes:
 - The sreality count-probe lane and its `index_walk.yml` dispatch were deleted in W0 (#2015): the worker triggers no
   GitHub workflow. Its `sreality_count_probe_state` table (mig 270) stays until a backed-up drop.
 - **Property-maintenance lane**, every 30 s (PR #716) — `run_incremental_pass` against `dirty_properties`
-  (rule #20), the only incremental runtime since W0 (#2010); serialized with the daily sweep by the `property_maintenance` `job_lease` row: **never a session advisory lock on a pooled connection** — the first cut stranded. Each drain
-  slice = ONE `properties_changed` txn (recompute, broker book (mig 692: property × canonical broker, every broker number's one source), Browse patch), as merge/detach run inline; then `_settle_fresh` stamps `settled_at` (rule 16, mig 668) on properties under 6 h old the pipeline is done with — the stamp commits alone, then `sync_browse_list` patches their Browse rows, best-effort (`settled` in the log + heartbeat; its error warns, never fails the pass).
+  (rule #20), the only incremental runtime since W0 (#2010); serialized with the daily sweep by the `property_maintenance` `job_lease` row: **never a session advisory lock on a pooled connection** — the first cut stranded. `_enqueue_published` queues cap releases; each drain
+  slice = ONE `properties_changed` txn (recompute, broker book (mig 692: property × canonical broker, every broker number's one source), Browse patch), as merge/detach run inline; then `_settle_fresh` stamps `settled_at` (rule 16, mig 668) on properties under 6 h old the pipeline is done with — committed alone, then `sync_browse_list` patches Browse, best-effort (`settled` in log + heartbeat; its error warns, never fails the pass).
 - **Broker-maintenance lane** (Broker Unify W3) — same cadence; `scripts.resolve_brokers.
   run_incremental_pass` (its only runtime since W0, #2010; the daily full sweep stays): drain until empty,
   recompute affected brokers' names, contacts, firm and memberships (one merged statement, no counts: every broker
@@ -352,7 +352,7 @@ Per-lane notes:
   Projects the portal contracts from the image once at lane start (warn, never fail); no `R2_*` =
   warn once, JSON only. Heartbeat `details.location_intake_fast.last` = `{listings,
   written, enqueued, bodies_mined, bodies_complete, seconds, cursor, bodies_cursor}`.
-- **Location-refetch lane** (W8) — hourly (a constant tick) queue the active ads rule 25 calls town-less
+- **Location-refetch lane** (W8) — 6-hourly (constant tick) queue the active ads rule 25 calls town-less
   (`location_steps.town_missing_sql()`, the town-coverage check's fragment, verbatim in `db.py`)
   whose newest stored page/payload is older than `LOCATION_REFETCH_MIN_AGE_S` (6 h) into
   `listing_detail_queue` at VERIFY, ≤`LOCATION_REFETCH_CAP_PER_SOURCE` (500)/portal/tick,
@@ -435,7 +435,7 @@ missing), `publishing` (queue age, Browse visibility of new ads and of the stock
 **Quality checks (Health dashboard sprint wave 6, `scripts/checks/quality.py`, on the worker):** the `parsing` alarm (fill and vocabulary against the blessed baseline, new ads' per-m² measures, stock
 medians, location payload shape via `claims_common.PAYLOAD_SHAPE_PREDICATES`, re-snapshot churn) and the gauges `data_quality` (basis floor, area vs usable, no portal link), `location_town_coverage` (active ads only) and `text_extraction` (flow, backlog ETA), each gauge cell with a 30-day `trend` and `worse_7d`.
 **Watchers (migration 620):** pg_cron's `health_liveness()` (job `health-liveness`, every 5 min) writes one `liveness` row
-(host `pg_cron`) whose cells judge what must not judge itself: `worker/<name>` (each heartbeat over 10 min old), `job/<name>` + `job-runner` (each runner job and the fleet: `health_job_cells`, `references/job-runner.md`), `health_lane` (no completed pass, a pass in flight or failing for 10 min), `stale:<key>` (an alarm past its staleness budget) and `unalerted` (a
+(host `pg_cron`) whose cells judge what must not judge itself: `worker/<name>` (each heartbeat over 10 min old), `job/<name>` + `job-runner` (each runner job and the fleet: `health_job_cells`, `references/job-runner.md`), `health_lane` (no completed pass, a pass in flight or failing for 10 min), `stale:<key>` (a check past its staleness budget) and `unalerted` (a
 measured Problem with no incident; the matcher-lease `api` cell went in W2b, mig 655); the ladder tells them, and they replace `worker_liveness` and the 24 h dead-man job.
 The canary's last step, `scripts/health_canary.py`, exits 2 when the DB does not answer and 1 on any `CANARY FAIL`: the
 newest `liveness` row is 30 min old, a failing liveness cell has no incident after 15 min, or an open, unacknowledged alarm-class

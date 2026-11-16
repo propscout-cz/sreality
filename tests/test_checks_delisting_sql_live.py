@@ -7,7 +7,8 @@ the rule it encodes:
 - outflow: each week back is read at every whole-hour offset around now (half-open 24 h windows), the current 24 h
   at offset 0 only, and the check judges a drop on each week's quietest window and a spike on its busiest;
 - stuck: per ad, the earliest gone verdict newer than its last sighting (a later sighting refutes an earlier
-  verdict, never a later one), counted once per active ad, against the portal's limit or the fallback;
+  verdict, never a later one) and than its latest flip, counted once per active ad, against the portal's limit or the
+  fallback;
 - verify backlog: VERIFY-priority rows, claimed ones counted, given-up ones left out, aged from the oldest enqueue;
 - precision: per portal, the flipped completions of a day from its own young edge (open there, closed a day on),
   "active again" = is_active now, no pool;
@@ -181,6 +182,25 @@ def test_stuck_takes_each_active_ads_earliest_unrefuted_verdict_and_counts_the_a
                                         "fallback_s": 25 * _H}).fetchall()
 
     assert _rows(rows, src, other) == {src: (3, 2, 45 * _H), other: (1, 1, 30 * _H)}
+
+
+def test_stuck_drops_a_verdict_older_than_the_ads_latest_flip_before_the_probe(conn):
+    """#2512: every reactivation stamps last_seen_at, so a verdict before the ad's latest flip never stands and is
+    dropped before listings is probed. Seeded against that invariant (active, last seen before every completion) so
+    the drop shows; a verdict after the flip stands, and so does an earlier one on an ad never flipped."""
+    src = "w4-live-stuck-flip"
+    for native, completions in (
+            ("a", (("gone", 50), ("flipped", 40))),                  # dropped: not waiting
+            ("b", (("gone", 50), ("flipped", 40), ("gone", 38))),    # the 38 h verdict stands: stuck
+            ("c", (("gone", 30), ("flipped", 45)))):                 # flipped before its verdict: waiting
+        _ad(conn, src, native, active=True, seen_h=60)
+        for outcome, hours_ago in completions:
+            _completion(conn, src, native, outcome, hours_ago=hours_ago)
+
+    rows = conn.execute(dl._STUCK_SQL, {"sources": [src], "limits_s": [37 * _H],
+                                        "fallback_s": 25 * _H}).fetchall()
+
+    assert _rows(rows, src) == {src: (2, 1, 38 * _H)}
 
 
 # --- verify backlog ----------------------------------------------------------------------------------------------

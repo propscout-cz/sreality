@@ -3051,7 +3051,7 @@ renumber.** Navigate by area:
     another property, or on none yet (`autodedup.cluster_members`). The stamp commits ALONE (it
     row-locks what it stamps, and the engine's merges run under a 5 s lock timeout, so a merge waits
     behind one statement at most); then `sync_browse_list` patches the stamped properties' Browse
-    rows in its own transaction, best-effort (a miss waits for the */15 rebuild). The stamper reads
+    rows in its own transaction, best-effort (the next pass's published enqueue re-queues a miss). The stamper reads
     the engine's own tables and decides nothing — no second opinion on duplicates anywhere. A merge
     passes a settled retired property's stamp to an unsettled survivor only when that publishes the
     survivor earlier (`r.settled_at < s.first_seen_at + 6 h`, `toolkit/property_identity._CARRY_SETTLED_SQL`;
@@ -3075,8 +3075,12 @@ renumber.** Navigate by area:
     extension, the boards, push rendering), the collection monitor, estimation subjects and
     comparables, broker lists and the engine's candidates — the gate is about a property's FIRST
     APPEARANCE; a change on a property a user already curates is not one, and a direct link must
-    open (rule 25 keeps the same boundary for location). A cap-released property enters
-    `browse_list` at the */15 rebuild after its 6 h mark (mean ~9 min, worst measured ~40 min);
+    open (rule 25 keeps the same boundary for location). Crossing the cap writes nothing, so the
+    maintenance pass opens by queueing into `dirty_properties` every active, served, published
+    property first seen within the cap plus two hours that `browse_list` lacks
+    (`recompute_property_stats._enqueue_published`, browse_projection's WHERE rendered from the two
+    rules); its drain patches the row in, ~30 s after the 6 h mark (before #2505: the */15 rebuild,
+    up to ~22 min on Large), and a patch a rebuild's swap superseded is re-queued the pass after;
     the publishing health check counts a held property in its expected `unpublished` stage, judged
     at the newest rebuild's start, never as a blocker. **A false 'new' withdraws itself (ruling 5):** `VISIBLE_SQL` (the feed, the badge,
     push) = `REACHABLE_SQL` (not a repeat, not dismissed, its watchdog not retired) AND NOT
@@ -3315,8 +3319,8 @@ renumber.** Navigate by area:
     the teller tells it like any check): a `worker/<name>` cell per heartbeat row (heartbeat over 10 min
     old; migration 675), a `job/<name>` cell per job-runner job and a `job-runner` fleet cell (migration 682,
     `health_job_cells()`; the `jobs` check's `job-runner/registry` census covers a job with no row), a
-    `health_lane` cell (the worker's health lane, silent for 10 min), a `stale:<key>` cell per alarm
-    past its staleness budget (worker keys fold into a failing `worker/<name>` cell) and an `unalerted` cell
+    `health_lane` cell (the worker's health lane, silent for 10 min), a `stale:<key>` cell per check
+    (alarm or gauge, migration 745) past its staleness budget (worker keys fold into a failing `worker/<name>` cell) and an `unalerted` cell
     (an alarm cell measured failing now and two cadences ago with no open incident; the `api` cell,
     which judged the watchdog matcher's lease, went with the matcher in W2b, migration 655); a
     subject that stops failing reads `ok` while its incident is open, so it recovers on a measured OK. It replaced the `worker_liveness` check and migration 274's 24 h
@@ -3949,12 +3953,13 @@ renumber.** Navigate by area:
     the `browse_list` snapshot: since field-capture W6 the drain patches `browse_list` for exactly
     the ids it recomputed — each slice runs `properties_changed` (recompute, the broker book,
     and `sync_browse_list`) in ONE transaction under
-    the 10-min ceiling, then dequeues — so a change usually no longer waits for the `*/15`
-    wholesale rebuild — which was a measured mean of 11.7 min, worst 36.6 (94 rebuilds / 24 h,
-    2026-09-21). A fast path, not a guarantee: the rebuild snapshots `browse_projection` at its
-    start and renames the new table in at its end, so a patch committed inside that window is
-    superseded silently, and a rebuild is in flight ~26 % of wall-clock (283 runs / 72 h, mean
-    237 s against a 900 s cadence). The drain is race-free +
+    the 10-min ceiling, then dequeues — so a change usually no longer waits for the wholesale
+    rebuild (then `*/15`, a measured mean of 11.7 min, worst 36.6, 94 rebuilds / 24 h,
+    2026-09-21; hourly at :45 since migration 740). A fast path, not a guarantee: the rebuild
+    snapshots `browse_projection` at its start and renames the new table in at its end, so a
+    patch committed inside that window is superseded silently until the next rebuild (a new
+    property's is re-queued by the published enqueue). The pass OPENS by queueing what the 6 h cap
+    published (rule 16; the clock is the one change no writer marks). The drain is race-free +
     terminating: it claims rows dirtied at/before a run cutoff and deletes each only while it
     still carries the `marked_at` it was claimed with (a compare-and-set, 2026-10-29), so a mid-run
     re-dirty survives — even one stamped at/before the cutoff by a writer whose transaction began
@@ -3964,7 +3969,11 @@ renumber.** Navigate by area:
     publication rule) on the fresh properties the pipeline is done with; the stamp commits alone,
     then the Browse patch (`sync_browse_list`). New listings (`property_id` NULL) are born by straggler-attach, not the queue (≤ 2000 a pass,
     brought current by `properties_changed`), every 30 s on the worker's lane and after each batch
-    of the daily full sweep, under the lease that sweep already holds. The
+    of the daily full sweep, under the lease that sweep already holds. After each batch's attach the
+    sweep also runs the pass's Browse half, the published enqueue and the dirty drain
+    (`_drain_published`, #2505): the lane skips for the sweep's whole run (20 min on 2XL, its whole
+    6,000 s budget on Large, 2026-11-13), and with the rebuild hourly a cap release or a queued change
+    would otherwise wait for the run's end. A failed drain is logged and the sweep goes on. The
     **daily full sweep** (the job runner's `property_sweep`, no `--incremental`, 03:00 UTC, #2027) is the
     reconcile backstop — it recomputes every property (writing only a row whose rollup differs: one
     `_ROLLUP` dict renders the SET list and its IS DISTINCT FROM guard, #2514) and clears the queue, so a missed enqueue
@@ -4019,7 +4028,7 @@ renumber.** Navigate by area:
     (migration 588), and that, a rung change or a foreign determination re-ranks the location
     advert (migration 635), at that property's next recompute, at worst the daily sweep. Until
     then every property surface keeps reading the stored location advert, whose point, label and
-    codes still refresh at every */15 list rebuild; only WHICH advert it is waits.
+    codes still refresh at every hourly list rebuild; only WHICH advert it is waits.
 21. **Every portal runs through ONE shared framework (Phase 4); per-portal code is a client
     (fetch + pacing) + a parser + a `Portal` adapter + a config row — and shared code grows no new
     portal-name branch.** The parser's outputs
@@ -5384,7 +5393,8 @@ that cursor up by lane and the fast lane never runs `--mode full`), and it proje
 contracts from the image once at startup — a failure there is a warning, because
 `location_claims_intake.yml` is the authoritative projector. **Expected latency, detail write to
 Browse:** ≤2 min lag → ≤1 min tick → the resolver drain's own worker lane (~15 s) → `browse_list`'s
-pg_cron rebuild, `*/15`. So a claim and a verdict land within ~3–4 minutes, and the read model — not
+pg_cron rebuild, hourly at :45 (the maintenance pass's published enqueue first, for a property first
+seen within the 6 h cap plus two hours). So a claim and a verdict land within ~3–4 minutes, and the read model — not
 the claim lane — is what the operator now waits on. **A batch that loses a LOCK runs again (W12):**
 55P03 and 40P01 roll the transaction back without moving the keyset cursor and the batch is
 idempotent, so both loops retry THE SAME batch (2 s doubling to 30 s, counters rolled back with the
@@ -5405,14 +5415,14 @@ fetched again: our one detail fetch read the page while its location fields were
 index card never changed afterwards, so nothing ever re-enqueued them and the listing had no claims
 for ever. Checked live the same day, ceskereality 3876635 now carries "Zlín, ulice Mlýnská" and
 coordinates — so the fix is a re-fetch, not a contract change. The `location_refetch` lane in
-`scraper/realtime_worker.py` ticks hourly (`LOCATION_REFETCH_TICK_SECONDS`, a constant), selects the active ads rule 25 calls town-less
+`scraper/realtime_worker.py` ticks every 6 h (`LOCATION_REFETCH_TICK_SECONDS`, a constant, #2506), selects the active ads rule 25 calls town-less
 — `location_steps.town_missing_sql()`, the fragment the scorecard view (migration 698) splits the town cells with,
 carried verbatim in `scraper/db.py` (which imports `location_data` lazily) and pinned by the
 vocabulary rail — so an ad holding only a kraj or okres claim, or one no property represents, is
 re-read too (until 2026-10-22 the lane read the pin-audit matview's `active_no_claims` bucket and
 missed both). It keeps the ones whose newest stored page or payload is older than
-`LOCATION_REFETCH_MIN_AGE_S` (6 h, so a listing discovered today gets its second look on tomorrow's
-tick; there is no first-seen term, so the lane acts before the check judges), and enqueues at most
+`LOCATION_REFETCH_MIN_AGE_S` (6 h, so a listing discovered now is queued for its second look 6-12 h
+later; there is no first-seen term, so the lane acts before the check judges), and enqueues at most
 `LOCATION_REFETCH_CAP_PER_SOURCE` (500) per portal, longest-unfetched first, into
 `listing_detail_queue` at `QUEUE_PRIORITY_VERIFY`. An ad the drain gave up on rests
 `delist_policy.RECHECK_THROTTLE` (24 h) unless a page or payload has landed since the give-up, read from
@@ -5754,7 +5764,7 @@ missing at the registry version; KÚ coverage of the coarser grains is a fact, n
 
 **Where each point came from** (W6-c1, migration 733; rulings Q2 and Q3 of 2026-11-02): `location_position_mv`
 (listing grain, every active ad plus every ad in any status the consumer rule refuses; pg_cron
-`refresh-location-position` at :07 through `refresh_matview`) decides each point's KIND by geometric identity within
+`refresh-location-position` at 08:07, 13:07, 18:07 and 23:07 UTC through `refresh_matview`, migration 741) decides each point's KIND by geometric identity within
 1e-7° against the points the resolver could have used, in its own precedence (`location_steps.position_kind_sql`:
 RÚIAN door, street point, own pin, část point, town point, unit point; `foreign` and `none` have no point; anything
 else is `unexplained`, shown and not judged until ruled); a DB-lane replay over the mini mirror holds each kind to the
@@ -5854,7 +5864,8 @@ was retired by 513 because it read five `properties` place columns 508 drops, an
 name on inputs that cannot expire the same way.
 
 **THE REBUILD BUDGET SCALES WITH THE CORPUS** (W13, migration 522, after the 2026-09-14 freeze).
-`browse_list` is a whole-relation rebuild of `browse_projection` on pg_cron (`*/15`; the map's
+`browse_list` is a whole-relation rebuild of `browse_projection` on pg_cron (`*/15`, hourly at :45 since
+migration 740; the map's
 `properties_map_mv`, rebuilt at `7,37`, was dropped in migration 631), so its cost tracks the corpus
 and its `statement_timeout` must too. It did
 not: as the location store recovered to 712,932 rows with a town the list rebuild grew 173 s → 257 s

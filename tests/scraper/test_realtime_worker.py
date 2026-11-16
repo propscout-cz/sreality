@@ -898,7 +898,7 @@ def test_the_health_lane_ticks_on_a_constant_and_sits_before_autodedup() -> None
     assert (rw.HEALTH_TICK_SECONDS, rw.HEALTH_PASS_BUDGET_SECONDS) == (60.0, 500.0)
     from scripts import verify_pipeline
 
-    # Wave 6: the worker budgets (1,030 s) outgrow one pass inside the watcher's 600 s in-flight line,
+    # Wave 6: the worker budgets (1,165 s since #2512) outgrow one pass inside the watcher's 600 s in-flight line,
     # so the pass is capped and run_due defers what no longer fits. Since curation sync (migration
     # 696, docs/design/curation-sync.md § 3.9) the alarms due at once owe WORKER_ALARMS_DUE_AT_ONCE_S,
     # past the pass: all but the last fit at their whole budgets, and the last (parsing) defers one
@@ -2179,14 +2179,16 @@ def _patch_refetch(
     return captured
 
 
-def test_location_refetch_lane_ticks_hourly_on_a_constant(
+def test_location_refetch_lane_ticks_every_six_hours_on_a_constant(
         monkeypatch: pytest.MonkeyPatch) -> None:
     # W2: one constant tick, no flag, no interval knob, no first delay — the predicate (a page
-    # at least MIN_AGE old) bounds the traffic, and an hourly tick is what lets liveness judge
-    # the lane (Watch after 3 h, not 3 days).
+    # at least MIN_AGE old) bounds the traffic. #2506: the tick is that predicate's own 6 h, a
+    # code constant (no Railway variable), so liveness reads the lane late after 18 h. The
+    # equality is pinned because the worker and realtime-scrapers.md derive the ~12 h re-read of a
+    # still-townless ad from it: change one value and that statement must change too.
     src = inspect.getsource(rw._amain)
     assert '("location_refetch"' in src
-    assert rw.LOCATION_REFETCH_TICK_SECONDS == 3600.0
+    assert rw.LOCATION_REFETCH_TICK_SECONDS == 21600.0 == float(rw.LOCATION_REFETCH_MIN_AGE_DEFAULT)
     assert "LOCATION_REFETCH_TICK_SECONDS" in src
     for gone in ("LOCATION_REFETCH_ENABLED_ENV", "LOCATION_REFETCH_INTERVAL_ENV",
                  "LOCATION_REFETCH_INTERVAL_DEFAULT", "LOCATION_REFETCH_FIRST_DELAY_SECONDS",

@@ -495,6 +495,12 @@ _PARSING_BUDGET_S = 300.0
 # rows it touches, which clears their pages from the visibility map.
 _SCRAPING_BUDGET_S = 90.0
 _COVERAGE_BUDGET_S = 150.0
+# Publishing and delisting spent their 45 s in 74 % and 29 % of runs on Large (11-11 to 11-13) and
+# judge lines of 3 h or more or a day's share, so they run every 30 min with 75 s. Description
+# reading's stock read alone took 41-44 s on Large when it finished, and its flows read 24 h windows,
+# so it runs every 6 h with 120 s (#2512).
+_PORTAL_TRAIL_BUDGET_S = 75.0
+_TEXT_EXTRACTION_BUDGET_S = 120.0
 # The location scorecard's two statements: ~12 s warm on 10-31 (2XL), past 45 s on Large (11-04).
 _LOCATION_COVERAGE_BUDGET_S = 120.0
 # The push ledger's four reads touch a few hundred rows (the 24 h event window, the live devices), so 5 s.
@@ -554,10 +560,10 @@ CHECKS: tuple[Check, ...] = (
     # Domain "portals" is the page's portal matrix: one column per check, one row per portal.
     Check("scraping", check_scraping, "portals", "alarm", _WORKER, _TEN_MINUTES, "Scraping",
           unit="cells", owner_path="/scrapers", budget_s=_SCRAPING_BUDGET_S),
-    Check("publishing", check_publishing, "portals", "alarm", _WORKER, _TEN_MINUTES,
-          "Publishing", unit="cells", owner_path="/scrapers"),
-    Check("delisting", check_delisting, "portals", "alarm", _WORKER, _TEN_MINUTES,
-          "Delisting", unit="cells", owner_path="/scrapers"),
+    Check("publishing", check_publishing, "portals", "alarm", _WORKER, _HALF_HOURLY,
+          "Publishing", unit="cells", owner_path="/scrapers", budget_s=_PORTAL_TRAIL_BUDGET_S),
+    Check("delisting", check_delisting, "portals", "alarm", _WORKER, _HALF_HOURLY,
+          "Delisting", unit="cells", owner_path="/scrapers", budget_s=_PORTAL_TRAIL_BUDGET_S),
     Check("coverage", check_coverage, "portals", "gauge", _WORKER, _HOURLY, "Coverage",
           unit="cells", owner_path="/scrapers", budget_s=_COVERAGE_BUDGET_S),
     Check("dedup", check_dedup, "dedup", "alarm", _WORKER, _TEN_MINUTES, "Engine",
@@ -576,8 +582,8 @@ CHECKS: tuple[Check, ...] = (
     # Owner: the per-portal page (value quality is a portal parser's debt; no page renders it).
     Check("data_quality", check_data_quality, "data_quality", "gauge", _WORKER, _SIX_HOURLY,
           "Data quality", unit="cells", owner_path="/scrapers"),
-    Check("text_extraction", check_text_extraction, "data_quality", "gauge", _WORKER, _HOURLY,
-          "Description reading", unit="cells", owner_path="/costs"),
+    Check("text_extraction", check_text_extraction, "data_quality", "gauge", _WORKER, _SIX_HOURLY,
+          "Description reading", unit="cells", owner_path="/costs", budget_s=_TEXT_EXTRACTION_BUDGET_S),
     Check("migration_drift", check_migration_drift, "platform", "alarm", _GITHUB, _HOURLY,
           "Migration drift", unit="files"),
     # LAST of the alarms: the check that leaves the database, so a lane that runs out of budget
@@ -744,9 +750,9 @@ def lane_budget_for(checks: Sequence[Check]) -> float:
 
 # What the worker's pass owes when every alarm it hosts falls due at once: the one figure the worker's pass budget
 # (scraper/realtime_worker.HEALTH_PASS_BUDGET_SECONDS), its test and the two docs that state it are weighed against.
-# 670 s since the Large-compute budgets: jobs, capacity, llm, publishing, delisting and dedup 6 x 45 = 270, scraping 90,
+# 730 s since #2512: jobs, capacity, llm and dedup 4 x 45 = 180, publishing and delisting 2 x 75 = 150, scraping 90,
 # notifications and curation sync 2 x 5 = 10, parsing 300. Past the 500 s pass, so the last alarm (parsing) defers one
-# 60 s tick when every alarm is due at once, the tested `defer_unfit` path; the other nine (370 s) always fit.
+# 60 s tick when every alarm is due at once, the tested `defer_unfit` path; the other nine (430 s) always fit.
 WORKER_ALARMS_DUE_AT_ONCE_S = lane_budget_for([c for c in CHECKS if c.host == _WORKER and c.cls == "alarm"])
 
 

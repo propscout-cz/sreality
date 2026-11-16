@@ -418,10 +418,12 @@ def test_each_check_runs_under_its_own_budget(monkeypatch: Any) -> None:
     run_checks(None, {}, checks=checks, lane_budget_s=vp.lane_budget_for(checks))
     assert seen == {"db": "45000ms", "probe": "120000ms"}
     # The stock readers are sized for the Large compute (8 GB, 2026-11-05): parsing, coverage, the
-    # location scorecard and scraping's inflow. W4's push ledger reads a few hundred rows on 5 s, and
-    # so do the curation clock's two reads (migration 696).
+    # location scorecard and scraping's inflow; publishing, delisting and description reading since
+    # #2512. W4's push ledger reads a few hundred rows on 5 s, and so do the curation clock's two
+    # reads (migration 696).
     assert {c.key: c.budget_s for c in CHECKS if c.budget_s != clock.CHECK_BUDGET_S} == {
         "parsing": 300.0, "coverage": 150.0, "location_town_coverage": 120.0, "scraping": 90.0,
+        "publishing": 75.0, "delisting": 75.0, "text_extraction": 120.0,
         "outbound_url_conformance": 120.0, "notifications": 5.0, "curation_sync": 5.0}
 
 
@@ -515,8 +517,9 @@ def test_the_wave6_checks_carry_the_contracts_metadata() -> None:
     assert meta("location_town_coverage") == (
         quality.check_location_town_coverage, "data_quality", "gauge", worker, 21_600, 120.0,
         "Location quality", "cells", "/location-quality")
+    # Every 6 h on 120 s since #2512 (its stock read alone took 41-44 s on Large).
     assert meta("text_extraction") == (quality.check_text_extraction, "data_quality", "gauge",
-                                       worker, 3_600, 45.0, "Description reading", "cells",
+                                       worker, 21_600, 120.0, "Description reading", "cells",
                                        "/costs")
     assert meta("migration_drift") == (check_migration_drift, "platform", "alarm", github,
                                        3_600, 45.0, "Migration drift", "files", "")
@@ -529,25 +532,31 @@ def test_the_wave6_checks_carry_the_contracts_metadata() -> None:
     parsing, text = _by_key("parsing"), _by_key("text_extraction")
     assert (parsing.staleness_budget, parsing.due_after_s) == (_dt.timedelta(hours=18), 20_700)
     assert _hold(parsing.cadence_s) == _dt.timedelta(hours=11, minutes=30)
-    assert (text.staleness_budget, text.due_after_s) == (_dt.timedelta(hours=3), 3_240)
+    assert (text.staleness_budget, text.due_after_s) == (_dt.timedelta(hours=18), 20_700)
+    # publishing and delisting (every 30 min since #2512): stale after 90 min, recovered after 54 min.
+    for key in ("publishing", "delisting"):
+        alarm = _by_key(key)
+        assert (alarm.cadence_s, alarm.budget_s) == (1_800, 75.0), key
+        assert (alarm.staleness_budget, alarm.due_after_s) == (_dt.timedelta(minutes=90), 1_620), key
+        assert _hold(alarm.cadence_s) == _dt.timedelta(minutes=54), key
 
 
 def test_every_worker_alarm_due_at_once_fits_the_pass_but_the_last_and_gauges_defer() -> None:
-    """Wave 6 (D2): the fourteen worker budgets sum 1,030 s since the Large-compute budgets
-    (2026-11-05), past what one pass may take inside the watcher's 600 s in-flight line, so the
-    pass is capped at 500 s (the worker pins the constant). Every ALARM due at once owes
-    vp.WORKER_ALARMS_DUE_AT_ONCE_S (curation sync § 3.9, migration 696): alarms run first, in
+    """Wave 6 (D2): the fourteen worker budgets sum 1,165 s since the Large-compute budgets
+    (2026-11-05; publishing, delisting and description reading since #2512), past what one pass
+    may take inside the watcher's 600 s in-flight line, so the pass is capped at 500 s (the worker
+    pins the constant). Every ALARM due at once owes vp.WORKER_ALARMS_DUE_AT_ONCE_S (curation sync § 3.9, migration 696): alarms run first, in
     registry order, so all but the last fit even when each spends its whole budget, and the last
     (parsing) is deferred one 60 s tick, the tested capped-pass path; a gauge that no longer fits is
-    deferred likewise. GitHub's two checks owe 165 s. The literal 670 s is what
+    deferred likewise. GitHub's two checks owe 165 s. The literal 730 s is what
     pipeline-verification.md and health-dashboard.md state."""
     from scripts import verify_pipeline as vp
 
     worker = [c for c in CHECKS if c.host == "realtime-worker"]
     alarms = [c for c in worker if c.cls == "alarm"]
     assert vp.WORKER_ALARMS_DUE_AT_ONCE_S == vp.lane_budget_for(alarms)
-    assert (vp.WORKER_ALARMS_DUE_AT_ONCE_S, vp.lane_budget_for(worker)) == (670.0, 1030.0), (
-        "the docs state 670 s: restate them")
+    assert (vp.WORKER_ALARMS_DUE_AT_ONCE_S, vp.lane_budget_for(worker)) == (730.0, 1165.0), (
+        "the docs state 730 s: restate them")
     assert alarms[-1].key == "parsing"
     assert vp.lane_budget_for(alarms[:-1]) <= 500.0 < vp.WORKER_ALARMS_DUE_AT_ONCE_S
     assert vp.WORKER_ALARMS_DUE_AT_ONCE_S - 500.0 <= alarms[-1].budget_s, "only the last alarm can defer"
@@ -666,14 +675,14 @@ def test_the_gauges_are_the_ruled_standing_conditions_and_the_rest_are_alarms() 
 
 
 def test_each_check_keeps_the_cadence_of_the_lane_it_ran_in() -> None:
-    """The worker's alarms run every 10 minutes, capacity every 30, curation_sync, the coverage and
-    description reading gauges hourly, parsing and the location and data-quality gauges 6-hourly; on GitHub
-    migration_drift runs hourly and the URL probe weekly."""
+    """The worker's alarms run every 10 minutes, capacity, publishing and delisting every 30 (#2512),
+    curation_sync and the coverage gauge hourly, parsing and the location, data-quality and description
+    reading gauges 6-hourly; on GitHub migration_drift runs hourly and the URL probe weekly."""
     assert {k: _by_key(k).cadence_s for k in _WORKER_KEYS} == {
         "location_town_coverage": 21_600, "jobs": 600, "capacity": 1_800, "llm": 600,
-        "scraping": 600, "publishing": 600, "delisting": 600, "coverage": 3_600, "dedup": 600,
+        "scraping": 600, "publishing": 1_800, "delisting": 1_800, "coverage": 3_600, "dedup": 600,
         "notifications": 600, "curation_sync": 3_600, "parsing": 21_600, "data_quality": 21_600,
-        "text_extraction": 3_600}
+        "text_extraction": 21_600}
     assert {k: _by_key(k).cadence_s for k in _GITHUB_KEYS} == {
         "migration_drift": 3_600, "outbound_url_conformance": 604_800}
 
@@ -1202,7 +1211,7 @@ _WORKER_PASS_S = 500.0
 def test_a_check_due_alone_runs_on_the_workers_capped_pass(monkeypatch: Any, caplog: Any,
                                                            key: str) -> None:
     """The capped pass sizes its lane to the due budgets, so a check due alone gets a lane of its
-    own budget (45 s for the capacity alarm and the two hourly gauges, 180 s for parsing). The
+    own budget (the capacity alarm's, the coverage and description-reading gauges', parsing's). The
     lane's clock has moved by the time the check is weighed, and wave 6's first build deferred
     it on every tick until another check fell due with it. It runs, and nothing is deferred."""
     import dataclasses

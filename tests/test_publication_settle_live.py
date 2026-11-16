@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from autodedup.incremental import EVIDENCE_HOLD_REASON, GENERATION
-from scripts.recompute_property_stats import _settle_fresh
+from scripts.recompute_property_stats import _drain_dirty, _enqueue_published, _settle_fresh
 from tests._live_property import REQUIRED_DB, _advert, _recompute
 from toolkit.property_identity import _CARRY_SETTLED_SQL
 
@@ -192,9 +192,8 @@ def test_a_merge_leaves_a_survivor_the_cap_published_unstamped(cur: Any) -> None
     assert _settled_at(cur, survivor) is None
 
 
-def test_a_stamp_publishes_the_property_to_browse_at_once(cur: Any) -> None:
-    pid = _fresh(cur)
-    ad = _ad(cur, pid)
+def _locate(cur: Any, ad: int) -> None:
+    """A served place for the ad: an address point in Praha."""
     cur.execute(
         "INSERT INTO listing_location (listing_id, geom, match_confidence, granularity, uncertainty_radius_m, "
         "  country_status, resolver_version, claim_set_hash, registry_version, country_code, obec_name, obec_kod, "
@@ -202,6 +201,12 @@ def test_a_stamp_publishes_the_property_to_browse_at_once(cur: Any) -> None:
         "VALUES (%s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), 'exact', 'address_point'::location_granularity, 10, "
         "  'cz'::country_status, 'test', '\\x00'::bytea, 'test', 'CZ', 'Praha', %s, 'Pod Sychrovem II', '850', '43')",
         (ad, *POINT, PRAHA))
+
+
+def test_a_stamp_publishes_the_property_to_browse_at_once(cur: Any) -> None:
+    pid = _fresh(cur)
+    ad = _ad(cur, pid)
+    _locate(cur, ad)
     _recompute(cur, pid)
     cur.execute("UPDATE properties SET first_seen_at = now() - interval '1 hour' WHERE id = %s "
                 "RETURNING status, repr_listing_ref_id, location_listing_ref_id, settled_at", (pid,))
@@ -210,3 +215,40 @@ def test_a_stamp_publishes_the_property_to_browse_at_once(cur: Any) -> None:
     assert _settle(cur) >= 1, "the pass stamped nothing (its MAINTENANCE warning is in the captured log)"
     assert _settled(cur, pid) == {pid: True}
     assert _browsed(cur, pid)
+
+
+def _aged(cur: Any, hours_ago: float, *, located: bool = True) -> int:
+    """An unsettled property of one ad first seen `hours_ago` ago, its place served unless `located` is False; the ad
+    carries the age, so a recompute keeps it."""
+    pid = _fresh(cur)
+    ad = _ad(cur, pid)
+    cur.execute("UPDATE listings SET first_seen_at = now() - make_interval(secs => %s) WHERE id = %s",
+                (hours_ago * 3600, ad))
+    if located:
+        _locate(cur, ad)
+    _recompute(cur, pid)
+    return pid
+
+
+def _in(cur: Any, table: str, pids: list[int]) -> set[int]:
+    cur.execute(f"SELECT property_id FROM {table} WHERE property_id = ANY(%s)", (pids,))
+    return {int(r[0]) for r in cur.fetchall()}
+
+
+def test_the_pass_queues_what_the_cap_published_and_its_drain_brings_it_into_browse(cur: Any) -> None:
+    """Crossing the cap writes nothing, so the pass's enqueue is what tells the drain: exactly the published, served
+    properties browse_list lacks, first seen within the cap plus two hours (older ones are the hourly rebuild's)."""
+    crossed, held, unplaced, old, listed = (_aged(cur, 6.1), _aged(cur, 5.9), _aged(cur, 6.1, located=False),
+                                            _aged(cur, 8.5), _aged(cur, 6.1))
+    cur.execute("INSERT INTO browse_list SELECT * FROM browse_projection WHERE property_id = %s", (listed,))
+    pids = [crossed, held, unplaced, old, listed]
+    assert _in(cur, "browse_list", pids) == {listed} and not _in(cur, "dirty_properties", pids)
+
+    _enqueue_published(cur.connection)
+    assert _in(cur, "dirty_properties", pids) == {crossed}
+    cur.execute("SELECT now()")
+    _drain_dirty(cur.connection, 500, cur.fetchone()[0])
+    assert _in(cur, "browse_list", pids) == {crossed, listed}
+    assert not _in(cur, "dirty_properties", pids)
+    _enqueue_published(cur.connection)
+    assert not _in(cur, "dirty_properties", pids), "a property its patch brought in is queued again"

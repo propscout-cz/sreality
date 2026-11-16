@@ -1137,6 +1137,37 @@ Migration drift reads 643 and 663 Not measured (a drop declares nothing it can p
 - **Next:**
   - One supervised Large trial on a quiet day; until it holds, Large is unproven on the current data.
 
+## 2026-11-14 — Browse rebuild hourly; the cap's releases reach Browse through the dirty queue (#2505, spec #2503)
+
+- **Why:** on Large the */15 Browse rebuild was the largest reader measured (96 runs a day at 320–400 s; 23.5 % of
+  shared-block reads in the 11-13 one-hour diff). Operator ruling 2026-11-14: hourly, paired with a `dirty_properties`
+  entry for every property the 6 h cap publishes; new-property freshness must not get worse than the ~22 min of before.
+- **Shipped:** migration 740 (`browse-list-rebuild` at `45 * * * *` as a fresh pg_cron job, so Health judges it on
+  hourly history; `derived_artifacts.browse_list` 130 min) and the maintenance pass's `_enqueue_published`: a cap
+  release is in Browse ~30 s after its 6 h mark. The daily sweep, which holds the lease the pass needs (up to its
+  6,000 s budget on Large), runs the same enqueue and drain after each batch. Apply 740 only after the code is live
+  on the worker.
+- **Cost:** what reaches Browse only through the rebuild (a resolver re-place of an older property, the operator's
+  location corrections included; city proximity; `tom_days`; a non-new patch a swap superseded) waits up to ~65 min
+  instead of ~22.
+- **Next:** let Health see a failed enqueue. A property published over ~10 min ago and still missing from
+  `browse_list` reads as the expected `unpublished` stage until the next rebuild starts (up to ~65 min), so a broken
+  `_enqueue_published` would only warn in the worker log. Proposal: judge `unpublished` at
+  `greatest(<newest rebuild start>, now() - 10 min)` in `scripts/checks/publishing.py`, or count the enqueue in the
+  pass result and heartbeat.
+
+## 2026-11-15 — Health budgets that fit Large, a cheaper delisting read, a stale alarm for gauges (#2512 of #2503; shipped with this PR)
+
+- **Why:** on Large (11-11 to 11-13) publishing timed out in 74 % of runs, delisting in 29 %, description reading in
+  83 %, and the location scorecard went 34.8 h unmeasured with no incident: the watcher's `stale:<key>` judged alarms
+  only.
+- **Shipped:** publishing and delisting every 30 min on 75 s, description reading every 6 h on 120 s (registry
+  constants); the in-dwell read drops a gone verdict older than the ad's latest flip before probing listings (42k probes
+  to 11k, 171k buffers to 49k, the same 6,050 ads, read on production 11-14); migration 745 gives every gauge a
+  `stale:<key>` cell on its own budget (three cadences on the worker: 18 h for a 6-hourly gauge).
+- **Next:** read each key's timed-out share and the `stale:` onsets for 24 h after the deploy; move the photo-tags
+  cohort to its own key only if publishing stays above 10 % timed out.
+
 ## 2026-11-15 — a given-up photo download is terminal; the images claim stops walking it (#2510, spec #2503)
 
 - **Why:** a photo whose download failed 5 times kept `unavailable_reason` NULL, so it stayed in

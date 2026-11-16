@@ -340,7 +340,7 @@ def _statement(code: str, head: str) -> str:
 
 
 def test_the_position_metric_is_the_matview_kind_by_the_live_grain_over_the_listing_cohort() -> None:
-    """Design § 2: the kind is the hourly matview's while the row's answer is the one it classified (`resolved_at`
+    """Design § 2: the kind is the matview's while the row's answer is the one it classified (`resolved_at`
     unchanged), else `unclassified`; the grain is the row's LIVE grain, so the grid's columns are the grain counts."""
     ctes = _ctes()
     assert "positions" in ctes and ctes["positions"][0], "positions is a materialized CTE"
@@ -433,7 +433,7 @@ def test_a_cells_list_is_the_scorecards_reading_rule_over_live_rows() -> None:
         assert f"{scalar} as (select r.rank from location_granularity_rank r where r.granularity = " in view
 
 
-def test_the_position_matview_is_registered_indexed_and_refreshed_off_the_old_minute() -> None:
+def test_the_position_matview_is_registered_and_indexed() -> None:
     code = _squeeze(_position_code())
     assert f"create unique index if not exists location_position_mv_pk on {POSITION_MV} (listing_id);" in code
     assert (f"create index if not exists location_position_mv_cell on {POSITION_MV} "
@@ -441,10 +441,28 @@ def test_the_position_matview_is_registered_indexed_and_refreshed_off_the_old_mi
     # The list sorts live listings (a cell's rows) or the ~12k no-answer rows: no keyset lane on the matview.
     assert "last_seen_at, listing_id" not in code and "first_seen_at, listing_id" not in code
     assert "values ('location_position_mv', 'refresh_matview', 'pg_cron'," in code
+    assert "refresh materialized view" not in code
+
+
+def test_the_position_snapshot_runs_four_times_a_day_outside_the_night_within_its_budget() -> None:
+    """#2506: the newest call site is the live schedule (cron.schedule upserts by name). Four runs a day, none in
+    00-07Z, off the old pin-audit job's :25, 733's command verbatim; the registry names that schedule and its budget
+    outlasts any ONE missed run (the longest two gaps in a row) plus a 900 s run."""
+    newest = max((p for p in (ROOT / "migrations").glob("*.sql")
+                  if "'refresh-location-position'," in p.read_text(encoding="utf-8")),
+                 key=lambda p: int(p.name.split("_", 1)[0]))
+    code = _squeeze(re.sub(r"--[^\n]*", "", newest.read_text(encoding="utf-8")))
     cron = re.search(r"cron\.schedule\(\s*'refresh-location-position',\s*'([^']+)',\s*\$\$(.+?)\$\$", code)
-    assert cron, "pg_cron refresh-location-position"
-    minute = cron.group(1).split()[0]
-    assert minute.isdigit() and minute != "25", "hourly, never at the old job's :25"
+    assert cron, f"{newest.name}: pg_cron refresh-location-position"
+    minute, hour, *rest = cron.group(1).split()
+    hours = sorted(int(h) for h in hour.split(","))
+    assert minute.isdigit() and minute != "25" and rest == ["*", "*", "*"]
+    assert len(hours) == 4 and not set(hours) & set(range(7)), hours
     assert cron.group(2).strip() == ("set statement_timeout='900s'; "
                                      "select public.refresh_matview('location_position_mv');")
-    assert "refresh materialized view" not in code
+    budget = re.search(r"set cadence = '([^']+)', staleness_budget = interval '(\d+) hours (\d+) minutes' "
+                       r"where name = 'location_position_mv'", code)
+    assert budget and budget.group(1) == cron.group(1), "the registry row names the live schedule"
+    gaps = [(b - a) % 24 for a, b in zip(hours, hours[1:] + hours[:1])]
+    one_miss = max(g + h for g, h in zip(gaps, gaps[1:] + gaps[:1]))
+    assert one_miss * 3600 + 900 <= int(budget.group(2)) * 3600 + int(budget.group(3)) * 60 < 24 * 3600

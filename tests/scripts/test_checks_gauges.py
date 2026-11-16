@@ -903,7 +903,7 @@ def test_the_gauges_are_registered_as_worker_gauges_with_their_metadata() -> Non
     assert rows["location_town_coverage"] == (qc.check_location_town_coverage, "gauge",
                                               "realtime-worker", 21_600, "cells")
     assert rows["text_extraction"] == (qc.check_text_extraction, "gauge", "realtime-worker",
-                                       3_600, "cells")
+                                       21_600, "cells")
 
 
 def test_the_module_never_imports_the_harness_the_worker_or_the_ladder() -> None:
