@@ -39,6 +39,17 @@ dev = [
   # CI's lint step (test.yml): the stdlib has no linter; one binary, no dependencies, pinned exactly.
   "ruff==0.17.2",
 ]
+browser = [
+  # ONE portal needs a real browser: ceskereality.cz put a JS proof-of-work interstitial
+  # in front of every page on 2026-10-31, so a `requests` fetch collects the challenge
+  # instead of listings and its walks stopped reaching the portal's end (#2479, #2529).
+  # Nothing lighter clears a JS proof of work: the cookie is coupled to the browser that
+  # earned it (a plain-HTTP client reusing one was tar-pitted after a single page), so a
+  # pure-Python solver was measured and rejected. Imported LAZILY in
+  # scraper/browser_fetch.py, so every other portal, the API and the tests run without it.
+  # Needs `playwright install --with-deps chromium` in the image / on the runner.
+  "playwright>=1.49",
+]
 api = [
   # Depends(scope="function") commits before the response (api/tenant_pool.TenantConn); 0.139 is the version verified.
   "fastapi>=0.139",

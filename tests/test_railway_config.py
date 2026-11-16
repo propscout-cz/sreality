@@ -275,10 +275,26 @@ def test_the_api_and_the_worker_pass_their_extras_to_the_root_dockerfile_build()
     assert "ARG EXTRAS\n" in dockerfile
     assert 'echo "EXTRAS=${EXTRAS:-unset}"' in dockerfile
     assert 'pip install ".[${EXTRAS:-api}]"' in dockerfile
-    for name in ("api", "worker"):
-        assert 'EXTRAS: "api"' in iac_entry(name), name
+    assert 'EXTRAS: "api"' in iac_entry("api")
+    # The worker also takes `browser`: it drains ceskereality, whose pages sit behind a JS
+    # proof-of-work interstitial, so that image bakes chromium (#2529). The API never
+    # scrapes, so it must NOT carry the extra (and the weight).
+    assert 'EXTRAS: "api,browser"' in iac_entry("worker")
+    assert "browser" not in iac_entry("api")
     assert 'EXTRAS: "api,clip,geo"' in iac_entry("jobRunner")
     assert 'EXTRAS: "api"' not in iac_entry("jobRunner")
+
+
+def test_the_browser_layer_installs_libatomic_before_it_runs_playwright() -> None:
+    """`playwright install --with-deps` resolves chromium's system libraries, but it runs on playwright's own
+    bundled node, which this slim base cannot load without libatomic.so.1 — so --with-deps dies at exit 127
+    before resolving anything (2026-11-16). apt must supply that one library first, by hand."""
+    final = (ROOT / "Dockerfile").read_text(encoding="utf-8").rsplit("\nFROM ", 1)[1]
+    layer = final[final.index('case ",${EXTRAS}," in *,browser,*)'):]
+    layer = layer[:layer.index("esac")]
+    assert layer.index("libatomic1") < layer.index("playwright install"), layer
+    assert "--with-deps" in layer, "chromium's own libraries still come from playwright, not a hand-kept apt list"
+    assert "BROWSER baked" in layer, "the build must still launch chromium, so a broken bake fails the build"
 
 
 def test_the_runner_image_is_cpu_torch_baked_and_offline() -> None:

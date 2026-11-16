@@ -120,8 +120,8 @@ Heal via `reparse.yml` (`--source <portal> --fields area_m2,estate_area,usable_a
 The sreality pipeline is **split by cadence (Phase 2)**: `index_walk.yml` ("Scraping: Sreality
 index walk", cron `*/15`) feeds the worker's drain lane — since W0 (#2010) the ONLY drain of the
 walk-only portals (sreality, bazos, idnes, ceskereality, realitymix, web), and since W1 (#2021) of
-the four combined scrapers too (bezrealitky, maxima, mmreality, remax: their workflows pass `--index-only`). The combined `scrape.yml` fallback (`scraper.main`'s `_run_full`) was deleted in C2-2
-(2026-10); an ad-hoc combined run of any portal is `python -m scraper.<portal>_main` with neither
+the four combined scrapers too (bezrealitky, maxima, mmreality, remax: their workflows pass `--index-only`). The combined `scrape.yml` fallback was deleted in C2-2
+(2026-10); an ad-hoc combined run is `python -m scraper.<portal>_main` with neither
 phase flag (walk, then drain), locally. The bazos crawl is **cadence-split**
 like sreality (bazos walks 22 nationwide scopes (migration 488), ~1500 index pages — a combined run starves the
 drain): `bazos_index_walk.yml` ("Scraping: Bazos index walk", cron `0 */6`, full walk +
@@ -137,8 +137,8 @@ scrapers (bezrealitky, maxima, mmreality, remax) only WALK since Actions exit W1
 `scrape_mmreality.yml` ("Scraping: M&M Reality scraper (pilot)", cron `50 */6` + dispatch —
 every request via the residential `SCRAPER_PROXY_URL` (CF 403s datacenter IPs; `USE_PROXY` +
 `PROXY_REQUIRED=True` so the worker skips it when unset — idnes is proxied too but sets
-`PROXY_REQUIRED=False`, being throttled rather than blocked; ceskereality is the one portal with
-`CLIENT_HINTS=True`, sending sec-ch-ua hints derived from the UA);
+`PROXY_REQUIRED=False`, throttled not blocked; ceskereality sets `CLIENT_HINTS=True` and is **the
+one fetched by a HEADLESS BROWSER** (JS wall: a walk needs the `browser` extra + chromium, #2529));
 bounded by `--max-pages`/`--max-seconds`). The remax scrape is `scrape_remax.yml` ("Scraping: RE/MAX
 scraper (pilot)", every 6h + dispatch; a `--max-seconds` walk budget). The idnes scrape is
 **cadence-split** like sreality (iDNES is large — 4,235 index pages, ~110k listings):
