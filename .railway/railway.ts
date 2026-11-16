@@ -66,7 +66,9 @@ const worker = (name: string) => {
   replicas: { [REGION]: 1 },
   deploy: { restartPolicyType: "ALWAYS", drainingSeconds: WORKER_DRAINING_SECONDS, limitOverride: LIMITS },
   // No Mapy key: nothing in the worker calls Mapy, #2454.
-  env: { EXTRAS: "api", ...kept(
+  // `browser`: the worker drains ceskereality, whose pages sit behind a JS proof-of-work
+  // interstitial, so this image bakes chromium (#2529). The API's EXTRAS stays "api".
+  env: { EXTRAS: "api,browser", ...kept(
     "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "QWEN_API_KEY", "R2_ACCESS_KEY_ID", "R2_ACCOUNT_ID",
     "R2_BUCKET_NAME", "R2_SECRET_ACCESS_KEY", "REALTIME_WORKER_ENABLED", "RUNPOD_API_KEY", "SCRAPER_PROXY_URL",
     "SUPABASE_DB_SESSION_URL", "SUPABASE_DB_URL", "VAPID_PRIVATE_KEY") },

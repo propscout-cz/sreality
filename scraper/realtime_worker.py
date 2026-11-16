@@ -691,6 +691,7 @@ _CLIENT_CLASSES = {
 
 # log-once-per-process guard for proxied portals skipped without SCRAPER_PROXY_URL.
 _PROXY_WARNED: set[str] = set()
+_BROWSER_WARNED: set[str] = set()
 
 # log-once-per-process guard when R2 env vars are absent on the worker.
 _R2_WARNED: set[str] = set()
@@ -976,6 +977,31 @@ def _skip_for_proxy(source: str) -> bool:
     return True
 
 
+def _skip_for_browser(source: str) -> bool:
+    """True when the portal is fetched through a headless browser and playwright is not
+    installed — every claim would only raise, and each raise burns one of a queue row's
+    five attempts (50k rows written off within hours).
+
+    The code and the image's `browser` extra deploy separately (the extra arrives with the
+    operator's `.railway/` apply), so this is the window between them, and the same guard
+    covers a later revert. Symmetrical to `_skip_for_proxy`.
+    """
+    mod_name, cls_name = _CLIENT_CLASSES[source]
+    cls = getattr(importlib.import_module(mod_name), cls_name)
+    if not getattr(cls, "USE_BROWSER", False):
+        return False
+    from scraper.browser_fetch import playwright_available
+
+    if playwright_available():
+        return False
+    if source not in _BROWSER_WARNED:
+        _BROWSER_WARNED.add(source)
+        LOG.warning(
+            "playwright is not installed; skipping browser-fetched portal %s "
+            "(the image needs the 'browser' extra + chromium)", source)
+    return True
+
+
 # --- lane passes (sync halves run in a thread) --------------------------------
 
 
@@ -1143,7 +1169,7 @@ def _probe_sync(disabled: set[str], stop_event: asyncio.Event) -> dict[str, Any]
             # is_set() is a plain attribute read, safe off the loop's thread.
             if stop_event.is_set():
                 break
-            if source in disabled or _skip_for_proxy(source):
+            if source in disabled or _skip_for_proxy(source) or _skip_for_browser(source):
                 totals["skipped"] += 1
                 continue
             attempted.append(source)
@@ -1205,7 +1231,7 @@ def _drain_sync(
             claimable = counts.get(source, 0)
             if claimable <= 0:
                 continue
-            if source in disabled or _skip_for_proxy(source):
+            if source in disabled or _skip_for_proxy(source) or _skip_for_browser(source):
                 totals["skipped"] += 1
                 continue
             attempted.append(source)

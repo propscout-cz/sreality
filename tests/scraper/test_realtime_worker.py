@@ -31,6 +31,15 @@ from scraper.portal import default_config
 from scraper.stop import StopRequested
 
 
+@pytest.fixture(autouse=True)
+def _browser_is_available(monkeypatch):
+    """ceskereality is fetched through a headless browser, and the worker skips its lanes
+    when playwright is absent (`_skip_for_browser`). Playwright is an optional extra, so it
+    is absent here and in CI — these tests are about lane SELECTION, so they state the
+    image's side of that assumption explicitly instead of inheriting the dev box's."""
+    monkeypatch.setattr("scraper.browser_fetch.playwright_available", lambda: True)
+
+
 def _probe_agg(**over: Any) -> dict[str, Any]:
     agg = {
         "probe_pages": 1, "index_pages": 1, "listings_found_new": 2,
@@ -3171,3 +3180,36 @@ def test_the_autodedup_pass_hands_the_lane_a_fresh_connection_factory(monkeypatc
     assert seen["fresh"] is not seen["conn"]
     assert len(opened) == 2 and opened[1] == {
         "attempts": 1, "connect_timeout": rw.AUTODEDUP_RESCUE_CONNECT_TIMEOUT_SECONDS}
+
+
+def test_a_browser_fetched_portal_is_skipped_while_playwright_is_absent(monkeypatch):
+    """The code and the image's `browser` extra deploy separately. In that window every
+    ceskereality claim could only raise, and each raise burns one of a queue row's five
+    attempts — 50k rows written off within hours. So the lane is skipped instead, exactly
+    as an unset proxy skips a PROXY_REQUIRED portal."""
+    monkeypatch.setenv("SCRAPER_PROXY_URL", "http://proxy.example:1080")
+    monkeypatch.setattr("scraper.browser_fetch.playwright_available", lambda: False)
+    rw._BROWSER_WARNED.discard("ceskereality")
+    assert rw._skip_for_browser("ceskereality") is True
+    # Every other portal is untouched: they do not set USE_BROWSER.
+    for source in ("sreality", "idnes", "bazos", "mmreality"):
+        assert rw._skip_for_browser(source) is False
+
+
+def test_the_browser_portal_runs_once_playwright_is_there(monkeypatch):
+    monkeypatch.setattr("scraper.browser_fetch.playwright_available", lambda: True)
+    assert rw._skip_for_browser("ceskereality") is False
+
+
+def test_the_drain_skips_the_browser_portal_when_playwright_is_absent(monkeypatch):
+    """The guard reaches the real lane, not just the predicate."""
+    monkeypatch.setenv("SCRAPER_PROXY_URL", "http://proxy.example:1080")
+    monkeypatch.setattr("scraper.browser_fetch.playwright_available", lambda: False)
+    monkeypatch.setattr(rw, "_read_drain_slice", lambda: 200)
+    monkeypatch.setattr(rw, "_read_drain_disabled_sources", lambda: set())
+    monkeypatch.setattr(rw, "_claimable_by_source", lambda: {"ceskereality": 7, "idnes": 5})
+    ran: list[tuple[str, int]] = []
+    monkeypatch.setattr(rw, "_run_drain_sync",
+                        lambda source, max_claims: (ran.append((source, max_claims)), _drain_agg())[1])
+    asyncio.run(rw._drain_pass(asyncio.Event(), rw._new_state()))
+    assert ran == [("idnes", 5)], "ceskereality must not burn attempts without a browser"

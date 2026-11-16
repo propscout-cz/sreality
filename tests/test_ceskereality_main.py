@@ -27,6 +27,7 @@ from types import SimpleNamespace
 import pytest
 
 from scraper import ceskereality_main as m
+from scraper.browser_fetch import BrowserResponse
 from scraper import portal as m_portal
 from scraper import portal_runner
 from scraper.ceskereality_client import (
@@ -1281,3 +1282,67 @@ def test_a_walk_of_no_listings_pages_collects_nothing_nominates_nothing_and_read
     assert all(c["collected"] == 0 for c in agg["by_category"])
     assert not any(c["walk_reached_end"] for c in agg["by_category"])
     assert sum(c["listings_to_verify"] for c in agg["by_category"]) == 0
+
+
+# --- the interstitial (the 2026-10-31 wall; #2479) --------------------------
+
+
+_CHALLENGE_HTML = (
+    '<html><head><title>Ujišťujeme se, že nejste robot!</title></head><body>'
+    '<script id="anubis_challenge" type="application/json">'
+    '{"rules":{"algorithm":"fast","difficulty":2}}</script></body></html>'
+)
+
+
+class _WalledFetcher:
+    """The wall as it actually answered: HTTP 200 carrying the interstitial, for every
+    page. Stands where the headless browser does when it cannot clear it."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def fetch(self, url):  # noqa: ANN001, ANN201 - a fetcher stand-in
+        self.calls.append(url)
+        return BrowserResponse(status_code=200, text=_CHALLENGE_HTML, url=url)
+
+    def close(self) -> None:
+        pass
+
+
+def _walled_client() -> CeskerealityClient:
+    return CeskerealityClient(
+        fetcher=_WalledFetcher(), request_delay_s=0.0, max_retries=0
+    )
+
+
+def test_the_interstitial_leaves_the_walk_short_of_the_portals_end(monkeypatch):
+    """The regression that stopped nominations (#2479).
+
+    A walled page answers 200 with challenge HTML and zero cards. Read as content it
+    looks exactly like an empty index — which would let a slice 'finish', let the walk
+    reach the portal's end, and nominate every unseen active ad for a presence check on
+    the strength of a page we never actually read. It must be a FAILED FETCH instead:
+    the slice errors and the walk reports incomplete.
+    """
+    client = _walled_client()
+    portal = m.CeskerealityPortal(default_config("ceskereality"))
+    sliced = portal._walk_slice(client, "prodej", "byty", "zlinsky-kraj")
+    assert sliced.outcome == "error" and sliced.positive is False
+    assert (sliced.stop, sliced.reached_end) == ("error", False)
+    assert sliced.rows == []
+
+    _seen, _counts, _total, _pages, complete = _walk(portal, client, monkeypatch)
+    assert complete is False, "a walled walk must never read as having reached the end"
+
+
+def test_a_walled_walk_collects_nothing_rather_than_a_confirmed_empty_slice(monkeypatch):
+    """`empty_confirmed` is a POSITIVE 'there is nothing here' and makes a slice reach the
+    end (see test_a_kraj_with_no_listings_is_a_valid_slice). The wall must not be able to
+    borrow that verdict."""
+    client = _walled_client()
+    portal = m.CeskerealityPortal(default_config("ceskereality"))
+    seen, _counts, _total, _pages, complete = _walk(portal, client, monkeypatch)
+    assert seen == set()
+    assert complete is False
+    sliced = portal._walk_slice(client, "prodej", "byty", "karlovarsky-kraj")
+    assert sliced.stop != "empty_confirmed"
