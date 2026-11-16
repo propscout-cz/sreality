@@ -79,11 +79,17 @@ RUN echo "EXTRAS=${EXTRAS:-unset}" && pip install --upgrade pip && pip install "
 # chromium and its system libraries. Only the service whose EXTRAS names `browser` pays
 # the weight — the API never scrapes. Baked at build time on purpose: a runtime download
 # would make the first walled fetch of a fresh container fail.
+# libatomic1 first, by hand: `--with-deps` installs chromium's system libraries, but it is
+# itself driven by playwright's bundled node, which this slim base cannot even load without
+# libatomic.so.1 (exit 127 before any dependency is resolved — build failure 2026-11-16).
 RUN case ",${EXTRAS}," in *,browser,*) \
-      playwright install --with-deps chromium \
+      apt-get update \
+      && apt-get install -y --no-install-recommends libatomic1 \
+      && playwright install --with-deps chromium \
       && python -c 'from playwright.sync_api import sync_playwright; \
         p = sync_playwright().start(); b = p.chromium.launch(); \
-        print("BROWSER baked", b.version); b.close(); p.stop()' ;; \
+        print("BROWSER baked", b.version); b.close(); p.stop()' \
+      && rm -rf /var/lib/apt/lists/* ;; \
     esac
 # The job runner's proof, offline: CPU torch at its pin, the vector stack at the manifest's versions (a resolver that
 # replaced one fails the build), and Tagger.load reads only the baked checkpoint (a missing file fails the build after
