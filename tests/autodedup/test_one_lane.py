@@ -1816,6 +1816,24 @@ def test_the_re_claims_on_top_of_the_limit_fill_none_of_it() -> None:
     assert _measure_rate(429, 480.0, rate, bound) == (round(2.0 * rate, 6), True)
 
 
+def test_a_clock_cut_claim_with_work_waiting_is_measured_however_small() -> None:
+    """E984, 2026-11-13: the stored rate 0.025404 gave a limit of 13; the feeds fed 12 (one ran
+    dry) in 221.1 s, under 20 and short of the limit, so nothing was measured and the rate stood
+    for days while 1,084 Praha arrivals waited. A feed that left work waiting makes the claim a
+    measurement; with room under half the deadline it doubles."""
+    from autodedup.incremental_lane import _measure_rate
+
+    rate = 0.025404
+    bound = _bound("time", int(525.0 * rate), 525.0)
+    assert bound["limit"] == 13
+    assert _measure_rate(12, 221.1, rate, bound) == (None, False)
+    assert _measure_rate(12, 221.1, rate, {**bound, "cut": True}) == (round(2 * rate, 6), True)
+    assert _measure_rate(12, 600.0, rate, {**bound, "cut": True}) == (
+        round(0.5 * 12 / 600.0 + 0.5 * rate, 6), False)
+    assert _measure_rate(12, 221.1, rate, {**_bound("cap", 13, 525.0), "cut": True}) == (
+        None, False), "a cap is memory, not the clock"
+
+
 class _LaneClock:
     """The lane's `time`, its pass `elapsed_s` seconds long: the first `perf_counter` (the
     pass's start) is real, every later one that start plus `elapsed_s`."""
