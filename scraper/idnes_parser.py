@@ -117,7 +117,8 @@ def subtype_from_title(text: str | None, category_main: str | None) -> str | Non
 _CZ_LAT_MIN, _CZ_LAT_MAX = 48.0, 51.5
 _CZ_LON_MIN, _CZ_LON_MAX = 12.0, 19.0
 
-_INT_RE = re.compile(r"(\d+)")
+# Not the index of an unfilled template: idnes prints "%1$s podlaží" for a count it lacks.
+_INT_RE = re.compile(r"(?<!%)(\d+)(?!\$)")
 _PAGE_RE = re.compile(r"[?&]page=(\d+)")
 _DETAIL_PATH_RE = re.compile(r"/detail/([^/?#]+)/([^/?#]+)/")
 # A price token: a leading digit then more digits split by ordinary / no-break /

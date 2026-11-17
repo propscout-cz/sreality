@@ -195,7 +195,8 @@ def test_parse_detail_full_mapping():
     assert listing.energy_rating == "G"
     # obj.floor 5 -> ground=0 storey 4 (W8).
     assert listing.floor == 4
-    assert listing.total_floors == 5
+    # overgroundFloors alone: the basement storey is not a storey a flat's floor counts against.
+    assert listing.total_floors == 4
     assert listing.has_lift is False
     assert listing.cellar is True
     assert listing.parking_lots == 1
