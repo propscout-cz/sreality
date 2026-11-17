@@ -267,9 +267,11 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "area_basis": _cell("derived"),
         "disposition": _cell("derived", note="the h1 title; the portal ships no "
                              "`dispozice` cell on any page of a 1,000-row census"),
-        # The one HTML portal whose key is `patro`: its "2." IS the storey above the
-        # ground one. Sibling-paired against idnes it lands on 0 (+0.20 mean over 7,453
-        # active byt pairs), so it was already canonical and W8 left its values alone.
+        # The one HTML portal whose key is `patro`, and the scale is the exporting
+        # agency's, not the portal's: of 218 agencies with >= 5 ads paired to sreality,
+        # 168 always count from the ground storey, 47 always one higher, 3 mix (#2552).
+        # The cell declares the majority; the row is ABSENT on a ground-storey flat,
+        # which `ceskereality_parser._storey` reads.
         "floor": _cell("structured", "patro", convention="ground0"),
         "total_floors": _cell("none", gap=None),
         # "Balkóny" is ONE multi-value cell ("Balkon, Lodžie, Terasa"): the union is read

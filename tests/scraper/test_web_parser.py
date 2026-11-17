@@ -83,7 +83,8 @@ def test_a_jsonld_page_gives_its_structured_facts() -> None:
     assert (got.category_type, got.category_main) == ("prodej", "byt")
     assert (got.price_czk, got.price_unit) == (6_490_000, "za nemovitost")
     assert (got.area_m2, got.area_basis) == (78.0, "floor")
-    assert got.disposition == "3+1" and got.floor == 4
+    # "ve 4. patře": a patro wording names no scale (#2552).
+    assert got.disposition == "3+1" and got.floor is None
     assert (got.lat, got.lon) == (49.2112, 16.5794)
     assert got.description.startswith("Nabízíme světlý byt 3+1 ve 4. patře")
     assert "<b>" not in got.description
@@ -117,7 +118,7 @@ def test_a_bare_czech_page_is_read_by_the_shared_grammars_and_never_its_chrome()
     got = _parse(CZECH_PAGE, "https://reality-xy.example/inzerat/123")
     assert (got.category_type, got.category_main) == ("prodej", "byt")
     assert (got.price_czk, got.disposition, got.area_m2) == (5_990_000, "2+kk", 54.0)
-    assert (got.floor, got.total_floors) == (2, 6)
+    assert (got.floor, got.total_floors) == (None, 6)
     assert "Prodáváme byt 2+kk" in got.description
     for chrome in ("Nejlepší realitka", "Podobné nabídky", "Copyright"):
         assert chrome not in got.description
@@ -304,7 +305,7 @@ def test_a_webforms_page_wrapped_in_one_form_is_read() -> None:
             "</div></div><input type='submit'></form></body></html>")
     got = _parse(page, "https://rk-plzen.example/detail.aspx?id=5")
     assert got.description.startswith("Prodej bytu 3+1 o výměře 72 m²")
-    assert (got.price_czk, got.area_m2, got.floor) == (3_900_000, 72.0, 4)
+    assert (got.price_czk, got.area_m2, got.floor) == (3_900_000, 72.0, None)
     assert got.raw["image_urls"] == ["https://rk-plzen.example/img/a.jpg"]
 
 
