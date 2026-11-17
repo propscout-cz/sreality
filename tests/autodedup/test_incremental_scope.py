@@ -682,11 +682,13 @@ def test_a_small_block_the_walks_keep_feeding_completes_only_while_they_add_less
 
 
 def test_no_block_waits_for_ever_behind_a_supply_of_smaller_ones() -> None:
-    """E987's fairness rule: an unread advert resolved `ENTRANT_MAX_WAIT_S` (24 h) ago or more is
+    """E987's fairness rule: an unread advert resolved `ENTRANT_MAX_WAIT_S` (72 h) ago or more is
     read before any block order, oldest first. Praha's 300 hold the largest block; small blocks
-    arrive every pass; the Praha adverts past 24 h are still read, three a pass, oldest first."""
+    arrive every pass; the Praha adverts past 72 h are still read, three a pass, oldest first. One
+    resolved 30 h ago (11-17's backlog was 16 h old at deploy) is not overdue: it keeps its block's
+    place, so a brake's backlog does not turn the feed into the new feed's id order."""
     db = _post_brake_world(town_unread=0, praha_unread=300)
-    for listing_id, hours in ((1290, 30), (1291, 26), (1292, 25)):
+    for listing_id, hours in ((1290, 80), (1291, 76), (1292, 74), (1293, 30)):
         db.scope_ids[(GEN, QUARTER, listing_id)] = {"resolved_at": db.now - timedelta(hours=hours)}
     town_ids = iter(range(100, 1000))
     for listing_id in [next(town_ids) for _ in range(5)]:

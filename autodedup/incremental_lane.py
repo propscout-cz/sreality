@@ -440,9 +440,11 @@ PASS_RATE_ALPHA: float = 0.5
 # saturating (2026-10-10: 62/125/250 adverts in 331/395/450 s, x1.14-1.19 a doubling).
 RAMP_HEADROOM: float = 0.5
 # E987's fairness: an unread snapshot advert resolved this long ago is read before any block
-# order, oldest first, so no block waits for ever behind a supply of smaller ones. A brake's
-# backlog (11-17: 10 h) is younger, so after one the blocks still complete fewest-first.
-ENTRANT_MAX_WAIT_S: float = 24 * 3600.0
+# order, oldest first, so no block waits for ever behind a supply of smaller ones. Measured
+# from `rt_scope_ids.resolved_at` (the location's resolution, about the advert's arrival), not
+# from its entry into the snapshot: 11-17's backlog was resolved 11-16 23:58Z to 11-17 09Z, 16 h
+# old at deploy, and at 24 h this tier would have taken every slot from the next morning on.
+ENTRANT_MAX_WAIT_S: float = 72 * 3600.0
 # E951: a build's pass budget as a share of the deadline: a build's pass need not finish fast
 # for latency, and its fixed cost is spread over more adverts. The margin is 4/3, not 2, so most
 # deadline hits a build meets come from here: each rolls back, halves the rate, costs ~18 min.
