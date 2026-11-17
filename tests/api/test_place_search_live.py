@@ -1468,3 +1468,56 @@ def test_a_typo_reaches_the_town_at_a_word_similarity_of_055_while_a_street_stil
         ("obec", OLOMOUC, "Olomouc", "Olomouc"),
         ("okres", OLOMOUC_OKRES, "Olomouc", None),
     ]
+
+
+MASARYKOVA_BRNO, MASARYKOVA_USTI, USTI_OKRES, USTI, PRAHA_3 = 27596, 618659, 3510, 554804, 500097
+
+
+@pytest.mark.parametrize("query", ["Masarykova, Brno", "Brno, Masarykova", "Masarykova Brno"])
+def test_a_street_typed_with_its_town_and_no_number_answers_that_town_s_street_first(mirror, client, query):
+    """Gap 1: the town is read without a number too, as the door read reads it (#2485): after a comma, before it, or
+    as the last words. Brno's Masarykova answers first though Ústí's serves more; Ústí's follows, as the whole text is
+    only similar to it."""
+    towns = _jihomoravsky(mirror)
+    usti = mirror.unit("obec", USTI, "Ústí nad Labem", mirror.unit("okres", USTI_OKRES, "Ústí nad Labem"))
+    mirror.street(MASARYKOVA_BRNO, "Masarykova", towns["brno"])
+    mirror.street(MASARYKOVA_USTI, "Masarykova", usti)
+    mirror.served(obec=USTI, street=MASARYKOVA_USTI)
+    mirror.served(obec=USTI, street=MASARYKOVA_USTI)
+    mirror.publish()
+    assert _chips(_suggest(client, query)) == [
+        ("ulice", MASARYKOVA_BRNO, "Masarykova", "Brno"),
+        ("ulice", MASARYKOVA_USTI, "Masarykova", "Ústí nad Labem"),
+    ]
+
+
+def test_a_quarter_typed_after_its_mestska_cast_answers_only_if_it_lies_in_it(mirror, client):
+    """Gap 1: "Praha 6 Dejvice" names Dejvice in Praha 6 (its pairs). Žižkov lies in Praha 3, so "Praha 6 Žižkov"
+    does not answer it."""
+    praha = _praha(mirror)
+    dejvice = mirror.unit("cast_obce", DEJVICE, "Dejvice", praha)
+    zizkov = mirror.unit("cast_obce", ZIZKOV_PRAHA, "Žižkov", praha)
+    mirror.quarters(mirror.unit("momc", PRAHA_6, "Praha 6", praha), dejvice)
+    mirror.quarters(mirror.unit("momc", PRAHA_3, "Praha 3", praha), zizkov)
+    mirror.publish()
+    assert _chips(_suggest(client, "Praha 6 Dejvice"))[:1] == [("cast_obce", DEJVICE, "Dejvice", "Praha")]
+    assert ("cast_obce", ZIZKOV_PRAHA, "Žižkov", "Praha") not in _chips(_suggest(client, "Praha 6 Žižkov"))
+
+
+FM_OKRES, FRYDEK_MISTEK, FRYDEK_CAST, MISTECKA = 3802, 598003, 598011, 600001
+
+
+def test_a_town_typed_so_far_answers_before_the_streets_its_words_find_in_a_town(mirror, client):
+    """Gap 1's limit: half-way through "Frýdek-Místek" the whole text starts the town and its okres, and that beats
+    reading "Frýdek" as a town and "Mís" as the start of its street Místecká, which follows; the část Frýdek, only
+    similar to the whole text, comes last."""
+    fm = mirror.unit("obec", FRYDEK_MISTEK, "Frýdek-Místek", mirror.unit("okres", FM_OKRES, "Frýdek-Místek"))
+    mirror.unit("cast_obce", FRYDEK_CAST, "Frýdek", fm)
+    mirror.street(MISTECKA, "Místecká", fm)
+    mirror.publish()
+    assert _chips(_suggest(client, "Frýdek-Mís")) == [
+        ("obec", FRYDEK_MISTEK, "Frýdek-Místek", "Frýdek-Místek"),
+        ("okres", FM_OKRES, "Frýdek-Místek", None),
+        ("ulice", MISTECKA, "Místecká", "Frýdek-Místek"),
+        ("cast_obce", FRYDEK_CAST, "Frýdek", "Frýdek-Místek"),
+    ]

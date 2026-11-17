@@ -25,6 +25,12 @@ Kolín", "Kolín, Nádražní 12", "Nádražní 12 Kolín"). Its doors are then 
 a část obce or a městská část (a městská část also by its number, as above: "Nádražní 12, Plzeň 2"), every homonym
 kept; a town that names nothing answers no door. Each reading is one statement, tried in order until one answers, the
 whole text's always last; the name read takes the whole text.
+
+A street or část may carry its town with no number too (#2548): "Masarykova, Brno", "Údolní Brno", "Praha 6 Dejvice".
+Read only when neither the whole text nor a door is exact, its rows go after what the whole text starts and before what
+is only similar. "okres Benešov" answers okresy alone; "Praha6" reads as "Praha 6"; a street is exact under every
+spelling the resolver's abbreviation folds make equal ("nám." and "náměstí"); place names are reached by similarity at
+0.55 ("Olomuc" reaches Olomouc), streets at 0.6.
 """
 
 from __future__ import annotations
@@ -35,6 +41,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import psycopg
+from psycopg.types.json import Jsonb
 
 from location_data.name_index import normalize_name, normalize_street_name
 from location_data.resolver.composite import WHOLE_LEVELS, abbreviation_spellings
@@ -49,6 +56,10 @@ _UNIT_LEVELS = ("kraj", "okres", "obec", "momc", "cast_obce")
 _OKRES_WORD = "okres "
 # "Praha6" is "Praha 6": a digit typed straight after a letter starts a word of its own (#2548).
 _DIGIT_AFTER_LETTER = re.compile(r"(?<=[a-z])(?=[0-9])")
+# A text with no comma splits into words on spaces and dashes ("Praha 6 - Dejvice", "Praha 6-Dejvice"); past six words
+# it names no place in a town, as no street and town together run longer (#2548).
+_WORD_GAP = re.compile(r"[\s\-–]+")
+_PAIR_MAX_WORDS = 6
 _LETTER = re.compile(r"[a-z]")
 # "<street> <number> <town>": the town is what follows the LAST number that whitespace and a letter follow, so an
 # ordinal ("28. října") and a č.o. ("12/3") never split, and "Praha 6" keeps its digit.
@@ -295,6 +306,61 @@ SELECT d.kod_adm, {_DOOR_LABEL}, tc.name, ST_Y(ap.geom), ST_X(ap.geom), d.street
  ORDER BY d.tier, d.served DESC, d.kod_adm
 """
 
+# A STREET OR ČÁST WITH ITS TOWN, NO NUMBER (#2548): "Masarykova, Brno", "Brno, Masarykova", "Údolní Brno", "Praha 6
+# Dejvice". Every split of the text is one pair, each piece tried as the place and as the town; one statement reads
+# them all, as a text that names neither (most of them) must cost one round trip. The town is the door read's (an obec,
+# část obce or městská část at the index's version, by its exact name or its number's other form; the suffix form,
+# "Plzeň 2" for Plzeň 2-Slovany, only reaches the door read), every homonym kept. It answers the streets of its obce
+# and, for an obec or a městská část, its části obce (a městská část's through its pairs), exact (under every spelling
+# for a street) before by their start, then served properties, then code.
+_IN_TOWN_SQL = f"""
+WITH cur AS (SELECT id FROM registry_versions WHERE is_current),
+pairs AS (
+  SELECT * FROM jsonb_to_recordset(%(pairs)s::jsonb)
+         AS p(place_key text, place_prefix text, street_keys text[], street_prefix text, town text, twin text)),
+town AS (
+  SELECT DISTINCT p.place_key, p.place_prefix, p.street_keys, p.street_prefix, u.level, u.id AS unit_id,
+         CASE WHEN u.level = 'obec' THEN u.code ELSE po.code END AS obec_code
+    FROM ruian_name_index n
+    JOIN pairs p ON n.name_norm = p.town OR n.name_norm = p.twin
+    JOIN ruian_admin_units u ON u.id = n.entity_id AND u.level = n.entity_kind
+    LEFT JOIN ruian_admin_units po ON po.id = u.parent_id AND po.level = 'obec'
+   WHERE n.registry_version_id = (SELECT id FROM cur) AND n.name_norm = ANY(%(town_keys)s::text[])
+     AND n.entity_kind IN ({_TOWN_LEVELS})
+     AND (SELECT id FROM cur) BETWEEN u.first_version_id AND u.last_version_id),
+obce AS (
+  SELECT t.*, o.id AS obec_id FROM town t JOIN ruian_admin_units o ON o.level = 'obec' AND o.code = t.obec_code),
+found AS (
+  (SELECT DISTINCT ON (s.code) 'ulice'::ruian_level AS level, s.code, s.name, s.obec_unit_id AS parent_id,
+          CASE WHEN s.name_norm = ANY(b.street_keys) THEN 0 ELSE 1 END AS tier
+     FROM obce b JOIN ruian_streets s ON s.obec_unit_id = b.obec_id
+    WHERE (s.name_norm = ANY(b.street_keys) OR s.name_norm LIKE b.street_prefix)
+      AND s.first_version_id <= (SELECT id FROM cur) AND s.last_version_id >= (SELECT id FROM cur)
+      AND (s.valid_to IS NULL OR s.last_version_id > (SELECT id FROM cur))
+    ORDER BY s.code, tier, s.valid_from DESC)
+  UNION ALL
+  (SELECT DISTINCT ON (q.code) q.level, q.code, q.name, q.parent_id,
+          CASE WHEN q.name_norm = b.place_key THEN 0 ELSE 1 END AS tier
+     FROM obce b JOIN ruian_admin_units q ON q.level = 'cast_obce' AND q.parent_id = b.obec_id
+    WHERE b.level IN ('obec', 'momc') AND (q.name_norm = b.place_key OR q.name_norm LIKE b.place_prefix)
+      AND (SELECT id FROM cur) BETWEEN q.first_version_id AND q.last_version_id
+      AND (b.level <> 'momc' OR EXISTS (SELECT 1 FROM ruian_admin_unit_relations rel
+                                         WHERE rel.from_id = b.unit_id AND rel.to_id = q.id
+                                           AND rel.relation_type = 'momc_cast_obce'
+                                           AND rel.registry_version_id = (SELECT id FROM cur)))
+    ORDER BY q.code, tier, q.valid_from DESC)),
+ranked AS (
+  SELECT f.*, coalesce(c.n, 0) AS served
+    FROM found f LEFT JOIN place_served_counts c ON c.level = f.level AND c.code = f.code
+   ORDER BY f.tier, served DESC, f.code, f.level
+   LIMIT %(limit)s)
+SELECT r.level::text, r.code, r.name, par.name, pf.lat, pf.lng
+  FROM ranked r
+  LEFT JOIN ruian_admin_units par ON par.id = r.parent_id AND par.level IN ('kraj', 'okres', 'obec')
+  LEFT JOIN place_facts pf ON pf.level = r.level AND pf.code = r.code
+ ORDER BY r.tier, r.served DESC, r.code, r.level
+"""
+
 
 @dataclass(frozen=True)
 class Place:
@@ -420,6 +486,34 @@ def _addresses(query: str) -> list[_Reading]:
     return [r for r in readings if r is not None]
 
 
+def _pairs(query: str) -> list[tuple[str, str]]:
+    """(place, town) pieces: a comma's two sides each way round, or else every split of the words each way round."""
+    pieces = [piece.strip() for piece in query.split(",")]
+    if len(pieces) == 2 and all(pieces):
+        return [(pieces[0], pieces[1]), (pieces[1], pieces[0])]
+    words = [word for word in _WORD_GAP.split(query.strip()) if word] if len(pieces) == 1 else []
+    if not 2 <= len(words) <= _PAIR_MAX_WORDS:
+        return []
+    splits = [(" ".join(words[:i]), " ".join(words[i:])) for i in range(1, len(words))]
+    return [pair for left, right in splits for pair in ((left, right), (right, left))]
+
+
+def _pair_row(place: str, town: str) -> dict[str, Any] | None:
+    """One pair's keys for `_IN_TOWN_SQL`; None when either piece has no letter to name a place by."""
+    place_key, street_key = normalize_name(place), normalize_street_name(place)
+    town_key = _DIGIT_AFTER_LETTER.sub(" ", normalize_name(town))
+    if not (_LETTER.search(place_key) and _LETTER.search(street_key) and _LETTER.search(town_key)):
+        return None
+    return {"place_key": place_key, "place_prefix": f"{place_key}%", "street_keys": _street_keys(place),
+            "street_prefix": f"{street_key}%", "town": town_key, "twin": _by_number(town_key)[0]}
+
+
+def _unique(places: list[Place]) -> list[Place]:
+    """The first row of each place: one found in its town comes again as only similar to the whole text."""
+    seen: set[tuple[str, int]] = set()
+    return [p for p in places if (p.level, p.id) not in seen and not seen.add((p.level, p.id))]
+
+
 def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
     unit_key, street_key = _DIGIT_AFTER_LETTER.sub(" ", normalize_name(query)), normalize_street_name(query)
     levels = _UNIT_LEVELS
@@ -441,6 +535,7 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
     }
     readings = _addresses(query) if street_key else []
     door_params = [bound for bound in (r.params(limit) for r in readings) if bound["street_keys"]]
+    pairs = [row for row in (_pair_row(*pair) for pair in _pairs(query)) if row] if street_key else []
     try:
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(_BOUNDS_SQL)
@@ -452,6 +547,11 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
                 doors = cur.fetchall()
                 if doors:
                     break
+            in_town: list[tuple[Any, ...]] = []
+            if pairs and not doors and not any(row[-1] == 0 for row in rows):
+                town_keys = sorted({key for pair in pairs for key in (pair["town"], pair["twin"]) if key})
+                cur.execute(_IN_TOWN_SQL, {"pairs": Jsonb(pairs), "town_keys": town_keys, "limit": limit})
+                in_town = cur.fetchall()
     except psycopg.Error as exc:
         # The SQLSTATE alone: a psycopg message can quote the statement's parameters, the typed text among them.
         LOG.warning("place_search: read failed (SQLSTATE %s)", exc.sqlstate)
@@ -459,6 +559,9 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
     names = [(tier, Place(level, int(code), name, context, lat, lng, _places(places)))
              for level, code, name, context, lat, lng, places, tier in rows]
     # A door's street part is an exact name, so doors rank with the exact tier: after the whole text's exact rows
-    # ("Praha 6", the register street "Na Hroudách 1"), before what is only similar to it.
-    return ([p for tier, p in names if tier == 0] + [_door(row) for row in doors]
-            + [p for tier, p in names if tier > 0])[:limit]
+    # ("Praha 6", the register street "Na Hroudách 1"), before what is only similar to it. A place found in its town
+    # is read only when neither answered; it goes after what the whole text starts ("Frýdek-Mís" is the town typed so
+    # far before it is Frýdek's street Mís...) and before what is only similar.
+    found = [Place(level, int(code), name, context, lat, lng) for level, code, name, context, lat, lng in in_town]
+    return _unique([p for tier, p in names if tier == 0] + [_door(row) for row in doors]
+                   + [p for tier, p in names if tier == 1] + found + [p for tier, p in names if tier > 1])[:limit]
