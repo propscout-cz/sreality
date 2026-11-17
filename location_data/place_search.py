@@ -44,6 +44,11 @@ LOG = logging.getLogger("location_data.place_search")
 
 _FUZZY_MIN_CHARS = 3
 _SPELLED_SLOTS = 3
+_UNIT_LEVELS = ("kraj", "okres", "obec", "momc", "cast_obce")
+# "okres Benešov": the word names the level, the rest the okres (#2548).
+_OKRES_WORD = "okres "
+# "Praha6" is "Praha 6": a digit typed straight after a letter starts a word of its own (#2548).
+_DIGIT_AFTER_LETTER = re.compile(r"(?<=[a-z])(?=[0-9])")
 _LETTER = re.compile(r"[a-z]")
 # "<street> <number> <town>": the town is what follows the LAST number that whitespace and a letter follow, so an
 # ordinal ("28. října") and a č.o. ("12/3") never split, and "Praha 6" keeps its digit.
@@ -76,10 +81,12 @@ SELECT {_DOOR_LABEL}
  WHERE ap.kod_adm = %s AND ap.valid_to IS NULL
 """
 
-# The threshold is pinned, not inherited: "brno" reaches Brněnská at exactly 0.6.
+# The thresholds are pinned, not inherited. A place name is reached at 0.55, so the typo "olomuc" (0.57) reaches
+# Olomouc (#2548); a street keeps 0.6 by its own bound ("brno" reaches Brněnská at exactly 0.6), as streets far
+# outnumber places and the measured gain was in place names alone.
 _BOUNDS_SQL = (
     "SELECT set_config('statement_timeout', '2s', true),"
-    " set_config('pg_trgm.word_similarity_threshold', '0.6', true)"
+    " set_config('pg_trgm.word_similarity_threshold', '0.55', true)"
 )
 
 # A unit is read AT the index's version, as api/maps.py's part lookup reads it (a load closes a re-parented unit before
@@ -112,7 +119,7 @@ units AS (
      AND (n.name_norm LIKE %(unit_prefix)s
           OR n.name_norm = %(unit_twin)s
           OR (n.name_norm LIKE %(unit_twin_suffix)s AND u.name ~ {_NUMBERED}))
-     AND n.entity_kind IN ('kraj', 'okres', 'obec', 'momc', 'cast_obce')
+     AND n.entity_kind = ANY(%(levels)s::ruian_level[])
      AND (SELECT id FROM cur) BETWEEN u.first_version_id AND u.last_version_id
      AND (u.level <> 'momc' OR EXISTS (SELECT 1 FROM ruian_admin_unit_relations rel
                                         WHERE rel.from_id = u.id AND rel.relation_type = 'momc_cast_obce'
@@ -135,7 +142,7 @@ fuzzy AS (
    WHERE (SELECT count(*) FROM near) < %(limit)s
      AND %(unit_fuzzy)s <%% n.name_norm
      AND n.registry_version_id = (SELECT id FROM cur)
-     AND n.entity_kind IN ('kraj', 'okres', 'obec', 'momc', 'cast_obce')
+     AND n.entity_kind = ANY(%(levels)s::ruian_level[])
      AND (SELECT id FROM cur) BETWEEN u.first_version_id AND u.last_version_id
      AND (u.level <> 'momc' OR EXISTS (SELECT 1 FROM ruian_admin_unit_relations rel
                                         WHERE rel.from_id = u.id AND rel.relation_type = 'momc_cast_obce'
@@ -144,7 +151,7 @@ fuzzy AS (
   SELECT 'ulice'::ruian_level, s.code, s.name, s.obec_unit_id, NULL::bigint, 2
     FROM ruian_streets s
    WHERE (SELECT count(*) FROM near) < %(limit)s
-     AND %(street_fuzzy)s <%% s.name_norm
+     AND %(street_fuzzy)s <%% s.name_norm AND word_similarity(%(street_fuzzy)s, s.name_norm) >= 0.6::real
      AND s.first_version_id <= (SELECT id FROM cur) AND s.last_version_id >= (SELECT id FROM cur)
      AND (s.valid_to IS NULL OR s.last_version_id > (SELECT id FROM cur))),
 hits AS (
@@ -414,7 +421,10 @@ def _addresses(query: str) -> list[_Reading]:
 
 
 def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
-    unit_key, street_key = normalize_name(query), normalize_street_name(query)
+    unit_key, street_key = _DIGIT_AFTER_LETTER.sub(" ", normalize_name(query)), normalize_street_name(query)
+    levels = _UNIT_LEVELS
+    if unit_key.startswith(_OKRES_WORD) and _LETTER.search(unit_key[len(_OKRES_WORD):]):
+        unit_key, street_key, levels = unit_key[len(_OKRES_WORD):], "", ("okres",)
     unit_prefix, unit_fuzzy = _arm(unit_key)
     if unit_prefix is None:
         return []
@@ -427,9 +437,10 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
         "unit_twin": unit_twin, "unit_suffix": unit_suffix, "unit_twin_suffix": unit_twin_suffix,
         "street_keys": street_keys, "street_prefix": street_prefix, "street_fuzzy": street_fuzzy,
         **{f"street_spelled_{n}": (spelled[n - 1] if n <= len(spelled) else None) for n in range(1, _SPELLED_SLOTS + 1)},
-        "limit": limit,
+        "levels": list(levels), "limit": limit,
     }
-    door_params = [bound for bound in (r.params(limit) for r in _addresses(query)) if bound["street_keys"]]
+    readings = _addresses(query) if street_key else []
+    door_params = [bound for bound in (r.params(limit) for r in readings) if bound["street_keys"]]
     try:
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(_BOUNDS_SQL)

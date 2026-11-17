@@ -527,13 +527,13 @@ def test_a_failed_read_is_a_503_and_no_log_line_carries_the_typed_text(mirror, c
     _jihomoravsky(mirror)
     mirror.publish()
     with caplog.at_level("INFO"):
-        assert _suggest(client, "Brnoxq") == []
+        assert _suggest(client, "Qxzwvk") == []
         conn.execute("ALTER MATERIALIZED VIEW place_facts RENAME TO place_facts_gone")
-        res = client.post("/places/suggest", json={"query": "Brnoxq"})
+        res = client.post("/places/suggest", json={"query": "Qxzwvk"})
     assert (res.status_code, res.json()) == (503, {"detail": UNAVAILABLE})
     lines = [r.getMessage() for r in caplog.records if r.name == "location_data.place_search"]
     assert lines == ["place_search: read failed (SQLSTATE 42P01)"]
-    assert not any("brnoxq" in r.getMessage().lower() or r.exc_info for r in caplog.records)
+    assert not any("qxzwvk" in r.getMessage().lower() or r.exc_info for r in caplog.records)
 
 
 def test_a_database_it_cannot_reach_is_the_same_503(client, monkeypatch, caplog):
@@ -1426,4 +1426,45 @@ def test_a_street_typed_long_is_exact_under_the_register_s_short_spelling_before
     assert _chips(_suggest(client, "třída Svobody"))[:2] == [
         ("ulice", TR_SVOBODY, "tř. Svobody", "Olomouc"),
         ("ulice", TRIDA_SVOBODY_NOVA, "třída Svobody Nová", "Olomouc"),
+    ]
+
+
+BENESOV_OKRES, BENESOV = 3201, 529303
+
+
+def test_okres_and_a_name_answers_only_the_okres_of_that_name(mirror, client):
+    """Gap 4: "okres Benešov" names the okres. Before, the word "okres" started no name and nothing answered; the town
+    Benešov, which "Benešov" alone answers first, is left out."""
+    stredocesky = mirror.unit("kraj", STREDOCESKY, "Středočeský kraj")
+    mirror.unit("obec", BENESOV, "Benešov", mirror.unit("okres", BENESOV_OKRES, "Benešov", stredocesky))
+    mirror.publish()
+    assert _chips(_suggest(client, "okres Benešov")) == [("okres", BENESOV_OKRES, "Benešov", "Středočeský kraj")]
+
+
+def test_a_number_typed_straight_after_a_name_reads_as_if_spaced(mirror, client):
+    """Gap 5: "Praha6" is "Praha 6". Before, "praha6" started no name and the městská část was missing."""
+    praha = _praha(mirror)
+    praha_6 = mirror.unit("momc", PRAHA_6, "Praha 6", praha)
+    mirror.quarters(praha_6, mirror.unit("cast_obce", DEJVICE, "Dejvice", praha))
+    mirror.publish()
+    items = _suggest(client, "Praha6")
+    assert _chips(items)[0] == ("momc", PRAHA_6, "Praha 6", "Praha")
+    assert items == _suggest(client, "Praha 6")
+
+
+OLOMUCANY, BLANSKO_OKRES, OLOMOUCKA = 581917, 3701, 330120
+
+
+def test_a_typo_reaches_the_town_at_a_word_similarity_of_055_while_a_street_still_needs_060(mirror, client):
+    """Gap 6: "olomuc" starts Olomučany and is 0.57 like Olomouc, which used to be out of reach at 0.6. Place names
+    now reach 0.55; the town goes right above its own okres (ruling 2). The street Olomoucká, also 0.57, stays out: a
+    street still needs 0.6."""
+    olomouc = mirror.unit("obec", OLOMOUC, "Olomouc", mirror.unit("okres", OLOMOUC_OKRES, "Olomouc"))
+    mirror.unit("obec", OLOMUCANY, "Olomučany", mirror.unit("okres", BLANSKO_OKRES, "Blansko"))
+    mirror.street(OLOMOUCKA, "Olomoucká", olomouc)
+    mirror.publish()
+    assert _chips(_suggest(client, "Olomuc")) == [
+        ("obec", OLOMUCANY, "Olomučany", "Blansko"),
+        ("obec", OLOMOUC, "Olomouc", "Olomouc"),
+        ("okres", OLOMOUC_OKRES, "Olomouc", None),
     ]
