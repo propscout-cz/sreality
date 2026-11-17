@@ -132,13 +132,14 @@ in front of it.
 The bezrealitky scrape is
 `scrape_bezrealitky.yml` ("Scraping: Bezrealitky scraper (pilot)", every 6h + dispatch). The maxima scrape is
 `scrape_maxima.yml` ("Scraping: Maxima Reality scraper (pilot)", every 6h + dispatch). These four combined
-scrapers (bezrealitky, maxima, mmreality, remax) only WALK since Actions exit W1 (#2021): each workflow passes
+scrapers (bezrealitky, maxima, mmreality, remax) only WALK since Actions exit W1 (#2021): each passes
 `--index-only` and the worker's drain lane drains them, as it already did nearly every row. The mmreality scrape is
 `scrape_mmreality.yml` ("Scraping: M&M Reality scraper (pilot)", cron `50 */6` + dispatch —
 every request via the residential `SCRAPER_PROXY_URL` (CF 403s datacenter IPs; `USE_PROXY` +
 `PROXY_REQUIRED=True` so the worker skips it when unset — idnes is proxied too but sets
-`PROXY_REQUIRED=False`, throttled not blocked; ceskereality sets `CLIENT_HINTS=True` and is **the
-one fetched by a HEADLESS BROWSER** (JS wall: a walk needs the `browser` extra + chromium, #2529));
+`PROXY_REQUIRED=False`, throttled not blocked; ceskereality sets `CLIENT_HINTS=True`, is **the
+one fetched by a HEADLESS BROWSER** (JS wall: `browser` extra + chromium, #2529; exit IP retires
+/250 pages + 2×403));
 bounded by `--max-pages`/`--max-seconds`). The remax scrape is `scrape_remax.yml` ("Scraping: RE/MAX
 scraper (pilot)", every 6h + dispatch; a `--max-seconds` walk budget). The idnes scrape is
 **cadence-split** like sreality (iDNES is large — 4,235 index pages, ~110k listings):
