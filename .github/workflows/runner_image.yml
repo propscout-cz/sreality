@@ -4,10 +4,12 @@ name: "CI: runner image"
 # the geo wheels), on every pull request that changes an image input, before Railway first builds it after the merge
 # (#2025): a failure there would leave main unable to build the runner until a fix lands. The build's own offline
 # RUN is the proof (CPU torch, and the checkpoint loads with the hub offline), so the scraper files it imports are
-# inputs too; the log then shows the image size. A second job builds the API image (EXTRAS=api, the API's and the
-# worker's one build) at the base and with this pull request, fails if it can import torch or transformers or holds
-# the hub cache, and prints both sizes and the package diff (#2032). No secrets; it pushes and deploys nothing. About
-# 10 minutes a run, billed once the repository is private.
+# inputs too; the log then shows the image size. A second job builds the API image (EXTRAS=api) at the base and with
+# this pull request, fails if it can import torch or transformers or holds the hub cache, and prints both sizes and
+# the package diff (#2032). A third builds the WORKER image (EXTRAS=api,browser) and launches chromium inside the
+# finished image with no network: that arm was missing, so the first browser build reached Railway unbuilt and failed
+# there instead (2026-11-16). No secrets; it pushes and deploys nothing. About 10 minutes a run, billed once the
+# repository is private.
 
 on:
   pull_request:
@@ -38,6 +40,28 @@ jobs:
 
       - name: Image size
         run: docker image ls runner-image
+
+  worker-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      # The build's own RUN launches chromium, so a build that completes has already proved the bake.
+      - name: Build the worker image
+        run: docker build --progress=plain --build-arg EXTRAS=api,browser -t worker-image .
+
+      # ... and this proves the FINISHED image kept it: a later layer that drops the browser, or a
+      # chromium that only runs because the build host had a library, fails here. No network, so a
+      # runtime download cannot stand in for the bake.
+      - name: Chromium launches in the finished image, with no network
+        run: |
+          docker run --rm --network none worker-image python -c 'from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(); print("BROWSER runs", b.version); b.close(); p.stop()'
+
+      - name: Image size
+        run: docker image ls worker-image
 
   api-image:
     runs-on: ubuntu-latest

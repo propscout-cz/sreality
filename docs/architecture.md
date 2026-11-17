@@ -4003,7 +4003,8 @@ renumber.** Navigate by area:
     6,000 s budget on Large, 2026-11-13), and with the rebuild hourly a cap release or a queued change
     would otherwise wait for the run's end. A failed drain is logged and the sweep goes on. The
     **daily full sweep** (the job runner's `property_sweep`, no `--incremental`, 03:00 UTC, #2027) is the
-    reconcile backstop — it recomputes every property and clears the queue, so a missed enqueue
+    reconcile backstop — it recomputes every property (writing only a row whose rollup differs: one
+    `_ROLLUP` dict renders the SET list and its IS DISTINCT FROM guard, #2514) and clears the queue, so a missed enqueue
     self-heals within one cycle (24h when one run covers it) *provided the cycle completes*:
     since the 2026-08-06 incident it runs under a `--max-seconds` budget (default 6000s, clamped
     to the ceiling its `timeout_s` of 150 min is sized for: 130 min worst run) and on exhaustion
@@ -4015,7 +4016,7 @@ renumber.** Navigate by area:
     resumed run that stops again, or a run that stops before its first batch (nothing to
     resume), exits RED. Only a completed cycle stamps the `property_sweep` derived artifact
     (migration 622, `db.stamp_derived_artifact`, inside the transaction that clears the swept
-    dirt and deletes the cursor: `rows` = the properties the finishing run recomputed,
+    dirt and deletes the cursor: `rows` = the properties the finishing run rewrote,
     `duration_ms` = that run's time, and `complete_through` = the stamp time, not the cycle's
     start, which can be ~38h earlier) — so chronic exhaustion surfaces as red runs plus the
     `jobs` check's `artifact/property_sweep` cell, and the unswept id tail keeps its pre-sweep

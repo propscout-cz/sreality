@@ -250,12 +250,13 @@ def test_the_rollup_sets_the_location_ad_in_the_canonical_ads_update() -> None:
                      r"cross join lateral property_canonical_listings\(b\.id\) o", sql)
     assert "loc as(select * from kids where location_rank = 1)" in sql
     assert sql.count("update properties p set") == 1
-    update = sql[sql.index("update properties p set"):]
-    sets, rest = update.split(" from child_agg r ", 1)
+    rest = sql[sql.index("update properties p set"):].split(" from child_agg r ", 1)[1]
     join = re.search(r"(left )?join loc (\w+) on \2\.property_id = r\.pid\b", rest)
     assert join and not join.group(1), "the location ad joins the UPDATE like the canonical ad (inner)"
-    assert f"location_listing_ref_id = {join.group(2)}.id, " in sets
-    assert "repr_listing_ref_id = c.id, " in sets
+    node = _assignments(ROLLUP)["_ROLLUP"]
+    assert isinstance(node, ast.Dict)
+    sets = {k.value: _literal(v) for k, v in zip(node.keys, node.values) if isinstance(k, ast.Constant)}
+    assert (sets["repr_listing_ref_id"], sets["location_listing_ref_id"]) == ("c.id", f"{join.group(2)}.id")
 
 
 def test_the_rollup_spells_no_location_order_of_its_own() -> None:

@@ -1,5 +1,6 @@
 """Own place search's read models (migration 738, #2449), EXECUTED against the replayed schema (CI's migrations lane,
-`TEST_DATABASE_URL`; locally `scripts/local_pg.sh test`). Every test rolls back.
+`TEST_DATABASE_URL`; locally `scripts/local_pg.sh test`). Every test rolls back (bar the name-index test's ANALYZE
+counts, named there).
 
   * THE REBUILD STILL RUNS. rebuild_browse_list() drops browse_list and renames its successor into place every hour
     (658; hourly since 740). A matview that named browse_list in its FROM would depend on it and refuse every rebuild, and Browse
@@ -135,17 +136,29 @@ def test_place_facts_copies_the_current_polygon_points_and_averages_the_open_doo
 
 
 @pytest.mark.parametrize(("predicate", "index_cond"), [
-    ("n.name_norm = 'brno'", "((name_norm = 'brno'::text) AND (registry_version_id = 1))"),
+    ("n.name_norm = 'brno'", "((name_norm = 'brno'::text) AND (registry_version_id = {v}))"),
     ("n.name_norm LIKE 'brno%'",
-     "((name_norm ~>=~ 'brno'::text) AND (name_norm ~<~ 'brnp'::text) AND (registry_version_id = 1))"),
+     "((name_norm ~>=~ 'brno'::text) AND (name_norm ~<~ 'brnp'::text) AND (registry_version_id = {v}))"),
 ])
 def test_the_text_pattern_ops_name_index_serves_equality_and_a_prefix(conn, predicate, index_cond):
     """No seq scan and no bitmap scan (the trigram GIN serves only bitmaps), so a btree must answer, and the name has
-    to bound its scan: the old (name_norm, registry_version_id) btree walks the whole version and filters a LIKE."""
+    to bound its scan: the old (name_norm, registry_version_id) btree walks the whole version and filters a LIKE.
+    Over a table holding rows the planner has counted: an empty one autovacuum has visited (0 tuples on 2 pages, after
+    the earlier lanes' rolled-back inserts) prices every btree alike and picked the unique key, CI 2026-11-15.
+    Not fully rolled back: ANALYZE writes the table's relpages/reltuples in pg_class in place (its pg_statistic rows do
+    roll back), so later tests in the same database see ~8k rows on this empty table until autovacuum recounts it. No
+    other test plans over it."""
+    versions = [_version(conn, current=False) for _ in range(4)]
+    conn.execute(
+        "INSERT INTO ruian_name_index (entity_kind, entity_id, registry_version_id, name, name_norm, name_kind)"
+        " SELECT 'obec', g, v, 'n' || g, 'n' || g, 'official' FROM generate_series(1, 2000) g, unnest(%s::bigint[]) v",
+        (versions,))
+    conn.execute("ANALYZE ruian_name_index")
     conn.execute("SET LOCAL enable_seqscan = off")
     conn.execute("SET LOCAL enable_bitmapscan = off")
     plan = conn.execute(
-        f"EXPLAIN (FORMAT JSON) SELECT n.id FROM ruian_name_index n WHERE {predicate} AND n.registry_version_id = 1"
+        f"EXPLAIN (FORMAT JSON) SELECT n.id FROM ruian_name_index n WHERE {predicate}"
+        f" AND n.registry_version_id = {versions[0]}"
     ).fetchone()[0]
     scans = [(node["Index Name"], node.get("Index Cond")) for node in _nodes(plan[0]["Plan"]) if "Index Name" in node]
-    assert scans == [("ruian_name_index_norm_prefix", index_cond)]
+    assert scans == [("ruian_name_index_norm_prefix", index_cond.format(v=versions[0]))]

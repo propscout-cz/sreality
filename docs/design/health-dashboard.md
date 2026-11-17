@@ -222,7 +222,7 @@ Precision:
 - Cannot be nominated, per portal: active ads unseen since before the start of their unit's (or, with no unit, the portal's) newest end-reached walk that the walks' own predicate (`db.nominable_predicate`: no queue row, no completion within the 24 h recheck throttle), judged at that walk's start, still calls nominable, minus that walk's deferrals. This outcome definition counts the NULL-category ads without naming a portal.
 Each cell carries a rolling 30-day trend and a worse-than-7-days-ago flag. As built (Health dashboard sprint wave 6): through the shared `scripts/checks/common.trend`, facts `trend` (up to 30 Europe/Prague days of [day, value, status]) and `worse_7d` (today's status worse than the point a week back); wave 4's `trend_30d` / `worse_than_7d` are renamed and the series starts at the deploy.
 
-**Data.** scrape_runs.by_category (declared total, collected, walk_reached_end, verify_deferred, total_is_count); listings (is_active, last_seen_at index; ~2.4 s count); detail_queue_completions gone index; listing_detail_queue. About 3 s, hourly.
+**Data.** scrape_runs.by_category (declared total, collected, walk_reached_end, verify_deferred, total_is_count); listings (every active row: through listings_subtype_active_idx, `where is_active`, since migration 743 dropped the (is_active, last_seen_at) index; held ~0.4 s on 2XL, 2026-11-16); detail_queue_completions gone index; listing_detail_queue. About 3 s, hourly.
 
 **Thresholds and their basis.** Residual:
 - Watch above 2 %, Problem above 5 % of D (D ≥ 500).

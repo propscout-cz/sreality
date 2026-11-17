@@ -285,6 +285,18 @@ def test_the_api_and_the_worker_pass_their_extras_to_the_root_dockerfile_build()
     assert 'EXTRAS: "api"' not in iac_entry("jobRunner")
 
 
+def test_the_browser_layer_installs_libatomic_before_it_runs_playwright() -> None:
+    """`playwright install --with-deps` resolves chromium's system libraries, but it runs on playwright's own
+    bundled node, which this slim base cannot load without libatomic.so.1 — so --with-deps dies at exit 127
+    before resolving anything (2026-11-16). apt must supply that one library first, by hand."""
+    final = (ROOT / "Dockerfile").read_text(encoding="utf-8").rsplit("\nFROM ", 1)[1]
+    layer = final[final.index('case ",${EXTRAS}," in *,browser,*)'):]
+    layer = layer[:layer.index("esac")]
+    assert layer.index("libatomic1") < layer.index("playwright install"), layer
+    assert "--with-deps" in layer, "chromium's own libraries still come from playwright, not a hand-kept apt list"
+    assert "BROWSER baked" in layer, "the build must still launch chromium, so a broken bake fails the build"
+
+
 def test_the_runner_image_is_cpu_torch_baked_and_offline() -> None:
     """EXTRAS naming clip adds CPU torch (PyPI's wheel pulls CUDA) and the pinned CLIP checkpoint in a layer keyed on
     the pin alone (a prompt edit reuses it), before the source so a code-only build reuses it too; the build then

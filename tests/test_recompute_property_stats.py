@@ -1722,6 +1722,25 @@ def test_a_property_with_no_ads_is_reset_to_no_ads_once():
     assert "repr_since" not in sql
 
 
+def test_the_rollup_writes_only_a_row_whose_rollup_changed():
+    """#2514: the daily sweep rewrote every row, changed or not. Its guard compares exactly what the
+    SET list writes, column for column and expression for expression, in both variants; only
+    `stats_computed_at`, which would always differ, stays out of it. RED by: a column written but
+    not compared (a row changed only there would be skipped) or compared but not written."""
+    import re
+
+    import scripts.recompute_property_stats as rps
+
+    for sql in (rps._RECOMPUTE_BATCH_SQL, rps._RECOMPUTE_SCOPED_SQL):
+        pairs = re.findall(r"^\s*(\w+)\s*=\s*(.+?),?$", _set_clause(sql), re.M)
+        assert pairs[-1] == ("stats_computed_at", "now()")
+        columns, values = zip(*pairs[:-1], strict=True)
+        assert len(set(columns)) == len(columns) == len(rps._ROLLUP)
+        guard = " ".join(sql.split("WHERE p.id = r.pid", 1)[1].split())
+        assert guard == (f"AND ({', '.join(f'p.{c}' for c in columns)}) "
+                         f"IS DISTINCT FROM ({', '.join(values)})")
+
+
 def test_with_no_canonical_ad_a_property_leaves_the_read_models():
     """Why the reset needs no clause of its own in Browse or the map: the projection's consumer
     rule (rule 25) reads the location row of the LOCATION ad, joined on `location_listing_ref_id`

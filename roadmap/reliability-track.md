@@ -1180,3 +1180,56 @@ Migration drift reads 643 and 663 Not measured (a drop declares nothing it can p
   detail refetch re-arms any unstored photo, as before.
 - **Next:** after 742 is applied, confirm in an hour-later `pg_stat_statements` diff that the claim's buffers fell,
   and again after images autovacuum empties the index's leaf pages (n_dead_tup 3.11M of a ~3.39M threshold on 11-15).
+
+## 2026-11-16 — the sweep rewrites only a changed row; 744 drops 15 never-read indexes and two retired lease tables (#2514, spec #2503)
+
+- **Why:** the property rollup rewrote every row it recomputed, the ~470k inactive properties the daily sweep reaches
+  among them, whether or not a value moved. Fifteen indexes (645 MB) were never read in at least 95 days while every
+  write still maintained them, and two lease tables stayed behind after the 11-03 move to `scheduled_jobs` (#2267,
+  #2273).
+- **Shipped:** `scripts/recompute_property_stats.py` renders the rollup's SET list and its IS DISTINCT FROM guard from
+  one dict, so a batch writes only the rows whose rollup changed (ids 600001–601000: 650 rows to 97, read on
+  production); the dirty-set drain runs the same text. The unused `db.mark_properties_dirty` goes. Migration 744 drops
+  the fifteen indexes CONCURRENTLY and the two tables (destructive half: the operator's yes, 2026-11-16); it applies
+  before the merge, through `apply_migration.yml`; revert: `migrations/reverts/744_revert_dead_indexes_and_lease_tables.sql`.
+- **Cost:** `properties.stats_computed_at` now dates the last change, not the last recompute (nothing reads it), and
+  the `property_sweep` artifact's `last_rows` counts rewritten rows (displayed, never judged).
+- **Next:** measure the WAL, full-page-write and vacuum saving: snapshot pg_stat_wal and the properties table's
+  n_tup_upd / n_tup_hot_upd around the 03:00 sweep the night before the deploy and the night after.
+  `listings_is_active_last_seen_at_idx` stays for #2511: the delisting orphan nomination still reads it, so it drops
+  only after that query's plan without it is measured off production.
+
+## 2026-11-16 — listings drops its (is_active, last_seen_at) index; the walk's touch can be a HOT update (#2511, spec #2503)
+
+- **Why:** `listings_is_active_last_seen_at_idx` was the one listings index on `last_seen_at`, which every index-walk
+  touch rewrites, so no touch could be a HOT update (0.4 % of listings' updates were HOT, read 11-16). Operator ruling
+  2026-11-16: drop it.
+- **Shipped:** migration 743, `drop index concurrently`, no code change. Apply first (workflow, `--ref` the branch),
+  then merge.
+- **Cost (read on production 11-16, 2XL):** the delisting orphan nomination (`db.orphan_candidates`) goes from ~0.1 s
+  to ~0.4 s a call warm (~1.3 s partly cold), the same rows, a few calls a day. Every other reader used the index only
+  as an `is_active` index, i.e. read the whole active set; each such read takes the partial
+  `listings_subtype_active_idx` instead, in about the same time and, where measured, half the buffers. The ones read
+  in the plans: Health's unnominated count, Coverage's held count, the `location_position_mv` refresh, comparables
+  with `max_age_days`, the location-refetch lane (`db.location_refetch_candidates`), the parked admin
+  condition-scoring count. That list is what a search found, not a census.
+- **Next:** a day after the apply, read listings' `n_tup_hot_upd / n_tup_upd` delta (0.4 % cumulative before) and the
+  touch statement's mean in `pg_stat_statements`. If HOT stays low because pages are full, a listings fillfactor below
+  100 is a separate ticket.
+
+## 2026-11-16 — the engine's refused-set read gets a partial index; E41 stays (#2525, spec #2503)
+
+- **Why:** `LEDGER_HISTORY_SQL` (E41) ran once a pass as a parallel seq scan of `autodedup.applied_merges` (339 MB,
+  344k rows) to find 0 rows: 1.0 s a call warm on 2XL (gate #2527, ~113 s/h); since 2026-08-11 14,244 calls, 141,221 s,
+  23.1M blocks read from disk. The operator's "proceed with #2525" (2026-11-16) is read as the recommended option:
+  keep the mechanism, make the read free.
+- **Shipped:** migration 746, `create index concurrently` on `(generation) where outcome = 'refused' and not dry_run`
+  (one empty page), no code change; `tests/test_autodedup_refused_read_plan.py` EXPLAINs the read on CI's replayed
+  schema, bound and generic. Apply with the workflow (`--ref` the branch) inside the coordinator's brake BEFORE the
+  Large retry's resize, receipt OK before the click; missed, after the trial ends. Then the light, then merge.
+- **Next:** right after the apply, `indisvalid` and a plain EXPLAIN showing `Index Scan using
+  autodedup_applied_merges_refused_idx`. The cost is a RATE between two `pg_stat_statements` snapshots of queryid
+  -8415569063472714520 a few hours apart once the engine runs again, `(total_exec_time₂ − total_exec_time₁) /
+  (calls₂ − calls₁)`, never its mean (a running average since 2026-08-11: 9,914 ms, which the index barely moves);
+  its own `gate` ticket, blocked by #2525. `RC_OUTCOME_HISTORY_SQL` (queryid -350548904177584120: 13,655 calls,
+  14,463 s, mean 1,059 ms) is the remaining once-a-pass scan of the ledger.

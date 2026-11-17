@@ -107,8 +107,65 @@ _STRAGGLERS_SQL = "SELECT id FROM listings WHERE property_id IS NULL LIMIT %(lim
 _NEWEST_AD_AT_AGG = "\n".join(
     f"        max(k.first_seen_at) FILTER (WHERE k.source = '{o.value}') AS newest_ad_at_{o.value},"
     for o in PORTAL_OPTIONS)
-_NEWEST_AD_AT_SET = "\n".join(
-    f"      newest_ad_at_{o.value} = r.newest_ad_at_{o.value}," for o in PORTAL_OPTIONS)
+
+# What the rollup writes, column by column. The SET list and the guard that skips a row whose
+# rollup is unchanged (no dead tuple, WAL or index entries for it) are rendered from this one dict,
+# so they cannot drift; `stats_computed_at` is stamped beside them, so only when a row changes. The
+# expressions read the stored row, as a SET does (the `p.` in `repr_since`, `city_proximity_computed_at`).
+_ROLLUP = {
+    "is_active": "r.is_active",
+    "source_count": "r.source_count",
+    "first_seen_at": "r.first_seen_at",
+    "last_seen_at": "r.last_seen_at",
+    "repr_listing_id": "c.sreality_id",
+    "repr_since": "CASE WHEN p.repr_listing_ref_id <> c.id OR p.source_count = 0 THEN now() "
+                  "ELSE p.repr_since END",
+    "city_proximity_computed_at": "CASE WHEN p.location_listing_ref_id IS DISTINCT FROM la.id "
+                                  "THEN NULL ELSE p.city_proximity_computed_at END",
+    "repr_listing_ref_id": "c.id",
+    "location_listing_ref_id": "la.id",
+    "category_main": "c.category_main",
+    "category_type": "c.category_type",
+    "category_sub_cb": "c.category_sub_cb",
+    "subtype": "c.subtype",
+    "disposition": "c.disposition",
+    "area_m2": "c.area_m2",
+    "current_price_czk": "c.price_czk",
+    "condition": "c.condition",
+    "building_condition_level": "c.building_condition_level",
+    "apartment_condition_level": "c.apartment_condition_level",
+    "furnished": "c.furnished",
+    "source": "c.source",
+    "all_sources": "r.all_sources",
+    "active_sources": "r.active_sources",
+    "has_lift": "r.has_lift",
+    "has_balcony": "r.has_balcony",
+    "has_parking": "r.has_parking",
+    "terrace": "r.terrace",
+    "garage": "r.garage",
+    "cellar": "r.cellar",
+    "usable_area": "r.usable_area",
+    "estate_area": "r.estate_area",
+    "garden_area": "r.garden_area",
+    "parking_lots": "r.parking_lots",
+    "building_type": "r.building_type",
+    "ownership": "r.ownership",
+    "energy_rating": "r.energy_rating",
+    "price_drop_count": "coalesce(ph.drops, 0)",
+    "price_rise_count": "coalesce(ph.rises, 0)",
+    "max_price_drop_pct": "ph.max_drop_pct",
+    "price_change_count": "coalesce(ph.changes, 0)",
+    "price_change_count_30d": "coalesce(ph.changes_30d, 0)",
+    "price_change_count_90d": "coalesce(ph.changes_90d, 0)",
+    "price_change_count_365d": "coalesce(ph.changes_365d, 0)",
+    "total_price_change_pct": "CASE WHEN cs.price_points >= 2 AND cs.first_price > 0 "
+                              "THEN (cs.last_price - cs.first_price)::numeric / cs.first_price * 100 END",
+    "last_change_at": "coalesce(ch.last_change_at, r.first_seen_at)",
+    **{f"newest_ad_at_{o.value}": f"r.newest_ad_at_{o.value}" for o in PORTAL_OPTIONS},
+}
+_ROLLUP_SET = "\n".join(f"      {column} = {value}," for column, value in _ROLLUP.items())
+_ROLLUP_CHANGED = (f"({', '.join(f'p.{column}' for column in _ROLLUP)})\n"
+                   f"        IS DISTINCT FROM ({', '.join(_ROLLUP.values())})")
 
 _RECOMPUTE_BATCH_SQL = f"""
     WITH batch AS (
@@ -243,55 +300,7 @@ _RECOMPUTE_BATCH_SQL = f"""
       GROUP BY l.property_id
     )
     UPDATE properties p SET
-      is_active           = r.is_active,
-      source_count        = r.source_count,
-      first_seen_at       = r.first_seen_at,
-      last_seen_at        = r.last_seen_at,
-      repr_listing_id     = c.sreality_id,
-      repr_since          = CASE WHEN p.repr_listing_ref_id <> c.id OR p.source_count = 0 THEN now() ELSE p.repr_since END,
-      city_proximity_computed_at = CASE WHEN p.location_listing_ref_id IS DISTINCT FROM la.id THEN NULL ELSE p.city_proximity_computed_at END,
-      repr_listing_ref_id = c.id,
-      location_listing_ref_id = la.id,
-      category_main       = c.category_main,
-      category_type       = c.category_type,
-      category_sub_cb     = c.category_sub_cb,
-      subtype             = c.subtype,
-      disposition         = c.disposition,
-      area_m2             = c.area_m2,
-      current_price_czk   = c.price_czk,
-      condition           = c.condition,
-      building_condition_level  = c.building_condition_level,
-      apartment_condition_level = c.apartment_condition_level,
-      furnished           = c.furnished,
-      source              = c.source,
-      all_sources         = r.all_sources,
-      active_sources      = r.active_sources,
-      has_lift            = r.has_lift,
-      has_balcony         = r.has_balcony,
-      has_parking         = r.has_parking,
-      terrace             = r.terrace,
-      garage              = r.garage,
-      cellar              = r.cellar,
-      usable_area         = r.usable_area,
-      estate_area         = r.estate_area,
-      garden_area         = r.garden_area,
-      parking_lots        = r.parking_lots,
-      building_type       = r.building_type,
-      ownership           = r.ownership,
-      energy_rating       = r.energy_rating,
-      price_drop_count    = coalesce(ph.drops, 0),
-      price_rise_count    = coalesce(ph.rises, 0),
-      max_price_drop_pct  = ph.max_drop_pct,
-      price_change_count      = coalesce(ph.changes, 0),
-      price_change_count_30d  = coalesce(ph.changes_30d, 0),
-      price_change_count_90d  = coalesce(ph.changes_90d, 0),
-      price_change_count_365d = coalesce(ph.changes_365d, 0),
-      total_price_change_pct  = CASE
-          WHEN cs.price_points >= 2 AND cs.first_price > 0
-          THEN (cs.last_price - cs.first_price)::numeric / cs.first_price * 100
-      END,
-      last_change_at      = coalesce(ch.last_change_at, r.first_seen_at),
-{_NEWEST_AD_AT_SET}
+{_ROLLUP_SET}
       stats_computed_at   = now()
     FROM child_agg r
     JOIN canon c ON c.property_id = r.pid
@@ -300,6 +309,7 @@ _RECOMPUTE_BATCH_SQL = f"""
     LEFT JOIN lineage_span cs ON cs.pid = r.pid
     LEFT JOIN changes ch ON ch.pid = r.pid
     WHERE p.id = r.pid
+      AND {_ROLLUP_CHANGED}
 """
 
 # Dirty-set recompute (Phase 3), derived from the batch SQL by scoping its `batch` CTE
@@ -460,8 +470,8 @@ def properties_changed(conn: Any, property_ids: Iterable[int]) -> None:
     the live depth is a couple of dozen) costs ~100-270 ms of ROW EXCLUSIVE on `browse_list`, the
     lock the rebuild's drop waits behind. That is the uncontended cost. The rebuild's drop runs
     with lock_timeout 0, so it queues behind any in-flight `browse_list` reader (up to 120 s on
-    the API role), and the patch queues behind it while the caller still holds these
-    properties' row locks; a merge or split of one of them waits too. The drain bounds that wait
+    the API role), and the patch queues behind it while the caller still holds the row locks of
+    the properties its rollup changed; a merge or split of one of them waits too. The drain bounds that wait
     (`_DRAIN_LOCK_TIMEOUT`); the identity writers inherit their caller's lock_timeout.
     """
     ids = sorted({int(p) for p in property_ids if p is not None})
@@ -529,8 +539,8 @@ def _attach_stragglers(conn: Any, limit: int = STRAGGLER_BATCH, hold: job_lease.
     return len(born)
 
 
-# The drain slice's ceiling on any one lock wait. Its Browse patch can queue behind a
-# rebuild's swap, holding the slice's `properties` row locks (properties_changed's docstring),
+# The drain slice's ceiling on any one lock wait. Its Browse patch can queue behind a rebuild's
+# swap, holding the row locks of the slice's properties its rollup changed (properties_changed's docstring),
 # and the slice is mostly recently-dirtied properties — the ones the autodedup lane (5 s
 # lock_timeout) and a split (5 s, busy 409) are likeliest to touch. A patch that times out
 # unwinds only its savepoint and the next rebuild carries the row; a recompute that times out
@@ -638,7 +648,7 @@ def _drain_dirty(
 # Only active, unsettled properties first seen within the cap are candidates: past it a stamp
 # changes nothing, so the cap bounds the statement (~1.7k rows, 134 ms measured) and it takes no
 # LIMIT. ONE query judges and locks: the row lock lands only on the rows that settle (a few per
-# pass), never on every candidate; a property a merge, split or drain slice holds is skipped
+# pass), never on every candidate; a property a merge, a split or a drain slice's changed rollup holds is skipped
 # (SKIP LOCKED) and taken next pass; the engine's tables are read, never locked. Stamped once: no
 # later change takes it back.
 _SETTLE_SQL = f"""
