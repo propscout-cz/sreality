@@ -36,7 +36,7 @@ _NOW = _dt.datetime(2026, 10, 19, 9, 0, tzinfo=_UTC)
 _CONTRACT: dict[str, Any] = {
     "dedup_rulings_fail": 1, "dedup_build_window_h": 3, "dedup_build_eta_warn_d": 7,
     "dedup_pause_warn_h": 48, "dedup_lag_warn": 0.01, "dedup_lag_fail": 0.10,
-    "dedup_lag_min_n": 20, "dedup_unread_fail_h": 2, "dedup_lease_fail_past_expiry_min": 10, "dedup_splits_warn": 0.02,
+    "dedup_lag_min_n": 20, "dedup_unread_fail_h": 2, "dedup_held_fail": 25, "dedup_lease_fail_past_expiry_min": 10, "dedup_splits_warn": 0.02,
     "dedup_splits_min_groups": 100,
 }
 T: dict[str, Any] = {key: THRESHOLDS[key] for key in _CONTRACT}
@@ -49,7 +49,8 @@ _OPEN = {"blocks": ["town:563510", "quarter:490245"], "category_types": ["prodej
          "all_blocks": False, "listing_ids": None, "max_clusters_per_run": 600}
 _CLOSED = {**_OPEN, "blocks": []}
 _LANE_SCOPE = [{"grain": "obec", "code": 563510}, {"grain": "cast_obce", "code": 490245}]
-_SUBJECTS = ["state", "stream", "build", "merge_pause", "decision_lag", "unread_arrivals", "lease",
+_SUBJECTS = ["state", "stream", "build", "merge_pause", "decision_lag", "unread_arrivals", "held_unpublished",
+             "lease",
              "rulings/ads",
              "rulings/brokers", "splits"]
 
@@ -102,6 +103,7 @@ _DEFAULT: dict[str, Any] = {
     "rulings": (765, 1, 0, 3), "brokers": (0, 0, 0), "decisions": 0, "backlog": 0,
     "walked": ["obec:563510", "cast_obce:490245"], "floor": 19_340_583,
     "arrivals": _arrivals(400, 0), "previous": None, "previous_at": _ago(minutes=10),
+    "held": (0, None, None),
 }
 
 
@@ -132,6 +134,7 @@ def _answers(**overrides: Any) -> dict[str, Any]:
         isql.RT_SCOPE_SCAN_SEEN_SQL: [(block,) for block in w["walked"]],
         dd._ARRIVAL_FLOOR_SQL: [(w["floor"],)],
         isql.RT_NEW_LISTINGS_SQL: [window],
+        dd._HELD_SQL: [w["held"]],
         isql.RT_FP_READ_SQL: lambda p: [row for row in fp if row[0] in set(p["ids"])],
         common.PREVIOUS_CELLS_SQL: ([] if w["previous"] is None
                                     else [(w["previous_at"], w["previous"])]),
@@ -1179,7 +1182,7 @@ def _merging_statements() -> set[str]:
     return {common.CLOCK_SQL, isql.RT_STORE_PRESENT_SQL, SETTING_SQL, dd._HISTORY_SQL,
             ui_sql.LIVE_STREAM_SQL, dd._STAMPS_SQL, isql.RT_CALIBRATION_PRESENT_SQL,
             dd._MERGES_SQL, isql.RT_LEASE_READ_SQL, dd._WORKER_SQL, dd._RULINGS_SQL,
-            dd._BROKER_SUPPRESSION_SQL, dd._ARRIVAL_FLOOR_SQL, isql.RT_NEW_LISTINGS_SQL,
+            dd._BROKER_SUPPRESSION_SQL, dd._ARRIVAL_FLOOR_SQL, isql.RT_NEW_LISTINGS_SQL, dd._HELD_SQL,
             isql.RT_FP_READ_SQL, common.PREVIOUS_CELLS_SQL}
 
 
@@ -1386,3 +1389,15 @@ def test_the_unread_arm_is_not_measured_without_the_store_or_the_scope() -> None
         "Not measured: the engine's store is absent")
     assert _cell("unread_arrivals", lane_scope=None)["message"].startswith(
         "Not measured: the lane's scope cannot be read")
+
+
+def test_a_property_held_unpublished_past_a_day_is_a_watch_and_many_are_a_problem() -> None:
+    """The arrivals window forgets an ad after 24 h; its property is still hidden, so this arm counts it."""
+    assert _cell("held_unpublished")["message"] == "No active property is unpublished past 24 h"
+    one = _cell("held_unpublished", held=(1, _ago(hours=40), 1_234_567))
+    assert one["status"] == "warn" and one["facts"]["oldest_property_id"] == 1_234_567
+    assert one["message"] == ("1 active property is unpublished past 24 h, each held by an ad the engine "
+                              "has not read; the oldest (property 1234567) was first seen 40.0 h ago "
+                              "(Watch at 1)")
+    many = _cell("held_unpublished", held=(26, _ago(days=3), 7))
+    assert many["status"] == "fail" and many["message"].endswith("(Problem over 25)")

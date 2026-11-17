@@ -287,6 +287,8 @@ THRESHOLDS: dict[str, Any] = {
     # The oldest in-scope ad first seen 1-24 h ago with no engine row: Problem past 2 h, brake or
     # not (ruling 2026-11-17: its property is unpublished until read). The 11-16 brake held 10 h.
     "dedup_unread_fail_h": 2,
+    # Active properties unpublished past 24 h (held by an unread ad): Watch at 1, Problem over 25.
+    "dedup_held_fail": 25,
     # Problem past expiry by more than the lane's interval + 10 min, counted from the later of the
     # expiry, the last brake lift and the build end: 8-10 strands, each re-taken in ~1 min.
     "dedup_lease_fail_past_expiry_min": 10,

@@ -258,6 +258,48 @@ def test_a_scope_that_cannot_be_read_stamps_nothing(cur: Any, caplog: Any) -> No
     assert _settled(cur, ready) == {ready: False} and "MAINTENANCE settle failed" in caplog.text
 
 
+def _place(cur: Any, ad: int, *, obec: int | None, cast_obce: int | None, okres: int | None) -> None:
+    """A served place carrying these RÚIAN codes."""
+    cur.execute(
+        "INSERT INTO listing_location (listing_id, geom, match_confidence, granularity, uncertainty_radius_m, "
+        "  country_status, resolver_version, claim_set_hash, registry_version, country_code, obec_name, obec_kod, "
+        "  cast_obce_kod, okres_kod) "
+        "VALUES (%s, ST_SetSRID(ST_MakePoint(%s, %s), 4326), 'exact', 'obec'::location_granularity, 10, "
+        "  'cz'::country_status, 'test', '\\x00'::bytea, 'test', 'CZ', 'Test', %s, %s, %s)",
+        (ad, *POINT, obec, cast_obce, okres))
+
+
+@pytest.mark.parametrize("scope", [
+    '[{"grain": "obec", "code": 1001}]', '[{"grain": "cast_obce", "code": 2002}]',
+    '[{"grain": "okres", "code": 3003}]', '"all"',
+    '[{"grain": "obec", "code": 1001}, {"grain": "okres", "code": 3003}]'])
+def test_the_stamper_holds_exactly_the_ads_the_lanes_own_feed_would_claim(cur: Any, scope: str) -> None:
+    """THE PIN on the one predicate spelled twice: `_SETTLE_SQL` renders the engine's scope by hand, the lane's
+    arrival feed (RT_NEW_LISTINGS_SQL) is its owner. Over one world of unread, placed, cap-old ads the properties
+    the stamper holds are exactly those whose ad the feed returns, under every grain and under `all`."""
+    from autodedup.incremental_lane import parse_scope
+    from autodedup.incremental_sql import RT_NEW_LISTINGS_SQL
+
+    _scope(cur, scope)
+    cur.execute("SELECT coalesce(max(id), 0) FROM listings")
+    floor = int(cur.fetchone()[0])
+    world = {"obec": (1001, None, None), "cast_obce": (9, 2002, None), "okres": (9, None, 3003),
+             "elsewhere": (9, 9, 9), "no codes": (None, None, None)}
+    ads: dict[int, int] = {}
+    for obec, cast_obce, okres in world.values():
+        pid = _fresh(cur, hours_ago=30)
+        ad = _ad(cur, pid, read=False)
+        _place(cur, ad, obec=obec, cast_obce=cast_obce, okres=okres)
+        ads[ad] = pid
+    cur.execute(RT_NEW_LISTINGS_SQL, {"after_id": floor, "lag": 0, "window": 1000,
+                                      **parse_scope(__import__("json").loads(scope)).params()})
+    claimed = {int(i) for i in cur.fetchone()[2]} & set(ads)
+    _settle(cur)
+    held = {ad for ad, pid in ads.items() if not _settled(cur, pid)[pid]}
+    assert held == claimed
+    assert held or scope != '"all"'
+
+
 def test_a_merge_hands_the_retired_stamp_to_a_survivor_not_yet_published(cur: Any) -> None:
     """Publication never regresses on a merge, whatever the survivor's age."""
     retired, survivor = _fresh(cur), _fresh(cur, hours_ago=30)

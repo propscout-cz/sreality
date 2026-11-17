@@ -7,13 +7,13 @@ engine's scope is never read and never waited for) and either the pipeline has s
 photo stored or none, no pending engine question, no group with an ad on another property) or it is
 `CAP_SQL` old. So the cap bounds the wait for photos and for an engine DECISION, never for the
 engine's READ: an ad the engine has not read yet may be a re-list of a property already told, and
-publishing it would tell it again (the 2026-11-17 ruling; the engine's read lag has its own alarm,
-dedup:unread_arrivals).
+publishing it would tell it again (the 2026-11-17 ruling; the engine's read lag has its own alarms,
+dedup:unread_arrivals and dedup:held_unpublished).
 published <=> settled_at IS NOT NULL; a watchdog's "what appeared after it was switched on" is
 settled_at > active_since.
 
 The SQL surfaces carry the inline text verbatim (browse_projection and the location scorecard's
-served cohort, migration 747, held by tests/test_browse_read_path_guardrail.py and
+served cohort, migrations 748 and 749, held by tests/test_browse_read_path_guardrail.py and
 tests/location_data/test_location_quality_view_contract.py); the Python sites render it through
 these helpers, each registered in tests/test_property_location_ad_rail.py PUBLISHED_RULE_SITES.
 """
@@ -41,5 +41,5 @@ def published_property_predicate(property_id: str = "l.property_id") -> str:
             f" AND {published_predicate('pp')})")
 
 
-# The text browse_projection and the location scorecard's served cohort (migration 747) carry verbatim.
+# The text browse_projection (748) and the location scorecard's served cohort (749) carry verbatim.
 PUBLISHED_PREDICATE = published_predicate()

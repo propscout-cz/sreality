@@ -95,6 +95,9 @@ def _seed(cur: Any) -> None:
         columns = {d.name for d in cur.description}
         for row in data[rel]:
             _insert(cur, rel, columns, row)
+    # The fixture's properties carry ages, not stamps: publish them as migration 747 published the stock.
+    cur.execute("UPDATE properties SET settled_at = first_seen_at + interval '6 hours' "
+                "WHERE settled_at IS NULL AND first_seen_at <= now() - interval '6 hours'")
 
 
 def _insert(cur: Any, rel: str, columns: set[str], row: dict[str, Any]) -> None:

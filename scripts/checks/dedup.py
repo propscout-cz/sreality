@@ -1,8 +1,9 @@
 """Engine: does production honour your rulings, and is the engine deciding and merging?
 
 `check_dedup` reads the engine's state (off, building, merging or idle: a fact on every cell, never
-a status) and judges ten cells: the state, the live stream, the build's progress, the merge pause
-a build causes, the decision lag of new ads, the new ads the engine has not read, the lane's lease, your rulings on ad pairs and on
+a status) and judges eleven cells: the state, the live stream, the build's progress, the merge pause
+a build causes, the decision lag of new ads, the new ads the engine has not read, the properties that holds unpublished past a day, the
+lane's lease, your rulings on ad pairs and on
 brokers, and the share of the engine's merges an operator split. It reads the live engine's stores
 (generation GENERATION) and only those property_merge_events rows the engine or an operator wrote,
 by a positive source filter (rule 15); the one ledger read without that filter is _MERGES_SQL's id
@@ -284,6 +285,19 @@ select (select count(*) from standing)::int,
 
 # Moved verbatim from verify_pipeline's broker_merge_suppression check (wave 5): an active
 # suppression whose two identities sit under one broker means an operator's no was bypassed.
+# Active properties a day old and still unpublished. Past the 6 h cap only one thing holds a
+# property back: an ad on it the engine has not read (toolkit/publication.py), and the arrivals
+# window above sees an ad for 24 h only (one whose place resolved late waits for the engine's paged
+# scope walk; one whose place never resolves waits for ever). Off properties_unsettled_idx
+# (migration 747): the unstamped are a few thousand rows.
+_HELD_SQL = """
+select count(*), min(p.first_seen_at), (array_agg(p.id order by p.first_seen_at))[1]
+  from public.properties p
+ where p.settled_at is null
+   and p.status = 'active' and p.is_active
+   and p.first_seen_at < now() - make_interval(hours => %(hours)s::int)
+"""
+
 _BROKER_SUPPRESSION_SQL = """
 select
   (select count(*) from broker_merge_suppressions where lifted_at is null) as active,
@@ -729,6 +743,25 @@ def _unread_cell(arrivals: _Arrivals, engine: _Engine,
                   facts=facts)
 
 
+def _held_unpublished_cell(conn: Any, engine: _Engine, thresholds: dict[str, Any]) -> dict[str, Any]:
+    """The properties the engine's read has held unpublished for more than a day."""
+    subject, hours = "held_unpublished", _LAG_WINDOW_H[1]
+    row = fetchone(conn, _HELD_SQL, {"hours": hours})
+    n, oldest, oldest_id = (int(row[0] or 0), as_utc(row[1]), row[2]) if row else (0, None, None)
+    facts: dict[str, Any] = {"state": engine.state, "n": n, "oldest_property_id": oldest_id,
+                             "oldest_first_seen_at": None if oldest is None else iso(oldest)}
+    if not n:
+        return cell(subject, "ok", f"No active property is unpublished past {hours} h", value=0,
+                    facts=facts)
+    said = (f"{n:,} active {_n(n, 'property is', 'properties are')} unpublished past {hours} h, "
+            f"each held by an ad the engine has not read; the oldest (property {oldest_id}) was "
+            f"first seen {ago(engine.age(oldest) or 0)} ago")
+    fail = int(thresholds["dedup_held_fail"])
+    level = "fail" if n > fail else "warn"
+    word = f"Problem over {fail}" if level == "fail" else "Watch at 1"
+    return judged(subject, [(level, f"{said} ({word})")], said, value=n, facts=facts)
+
+
 def _lag_cell(conn: Any, engine: _Engine, arrivals: _Arrivals,
               thresholds: dict[str, Any]) -> dict[str, Any]:
     """The decision lag, and the open reading its excuses must not keep from recovering."""
@@ -985,7 +1018,8 @@ def check_dedup(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     cells = [_state_cell(engine, merges), _stream_cell(engine),
              _build_cell(conn, engine, thresholds), _pause_cell(engine, merges, thresholds),
              _lag_cell(conn, engine, arrivals, thresholds),
-             _unread_cell(arrivals, engine, thresholds), _lease_cell(conn, engine, thresholds),
+             _unread_cell(arrivals, engine, thresholds),
+             _held_unpublished_cell(conn, engine, thresholds), _lease_cell(conn, engine, thresholds),
              _rulings_cell(conn, engine, thresholds), _brokers_cell(conn, engine, thresholds),
              _splits_cell(engine, merges, thresholds)]
     return result(_KEY, cells, {})

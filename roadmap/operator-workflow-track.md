@@ -179,8 +179,8 @@ account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, e
       properties were told as New match at their 6 h mark while the engine was braked for 10 h: the cap could not tell
       "no duplicate found" from "not read yet". Now `settled_at` alone is publication and the maintenance pass alone
       writes it: never while an in-scope ad is unread by the engine, otherwise once settled or 6 h old. The clock arm
-      left Browse, the scorecard, the watchdog, the health check and the merge carry. New alarm
-      `dedup:unread_arrivals` (red past 2 h, a brake not excused). Apply: 747 before the merge, 748 + 749 after the
+      left Browse, the scorecard, the watchdog, the health check and the merge carry. New alarms
+      `dedup:unread_arrivals` (red past 2 h, a brake not excused) and `dedup:held_unpublished` (past a day). Apply: 747 before the merge, 748 + 749 after the
       rollout. The engine reading arrivals before its backlog is its owner's PR #2537.
 - [ ] **Next after the publication gate:** (a) the phone feed's day buckets and "Newest first" on the visible-since
       moment, not `first_seen_at` — needs a ruling; (b) drop `properties.published_at` + `publish_reason` + their three

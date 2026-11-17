@@ -3076,7 +3076,8 @@ renumber.** Navigate by area:
     **Never while an ad on the property awaits the engine's READ**: no `autodedup.rt_fp` row in the
     live generation, and its place undetermined (the served rule) or inside the engine's scope
     (`rt_scope`, the lane's own predicate on `listing_location`); no clock ends that wait, and
-    `dedup:unread_arrivals` goes red when an in-scope arrival is unread past 2 h, a brake included.
+    `dedup:unread_arrivals` goes red when an in-scope arrival is unread past 2 h, a brake included,
+    and `dedup:held_unpublished` counts the active properties still unstamped after a day.
     Otherwise it stamps when the pipeline is done with the property (its first photo is stored or
     it has none, the engine has read every ad, holds no pending question about them
     (`autodedup.pairs` at the evidence hold) and keeps none in a group that also holds an ad on
