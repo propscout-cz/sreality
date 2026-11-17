@@ -1058,7 +1058,7 @@ NADRAZNI_PRAHA = 401003
 
 
 @pytest.mark.parametrize(("query", "kod"), [("Nádražní 12, Praha 6", 21000611), ("Praha 7, Nádražní 12", 21000612),
-                                           ("Nádražní 12 Praha 6", 21000611)])
+                                           ("Nádražní 12 Praha 6", 21000611), ("Nádražní 12, Praha6", 21000611)])
 def test_a_mestska_cast_typed_as_the_town_answers_the_door_that_lies_in_it(mirror, client, query, kod):
     """A street runs through several městské části of its town, and its doors carry the one each lies in: Nádražní 12
     is in Praha 6, Nádražní 345/12 in Praha 7. Both pieces of "Praha 7, Nádražní 12" carry a number; "Praha 7" in a town
@@ -1521,3 +1521,32 @@ def test_a_town_typed_so_far_answers_before_the_streets_its_words_find_in_a_town
         ("ulice", MISTECKA, "Místecká", "Frýdek-Místek"),
         ("cast_obce", FRYDEK_CAST, "Frýdek", "Frýdek-Místek"),
     ]
+
+
+NOVAKA = 470801
+
+
+def test_a_street_typed_with_three_abbreviations_is_exact_under_the_register_s_full_spelling(mirror, client):
+    """Gap 2's bound: "nám. gen. plk. Nováka" has eight spellings, more than the three prefix slots, and the
+    register's full one is none of the three; it is still read, as the exact keys select rows of their own."""
+    mirror.street(NOVAKA, "náměstí generála plukovníka Nováka", _praha(mirror))
+    mirror.publish()
+    assert _chips(_suggest(client, "nám. gen. plk. Nováka"))[:1] == [
+        ("ulice", NOVAKA, "náměstí generála plukovníka Nováka", "Praha"),
+    ]
+
+
+KOLIN_III_HUSOVA = 228801
+
+
+@pytest.mark.parametrize(("query", "street"), [("Husova, Kolín 3", KOLIN_III_HUSOVA), ("Dejvice, Praha", None)])
+def test_a_town_named_by_its_number_or_a_cast_named_with_its_obec_answers_in_that_town(mirror, client, query, street):
+    """Gap 1: the town by its number's other form ("Kolín 3" is Kolín III, whose obec's streets answer), and a část
+    with its obec ("Dejvice, Praha"). Neither whole text is a name, so each answers by its town alone."""
+    towns = _towns(mirror)
+    mirror.unit("cast_obce", KOLIN_III, "Kolín III", towns["kolin"])
+    mirror.street(KOLIN_III_HUSOVA, "Husova", towns["kolin"])
+    mirror.unit("cast_obce", DEJVICE, "Dejvice", _praha(mirror))
+    mirror.publish()
+    expected = ("ulice", street, "Husova", "Kolín") if street else ("cast_obce", DEJVICE, "Dejvice", "Praha")
+    assert _chips(_suggest(client, query))[:1] == [expected]

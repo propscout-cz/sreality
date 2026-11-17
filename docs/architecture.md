@@ -1164,12 +1164,13 @@ rules. Identify which one a task belongs to before you start.
   2026-11-17): a town ranks right above its own okres and kraj, on every tier (68 of 77 okresy share a town's name, and
   an okres's served count takes in its town's): a kraj or okres row whose tier holds an obec under it (`path <@`) takes
   that obec's sort keys and follows it, the nearer region first. Every other row keeps the order above, so Praha's
-  Karlín, served, answers before the village Karlín; on equal served properties an obec still goes before any other
-  row (its own část of the same name included). Both ORDER BYs carry it, the one that feeds the LIMIT and the final
+  Karlín, served, answers before the village Karlín; on equal served properties a row lying under an obec of its tier
+  (its own část or městská část, `path <@`) follows that town. Both ORDER BYs carry it, the one that feeds the LIMIT and the final
   one; each row carries its level. "Praha 6" keeps its městská část first, as the town Praha is no exact match for it.
   **Also #2548** (found by a simulated run of gate #2465): a street is exact under every spelling the resolver's
   abbreviation folds make equal ("Václavské nám." reaches Praha's Václavské náměstí as exactly as Třebíč's "nám."), and
-  a prefix under each (three spelled slots, each its own trigram index condition, as `LIKE ANY` takes none); "okres X"
+  a prefix under each (the exact keys one `= ANY` condition, three spelled prefix slots each its own trigram index
+  condition, as `LIKE ANY` takes none, so a spelling past them is still read when exact); "okres X"
   answers okresy named X alone, no street or door; a digit typed straight after a letter starts a word ("Praha6"). **A unit by its number** (#2497
   a městská část, #2499 every level; rulings 2026-11-13). When the key's last token is a number 1–39, in Arabic or
   Roman numerals (I–XXXIX), after at least one other token, its twin is the key with that number in the other form
@@ -1283,9 +1284,10 @@ rules. Identify which one a task belongs to before you start.
   The town is the door read's, by its exact name or its number's other form (not the suffix form, "Plzeň 2" for Plzeň
   2-Slovany: one `= ANY` index condition over every pair's keys); it answers the streets of its obce (exact under every
   spelling, then by start) and, for an obec or a městská část, its části obce (a městská část's through its pairs, so
-  "Praha 6 Žižkov" answers no Žižkov), ranked exact, served, code. Its rows go after what the whole text starts
-  ("Frýdek-Mís" is the town typed so far before Frýdek's street Místecká) and before what is only similar; a row found
-  both ways shows once.
+  "Praha 6 Žižkov" answers no Žižkov), ranked exact, served, code. Its rows go after the whole text's prefix tier
+  ("Frýdek-Mís" is the town typed so far before Frýdek's street Místecká; a builder decision beyond #2548's "before
+  similar rows", for the operator's ruling) and before its fuzzy tier; a row found both ways shows once. "Praha6" reads
+  as "Praha 6" in every town piece, the door read's too.
   Two read models (migration 738,
   service-role only): `place_served_counts` (level, code, n), GROUPING SETS over the kraj, okres, obec, část and street
   ids of active `browse_list` rows, refreshed hourly at :37 by pg_cron through `refresh_matview`; and `place_facts`
