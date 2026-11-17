@@ -438,11 +438,7 @@ PASS_RATE_ALPHA: float = 0.5
 # under 2T only if its next adverts cost no more each, its fixed part has not grown and the
 # database is no slower (2 s to spare at the threshold); the margin is E71's neighbourhood
 # saturating (2026-10-10: 62/125/250 adverts in 331/395/450 s, x1.14-1.19 a doubling).
-# E984: a claim the clock cut with a feed left waiting counts as filled: 2026-11-13 a limit of
-# 13 fed 12 (one feed dry), so no pass under 20 adverts was ever measured again.
 RAMP_HEADROOM: float = 0.5
-# E985: behind, each feed other than the arrivals takes this fraction of the limit, not a fifth.
-REST_SHARE_DIVISOR: int = 20
 # E951: a build's pass budget as a share of the deadline: a build's pass need not finish fast
 # for latency, and its fixed cost is spread over more adverts. The margin is 4/3, not 2, so most
 # deadline hits a build meets come from here: each rolls back, halves the rate, costs ~18 min.
@@ -1457,15 +1453,17 @@ class SqlWork:
         limit = effective
         cursors = self.cursors()
         share = max(1, limit // 5)
-        # E985: arrivals before backlog. Behind their share, the arrivals (stragglers, then new
-        # rows) keep the fifth each held before and take the slack past it: the limit less a
-        # twentieth for each other feed that runs; every other feed keeps that twentieth.
-        rest_feeds = 2 + sum(1 for on in (self.revive_slice, self.drift_slice,
-                                          self.enter_slice and self.enter_blocks,
-                                          self.evidence_slice) if on)
-        rest_share = max(1, limit // REST_SHARE_DIVISOR)
-        rest = rest_feeds * rest_share
+        # During the bootstrap phase the entrant feed is not one of seven equals: it is the
+        # build. Every other feed keeps its share, so an arrival, a delisting or a photograph
+        # landing mid-build is still decided in the pass that sees it. A build's first attempt
+        # carries its re-claims INSIDE that limit (E964 x E971): on top of it, a build's limit
+        # + 200 re-claims outgrows the ~300 adverts the worker's memory holds. They go first,
+        # so a widening's days of build never stall the merges waiting on them, and the build
+        # takes what they leave, never less than a fifth: a build pass then holds no more than
+        # a build or a steady pass did before E964.
         reserved = len(self.stale_claims) if self.bootstrap and self.attempt == 0 else 0
+        enter_share = max(share, limit - reserved) if self.bootstrap else share
+        self.claim_bound["enter"] = enter_share
         scope = self.scope.params()
         items: list[WorkItem] = []
         self._pending = {}
@@ -1476,44 +1474,20 @@ class SqlWork:
         # The straggler sweep FIRST: a row that committed after the cursor passed its id is
         # older work than anything the forward feed is about to hand over. It carries no
         # cursor value — it is BEHIND the watermark by definition.
-        stragglers: list[WorkItem] = []
         if after_new and self.straggler_window:
             for row in self._query(RT_NEW_STRAGGLERS_SQL, {
                     "after_id": after_new, "window": self.straggler_window,
-                    "generation": self.generation, "limit": max(share, limit - rest),
-                    **scope}):
-                stragglers.append(WorkItem(int(row[0]), "straggler", _epoch(row[1]), None))
+                    "generation": self.generation, "limit": share, **scope}):
+                items.append(WorkItem(int(row[0]), "straggler", _epoch(row[1]), None))
 
         end, size, ids, stamps = _window(self._query(RT_NEW_LISTINGS_SQL, {
             "after_id": after_new, "lag": self.lag, "window": self.window, **scope}), after_new)
         self.windows["new"] = size
-        behind = len(stragglers) > share or len(ids) > share
-        held = min(len(stragglers), share), min(len(ids), share)
-        room = max(0, limit - rest - sum(held)) if behind else 0
-        took_stragglers = held[0] + min(len(stragglers) - held[0], room)
-        taken = held[1] + min(len(ids) - held[1], room - (took_stragglers - held[0]))
-        items.extend(stragglers[:took_stragglers])
-        if size and (taken or not ids):
+        if size:
+            taken = min(len(ids), share)
             self._pending[CURSOR_NEW] = (int(ids[taken - 1]) if taken < len(ids) else int(end))
-        for listing_id, stamp in zip(ids[:taken], stamps[:taken]):
-            items.append(WorkItem(int(listing_id), "new", _epoch(stamp), None))
-        arrivals = took_stragglers + taken
-        cut = arrivals < len(stragglers) + len(ids)
-        # What the arrivals took past the two shares they held before E985 comes out of the
-        # build, so a build pass holds no more than it did. During the bootstrap phase the
-        # entrant feed is not one of seven equals: it is the build. Every other feed keeps its
-        # share, so an arrival, a delisting or a photograph landing mid-build is still decided
-        # in the pass that sees it. A build's first attempt carries its re-claims INSIDE that
-        # limit (E964 x E971): on top of it, a build's limit + 200 re-claims outgrows the ~300
-        # adverts the worker's memory holds. They go first, so a widening's days of build never
-        # stall the merges waiting on them, and the build takes what they leave, never less
-        # than a fifth: a build pass then holds no more than a build or a steady pass did
-        # before E964.
-        extra = arrivals - sum(held)
-        share = rest_share if behind else share
-        enter_share = max(share, limit - reserved - extra) if self.bootstrap else share
-        self.claim_bound.update(enter=enter_share, arrivals=arrivals, behind=behind,
-                                rest_share=share)
+            for listing_id, stamp in zip(ids[:taken], stamps[:taken]):
+                items.append(WorkItem(int(listing_id), "new", _epoch(stamp), None))
 
         after_changed = cursors[CURSOR_CHANGED][1]
         end, size, ids, stamps, snapshot_ids = _window(self._query(RT_CHANGED_LISTINGS_SQL, {
@@ -1522,7 +1496,6 @@ class SqlWork:
         self.windows["changed"] = size
         if size:
             taken = min(len(ids), share)
-            cut = cut or taken < len(ids)
             self._pending[CURSOR_CHANGED] = (int(snapshot_ids[taken - 1])
                                              if taken < len(ids) else int(end))
             for listing_id, stamp in zip(ids[:taken], stamps[:taken]):
@@ -1535,7 +1508,6 @@ class SqlWork:
         self.windows["flipped"] = size
         if size:
             taken = min(len(ids), share)
-            cut = cut or taken < len(ids)
             self._pending[CURSOR_FLIPPED] = ((stamps[taken - 1], int(ids[taken - 1]))
                                              if taken < len(ids)
                                              else (stamp_end, int(id_end)))
@@ -1554,7 +1526,6 @@ class SqlWork:
             # short slice taken whole is the end of the sweep, so the cursor wraps and the next
             # pass starts the cycle again.
             taken = min(len(revived), share)
-            cut = cut or taken < len(revived)
             self._pending[CURSOR_REVIVE] = (int(revived[taken - 1]) if taken < len(revived)
                                             else 0 if slice_size < self.revive_slice
                                             else slice_max)
@@ -1571,7 +1542,6 @@ class SqlWork:
                 (int(rows[0][0]), int(rows[0][1]), list(rows[0][2] or ()))
                 if rows else (after_scope, 0, []))
             retiring = [int(value) for value in departed[:share]]
-            cut = cut or len(retiring) < len(departed)
             self._guard_retirement(departed, len(retiring))
             self._pending[CURSOR_SCOPE] = 0 if slice_size < self.drift_slice else slice_max
             for listing_id in retiring:
@@ -1604,7 +1574,6 @@ class SqlWork:
                 self._pending[CURSOR_ENTER] = (
                     (int(rows[-1][0]), pointer) if len(rows) >= enter_share else (0, pointer))
             self.windows["entered"] = len(rows)
-            cut = cut or len(rows) >= enter_share
             for row in rows:
                 items.append(WorkItem(int(row[0]), "entered", _epoch(row[1]), None))
             if self.bootstrap:
@@ -1635,9 +1604,6 @@ class SqlWork:
             self.claim_bound["stale"] = len(taken)
             items.extend(WorkItem(listing_id, "stale", None, None, redecide=True)
                          for listing_id in taken)
-        # E984: a feed left work waiting, so a pass the clock cut was a measurement of the
-        # claim's size even where the feeds that ran dry kept it short of the limit.
-        self.claim_bound["cut"] = cut
         for item in items:
             self._claimed.setdefault(item.feed, set()).add(item.listing_id)
         return items
@@ -3062,8 +3028,7 @@ def _measure_rate(claimed: int, elapsed_s: float, previous: float,
     # build's sit inside its limit (E964) and still fill none: such a pass blends, never doubles.
     limit = int(bound.get("limit") or 0)
     fed = claimed - int(bound.get("stale") or 0)
-    saturated = bound.get("bound_by") == "time" and limit > 0 and (
-        fed >= limit or bool(bound.get("cut")))
+    saturated = bound.get("bound_by") == "time" and limit > 0 and fed >= limit
     if elapsed_s <= 0 or (claimed < PASS_RATE_MIN_CLAIM and not saturated):
         return None, False
     start = max(1e-6, previous)
