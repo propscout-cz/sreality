@@ -21,12 +21,12 @@ import requests
 
 from scraper import contact
 from scraper import db as scraper_db
+from scraper import hashing
 from scripts.ingest_map_overlays import Refused as OverlayRefused, render_sql_section
 from toolkit.rent_map import (
     MF_INFOGRAPHIC_URL,
     ParsedRentMap,
     parse_rent_map_xlsx,
-    sha256_bytes,
     source_date_from_filename,
 )
 
@@ -198,7 +198,7 @@ def ingest_bytes(
     parsed = parse_rent_map_xlsx(
         data, source_date=source_date_from_filename(source_filename)
     )
-    file_sha256 = sha256_bytes(data)
+    file_sha256 = hashing.file_sha256(data)
     outcome = insert_revision(
         conn, parsed,
         source_filename=source_filename,

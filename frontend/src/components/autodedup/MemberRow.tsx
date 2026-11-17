@@ -17,6 +17,7 @@ import { Link } from 'react-router-dom';
 import type { AutodedupMemberDetail } from '@/lib/api';
 import ImageCarousel from '@/components/ImageCarousel';
 import { imageSrc } from '@/lib/imageUrl';
+import { advertLink } from '@/lib/portals';
 import {
   MissingPhotoTile,
   memberAttrs,
@@ -55,6 +56,7 @@ export default function MemberRow({
     confidence: null,
   }));
   const inApp = memberListingPath(member);
+  const link = advertLink(member);
   return (
     <li className="grid gap-3 sm:grid-cols-[18rem_1fr] items-start">
       <ImageCarousel
@@ -102,9 +104,9 @@ export default function MemberRow({
               Detail
             </Link>
           )}
-          {member.source_url && (
+          {link && (
             <a
-              href={member.source_url}
+              href={link}
               target="_blank"
               rel="noopener noreferrer"
               className="text-[var(--color-copper-2)] underline decoration-dotted underline-offset-2"

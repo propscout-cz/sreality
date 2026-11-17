@@ -1,10 +1,12 @@
 /* THE portal chip transition (migration 597) — one rule for Browse, the Watchdog
  * editor and the phone Feed. */
 
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { DEFAULT_FILTERS } from './filters';
-import { advertHost, cyclePortal, NO_PORTALS, portalBadge, portalScopeLabel } from './portals';
+import { advertHost, advertLink, cyclePortal, NO_PORTALS, portalBadge, portalScopeLabel } from './portals';
 
 describe('cyclePortal', () => {
   it('moves a chip off → on it → not on it → off', () => {
@@ -62,5 +64,56 @@ describe('advertHost', () => {
     expect(advertHost('https://user@WWW.Example.cz:8443/a?b=1#c')).toBe('example.cz');
     expect(advertHost(undefined)).toBeNull();
     expect(advertHost('')).toBeNull();
+  });
+});
+
+describe('advertLink', () => {
+  it("is the advert's page on its portal, for a portal and for a pasted web advert", () => {
+    const url = 'https://www.sreality.cz/detail/prodej/byt/2+kk/praha/123';
+    expect(advertLink({ source: 'sreality', source_url: url })).toBe(url);
+    expect(advertLink({ source: 'web', source_url: 'https://www.reality-novak.cz/nabidka/byt-2kk' }))
+      .toBe('https://www.reality-novak.cz/nabidka/byt-2kk');
+  });
+
+  it('is null when the advert has no page, so the caller links in-app', () => {
+    expect(advertLink({ source: 'bazos', source_url: null })).toBeNull();
+    expect(advertLink({ source: 'bazos', source_url: '' })).toBeNull();
+    expect(advertLink({ source: 'bazos' })).toBeNull();
+  });
+});
+
+function sources(dir: string, out: string[] = []): string[] {
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    if (statSync(p).isDirectory()) sources(p, out);
+    else if (/\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name)) out.push(p);
+  }
+  return out;
+}
+
+const HREF_FROM_SOURCE_URL = /href=\{[^}]*\b(?:source_url|sourceUrl)\b[^}]*\}/g;
+/* Links named source_url that are no advert: a map layer's data attribution and a
+ * workflow's YAML on GitHub. */
+const NOT_ADVERTS = new Set([
+  'components/MapOverlayControls.tsx href={section.source_url}',
+  'pages/Settings.tsx href={doc.sourceUrl}',
+]);
+
+function hrefSites(): string[] {
+  const root = join(process.cwd(), 'src');
+  return sources(root).flatMap((file) =>
+    (readFileSync(file, 'utf8').match(HREF_FROM_SOURCE_URL) ?? []).map(
+      (site) => `${relative(root, file)} ${site.replace(/\s+/g, ' ')}`,
+    ),
+  );
+}
+
+describe('advert link census', () => {
+  it('no component reads source_url for an href: every advert link is advertLink', () => {
+    expect(hrefSites().filter((site) => !NOT_ADVERTS.has(site))).toEqual([]);
+  });
+
+  it('sees the two links that are no advert (so a silent regex miss cannot pass)', () => {
+    expect(hrefSites().sort()).toEqual([...NOT_ADVERTS].sort());
   });
 });

@@ -20,7 +20,7 @@ import { fmtArea, fmtCzk, fmtDateSlash, fmtTime24 } from '@/lib/format';
 import type { KeysetCursor } from '@/lib/keyset';
 import { propertyPath } from '@/lib/listingUrl';
 import { LOCATION_SOURCES } from '@/lib/locationQuality';
-import { portalShort } from '@/lib/portals';
+import { advertLink, portalShort } from '@/lib/portals';
 import {
   ALL_KINDS,
   KIND_LABEL,
@@ -446,6 +446,7 @@ export function PositionList({
               const name = [categoryMainLabel(r.category_main), r.disposition, r.area_m2 != null ? fmtArea(r.area_m2) : null]
                 .filter(Boolean)
                 .join(' · ');
+              const link = advertLink(r);
               return (
                 <tr key={r.listing_id} className={`${ROW} align-top`} data-testid={`position-row-${r.listing_id}`}>
                   <td className="py-1.5 pr-3">
@@ -457,9 +458,9 @@ export function PositionList({
                       <span className="text-[var(--color-ink)]">{name}</span>
                     )}
                     <span className="block text-[var(--color-ink-3)]">{r.display_label ?? '—'}</span>
-                    {r.source_url ? (
+                    {link ? (
                       <a
-                        href={r.source_url}
+                        href={link}
                         target="_blank"
                         rel="noreferrer"
                         className="text-[0.72rem] text-[var(--color-ink-3)] underline decoration-dotted underline-offset-2"
