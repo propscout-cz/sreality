@@ -1216,3 +1216,20 @@ Migration drift reads 643 and 663 Not measured (a drop declares nothing it can p
 - **Next:** a day after the apply, read listings' `n_tup_hot_upd / n_tup_upd` delta (0.4 % cumulative before) and the
   touch statement's mean in `pg_stat_statements`. If HOT stays low because pages are full, a listings fillfactor below
   100 is a separate ticket.
+
+## 2026-11-16 — the engine's refused-set read gets a partial index; E41 stays (#2525, spec #2503)
+
+- **Why:** `LEDGER_HISTORY_SQL` (E41) ran once a pass as a parallel seq scan of `autodedup.applied_merges` (339 MB,
+  344k rows) to find 0 rows: 1.0 s a call warm on 2XL (gate #2527, ~113 s/h); since 2026-08-11 14,244 calls, 141,221 s,
+  23.1M blocks read from disk. The operator's "proceed with #2525" (2026-11-16) is read as the recommended option:
+  keep the mechanism, make the read free.
+- **Shipped:** migration 746, `create index concurrently` on `(generation) where outcome = 'refused' and not dry_run`
+  (one empty page), no code change; `tests/test_autodedup_refused_read_plan.py` EXPLAINs the read on CI's replayed
+  schema, bound and generic. Apply with the workflow (`--ref` the branch) inside the coordinator's brake BEFORE the
+  Large retry's resize, receipt OK before the click; missed, after the trial ends. Then the light, then merge.
+- **Next:** right after the apply, `indisvalid` and a plain EXPLAIN showing `Index Scan using
+  autodedup_applied_merges_refused_idx`. The cost is a RATE between two `pg_stat_statements` snapshots of queryid
+  -8415569063472714520 a few hours apart once the engine runs again, `(total_exec_time₂ − total_exec_time₁) /
+  (calls₂ − calls₁)`, never its mean (a running average since 2026-08-11: 9,914 ms, which the index barely moves);
+  its own `gate` ticket, blocked by #2525. `RC_OUTCOME_HISTORY_SQL` (queryid -350548904177584120: 13,655 calls,
+  14,463 s, mean 1,059 ms) is the remaining once-a-pass scan of the ledger.
