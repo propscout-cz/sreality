@@ -437,18 +437,23 @@ FIELDS = ("floor", "total_floors", "has_lift", "has_balcony", "condition")
 
 
 def test_floor_is_converted_from_the_adverts_own_words() -> None:
-    values, dropped = merge({"floor": _cell("3. patro", "ve 3. patře cihlového domu")})
+    values, dropped = merge({"floor": _cell("4. NP", DESCRIPTION[:40])})
     assert values["floor"] == 3
     assert not dropped
 
 
+def test_a_patro_wording_names_no_scale_and_is_refused() -> None:
+    values, dropped = merge({"floor": _cell("3. patro", "ve 3. patře cihlového domu")})
+    assert "floor" not in values
+    assert dropped["floor"] == "floor_words_unreadable"
+
+
 @pytest.mark.parametrize("words,expected", [
-    ("3. patro", 3),
     ("3. NP", 2),      # nadzemní podlaží is 1-indexed from the ground
     ("přízemí", 0),
     ("suterén", -1),
 ])
-def test_the_two_czech_conventions_are_read_by_scraper_floor(words, expected) -> None:
+def test_the_adverts_words_are_read_by_scraper_floor(words, expected) -> None:
     values, _ = merge({"floor": _cell(words, DESCRIPTION[:40])})
     assert values["floor"] == expected
 
@@ -466,7 +471,7 @@ def test_a_bare_number_has_no_convention_and_is_refused() -> None:
 
 def test_a_floor_above_the_stated_total_is_refused() -> None:
     values, dropped = merge({
-        "floor": _cell("9. patro", "ve 3. patře"),
+        "floor": _cell("9. NP", DESCRIPTION[:40]),
         "total_floors": _cell(5, "Dům má celkem 5 pater"),
     })
     assert values == {"total_floors": 5}

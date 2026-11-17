@@ -1,7 +1,7 @@
 """Shared Czech floor grammar: ONE storey scale, ground = 0, on all nine portals.
 
 `listings.floor` means the same storey whatever portal wrote it: **přízemí = 0,
-1. patro = 1, 1. NP = 0, suterén = −1**. Ground = 0 is not a preference — it is the
+1. NP = 0, 2. NP = 1, suterén = −1**. Ground = 0 is not a preference — it is the
 only convention anything in this repo ever DECLARED (this module and the retired LLM
 URL parser's prompt); ground = 1 was undeclared portal
 passthrough on six portals until W8, and the column was a ~50/50 mix of the two
@@ -22,27 +22,33 @@ declares no convention: reading a number off a key whose Czech meaning nobody wr
 down is exactly how ceskereality's `patro` and realitymix's `podlaží` — one storey
 apart — ended up in a single bare-int reader.
 
+**"patro" names no scale.** Brokers use it for both: against the idnes ad of the same
+property, a prose 'N. patře' read as ground + N lands on the same storey in 50% of
+2,142 pairs and one storey high in 46%, on sreality, ceskereality and bazos alike, while
+'N. NP' lands in 87% of 3,688 (#2552). So a number worded only as patro is unread, as a
+storey and as a building total ('třípatrový'); it is still a storey CUE, which keeps a
+bare number or a 'přízemí' beside it from being read in its place. idnes's own cell
+('2. patro (3. NP)') is read from its NP.
+
 `normalize_floor` is the value-side grammar (the word wins wherever a value carries
 one, on every portal). `floor_from_text` is the free-text miner built on it (bazos and
 `web`, the portals with no structured floor field): HIGH-PRECISION only — it fires on
 explicit unit-floor cues and defers the ambiguous tail (mezonet/loft, bare 'suterén' in
 prose). For a FLAT it also reads a bare 'N. podlaží' and a spelled-out ordinal ('v šestém
-podlaží', 'čtvrté patro'), and reads 'přízemí' as 0 only when the text ties it to the flat
+podlaží'), and reads 'přízemí' as 0 only when the text ties it to the flat
 ('byt v přízemí', 'přízemní byt') and names no other storey: an advert says where its
 cellar, pram room or entrance is, and 'sklep v přízemí domu' put 373 sixth-floor bazos
 flats on the ground storey. The chief trap is the BUILDING total leaking in
-as the unit's floor ("v 6. patře šestipodlažního domu", "z celkových 10 pater"): the
-unit floor uses the positional-ordinal NOUN ('6. patře'), the building total the
-ADJECTIVAL form ('šestipodlažní') or an explicit 'celkem'/'z celkových' phrase —
-lexically separable, so the miner captures the former and reads the latter only as
-`total_floors`, then drops any floor that is not below the stated total.
+as the unit's floor ("v 6. NP šestipodlažního domu"): the unit floor uses the
+positional-ordinal NOUN ('6. NP'), the building total the ADJECTIVAL form
+('6podlažní') or an explicit 'celkem' label — lexically separable, so the miner
+captures the former and reads the latter only as `total_floors`, then drops any floor
+that is not below the stated total.
 
 `total_floors` is the ABOVE-GROUND podlaží count on every portal (ground storey
 included, basements never: mmreality's `undergroundFloors` is not added), so a
 building's top storey is `total_floors - 1` under ground = 0 — which is what
-`is_plausible_floor` enforces. That count convention is also why the two patra-worded
-total cues below are read as `n + 1`: "třípatrový dům" / "z celkových 3 pater" is three
-storeys ABOVE the ground one, i.e. four podlaží.
+`is_plausible_floor` enforces.
 
 Text is diacritics-folded before matching (přízemí==prizemi, patře==patre), so a
 listing that drops accents reads the same; patterns are written folded/ASCII.
@@ -72,14 +78,10 @@ def _fold(text: str) -> str:
 _NP_RE = re.compile(r"(\d{1,2})\.\s*(?:np|nadzemni\w*\s+podlazi)\b")
 # N. PP (podzemní podlaží, below ground): k.PP -> -k.
 _PP_RE = re.compile(r"(\d{1,2})\.\s*(?:pp|podzemni\w*\s+podlazi)\b")
-# N. patro/patra/patře/patrem (ground=0 relative): k -> k. Noun forms only — the
-# building ADJECTIVE 'patrový' (patr+ovy) is excluded by the trailing \b stopping
-# at its 'v', and the genitive-plural building total 'pater' (pat+er) lacks the
-# 'patr' stem entirely. The sign is captured: idnes spells a basement '-1. patro'.
+# patro/patra/patře/patrem: a storey cue that names no scale (module docstring). Noun
+# forms only — the building ADJECTIVE 'patrový' (patr+ovy) is excluded by the trailing
+# \b stopping at its 'v', and the genitive-plural 'pater' lacks the 'patr' stem entirely.
 _PATRO_NOUN = r"(?:patr[oau]|patre|patrem)\b"
-# The sign may not be the hyphen of a storey RANGE: in "1.-2. patro" (a maisonette)
-# the '-' separates two ordinals, so a bare `-?` read it as -2 = suterén.
-_PATRO_RE = re.compile(rf"(?<![\d.])(-?\d{{1,2}})\.\s*{_PATRO_NOUN}")
 # přízemí (ground) -> 0; 'zvýšené/snížené přízemí' is still the ground storey.
 _PRIZEMI_RE = re.compile(r"prizem")
 # suterén (basement) -> -1. NOT 'sklep' (a cellar the flat HAS, not the storey it
@@ -127,9 +129,9 @@ def storey_label(floor: int | None, total_floors: int | None = None) -> str | No
 def normalize_floor(text: str | None) -> int | None:
     """One Czech floor expression -> canonical storey (ground = 0), or None.
 
-    Recognizes přízemí, N. patro, N.NP, N.PP, suterén (diacritics-insensitive).
-    Returns None for a bare integer (no keyword = no convention to read) or any
-    unrecognized form, so a caller never silently reads an NP value as a patro.
+    Recognizes přízemí, N.NP, N.PP, suterén (diacritics-insensitive). Returns None for a
+    bare integer (no keyword = no convention to read), for a number worded only as patro
+    (the word names no scale) and for any unrecognized form.
 
     přízemí is read FIRST because idnes files 'snížené přízemí' as '1. PP': the half-sunk
     ground storey is the one the advert names, not the basement its parenthetical numbers
@@ -140,9 +142,6 @@ def normalize_floor(text: str | None) -> int | None:
     folded = _fold(text)
     if _PRIZEMI_RE.search(folded):
         return 0
-    m = _PATRO_RE.search(folded)
-    if m:
-        return _bounded(int(m.group(1)))
     m = _NP_RE.search(folded)
     if m:
         return _bounded(int(m.group(1)) - 1)
@@ -207,23 +206,18 @@ def total_floors_from_portal(value: int | None) -> int | None:
 # --- Free-text miner ---------------------------------------------------------
 
 # Building-total cues -> total_floors, as a PODLAŽÍ count (ground storey included).
-# 'Podlaží celkem: 6' and the digit adjectival '6-podlažní' / '6podlažní' already count
-# podlaží; the patra-worded cues ('z celkových 10 pater', '6patrový') count the storeys
-# ABOVE the ground one, so they are +1. Word-number adjectivals ('šestipodlažní') carry
-# no digit and are intentionally left unparsed — they also never match the unit-floor
-# patterns, so the trap is closed without reading them.
-_TOTAL_LABEL_RE = re.compile(r"podlazi\s+celkem\s*[:\-]?\s*(\d{1,2})")
-_TOTAL_CELKEM_PATER_RE = re.compile(r"z\s+celkov\w+\s+(\d{1,2})\s+pater")
-_TOTAL_ADJ_PODLAZI_RE = re.compile(r"(\d{1,2})\s*-?\s*podlazni\w*")
-_TOTAL_ADJ_PATRO_RE = re.compile(r"(\d{1,2})\s*-?\s*patrov\w*")
-_TOTAL_CUES: tuple[tuple[re.Pattern[str], int], ...] = (
-    (_TOTAL_LABEL_RE, 0), (_TOTAL_CELKEM_PATER_RE, 1),
-    (_TOTAL_ADJ_PODLAZI_RE, 0), (_TOTAL_ADJ_PATRO_RE, 1),
+# 'Podlaží celkem: 6' and the digit adjectival '6-podlažní' / '6podlažní' count podlaží.
+# The patra-worded totals ('z celkových 10 pater', '6patrový') are unread, like every
+# patro wording. Word-number adjectivals ('šestipodlažní') carry no digit and are
+# intentionally left unparsed — they also never match the unit-floor patterns.
+_TOTAL_CUES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"podlazi\s+celkem\s*[:\-]?\s*(\d{1,2})"),
+    re.compile(r"(\d{1,2})\s*-?\s*podlazni\w*"),
 )
 
 # A spec-style 'Podlaží: <expr>' label: the value is read through normalize_floor
-# so its embedded NP/patro form ('Podlaží: 4. NP') is converted correctly. A bare
-# 'Podlaží: 7' with no NP/patro keyword yields None (the integer's convention is
+# so its embedded NP form ('Podlaží: 4. NP') is converted correctly. A bare
+# 'Podlaží: 7' with no NP keyword yields None (the integer's convention is
 # unknowable from the label alone) and is left to the text lane. 'Podlaží celkem:' has a
 # word between 'podlazi' and the colon, so it never matches this floor label.
 # The capture stops at a comma/semicolon: it routinely runs past the value into the next
@@ -232,7 +226,7 @@ _FLOOR_LABEL_RE = re.compile(r"\bpodlazi\s*[:\-]\s*([^\n,;]{1,30})")
 # A numeric unit-floor expression, optionally bound by a leading preposition. The digit
 # may not close a layout: in 'byt 2+1. Patro: přízemí' the '1.' is the layout's.
 _NO_LAYOUT = r"(?<![+\d])"
-_FLOOR_EXPR = rf"{_NO_LAYOUT}\d{{1,2}}\.\s*(?:np|nadzemni\w*\s+podlazi|pp|podzemni\w*\s+podlazi|{_PATRO_NOUN})"
+_FLOOR_EXPR = rf"{_NO_LAYOUT}\d{{1,2}}\.\s*(?:np|nadzemni\w*\s+podlazi|pp|podzemni\w*\s+podlazi)"
 _FLOOR_PREP_RE = re.compile(rf"\b(?:v|ve|na)\s+({_FLOOR_EXPR})")
 _FLOOR_BARE_RE = re.compile(rf"\b({_FLOOR_EXPR})")
 _PRIZEMI_TEXT_RE = re.compile(r"\bprizem")
@@ -259,19 +253,20 @@ _ORDINAL_STEMS: dict[str, int] = {
     "sest": 6, "sedm": 7, "osm": 8, "devat": 9, "desat": 10,
 }
 _ORDINAL = rf"({'|'.join(_ORDINAL_STEMS)})(?:i|y|e|a|im|em|ym|iho|eho|ou)"
-_STOREY_NOUN = rf"({_PATRO_NOUN}|podlazi(?:m)?\b)"
+_STOREY_NOUN = r"podlazi(?:m)?\b"
 # 'v šestém (nadzemním) podlaží' takes one locative adjective between; the nominative
 # 'čtvrté patro' takes none, so 'na druhé straně patra' or a stray ordinal never binds.
 _ORDINAL_PREP_RE = re.compile(
     rf"\b(?:v|ve|na)\s+{_ORDINAL}\s+(?:(\w+(?:im|em|ym))\s+)?{_STOREY_NOUN}")
 _ORDINAL_BARE_RE = re.compile(rf"\b{_ORDINAL}\s+{_STOREY_NOUN}")
 
-# A storey cue the readers above do not convert ('v 6 podlaží', 've 3. poschodí', 'patro:
-# 4'). It reads no number; it only forbids the přízemí fallback, which would be a guess
-# against what the advert says.
+# A storey cue the readers above do not convert ('v 6 podlaží', 've 3. patře', 'páté
+# patro', 've 3. poschodí', 'patro: 4'). It reads no number; it only forbids the přízemí
+# fallback, which would be a guess against what the advert says.
 _UNREAD_STOREY_RE = re.compile(
     rf"\b(?:v|ve|na)\s+\d{{1,2}}\s+(?:{_PATRO_NOUN}|podlazi|poschodi)"
-    rf"|\d{{1,2}}\.\s*poschodi|\b{_ORDINAL}\s+(?:\w+\s+)?poschodi|\bpatro\s*:?\s*\d")
+    rf"|{_NO_LAYOUT}\d{{1,2}}\.\s*(?:poschodi|{_PATRO_NOUN})"
+    rf"|\b{_ORDINAL}\s+(?:\w+\s+)?(?:poschodi|{_PATRO_NOUN})|\bpatro\s*:?\s*\d")
 
 # Any storey cue at all, read or not. Inside the words before a 'v přízemí' it binds the
 # unit word that precedes it: 'byt v 6. podlaží, v přízemí domu je prádelna'.
@@ -307,10 +302,10 @@ _UNIT_WINDOW, _AMENITY_WINDOW = 12, 4
 
 
 def _parse_total_floors(folded: str) -> int | None:
-    for rx, above_ground in _TOTAL_CUES:
+    for rx in _TOTAL_CUES:
         m = rx.search(folded)
         if m:
-            value = int(m.group(1)) + above_ground
+            value = int(m.group(1))
             if 1 <= value <= _FLOOR_MAX:
                 return value
     return None
@@ -325,10 +320,7 @@ def _unit_storey(expr: str) -> int | None:
 
 def _ordinal_storey(m: re.Match[str], *, between: str | None) -> int | None:
     n = _ORDINAL_STEMS[m.group(1)]
-    noun = m.group(m.lastindex or 0)
-    if between and between.startswith("podzemn"):
-        return _bounded(-n)
-    return _bounded(n - 1 if noun.startswith("podlazi") else n)
+    return _bounded(-n if between and between.startswith("podzemn") else n - 1)
 
 
 def _spelled_storey(folded: str) -> int | None:
@@ -382,15 +374,15 @@ def _flat_floor(folded: str, cased: str) -> int | None:
 def _read_storey(folded: str) -> int | None:
     m = _FLOOR_LABEL_RE.search(folded)           # 1) 'Podlaží: 4. NP' label
     floor = _unit_storey(m.group(1)) if m else None
-    if floor is None:                             # 2) 've 3. patře' / 'v 6. podlaží'
+    if floor is None:                             # 2) 've 3. NP' / 'v 6. podlaží'
         m = _FLAT_PREP_RE.search(folded)
         if m:
             floor = _unit_storey(m.group(1))
-    if floor is None:                             # 3) bare '3. patro' / '4. NP'
+    if floor is None:                             # 3) bare '4. NP' / '6. podlaží'
         m = _FLAT_BARE_RE.search(folded)
         if m:
             floor = _unit_storey(m.group(1))
-    if floor is None:                             # 4) 'v šestém podlaží' / 'čtvrté patro'
+    if floor is None:                             # 4) 'v šestém podlaží'
         floor = _spelled_storey(folded)
     return floor
 
@@ -400,17 +392,22 @@ def _legacy_floor(folded: str) -> int | None:
     m = _FLOOR_LABEL_RE.search(folded)           # 1) 'Podlaží: 4. NP' label
     if m:
         floor = normalize_floor(m.group(1))
-    if floor is None:                             # 2) 've 3. patře' / '6. NP'
+    if floor is None:                             # 2) 've 3. NP'
         m = _FLOOR_PREP_RE.search(folded)
         if m:
             floor = normalize_floor(m.group(1))
-    if floor is None:                             # 3) bare '3. patro' / '4. NP'
+    if floor is None:                             # 3) bare '4. NP' / '6. podlaží'
         m = _FLOOR_BARE_RE.search(folded)
         if m:
             floor = normalize_floor(m.group(1))
     if floor is None and _PRIZEMI_TEXT_RE.search(folded):  # 4) přízemí -> 0
         floor = 0
     return floor
+
+
+def names_a_storey(haystack: str | None) -> bool:
+    """Whether the text carries any storey cue at all, read or not ('ve 3. patře' too)."""
+    return bool(haystack) and bool(_STOREY_CUE_RE.search(_fold(haystack)))
 
 
 def floor_from_text(haystack: str | None, *,

@@ -34,7 +34,7 @@ Nájemné: 14 500 Kč/měsíc
 Poplatky: 3 500 Kč/měsíc
 Kauce: 29 000 Kč
 Plocha: 54 m²
-Patro: 3. patro
+Podlaží: 4. NP
 Vybavení: Částečně vybaveno
 Parkování: Garáž
 Pronajmeme částečně zařízený byt 2+kk v klidné ulici, volný od prosince. Volejte 777 12 34 56.
