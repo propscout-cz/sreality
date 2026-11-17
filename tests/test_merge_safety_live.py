@@ -602,6 +602,26 @@ def test_the_energy_rating_is_the_best_class_any_advert_states(cur, canonical, e
     assert cur.fetchone() == (best,)
 
 
+@pytest.mark.parametrize(("canonical", "others", "chosen"), [
+    ((6, 7), [(5, 7), (5, 7)], (5, 7)),          # most adverts agree, against the canonical one
+    ((6, 7), [(5, 6)], (6, 7)),                  # a tie goes to the canonical order
+    ((None, None), [(2, None), (3, 5)], (2, 5)),  # each fact on its own; an unstated one never votes
+    ((None, None), [(None, None)], (None, None))])
+def test_the_storey_is_the_one_most_adverts_state(cur, canonical, others, chosen):
+    """#2552 W4: the storey and the above-ground count are each the value most adverts state,
+    an ended advert too; a tie goes to the advert first in the canonical order."""
+    pid = _property(cur)
+    canon = _advert(cur, pid, source="sreality")
+    ads = [canon] + [_advert(cur, pid, source=source, active=False)
+                     for source, _ in zip(("idnes", "realitymix"), others)]
+    for lid, (floor, total) in zip(ads, [canonical, *others]):
+        cur.execute("UPDATE listings SET floor = %s, total_floors = %s WHERE id = %s",
+                    (floor, total, lid))
+    assert _recomputed_canonical(cur, pid) == canon
+    cur.execute("SELECT floor, total_floors FROM properties WHERE id = %s", (pid,))
+    assert cur.fetchone() == chosen
+
+
 def test_the_portal_lists_and_newest_ad_dates_follow_every_advert(cur):
     """MS19: both portal lists and each portal's newest-advert date follow a merge and a detach."""
     from toolkit.filter_registry import PORTAL_OPTIONS
