@@ -16,6 +16,10 @@ from toolkit.publication import CAP_SQL, PUBLISHED_PREDICATE, published_property
 S665 = (MIGRATIONS / "665_browse_street_sort.sql").read_text(encoding="utf-8")
 S668 = (MIGRATIONS / "668_publication_settled_at.sql").read_text(encoding="utf-8")
 S669 = (MIGRATIONS / "669_publication_gate_view.sql").read_text(encoding="utf-8")
+S747 = (MIGRATIONS / "747_publication_stamp_fill.sql").read_text(encoding="utf-8")
+S748 = (MIGRATIONS / "748_publication_stamp_browse.sql").read_text(encoding="utf-8")
+# 669's arm: the rule until 2026-11-17, when the clock stopped publishing (748 reads the stamp alone).
+CLOCK_ARM = "coalesce(p.settled_at, p.first_seen_at + interval '6 hours') <= now()"
 CONSUMER_RULE = "(ll.geom IS NOT NULL OR ll.country_status = 'foreign')"
 # Comments and string literals together, a literal first: 668's column comment holds a `--`.
 _NOISE = re.compile(r"'(?:[^']|'')*'|--[^\n]*")
@@ -51,13 +55,13 @@ def _header(sql: str) -> str:
 
 
 def test_the_rule_has_exactly_one_shape() -> None:
-    """A change to the constant is a change to every surface, so the shape itself is pinned: the stamp, else the
-    first sighting plus the one cap, against now() — no flag, no setting, no second clock."""
+    """A change to the constant is a change to every surface, so the shape itself is pinned: the stamp and
+    nothing else — no clock, no flag, no setting. The cap is the stamper's, read by no surface."""
     assert CAP_SQL == "interval '6 hours'"
-    assert PUBLISHED_PREDICATE == "coalesce(p.settled_at, p.first_seen_at + interval '6 hours') <= now()"
+    assert PUBLISHED_PREDICATE == "p.settled_at IS NOT NULL"
     assert published_property_predicate("l.property_id") == (
         "EXISTS (SELECT 1 FROM properties pp WHERE pp.id = l.property_id"
-        " AND coalesce(pp.settled_at, pp.first_seen_at + interval '6 hours') <= now())")
+        " AND pp.settled_at IS NOT NULL)")
 
 
 def test_668_adds_the_column_and_nothing_else() -> None:
@@ -72,15 +76,26 @@ def test_669_is_665s_body_plus_the_published_arm() -> None:
     """WHERE-only: no column moves, so browse_list's positional `select *` sync stays aligned. RED by: restating
     the view from an older body, or touching anything but the WHERE."""
     body = _view(S669)
-    assert body.replace(f" and {PUBLISHED_PREDICATE}", "", 1) == _view(S665)
+    assert body.replace(f" and {CLOCK_ARM}", "", 1) == _view(S665)
 
 
-def test_669_carries_the_constant_verbatim_after_the_consumer_rule() -> None:
-    """THE PIN. pg_get_viewdef re-prints a parsed tree, so 669's own $post$ can only see that `settled_at` is
-    named; only this comparison against the importable constant sees the text."""
-    assert _view(S669).endswith(f"and {CONSUMER_RULE} and {PUBLISHED_PREDICATE}"), (
-        "669's browse_projection does not end its WHERE with the consumer rule, then "
+def test_748_is_669s_body_with_the_arm_reading_the_stamp_alone() -> None:
+    """THE PIN. WHERE-only again, and the arm is the importable constant character for character:
+    pg_get_viewdef re-prints a parsed tree, so only this comparison sees the text."""
+    assert _view(S748) == _view(S669).replace(CLOCK_ARM, PUBLISHED_PREDICATE, 1)
+    assert _view(S748).endswith(f"and {CONSUMER_RULE} and {PUBLISHED_PREDICATE}"), (
+        "748's browse_projection does not end its WHERE with the consumer rule, then "
         "toolkit.publication.PUBLISHED_PREDICATE: the two texts are one rule and must be the same characters")
+
+
+def test_747_stamps_what_the_clock_published_with_the_moment_the_clock_gave_it() -> None:
+    """The fill is inert: each stamp is the old rule's own value, so no surface sees a property move, and
+    the partial index the stamper's candidates ride is built after it."""
+    code = " ".join(_code(S747).split())
+    assert "set settled_at = p.first_seen_at + interval ''" in code and "for no key update skip locked" in code
+    assert code.index("update public.properties") < code.index(
+        "create index concurrently if not exists properties_unsettled_idx on public.properties (id) "
+        "where settled_at is null")
 
 
 def test_669_refuses_any_body_but_665s_and_any_schema_without_668() -> None:

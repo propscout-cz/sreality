@@ -140,9 +140,10 @@ earlier, so publication never regresses, and never moves later.
 _Avoid_: evaluated, checked, dedup-checked
 
 **Published**:
-A property Browse, the map, Stats and the watchdog serve: from the moment it is settled, or 6 hours
-after it was first seen, whichever comes first. The 6 hours are the cap, so a slow engine can delay
-a property but never hide it. Its page opens by its link either way.
+A property Browse, the map, Stats and the watchdog serve: from the moment the maintenance pass
+stamps it. The pass never stamps it before the engine has read every ad on it that lies in the
+engine's scope; after that it stamps it once settled, or 6 hours after it was first seen (the cap,
+which also is the whole wait outside the scope). Its page opens by its link either way.
 _Avoid_: gated-in, live (for this)
 
 **Valuo valuation**:

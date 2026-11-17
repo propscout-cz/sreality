@@ -183,7 +183,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     `toolkit/filter_compiler.compile_filter_where`; Browse's TS + RPCs are pinned per shared predicate. Portal + broker filters select ADS, rows stay
     properties, under the PROPERTY's status: P asks for an ad on P in that status (`active_sources` under active, else `all_sources`), a broker likewise,
     both met by one ad (estimation cohorts stay per-ad). **A property is SERVED (Browse, map, stats, the watchdog) only once PUBLISHED**
-    (`toolkit/publication.py`: `properties.settled_at`, stamped by the maintenance pass once photos and the engine are done, or 6 h old); detail by id
+    (`toolkit/publication.py`: `properties.settled_at`, stamped by the maintenance pass, never before the engine READ its in-scope ads); detail by id
     stays ungated. `notification_dispatches` is the event table, append-only for its producers' events (bar the deletions on record; account and
     collection deletion still cascade): three producers (`watchdog`; `collection_monitor`, anchored on `monitor_since` so a pre-membership change never
     fires; `share`, written only by `api/shares.py`) write facts, never routing; system alerts are no producer. ONE identity index

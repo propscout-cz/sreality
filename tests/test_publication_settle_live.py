@@ -1,10 +1,10 @@
-"""Migration 668's stamp and its merge carry, executed. `_settle_fresh` (scripts/recompute_property_stats.py) stamps
-`properties.settled_at` on an active, unsettled property first seen inside the cap once its first photo is stored or
-none of its ads has one, the engine has an `rt_fp` row for every ad of it in its generation, holds no pair of them for
-evidence and keeps none in a group with an ad of another property or of none; a stamp publishes the property to
-browse_projection at once (migration 669). `_CARRY_SETTLED_SQL` (toolkit/property_identity.py) hands a retired
-property's stamp to an unsettled survivor only while it is earlier than the survivor's cap. Every hold seeds a ready
-property beside it, so a stamper that stamps nothing fails instead of passing. Runs in CI's migrations lane
+"""The publication stamp and its merge carry, executed (migrations 668/747). `_settle_fresh`
+(scripts/recompute_property_stats.py) stamps `properties.settled_at`, which IS publication (migration 748): never
+while an ad of the property awaits the engine's read (no `rt_fp` row in its generation, and its place undetermined or
+inside the engine's scope), otherwise once the property is settled (first photo stored or none, every ad read, no pair
+held for evidence, no group with an ad of another property or of none) or 6 h old. `_CARRY_SETTLED_SQL`
+(toolkit/property_identity.py) hands a retired property's stamp to a survivor not yet published. Every hold seeds a
+ready property beside it, so a stamper that stamps nothing fails instead of passing. Runs in CI's migrations lane
 (`TEST_DATABASE_URL`); every test rolls back.
 """
 
@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from autodedup.incremental import EVIDENCE_HOLD_REASON, GENERATION
+from autodedup.incremental_lane import scope_setting_key
 from scripts.recompute_property_stats import _drain_dirty, _enqueue_published, _settle_fresh
 from tests._live_property import REQUIRED_DB, _advert, _recompute
 from toolkit.property_identity import _CARRY_SETTLED_SQL
@@ -23,6 +24,7 @@ from toolkit.property_identity import _CARRY_SETTLED_SQL
 pytestmark = REQUIRED_DB
 
 PRAHA = 554782
+LIBEREC = 563889
 POINT = (14.46709, 50.05995)
 
 
@@ -169,27 +171,110 @@ def test_a_group_entirely_within_the_property_holds_nothing(cur: Any) -> None:
     assert _settled(cur, pid) == {pid: True}
 
 
-def test_a_property_past_the_cap_is_no_candidate(cur: Any) -> None:
-    """The cap has published it already, so a stamp would change nothing."""
-    ready, old = _ready(cur), _ready(cur, hours_ago=7)
+def _scope(cur: Any, value: Any) -> None:
+    """The engine's scope row, as its seed writes it: a JSON list of `{grain, code}`."""
+    cur.execute("INSERT INTO autodedup.settings (key, value) VALUES (%s, %s::jsonb) "
+                "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                (scope_setting_key(GENERATION), value))
+
+
+_PRAHA_SCOPE = '[{"grain": "obec", "code": %d}]' % PRAHA
+_LIBEREC_SCOPE = '[{"grain": "obec", "code": %d}]' % LIBEREC
+
+
+def _unread(cur: Any, hours_ago: float, *, located: bool = True, photo: bool | None = True) -> int:
+    """A property of one ad the engine has not read, its place Praha unless `located` is False."""
+    pid = _fresh(cur, hours_ago)
+    ad = _ad(cur, pid, photo=photo, read=False)
+    if located:
+        _locate(cur, ad)
+    return pid
+
+
+def test_the_cap_ends_the_wait_for_a_photo(cur: Any) -> None:
+    waiting, old = _fresh(cur), _fresh(cur, hours_ago=7)
+    _ad(cur, waiting, photo=False)
+    _ad(cur, old, photo=False)
     _settle(cur)
-    assert _settled(cur, ready, old) == {ready: True, old: False}
+    assert _settled(cur, waiting, old) == {waiting: False, old: True}
 
 
-def test_a_merge_hands_the_retired_stamp_to_a_survivor_inside_its_cap(cur: Any) -> None:
-    retired, survivor = _fresh(cur), _fresh(cur, hours_ago=2)
+def test_the_cap_ends_the_wait_for_an_engine_decision(cur: Any) -> None:
+    pid = _fresh(cur, hours_ago=7)
+    _pair(cur, _ad(cur, pid), _loose(cur))
+    _settle(cur)
+    assert _settled(cur, pid) == {pid: True}
+
+
+def test_no_clock_publishes_an_ad_the_engine_will_read_and_has_not(cur: Any) -> None:
+    """2026-11-17: a re-list of a property held for weeks was told as new at its 6 h mark, the engine braked. An
+    unread ad inside the engine's scope holds its property however old it is; the engine's read releases it."""
+    _scope(cur, _PRAHA_SCOPE)
+    ready, pid = _ready(cur), _unread(cur, hours_ago=30)
+    _settle(cur)
+    assert _settled(cur, ready, pid) == {ready: True, pid: False}
+    cur.execute("SELECT id FROM listings WHERE property_id = %s", (pid,))
+    _read(cur, int(cur.fetchone()[0]))
+    _settle(cur)
+    assert _settled(cur, pid) == {pid: True}
+
+
+def test_an_ad_outside_the_engines_scope_is_never_waited_for_past_the_cap(cur: Any) -> None:
+    """The engine never reads it, so only the cap applies: no special case there, and no stamp before it."""
+    _scope(cur, _LIBEREC_SCOPE)
+    young, old = _unread(cur, hours_ago=1), _unread(cur, hours_ago=7)
+    _settle(cur)
+    assert _settled(cur, young, old) == {young: False, old: True}
+
+
+def test_an_unread_ad_whose_place_is_undetermined_holds_the_property(cur: Any) -> None:
+    """Its place may still resolve into the scope; until it resolves no surface serves it anyway (rule 25)."""
+    _scope(cur, _LIBEREC_SCOPE)
+    ready, pid = _ready(cur), _unread(cur, hours_ago=30, located=False)
+    _settle(cur)
+    assert _settled(cur, ready, pid) == {ready: True, pid: False}
+
+
+def test_a_whole_corpus_scope_waits_for_every_unread_ad(cur: Any) -> None:
+    _scope(cur, '"all"')
+    pid = _unread(cur, hours_ago=30)
+    _settle(cur)
+    assert _settled(cur, pid) == {pid: False}
+
+
+def test_without_a_scope_row_the_engine_reads_nothing_and_the_cap_publishes(cur: Any) -> None:
+    cur.execute("DELETE FROM autodedup.settings WHERE key = %s", (scope_setting_key(GENERATION),))
+    pid = _unread(cur, hours_ago=7)
+    _settle(cur)
+    assert _settled(cur, pid) == {pid: True}
+
+
+def test_a_scope_that_cannot_be_read_stamps_nothing(cur: Any, caplog: Any) -> None:
+    """Never a guess: publishing under an unknown scope could tell a re-list as new."""
+    _scope(cur, '[]')
+    ready = _ready(cur)
+    with caplog.at_level("WARNING"):
+        assert _settle(cur) == 0
+    assert _settled(cur, ready) == {ready: False} and "MAINTENANCE settle failed" in caplog.text
+
+
+def test_a_merge_hands_the_retired_stamp_to_a_survivor_not_yet_published(cur: Any) -> None:
+    """Publication never regresses on a merge, whatever the survivor's age."""
+    retired, survivor = _fresh(cur), _fresh(cur, hours_ago=30)
     cur.execute("UPDATE properties SET settled_at = now() WHERE id = %s RETURNING settled_at", (retired,))
     stamp = cur.fetchone()[0]
     cur.execute(_CARRY_SETTLED_SQL, (survivor, retired))
     assert _settled_at(cur, survivor) == stamp
 
 
-def test_a_merge_leaves_a_survivor_the_cap_published_unstamped(cur: Any) -> None:
-    """A stamp later than the survivor's cap would move the moment it became visible past the moment it did."""
+def test_a_merge_leaves_a_published_survivors_stamp_alone(cur: Any) -> None:
     retired, survivor = _fresh(cur), _fresh(cur, hours_ago=10)
+    cur.execute("UPDATE properties SET settled_at = now() - interval '4 hours' WHERE id = %s "
+                "RETURNING settled_at", (survivor,))
+    stamp = cur.fetchone()[0]
     cur.execute("UPDATE properties SET settled_at = now() WHERE id = %s", (retired,))
     cur.execute(_CARRY_SETTLED_SQL, (survivor, retired))
-    assert _settled_at(cur, survivor) is None
+    assert _settled_at(cur, survivor) == stamp
 
 
 def _locate(cur: Any, ad: int) -> None:
@@ -211,15 +296,15 @@ def test_a_stamp_publishes_the_property_to_browse_at_once(cur: Any) -> None:
     cur.execute("UPDATE properties SET first_seen_at = now() - interval '1 hour' WHERE id = %s "
                 "RETURNING status, repr_listing_ref_id, location_listing_ref_id, settled_at", (pid,))
     assert cur.fetchone() == ("active", ad, ad, None)
-    assert not _browsed(cur, pid), "an unsettled property inside the cap is in Browse already"
+    assert not _browsed(cur, pid), "an unstamped property is in Browse already"
     assert _settle(cur) >= 1, "the pass stamped nothing (its MAINTENANCE warning is in the captured log)"
     assert _settled(cur, pid) == {pid: True}
     assert _browsed(cur, pid)
 
 
-def _aged(cur: Any, hours_ago: float, *, located: bool = True) -> int:
-    """An unsettled property of one ad first seen `hours_ago` ago, its place served unless `located` is False; the ad
-    carries the age, so a recompute keeps it."""
+def _aged(cur: Any, hours_ago: float, *, located: bool = True, published: bool = True) -> int:
+    """A property of one ad first seen `hours_ago` ago, published unless `published` is False, its place served
+    unless `located` is False; the ad carries the age, so a recompute keeps it."""
     pid = _fresh(cur)
     ad = _ad(cur, pid)
     cur.execute("UPDATE listings SET first_seen_at = now() - make_interval(secs => %s) WHERE id = %s",
@@ -227,6 +312,8 @@ def _aged(cur: Any, hours_ago: float, *, located: bool = True) -> int:
     if located:
         _locate(cur, ad)
     _recompute(cur, pid)
+    if published:
+        cur.execute("UPDATE properties SET settled_at = now() WHERE id = %s", (pid,))
     return pid
 
 
@@ -235,11 +322,12 @@ def _in(cur: Any, table: str, pids: list[int]) -> set[int]:
     return {int(r[0]) for r in cur.fetchall()}
 
 
-def test_the_pass_queues_what_the_cap_published_and_its_drain_brings_it_into_browse(cur: Any) -> None:
-    """Crossing the cap writes nothing, so the pass's enqueue is what tells the drain: exactly the published, served
-    properties browse_list lacks, first seen within the cap plus two hours (older ones are the hourly rebuild's)."""
-    crossed, held, unplaced, old, listed = (_aged(cur, 6.1), _aged(cur, 5.9), _aged(cur, 6.1, located=False),
-                                            _aged(cur, 8.5), _aged(cur, 6.1))
+def test_the_pass_queues_what_is_published_but_not_in_browse_and_its_drain_brings_it_in(cur: Any) -> None:
+    """A place resolved after the stamp, or a patch a rebuild superseded, writes nothing to the dirty set, so the
+    pass's enqueue is what tells the drain: exactly the published, served properties browse_list lacks, first seen
+    within the cap plus two hours (older ones are the hourly rebuild's)."""
+    crossed, held, unplaced, old, listed = (_aged(cur, 6.1), _aged(cur, 5.9, published=False),
+                                            _aged(cur, 6.1, located=False), _aged(cur, 8.5), _aged(cur, 6.1))
     cur.execute("INSERT INTO browse_list SELECT * FROM browse_projection WHERE property_id = %s", (listed,))
     pids = [crossed, held, unplaced, old, listed]
     assert _in(cur, "browse_list", pids) == {listed} and not _in(cur, "dirty_properties", pids)

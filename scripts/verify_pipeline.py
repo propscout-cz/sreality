@@ -284,6 +284,9 @@ THRESHOLDS: dict[str, Any] = {
     "dedup_lag_fail": 0.10,
     # Under 20 ads in that cohort the arm is Not measured (about 400 arrive in scope a day).
     "dedup_lag_min_n": 20,
+    # The oldest in-scope ad first seen 1-24 h ago with no engine row: Problem past 2 h, brake or
+    # not (ruling 2026-11-17: its property is unpublished until read). The 11-16 brake held 10 h.
+    "dedup_unread_fail_h": 2,
     # Problem past expiry by more than the lane's interval + 10 min, counted from the later of the
     # expiry, the last brake lift and the build end: 8-10 strands, each re-taken in ~1 min.
     "dedup_lease_fail_past_expiry_min": 10,

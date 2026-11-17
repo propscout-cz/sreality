@@ -3067,24 +3067,35 @@ renumber.** Navigate by area:
     EXCLUDE chip keeps rows whose code at that level is NULL (`NOT COALESCE(…, false)` in SQL,
     `or(col.is.null,col.not.in.(…))` in PostgREST), because an exclude subtracts what it MATCHES
     and the bare spelling made "not Prague" quietly mean "not Prague AND located".
-    **A property is SHOWN and TOLD only once PUBLISHED (operator rulings 2026-10-23, Q1–Q6;
-    migrations 668/669; `toolkit/publication.py`, the one spelling and the one cap).** One stored
-    fact and one rule: published ⇔ `coalesce(settled_at, first_seen_at + interval '6 hours') <=
-    now()` (that coalesce is the property's *visible since*). The maintenance pass stamps
-    `properties.settled_at` once (`scripts/recompute_property_stats._settle_fresh`, after the dirty
-    drain, set-based over properties first seen in the last 6 h; the daily sweep never stamps) when
-    the pipeline is done with the property: its first photo is stored or it has none, the engine has
-    read every ad (`autodedup.rt_fp` of the live generation), holds no pending question about them
+    **A property is SHOWN and TOLD only once PUBLISHED (operator rulings 2026-10-23, Q1–Q6, and
+    2026-11-17; migrations 668, 747–749; `toolkit/publication.py`, the one spelling).** One stored
+    fact: published ⇔ `settled_at IS NOT NULL` (the stamp is the property's *visible since*); no
+    surface reads a clock. The maintenance pass alone writes it, once
+    (`scripts/recompute_property_stats._settle_fresh`, after the dirty drain and after each batch
+    of the daily sweep, set-based over every unstamped property off `properties_unsettled_idx`).
+    **Never while an ad on the property awaits the engine's READ**: no `autodedup.rt_fp` row in the
+    live generation, and its place undetermined (the served rule) or inside the engine's scope
+    (`rt_scope`, the lane's own predicate on `listing_location`); no clock ends that wait, and
+    `dedup:unread_arrivals` goes red when an in-scope arrival is unread past 2 h, a brake included.
+    Otherwise it stamps when the pipeline is done with the property (its first photo is stored or
+    it has none, the engine has read every ad, holds no pending question about them
     (`autodedup.pairs` at the evidence hold) and keeps none in a group that also holds an ad on
-    another property, or on none yet (`autodedup.cluster_members`). The stamp commits ALONE (it
+    another property, or on none yet (`autodedup.cluster_members`)) or when the property is 6 h old:
+    the cap bounds the wait for photos and for an engine DECISION, and is the whole wait outside the
+    scope (ruling 4: no special case there). The stamp commits ALONE (it
     row-locks what it stamps, and the engine's merges run under a 5 s lock timeout, so a merge waits
     behind one statement at most); then `sync_browse_list` patches the stamped properties' Browse
     rows in its own transaction, best-effort (the next pass's published enqueue re-queues a miss). The stamper reads
     the engine's own tables and decides nothing — no second opinion on duplicates anywhere. A merge
-    passes a settled retired property's stamp to an unsettled survivor only when that publishes the
-    survivor earlier (`r.settled_at < s.first_seen_at + 6 h`, `toolkit/property_identity._CARRY_SETTLED_SQL`;
-    the survivor is the oldest record, so its cap may have published it long ago): publication never
-    regresses, and never moves later.
+    passes a published retired property's stamp to a survivor not yet published
+    (`toolkit/property_identity._CARRY_SETTLED_SQL`): publication never regresses.
+    **Why the read is not capped (2026-11-17):** until then the rule was `coalesce(settled_at,
+    first_seen_at + 6 h) <= now()`, read off the clock by every surface. The clock cannot tell "the
+    engine found no duplicate" from "the engine has not read the ad": the engine's read lag passed
+    6 h on six of nine days (database strain, then a 10 h brake for a resize), and each re-list of a
+    held property was told as New match at its 6 h mark; a retraction needs a merge, which never
+    came for a singleton nobody had read. 747 stamped the 1.13M properties the clock had published
+    with the moment the clock gave them, so the stamp alone could say "published".
     **Why:** the watchdog told 'new' about a singleton minutes after its birth, before the engine
     had read it (audit F13: ~2.6 % of new properties were a cross-post of a live older property,
     ~5 % a second ad of one new property), and Browse showed the same half-read property. The cap
@@ -3986,15 +3997,16 @@ renumber.** Navigate by area:
     2026-09-21; hourly at :45 since migration 740). A fast path, not a guarantee: the rebuild
     snapshots `browse_projection` at its start and renames the new table in at its end, so a
     patch committed inside that window is superseded silently until the next rebuild (a new
-    property's is re-queued by the published enqueue). The pass OPENS by queueing what the 6 h cap
-    published (rule 16; the clock is the one change no writer marks). The drain is race-free +
+    property's is re-queued by the published enqueue). The pass OPENS by queueing what is
+    published and served but not yet in Browse (rule 16: a place resolved after the stamp, a
+    superseded settle patch; neither marks the dirty set). The drain is race-free +
     terminating: it claims rows dirtied at/before a run cutoff and deletes each only while it
     still carries the `marked_at` it was claimed with (a compare-and-set, 2026-10-29), so a mid-run
     re-dirty survives — even one stamped at/before the cutoff by a writer whose transaction began
     before it and committed after the slice read its adverts (an attribution chunk is one long
     transaction); it is claimed again once committed.
-    The incremental pass then ends with `_settle_fresh`, which stamps `settled_at` (rule 16's
-    publication rule) on the fresh properties the pipeline is done with; the stamp commits alone,
+    The incremental pass then ends with `_settle_fresh`, which stamps `settled_at` (rule 16:
+    the stamp is publication) on the properties the pipeline is done with; the stamp commits alone,
     then the Browse patch (`sync_browse_list`). New listings (`property_id` NULL) are born by straggler-attach, not the queue (≤ 2000 a pass,
     brought current by `properties_changed`), every 30 s on the worker's lane and after each batch
     of the daily full sweep, under the lease that sweep already holds. After each batch's attach the

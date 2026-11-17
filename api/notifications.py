@@ -12,8 +12,8 @@ Two responsibilities:
    event (a watchdog's 'new' each time a property enters its slice, migration 735), a
    watchdog only for the kinds it tells (`notify_kinds`); the one identity index
    (`EVENT_IDENTITY`, migration 653) makes every re-run idempotent. A watchdog tells a
-   property only once it is PUBLISHED — settled by the pipeline or 6 h old, the rule
-   Browse serves by (`toolkit/publication.py`, migrations 668/669).
+   property only once it is PUBLISHED — stamped by the maintenance pass, the rule
+   Browse serves by (`toolkit/publication.py`, migrations 668/747).
 
 `WatchdogFilterSpec` is intentionally a separate model from
 `ComparableFilters`: the watchdog matcher does NOT require a target
@@ -853,7 +853,7 @@ def mark_all_seen(
 # each producer's equals what 652 backfilled from the pre-W3 key on the rows written before it
 # (tests/api/test_notifications.py renders and pins both), so no event already told re-fires.
 # A watchdog tells a property only once it is PUBLISHED (`_build_match_clauses`;
-# toolkit/publication.py, migrations 668/669: settled by the pipeline, or 6 h old), as Browse
+# toolkit/publication.py, migrations 668/747: stamped by the maintenance pass), as Browse
 # serves it; that rule replaced the images-first gate 'new' was held by. The collection monitor
 # does not: a change on a property the user curated is not its first appearance.
 
@@ -1020,8 +1020,7 @@ _SLICE_LOCK_SQL = (
 _SLICE_RESTART_SQL = "DELETE FROM watchdog_slice_members WHERE subscription_id = %(subscription_id)s"
 
 # A start: every property in the slice becomes a member. Told: one first seen inside NEW_WINDOW that
-# became visible after the start (`toolkit/publication.py`; held while unpublished, the 6 h cap ends
-# every hold inside the window), unless this watchdog already told it a 'new' since the start (the
+# became visible after the start (`toolkit/publication.py`; held while unpublished), unless this watchdog already told it a 'new' since the start (the
 # matcher before the slice wrote no event_ref).
 _SLICE_SEED_SQL = (
     f"WITH {_SLICE_CTE}, "

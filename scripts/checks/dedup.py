@@ -1,8 +1,8 @@
 """Engine: does production honour your rulings, and is the engine deciding and merging?
 
 `check_dedup` reads the engine's state (off, building, merging or idle: a fact on every cell, never
-a status) and judges nine cells: the state, the live stream, the build's progress, the merge pause
-a build causes, the decision lag of new ads, the lane's lease, your rulings on ad pairs and on
+a status) and judges ten cells: the state, the live stream, the build's progress, the merge pause
+a build causes, the decision lag of new ads, the new ads the engine has not read, the lane's lease, your rulings on ad pairs and on
 brokers, and the share of the engine's merges an operator split. It reads the live engine's stores
 (generation GENERATION) and only those property_merge_events rows the engine or an operator wrote,
 by a positive source filter (rule 15); the one ledger read without that filter is _MERGES_SQL's id
@@ -654,10 +654,86 @@ def _open_reading(conn: Any,
     return opened, recovering
 
 
-def _lag_cell(conn: Any, engine: _Engine, thresholds: dict[str, Any]) -> dict[str, Any]:
+class _Arrivals:
+    """The in-scope ads first seen 1-24 h ago and the engine's row for each, read once for the two
+    arms that judge them: `read()` is (first seen by ad, the row's decision stamp by ad) or the
+    reason it was not measured."""
+
+    def __init__(self, conn: Any, engine: _Engine) -> None:
+        self._conn, self._engine = conn, engine
+        self._reading: tuple[dict[int, _dt.datetime], dict[int, Any]] | str | None = None
+
+    def read(self) -> tuple[dict[int, _dt.datetime], dict[int, Any]] | str:
+        if self._reading is None:
+            self._reading = self._window()
+        return self._reading
+
+    def _window(self) -> tuple[dict[int, _dt.datetime], dict[int, Any]] | str:
+        conn, engine, (young_h, old_h) = self._conn, self._engine, _LAG_WINDOW_H
+        try:
+            scope = pass_scope(read_scope_setting(engine.control, GENERATION))
+        except ScopeError as exc:
+            return f"Not measured: the lane's scope cannot be read ({oneline(exc, 120)})"
+        floor = fetchone(conn, _ARRIVAL_FLOOR_SQL, {"hours": old_h + _FLOOR_SLACK_H,
+                                                    "sources": sorted(_PORTALS)})
+        window = fetchone(conn, RT_NEW_LISTINGS_SQL, {
+            "after_id": int(floor[0] or 0) if floor else 0, "lag": young_h * 3600,
+            "window": _LAG_WINDOW_ROWS, **scope.params()})
+        if window is not None and int(window[1] or 0) >= _LAG_WINDOW_ROWS:
+            return (f"Not measured: more than {_LAG_WINDOW_ROWS:,} ads arrived in {old_h} h, "
+                    "past the window this arm reads")
+        ids, stamps = (window[2] or [], window[3] or []) if window else ([], [])
+        since = engine.at - _dt.timedelta(hours=old_h)
+        arrived: dict[int, _dt.datetime] = {}
+        for listing_id, stamp in zip(ids, stamps):
+            stamp = as_utc(stamp)
+            if stamp is not None and stamp >= since:
+                arrived[int(listing_id)] = stamp
+        decided: dict[int, Any] = {}
+        if arrived:
+            decided = {int(row[0]): row[_FP_DECIDED_COLUMN] for row in fetchall(
+                conn, RT_FP_READ_SQL, {"generation": GENERATION, "ids": sorted(arrived)})}
+        return arrived, decided
+
+
+def _unread_cell(arrivals: _Arrivals, engine: _Engine,
+                 thresholds: dict[str, Any]) -> dict[str, Any]:
+    """The oldest in-scope ad the engine has not read. Its property stays unpublished until it is
+    read (toolkit/publication.py), so nothing excuses this arm: a brake, a build and a stall all
+    hold alerts back the same way."""
+    subject, (young_h, old_h) = "unread_arrivals", _LAG_WINDOW_H
+    facts: dict[str, Any] = {"state": engine.state}
+    if not engine.present:
+        return cell(subject, "unknown", "Not measured: the engine's store is absent",
+                    facts=facts)
+    reading = arrivals.read()
+    if isinstance(reading, str):
+        return cell(subject, "unknown", reading, facts=facts)
+    arrived, decided = reading
+    unread = [stamp for listing_id, stamp in arrived.items() if listing_id not in decided]
+    seen = f"first seen {young_h}-{old_h} h ago"
+    facts.update(n=len(arrived), unread=len(unread))
+    if not unread:
+        return cell(subject, "ok", f"The engine has read all {len(arrived):,} in-scope "
+                    f"{_n(len(arrived), 'ad', 'ads')} {seen}", value=0, unit="h", facts=facts)
+    oldest_s = (engine.at - min(unread)).total_seconds()
+    facts["oldest_h"] = round(oldest_s / 3600, 2)
+    said = (f"The engine has not read {len(unread):,} of {len(arrived):,} in-scope ads {seen}; "
+            f"the oldest arrived {ago(oldest_s)} ago and their properties stay unpublished, with "
+            "no alert, until it does")
+    if engine.state == _OFF:
+        said += "; the lane is off (the brake)"
+    fail_h = float(thresholds["dedup_unread_fail_h"])
+    conditions = [("fail", f"{said} (Problem past {fail_h:g} h)")] if oldest_s > fail_h * 3600 else []
+    return judged(subject, conditions, said, value=round(oldest_s / 3600, 2), unit="h",
+                  facts=facts)
+
+
+def _lag_cell(conn: Any, engine: _Engine, arrivals: _Arrivals,
+              thresholds: dict[str, Any]) -> dict[str, Any]:
     """The decision lag, and the open reading its excuses must not keep from recovering."""
     memory = _open_reading(conn, engine)
-    lag = _lag_reading(conn, engine, thresholds, memory is not None)
+    lag = _lag_reading(engine, arrivals, thresholds, memory is not None)
     status = lag["status"]
     if memory is None and status != "fail":
         return lag
@@ -674,7 +750,7 @@ def _lag_cell(conn: Any, engine: _Engine, thresholds: dict[str, Any]) -> dict[st
     return lag
 
 
-def _lag_reading(conn: Any, engine: _Engine, thresholds: dict[str, Any],
+def _lag_reading(engine: _Engine, arrivals: _Arrivals, thresholds: dict[str, Any],
                  open_reading: bool) -> dict[str, Any]:
     """While merging or idle: the in-scope ads first seen 1-24 h ago with no decision."""
     subject, (young_h, old_h) = "decision_lag", _LAG_WINDOW_H
@@ -687,11 +763,6 @@ def _lag_reading(conn: Any, engine: _Engine, thresholds: dict[str, Any],
     if not engine.present:
         return cell(subject, "unknown", "Not measured: the engine's store is absent",
                     facts=facts)
-    try:
-        scope = pass_scope(read_scope_setting(engine.control, GENERATION))
-    except ScopeError as exc:
-        return cell(subject, "unknown", f"Not measured: the lane's scope cannot be read "
-                    f"({oneline(exc, 120)})", facts=facts)
     since = engine.at - _dt.timedelta(hours=old_h)
     excuses = _excuses(engine, since)
     stall = engine.age(_latest(engine.last_commit, engine.last_lift, engine.build_end))
@@ -701,24 +772,10 @@ def _lag_reading(conn: Any, engine: _Engine, thresholds: dict[str, Any],
     excused = bool(excuses) and not stalled
     if excused and not open_reading:
         return cell(subject, "unknown", _not_lag(excuses), facts=facts)
-    floor = fetchone(conn, _ARRIVAL_FLOOR_SQL, {"hours": old_h + _FLOOR_SLACK_H,
-                                                "sources": sorted(_PORTALS)})
-    window = fetchone(conn, RT_NEW_LISTINGS_SQL, {
-        "after_id": int(floor[0] or 0) if floor else 0, "lag": young_h * 3600,
-        "window": _LAG_WINDOW_ROWS, **scope.params()})
-    if window is not None and int(window[1] or 0) >= _LAG_WINDOW_ROWS:
-        return cell(subject, "unknown", f"Not measured: more than {_LAG_WINDOW_ROWS:,} ads "
-                    f"arrived in {old_h} h, past the window this arm reads", facts=facts)
-    ids, stamps = (window[2] or [], window[3] or []) if window else ([], [])
-    arrived: dict[int, _dt.datetime] = {}
-    for listing_id, stamp in zip(ids, stamps):
-        stamp = as_utc(stamp)
-        if stamp is not None and stamp >= since:
-            arrived[int(listing_id)] = stamp
-    decided: dict[int, Any] = {}
-    if arrived:
-        decided = {int(row[0]): row[_FP_DECIDED_COLUMN] for row in fetchall(
-            conn, RT_FP_READ_SQL, {"generation": GENERATION, "ids": sorted(arrived)})}
+    reading = arrivals.read()
+    if isinstance(reading, str):
+        return cell(subject, "unknown", reading, facts=facts)
+    arrived, decided = reading
     n = len(arrived)
     undecided = sum(1 for listing_id in arrived if listing_id not in decided)
     waits = [(float(epoch) - arrived[listing_id].timestamp()) / 60
@@ -924,9 +981,11 @@ def check_dedup(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     """Does production honour your rulings, and is the engine deciding and merging?"""
     engine = _read_engine(conn)
     merges = _merges(conn)
+    arrivals = _Arrivals(conn, engine)
     cells = [_state_cell(engine, merges), _stream_cell(engine),
              _build_cell(conn, engine, thresholds), _pause_cell(engine, merges, thresholds),
-             _lag_cell(conn, engine, thresholds), _lease_cell(conn, engine, thresholds),
+             _lag_cell(conn, engine, arrivals, thresholds),
+             _unread_cell(arrivals, engine, thresholds), _lease_cell(conn, engine, thresholds),
              _rulings_cell(conn, engine, thresholds), _brokers_cell(conn, engine, thresholds),
              _splits_cell(engine, merges, thresholds)]
     return result(_KEY, cells, {})

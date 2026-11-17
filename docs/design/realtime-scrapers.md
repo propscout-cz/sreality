@@ -69,8 +69,9 @@ the API's loop), so the API's one loop is the health teller*). It runs, as conti
    stored, with a timeout fallback for listings that genuinely have no photos. — *superseded
    2026-10-23 by the publication rule (rule 16, migrations 668/669, `toolkit/publication.py`): the
    maintenance lane's pass stamps `properties.settled_at` once a property's first photo is stored
-   (or it has none) and the engine is done with its ads, and Browse, the map, stats and the
-   watchdog serve a property once it is settled or 6 h old; the image gate is deleted.*
+   (or it has none) and the engine is done with its ads, or it is 6 h old and the engine has read
+   every in-scope ad on it (2026-11-17), and Browse, the map, stats and the watchdog serve a
+   property once it is stamped; the image gate is deleted.*
 4. **Targeted gone-probes** for watchdog/pipeline/collection properties (the per-listing
    `ListingGoneError` → immediate inactive flip already exists) — minutes-grade delisting
    for WATCHED properties; market-wide delisting stays completeness-gated on the walks.
