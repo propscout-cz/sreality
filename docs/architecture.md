@@ -410,7 +410,16 @@ stopped nominating (pages/walk fell ~2,400 → ~140 the day the wall went up; #2
 (Python Playwright, imported lazily, the `browser` pyproject extra, chromium baked into the scraper
 image by `EXTRAS=api,browser`): one chromium context per phase solves the interstitial ONCE and
 carries its ~7-day cookie, pinned to ONE residential exit IP (the gateway rotates per request and a
-rotating IP re-challenges every page). Everything around that call — pacing, `penalize()`, the
+rotating IP re-challenges every page). **That exit IP is RETIRED every 250 pages, and after 2
+consecutive 403s** (`rotate()`: a new sticky session, and the browser goes with it, since the
+interstitial cookie is bound to both the old IP and that browser). The first full walk after the wall
+fell put all 1,558 pages on one IP and the portal blocked it for ~30 minutes mid-walk, costing
+`byt/prodej`, `byt/pronajem` and `dum/prodej` their end and so their nominations (2026-11-16;
+end-reached 7/10 against a 96% baseline). A 403 is the portal refusing the IP and is distinct from an
+unsolved interstitial, which logs `CHALLENGE unsolved` — that walk had ZERO of those in 1,558 pages,
+so Anubis itself is solved and what remains is IP-level. A 404/410 never rotates: that is the listing
+speaking, and rotating would buy a fresh solve for every delisted ad the drain verifies. Everything
+around that call — pacing, `penalize()`, the
 retry/backoff, gone detection, `walk_reached_end`, nomination — stays shared and portal-generic
 (rule #21); the parser is untouched. **A page still challenged after the solve is a FAILED FETCH
 (classified 403), never content**, so a difficulty bump reads red (the empty-walk check, #2376)

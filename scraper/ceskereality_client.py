@@ -40,6 +40,14 @@ from scraper.portal_base import BasePortalClient, ListingGoneError
 
 LOG = logging.getLogger(__name__)
 
+# Consecutive 403s before the exit IP is retired. Two, not one: a lone refusal among
+# successes is noise, and rotating on it discards a working IP and pays a fresh
+# interstitial solve for nothing.
+REFUSALS_BEFORE_ROTATE = 2
+# Pages one exit IP serves before it is retired unasked. The 2026-11-16 walk put all
+# 1,558 pages of a walk on ONE IP and was blocked for 30 minutes partway through.
+PAGES_PER_EXIT_IP = 250
+
 BASE_URL = "https://www.ceskereality.cz"
 
 # The 14 modern kraje — a ROW-LEVEL partition, proved by ID enumeration
@@ -235,6 +243,7 @@ class CeskerealityClient(BasePortalClient):
         portal launches no browser."""
         super().__init__(**kwargs)
         self._fetcher = fetcher
+        self._refusals = 0
 
     def _browser(self) -> Any:
         if self._fetcher is None:
@@ -244,8 +253,34 @@ class CeskerealityClient(BasePortalClient):
                 proxy_url=os.environ.get(self.PROXY_ENV),
                 user_agent=self._session.headers.get("User-Agent"),
                 timeout_s=self.timeout_s,
+                rotate_after=PAGES_PER_EXIT_IP,
             )
         return self._fetcher
+
+    def _note_refusal(self, status: int, url: str) -> None:
+        """Retire the exit IP after a RUN of refusals.
+
+        A 403 here is the portal refusing this residential IP — the interstitial is a
+        separate thing and the browser solves it (1,558 of 1,558 on 2026-11-16; every one
+        of that walk's 403s was nginx, in front of Anubis). Retrying a blocked IP only
+        draws the same refusal, which is how one block cost three category groups a whole
+        walk. One 403 is noise, so the rotation waits for a run of them; a 404/410 is the
+        LISTING speaking and never counts."""
+        if status != 403:
+            self._refusals = 0
+            return
+        self._refusals += 1
+        if self._refusals < REFUSALS_BEFORE_ROTATE:
+            return
+        self._refusals = 0
+        fetcher = self._fetcher
+        rotate = getattr(fetcher, "rotate", None)
+        if rotate is None:
+            return
+        try:
+            rotate(f"{REFUSALS_BEFORE_ROTATE} refusals, last {url}")
+        except Exception as exc:  # noqa: BLE001 - a failed rotation must not end the walk
+            LOG.warning("BROWSER rotation failed (ignored): %r", exc)
 
     def _send(
         self,
@@ -269,6 +304,7 @@ class CeskerealityClient(BasePortalClient):
         # interstitial is a FAILED FETCH and never content is enforced here, at the seam
         # every caller goes through, whatever fetcher is in place.
         status = classify_status(response.status_code, response.text)
+        self._note_refusal(status, url)
         if status != response.status_code:
             LOG.warning(
                 "CHALLENGE unsolved url=%s served=%d -> retryable %d",
