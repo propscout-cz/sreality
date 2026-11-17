@@ -61,7 +61,7 @@ export default function PropertyGallery({
               tabIndex={copy ? -1 : undefined}
               aria-hidden={copy || undefined}
               aria-label={copy ? undefined : `Fotka ${index + 1} z ${images.length}`}
-              className="relative aspect-[4/3] w-full shrink-0 snap-start snap-always overflow-hidden bg-[var(--color-inset)]"
+              className="relative aspect-[4/3] w-full shrink-0 snap-start overflow-hidden bg-[var(--color-inset)]"
             >
               {broken.has(img.id) ? (
                 <span className="absolute inset-0 flex items-center justify-center text-[12px] text-[var(--color-ink-4)]">

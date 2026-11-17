@@ -18,6 +18,10 @@ import type { ImagePublic } from '@/lib/types';
 
 import { useCardHydration } from './CardHydration';
 
+/* Every photo the Browse carousel would hold, so the cover choice is the same and
+ * the hydration cache is shared with Browse (BrowseExperience's perId). */
+export const PHOTOS_PER_CARD = 50;
+
 export interface CardPhotos {
   cover: ImagePublic | null;
   /* The cover first, then the rest in position order. */
@@ -48,9 +52,11 @@ export function cardPhotos(all: readonly ImagePublic[], coverTag: CoverTag): Car
 export function useCardPhotos(
   listingId: number | null | undefined,
   coverTag: CoverTag,
-): CardPhotos & { pending: boolean } {
+): CardPhotos & { pending: boolean; mayHoldMore: boolean } {
   const { photosFor, photosPending } = useCardHydration();
   const all = photosFor(listingId);
   const strip = useMemo(() => cardPhotos(all, coverTag), [all, coverTag]);
-  return { ...strip, pending: photosPending && all.length === 0 };
+  /* The read keeps PHOTOS_PER_CARD photos an ad: a full set may be a cut one, and
+   * only the property page knows. */
+  return { ...strip, pending: photosPending && all.length === 0, mayHoldMore: all.length >= PHOTOS_PER_CARD };
 }

@@ -31,12 +31,12 @@ import FeedCard from '@/components/phone/FeedCard';
 import BottomSheet from '@/components/phone/BottomSheet';
 import DayRule from '@/components/phone/DayRule';
 import { CHIP, CHIP_DIVIDER, CHIP_MD, CHIP_ROW, CHIP_SM, chipState } from '@/components/phone/chips';
-import { PHOTOS_PER_CARD } from '@/components/phone/CardRoll';
 import { filtersBeyond } from '@/components/phone/filterRows';
 import { RollEmpty, RollSkeleton } from '@/components/phone/RollParts';
 import { usePhoneHeaderAside } from '@/components/phone/PhoneShell';
 import PushNotice from '@/components/phone/PushNotice';
-import { CheckIcon, SlidersIcon, SortIcon } from '@/components/phone/phoneIcons';
+import { SlidersIcon, SortIcon } from '@/components/phone/phoneIcons';
+import SortSheet from '@/components/phone/SortSheet';
 import { AlertIcon, EyeOffIcon } from '@/components/icons';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
 import { listFilterPresets } from '@/lib/api';
@@ -65,13 +65,12 @@ import {
 import { filterById } from '@/lib/filterRegistry.generated';
 import { filtersEqualForPreset } from '@/lib/filters';
 import { czPlural } from '@/lib/format';
-import { CardHydrationProvider } from '@/lib/hydration';
+import { CardHydrationProvider, PHOTOS_PER_CARD } from '@/lib/hydration';
 import type { KeysetCursor } from '@/lib/keyset';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { cyclePortal, portalShort, type PortalChoice } from '@/lib/portals';
 import {
   CARD_PAGE_SIZE,
-  CARD_SORTS,
   DEFAULT_SORT,
   dismissalKeys,
   fetchBrowseCount,
@@ -80,7 +79,6 @@ import {
   fetchListingsForCards,
   filterPresetKeys,
   orderPortal as orderPortalOf,
-  sortToParam,
   type CardRow,
   type DismissedCardRow,
 } from '@/lib/queries';
@@ -329,7 +327,7 @@ export default function Feed() {
             <span className="font-mono text-[11px] tabular-nums text-[var(--color-ink)]">{shownBeyond}</span>
           )}
         </button>
-        {/* The order on the roll itself (operator's ask, 2026-11-15); the sheet's Řazení row stays, one menu. */}
+        {/* The order on the roll itself (operator's ask, 2026-11-15): the Filtry sheet's own menu (SortChips). */}
         <button
           type="button"
           onClick={() => setSortOpen(true)}
@@ -434,33 +432,8 @@ export default function Feed() {
       </CardHydrationProvider>
 
       {sortOpen && (
-        <BottomSheet label="Řazení" closeLabel="Zavřít" onClose={() => setSortOpen(false)}>
-          <div role="radiogroup" aria-label="Řazení" className="pb-2">
-            {CARD_SORTS.map((o) => {
-              const on = sortToParam(o.spec) === sortToParam(sort);
-              return (
-                <button
-                  key={sortToParam(o.spec)}
-                  type="button"
-                  role="radio"
-                  aria-checked={on}
-                  onClick={() => {
-                    /* The roll in view keeps its place in the app (Skryté too); only its order changes. */
-                    setView({ ...view, sort: o.spec });
-                    window.scrollTo(0, 0);
-                    setSortOpen(false);
-                  }}
-                  className={`flex h-11 w-full items-center justify-between gap-3 px-4 text-left text-[15px] active:bg-[var(--color-inset)] ${
-                    on ? 'font-medium text-[var(--color-ink)]' : 'text-[var(--color-ink-2)]'
-                  }`}
-                >
-                  {o.label}
-                  {on && <CheckIcon className="h-4 w-4 shrink-0" />}
-                </button>
-              );
-            })}
-          </div>
-        </BottomSheet>
+        /* Through `show`, as the Filtry sheet applies: Skryté is read by dismissal date and takes no order. */
+        <SortSheet sort={sort} onPick={(next) => show({ ...view, sort: next })} onClose={() => setSortOpen(false)} />
       )}
 
       {sheetOpen && (

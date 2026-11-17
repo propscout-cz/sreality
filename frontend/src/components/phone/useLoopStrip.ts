@@ -23,7 +23,7 @@ export interface LoopSlot {
   copy: boolean;
 }
 
-/** The slides in strip order: the photos, between two copies when there is more than one. */
+/* The slides in strip order: the photos, between two copies when there is more than one. */
 export function loopSlots(count: number): LoopSlot[] {
   const own = Array.from({ length: count }, (_, index) => ({ index, copy: false }));
   if (count < 2) return own;
@@ -32,9 +32,7 @@ export function loopSlots(count: number): LoopSlot[] {
 
 export interface LoopStrip {
   ref: RefObject<HTMLDivElement>;
-  /* The photo on screen. */
   at: number;
-  /* Spread onto the scroller. */
   handlers: {
     onScroll(): void;
     onTouchStart(): void;
@@ -50,17 +48,19 @@ export function useLoopStrip(count: number): LoopStrip {
   const raf = useRef(0);
   const idle = useRef<number | undefined>(undefined);
   const loops = count > 1;
-  const slides = loops ? count + 2 : count;
+  const slides = useRef(0);
+  slides.current = loops ? count + 2 : count;
 
-  /* One slide's width. scrollWidth over the slide count, not clientWidth: on a
-   * fractional-width screen the rounding error would grow with the photo count. */
+  /* scrollWidth over the slide count, not clientWidth: on a fractional-width
+   * screen the rounding error would grow with the photo count. */
   const slideWidth = useCallback((): number => {
     const el = ref.current;
-    if (!el || slides === 0) return 0;
-    return (el.scrollWidth || el.clientWidth * slides) / slides;
-  }, [slides]);
+    if (!el || slides.current === 0) return 0;
+    return (el.scrollWidth || el.clientWidth * slides.current) / slides.current;
+  }, []);
 
-  /* Open on the first photo, past the copy before it. */
+  /* Past the copy before the first photo. Keyed on `loops` alone: a photo count
+   * that changes under a strip in use (a re-read) must not send it back to the start. */
   useLayoutEffect(() => {
     const el = ref.current;
     if (el && loops) el.scrollLeft = slideWidth();
@@ -97,7 +97,7 @@ export function useLoopStrip(count: number): LoopStrip {
     });
   };
 
-  const lift = (e: TouchEvent<HTMLDivElement>): void => {
+  const onLift = (e: TouchEvent<HTMLDivElement>): void => {
     if (e.touches.length > 0) return;
     touching.current = false;
     settle();
@@ -111,8 +111,8 @@ export function useLoopStrip(count: number): LoopStrip {
       onTouchStart: () => {
         touching.current = true;
       },
-      onTouchEnd: lift,
-      onTouchCancel: lift,
+      onTouchEnd: onLift,
+      onTouchCancel: onLift,
     },
   };
 }

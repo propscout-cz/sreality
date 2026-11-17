@@ -383,6 +383,18 @@ describe('<FeedCard> — the photo strip', () => {
     expect(screen.getByText(/fot\./).textContent).toMatch(/12/);
   });
 
+  it('closes the round on "all photos" when the read\'s set is full and the ad may hold more', async () => {
+    vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map([[9001, photos(50)]]));
+    renderCard(base);
+    await waitFor(() => expect(slides()).toHaveLength(51));
+    const last = slides()[50];
+    expect(last).toHaveTextContent('Zobrazit všechny fotky');
+    expect(last).toHaveAttribute('href', expect.stringContaining('/property/304388'));
+    /* Back from the cover is that slide's copy; the counter owns up to the cut. */
+    expect(frames()[0]).toHaveTextContent('Zobrazit všechny fotky');
+    expect(strip().parentElement!.querySelector('[data-counter]')).toHaveTextContent('1 / 50+');
+  });
+
   it('draws neither dots nor copies for a single photo', async () => {
     vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map([[9001, photos(1)]]));
     renderCard(base);

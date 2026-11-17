@@ -122,7 +122,6 @@ export function SlidersIcon(p: IconProps) {
   );
 }
 
-/* The feed's order: one arrow up, one down. */
 export function SortIcon(p: IconProps) {
   return (
     <Svg {...p}>

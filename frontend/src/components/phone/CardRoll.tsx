@@ -6,16 +6,12 @@ import { useMemo, type ReactNode } from 'react';
 
 import InfiniteSentinel from '@/components/InfiniteSentinel';
 import { useCardCoverTag } from '@/lib/browseLayout';
-import { CardHydrationProvider } from '@/lib/hydration';
+import { CardHydrationProvider, PHOTOS_PER_CARD } from '@/lib/hydration';
 import type { CardRow } from '@/lib/queries';
 
 import FeedCard from './FeedCard';
 import { RollEmpty, RollSkeleton } from './RollParts';
 
-/* Every photo the Browse carousel would hold, so the cover choice is the same and
- * the hydration cache is shared with Browse (BrowseExperience's perId). The card's
- * strip shows them all. */
-export const PHOTOS_PER_CARD = 50;
 
 export interface CardRollList {
   rows: CardRow[];

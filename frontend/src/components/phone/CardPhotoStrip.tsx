@@ -5,7 +5,9 @@
  * 2026-11-15; ./useLoopStrip): past the last photo comes the cover, before the
  * cover the last. The position sits on the photo in the margin's own translucent
  * paper — dots up to STRIP_MAX_DOTS photos, a counter past that — so it reads as
- * the margin's material rather than a control laid on the picture.
+ * the margin's material rather than a control laid on the picture. The card's read
+ * keeps at most PHOTOS_PER_CARD photos an ad; when the set is full (`mayHoldMore`)
+ * one plain slide closes the round and opens the property page, which holds them all.
  *
  * PHOTOS LOAD ONE STEP AHEAD OF THE SWIPE: the photo on screen and the next get
  * an <img> (native lazy, so a card far down the roll fetches nothing); the rest
@@ -31,6 +33,7 @@ import { Link } from 'react-router-dom';
 import { imageSrc } from '@/lib/imageUrl';
 import type { ImagePublic } from '@/lib/types';
 
+import { ChevronIcon } from './phoneIcons';
 import StageWash, { type StageWashProps } from './StageWash';
 import { loopSlots, useLoopStrip } from './useLoopStrip';
 
@@ -50,6 +53,8 @@ export interface CardPhotoStripProps {
   /* The property page the strip opens. */
   to: string;
   photos: readonly ImagePublic[];
+  /* The read's photo set is full, so the ad may have more than the strip holds. */
+  mayHoldMore: boolean;
   /* The first page of photos is still in flight. */
   pending: boolean;
   /* The stage wash of a filed property, laid on every photo. */
@@ -80,11 +85,13 @@ export function useTapGuard() {
   };
 }
 
-export default function CardPhotoStrip({ to, photos, pending, wash, insetRight }: CardPhotoStripProps) {
+export default function CardPhotoStrip({ to, photos, mayHoldMore, pending, wash, insetRight }: CardPhotoStripProps) {
   const count = photos.length;
-  const { ref, at, handlers } = useLoopStrip(count);
-  /* The photos that have an <img>: grown as the swipe nears them, never shrunk. */
-  const [near, setNear] = useState<ReadonlySet<number>>(() => new Set([0, 1]));
+  /* The slides of one round: the photos, then the "all photos" slide when there may be more. */
+  const slideCount = count + (mayHoldMore ? 1 : 0);
+  const { ref, at, handlers } = useLoopStrip(slideCount);
+  /* The slides whose photo has an <img>: grown as the swipe nears them, never shrunk. */
+  const [loaded, setLoaded] = useState<ReadonlySet<number>>(() => new Set([0, 1]));
   const [touched, setTouched] = useState(false);
   const [broken, setBroken] = useState<ReadonlySet<number>>(() => new Set());
   const guard = useTapGuard();
@@ -107,10 +114,10 @@ export default function CardPhotoStrip({ to, photos, pending, wash, insetRight }
     );
   }
 
-  const want = [at, (at + 1) % count, ...(touched ? [(at - 1 + count) % count] : [])];
-  if (want.some((i) => !near.has(i))) setNear(new Set([...near, ...want]));
-  /* A copy stands beside the first or the last photo and is only ever seen from there. */
-  const atAnEnd = at === 0 || at === count - 1;
+  const toLoad = [at, (at + 1) % slideCount, ...(touched ? [(at - 1 + slideCount) % slideCount] : [])];
+  if (toLoad.some((i) => !loaded.has(i))) setLoaded(new Set([...loaded, ...toLoad]));
+  /* A copy stands beside the first or the last slide and is only ever seen from there. */
+  const atAnEnd = at === 0 || at === slideCount - 1;
 
   return (
     <div className="relative">
@@ -126,7 +133,27 @@ export default function CardPhotoStrip({ to, photos, pending, wash, insetRight }
         onClickCapture={guard.onClickCapture}
         className="flex snap-x snap-mandatory overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
-        {loopSlots(count).map(({ index, copy }) => {
+        {loopSlots(slideCount).map(({ index, copy }) => {
+          if (index === count) {
+            return (
+              <Link
+                key={copy ? 'copy-all' : 'all'}
+                to={to}
+                tabIndex={-1}
+                draggable={false}
+                aria-hidden={copy || undefined}
+                className={SLIDE}
+              >
+                <span
+                  className="absolute inset-0 flex items-center justify-center gap-1 font-display text-[17px] text-[var(--color-ink)]"
+                  style={{ paddingRight: insetRight }}
+                >
+                  Zobrazit všechny fotky
+                  <ChevronIcon className="h-4 w-4 text-[var(--color-ink-3)]" />
+                </span>
+              </Link>
+            );
+          }
           const img = photos[index];
           return (
             <Link
@@ -138,7 +165,7 @@ export default function CardPhotoStrip({ to, photos, pending, wash, insetRight }
               aria-label={copy ? undefined : `Fotka ${index + 1} z ${count}`}
               className={SLIDE}
             >
-              {!near.has(index) || (copy && !atAnEnd) ? null : broken.has(img.id) ? (
+              {!loaded.has(index) || (copy && !atAnEnd) ? null : broken.has(img.id) ? (
                 <span
                   className="absolute inset-0 flex items-center justify-center text-[12px] text-[var(--color-ink-4)]"
                   style={{ paddingRight: insetRight }}
@@ -164,7 +191,9 @@ export default function CardPhotoStrip({ to, photos, pending, wash, insetRight }
       {count > 1 && (
         <div
           aria-hidden
-          className="pointer-events-none absolute bottom-4 left-0 flex justify-center"
+          className={`pointer-events-none absolute bottom-4 left-0 flex justify-center transition-opacity duration-150 motion-reduce:transition-none ${
+            at < count ? 'opacity-100' : 'opacity-0'
+          }`}
           style={{ right: insetRight }}
         >
           <span className="flex h-3.5 items-center gap-1 rounded-full bg-[var(--color-paper-2)]/88 px-1.5">
@@ -180,7 +209,8 @@ export default function CardPhotoStrip({ to, photos, pending, wash, insetRight }
               ))
             ) : (
               <span data-counter className="font-mono text-[10px] leading-none tabular-nums text-[var(--color-ink)]">
-                {at + 1} / {count}
+                {Math.min(at + 1, count)} / {count}
+                {mayHoldMore && '+'}
               </span>
             )}
           </span>

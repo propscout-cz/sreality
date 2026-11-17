@@ -38,7 +38,7 @@ export {
   taggedImageUrls,
   NO_PHOTOS,
 } from './useCardHydration';
-export { cardPhotos, useCardPhotos } from './cardPhotos';
+export { PHOTOS_PER_CARD, cardPhotos, useCardPhotos } from './cardPhotos';
 export type { CardPhotos } from './cardPhotos';
 export type {
   CoverByListingId,

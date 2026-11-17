@@ -114,6 +114,7 @@ export default function FeedCard({ r, coverTag }: { r: CardRow; coverTag: CoverT
         <CardPhotoStrip
           to={to}
           photos={strip.photos}
+          mayHoldMore={strip.mayHoldMore}
           pending={strip.pending}
           wash={member ? { color: accent.fg, badge, label: member.stage_label } : null}
           insetRight={MARGIN_PX}

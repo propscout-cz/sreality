@@ -286,8 +286,10 @@ describe('<Feed>', () => {
     await screen.findByText('Místo 1', { exact: false });
     await user.click(screen.getByRole('button', { name: 'Řazení: Newest first' }));
     const sheet = screen.getByRole('dialog', { name: 'Řazení' });
-    expect(within(sheet).getByRole('radio', { name: 'Newest first' })).toBeChecked();
-    await user.click(within(sheet).getByRole('radio', { name: 'Price: low → high' }));
+    /* A menu that acts as you tap closes on "Hotovo"; the orders are the Filtry sheet's chips. */
+    expect(within(sheet).getByRole('button', { name: 'Hotovo' })).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Newest first' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(within(sheet).getByRole('button', { name: 'Price: low → high' }));
     expect(screen.queryByRole('dialog', { name: 'Řazení' })).toBeNull();
     await waitFor(() => {
       const calls = vi.mocked(queries.fetchListingsForCards).mock.calls;
@@ -295,6 +297,17 @@ describe('<Feed>', () => {
     });
     /* The chip names the order once it is not the default. */
     expect(screen.getByRole('button', { name: 'Řazení: Price: low → high' })).toHaveTextContent('Price: low → high');
+  });
+
+  it('an order picked under Skryté leaves Skryté, which takes no order', async () => {
+    const user = userEvent.setup();
+    renderFeed();
+    await screen.findByText('Místo 1', { exact: false });
+    await user.click(screen.getByRole('button', { name: /^Skryté/ }));
+    expect(screen.getByRole('button', { name: /^Skryté/ })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(screen.getByRole('button', { name: /^Řazení/ }));
+    await user.click(within(screen.getByRole('dialog', { name: 'Řazení' })).getByRole('button', { name: 'Oldest first' }));
+    expect(screen.getByRole('button', { name: /^Skryté/ })).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('opens the Filtry sheet and applies its draft to the roll', async () => {

@@ -29,7 +29,6 @@ import {
   sidebarUnits,
 } from '@/components/Filters';
 import MarketGrowthFilter from '@/components/MarketGrowthFilter';
-import { PickButton } from '@/components/controls';
 import { LocationTypeahead, MultiselectChips } from '@/components/filter-controls';
 import { PortalFilterControl } from '@/components/filter-controls/PortalFilterControl';
 import BrokerFilterControl from '@/components/filter-controls/BrokerFilterControl';
@@ -47,11 +46,9 @@ import {
 } from '@/lib/filters';
 import { czPlural } from '@/lib/format';
 import {
-  CARD_SORTS,
   DEFAULT_SORT,
   fetchBrowseCount,
   filterPresetKeys,
-  parseSort,
   sortToParam,
   type SortSpec,
 } from '@/lib/queries';
@@ -59,6 +56,7 @@ import type { FilterPreset } from '@/lib/types';
 
 import BottomSheet from './BottomSheet';
 import DayRule from './DayRule';
+import { SortChips } from './SortSheet';
 import { NO_FOCUS_ZOOM } from './chips';
 import { filtersBeyond, sheetBands, type SheetRow } from './filterRows';
 import { rowWords } from './filterSummary';
@@ -77,8 +75,6 @@ export interface FilterSheetProps {
 
 /* The count follows the draft once typing pauses, not on every keystroke. */
 const COUNT_DEBOUNCE_MS = 350;
-
-const SORT_OPTIONS = CARD_SORTS.map((o) => ({ value: sortToParam(o.spec), label: o.label }));
 
 type PresetsResponse = FilterPresetList;
 
@@ -164,19 +160,7 @@ export default function FilterSheet({ filters, sort, base, preset, onApply, onCl
           open={sortOpen}
           onToggle={() => setSortOpen((o) => !o)}
         >
-          {/* Seventeen orders: a chip row, not the joined bar (system.md § Option groups). */}
-          <div role="group" aria-label="Řazení" className="flex flex-wrap gap-1">
-            {SORT_OPTIONS.map((o) => (
-              <PickButton
-                key={o.value}
-                variant="solid"
-                on={o.value === sortToParam(draftSort)}
-                onClick={() => setDraftSort(parseSort(o.value))}
-              >
-                {o.label}
-              </PickButton>
-            ))}
-          </div>
+          <SortChips sort={draftSort} onPick={setDraftSort} />
         </Row>
         <FilterSheetBody draft={draft} setDraft={setDraft} />
       </div>
