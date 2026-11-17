@@ -55,6 +55,8 @@ import {
   fmtArea,
   fmtCzk,
   fmtFloor,
+  storeyFromOrdinal,
+  storeyOrdinal,
   fmtMeasuredPricePerM2,
   fmtPct,
   fmtRelative,
@@ -1617,10 +1619,10 @@ function AdjustPanel({
         />
         <NumField
           label="Floor"
-          value={state.floor}
+          value={storeyOrdinal(state.floor)}
           placeholder="—"
-          hint="Přízemí = 0, 1. patro = 1, suterén = −1 — the same scale listings.floor is on."
-          onChange={(v) => set('floor', v != null ? Math.round(v) : null)}
+          hint="Podlaží: přízemí = 1, the first basement = −1 — the number every floor label shows."
+          onChange={(v) => set('floor', storeyFromOrdinal(v != null ? Math.round(v) : null))}
         />
       </div>
 

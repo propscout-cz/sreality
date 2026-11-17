@@ -412,7 +412,7 @@ function MergedAdvertRow({
                   detail ? fmtArea(detail.area_m2, areaKindOf(detail.category_main)) : '—',
                 ],
                 ['Dispozice', detail?.disposition ?? '—'],
-                ['Patro', fmtFloor(detail?.floor, detail?.total_floors) ?? '—'],
+                ['Podlaží', fmtFloor(detail?.floor, detail?.total_floors) ?? '—'],
               ].map(([label, value]) => (
                 <div key={label} className="flex items-baseline justify-between gap-2">
                   <dt className="text-[var(--color-ink-4)]">{label}</dt>

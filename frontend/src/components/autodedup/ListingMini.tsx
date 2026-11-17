@@ -46,7 +46,7 @@ export function memberAttrs(m: AutodedupMember): Array<[string, string]> {
     ['Cena', fmtCzk(m.price_czk)],
     ['Plocha', fmtArea(m.area_m2)],
     ['Dispozice', m.disposition ?? '—'],
-    ['Patro', fmtFloor(m.floor, m.total_floors) ?? '—'],
+    ['Podlaží', fmtFloor(m.floor, m.total_floors) ?? '—'],
   ];
 }
 

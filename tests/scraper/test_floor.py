@@ -6,6 +6,7 @@ from scraper.floor import (
     floor_from_text,
     is_plausible_floor,
     normalize_floor,
+    storey_label,
 )
 
 
@@ -297,3 +298,12 @@ def test_a_house_keeps_the_legacy_miner():
     assert floor_from_text(text, category_main="dum") == (0, None)
     assert floor_from_text("Dům ve 2. patře má terasu", category_main="dum") == (2, None)
     assert floor_from_text("v 6. podlaží", category_main="dum") == (None, None)
+
+
+def test_storey_label_reads_the_fixture_the_spa_formatter_reads() -> None:
+    import json
+    from pathlib import Path
+
+    cases = json.loads((Path(__file__).parents[1] / "fixtures" / "storey_labels.json").read_text())
+    for case in cases:
+        assert storey_label(case["floor"], case["total"]) == case["label"], case

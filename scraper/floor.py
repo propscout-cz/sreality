@@ -113,6 +113,16 @@ def is_plausible_floor(floor: int | None, total_floors: int | None) -> bool:
     return True
 
 
+def storey_label(floor: int | None, total_floors: int | None = None) -> str | None:
+    """The stored storey as every surface words it: the ordinal the portals print, ground
+    = "1. podlaží", read against the above-ground count ("7. podlaží z 7" is the top).
+    The SPA's `fmtFloor` is its other face; both read tests/fixtures/storey_labels.json."""
+    if floor is None:
+        return None
+    storey = f"{-floor}. podzemní podlaží" if floor < 0 else f"{floor + 1}. podlaží"
+    return storey if total_floors is None else f"{storey} z {total_floors}"
+
+
 def normalize_floor(text: str | None) -> int | None:
     """One Czech floor expression -> canonical storey (ground = 0), or None.
 
