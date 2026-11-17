@@ -224,10 +224,6 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   no decision module, digest unchanged.
   Reverted the same day (#2096): its 57–80 re-decides a pass overran the build's pass deadline twice.
   **E980b** brings it back OFF in a build and at most 15 re-decides a pass outside one (constants).
-- **E984 + E985 (2026-11-17, built in a draft PR, ships only on the operator's word):** a clock-cut pass
-  with a feed left waiting is measured however small (11-13: 12 of 13, never measured, rate stuck for
-  days); arrivals behind their fifth take the slack, each other feed keeps a twentieth (11-11..14: 2.4 days
-  behind). Lane only; no decision module, digest unchanged.
 - **E977 (2026-10-22, built; ships only on the operator's yes):** during a build, a block whose walk is
   complete holds back only the groups whose own adverts (members, carried riders) have no fingerprint, not
   every group in the block; a block never walked or mid-walk, an advert the snapshot does not place and the

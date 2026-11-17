@@ -314,11 +314,9 @@ def test_a_window_with_more_in_scope_than_the_share_stops_at_what_it_took() -> N
                                    "is_active": True}
         _place(db, listing_id, obec=563510)
     work = SqlWork(db, SCOPE, GEN, window=25, revive_slice=0, drift_slice=0, enter_slice=0)
-    # A share of two, behind it: E985's slack is 10 less a twentieth (1) for each of the three
-    # other feeds that run (changed, flipped, evidence) less the share held, 5 more.
-    items = work.claim(10)
-    assert [item.listing_id for item in items] == list(range(300, 307))
-    assert work.commit(items)[CURSOR_NEW] == 306, "the window end would skip 307-309"
+    items = work.claim(10)  # five feeds, so a share of two
+    assert [item.listing_id for item in items] == [300, 301]
+    assert work.commit(items)[CURSOR_NEW] == 301, "the window end would skip 302-309"
 
 
 def test_a_refused_pass_advances_no_cursor_even_across_an_empty_window() -> None:
