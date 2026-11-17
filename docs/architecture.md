@@ -515,13 +515,21 @@ searched), OpenGraph/meta, the gallery (the JSON-LD images + `og:image`; the pag
 when the JSON-LD lists none, and only from the main block's own container), the stable main text
 as `description` (JSON-LD, `og:description`, the container with the most text in its OWN `<p>`
 children once the site's landmark header/footer, nav, aside, prose-free forms and every
-similar/related block are dropped, the meta description last — never page chrome or another
-ad's card, which would snapshot on every fetch), and the shared grammars (`price_text`'s per-m²
-guard, `,-` spelling included; the first CZK amount no deposit/fee/commission word names;
-`area`, `vocabulary.disposition`, `floor.floor_from_text`, the prodej/pronájem +
-byt/dům/pozemek/komerční/garáž words of the first of JSON-LD name, og:title, `<h1>`, `<title>`
-that says — NULL when none does). Contacts (JSON-LD, `mailto:`, `tel:`, a `+420` number in the
-ad text) become `raw['broker']` keyed by the email, else the phone. The text lane is the
+similar/related block are dropped, the meta description last; the main block beats a metadata
+excerpt of itself, cut with "…"/"[…]" or a prefix of its text — never page chrome or another
+ad's card, which would snapshot on every fetch), the page's labelled facts (`th`/`td`, `dt`/`dd`,
+label/value class pairs, `li`/`p` "Label: value", a price box; never in a hidden block or a dialog;
+kept in `raw['facts']`), and ONE shared text grammar over title + description + facts,
+`scraper/text_grammar.py` `parse_text` — importable without HTML, so the file portal reads a
+document's lines with it: a label table folded with `vocabulary.fold` (an unknown label is counted
+under `label/<portal>/<label>` in the vocabulary's unmapped counter, never guessed; enum values
+through `vocabulary.canonical`), the price (a labelled one, else the first CZK amount no
+deposit/fee/commission word names; `price_text`'s per-m² guard, `,-` and dotted thousands
+included), `area`, `vocabulary.disposition`, `floor.floor_from_text`, and the prodej/pronájem +
+byt/dům/pozemek/komerční/garáž words of a labelled type, else the first of JSON-LD name,
+og:title, `<h1>`, `<title>` that says — NULL when none does. Contacts (JSON-LD, `mailto:`, `tel:`,
+a labelled phone/e-mail, a `+420` number in the ad text) become `raw['broker']` keyed by the
+email, else the phone. The text lane is the
 portal's only reader of prose: its one call returns the location block from `web.yaml`. Every
 deterministic reading sits at the TOP LEVEL of `raw_json` (the field census reads
 `coalesce(raw->'params', raw)`). **Delisting:** `web` has no index, so it declares `indexless`
