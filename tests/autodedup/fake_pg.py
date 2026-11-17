@@ -1109,6 +1109,14 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         db.scope_scans = [row for row in db.scope_scans
                           if not (row["generation"] == gen and row["block_key"] not in keep)]
         return []
+    if sql == S.RT_SCOPE_UNREAD_SQL:
+        cut = db.now - timedelta(seconds=int(p["lag"]))
+        return sorted((block, listing_id, row["resolved_at"],
+                       row["resolved_at"] is None or row["resolved_at"] <= cut,
+                       None if row["resolved_at"] is None
+                       else (db.now - row["resolved_at"]).total_seconds())
+                      for (g, block, listing_id), row in db.scope_ids.items()
+                      if g == gen and (gen, listing_id) not in db.rt_fp)
     if sql == S.RT_SCOPE_ENTRANTS_SQL:
         cut = db.now - timedelta(seconds=int(p["lag"]))
         rows = sorted((listing_id, row["resolved_at"])

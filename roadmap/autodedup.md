@@ -224,6 +224,12 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   no decision module, digest unchanged.
   Reverted the same day (#2096): its 57–80 re-decides a pass overran the build's pass deadline twice.
   **E980b** brings it back OFF in a build and at most 15 re-decides a pass outside one (constants).
+- **E984 + E987 + E988 (2026-11-17, draft; light after the coordinator's review, merge on the
+  operator's word):** after the 11-16/17 brake the scope walks held all 32 blocks behind ~4,100
+  unread arrivals and nothing merged from 12:58Z (#2537's E985 was not the cause; reverted, #2553).
+  E987: outside a build the entrant feed reads fewest-unread blocks first (72 h fairness), from one
+  scan the reconcile reuses; E988: the new feed skips rows the lane holds; E984: a steady clock-cut
+  pass with work waiting is measured. Lane only; no decision module, digest unchanged.
 - **E977 (2026-10-22, built; ships only on the operator's yes):** during a build, a block whose walk is
   complete holds back only the groups whose own adverts (members, carried riders) have no fingerprint, not
   every group in the block; a block never walked or mid-walk, an advert the snapshot does not place and the
