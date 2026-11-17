@@ -37,7 +37,8 @@ ADJECTIVAL form ('šestipodlažní') or an explicit 'celkem'/'z celkových' phra
 lexically separable, so the miner captures the former and reads the latter only as
 `total_floors`, then drops any floor that is not below the stated total.
 
-`total_floors` is a PODLAŽÍ COUNT on every portal (ground storey included), so a
+`total_floors` is the ABOVE-GROUND podlaží count on every portal (ground storey
+included, basements never: mmreality's `undergroundFloors` is not added), so a
 building's top storey is `total_floors - 1` under ground = 0 — which is what
 `is_plausible_floor` enforces. That count convention is also why the two patra-worded
 total cues below are read as `n + 1`: "třípatrový dům" / "z celkových 3 pater" is three

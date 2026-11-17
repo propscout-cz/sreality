@@ -216,7 +216,7 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "area_basis": _cell("derived"),
         "disposition": _cell("structured", "type", "title"),
         "floor": _cell("structured", "floor", convention="ground1"),
-        "total_floors": _cell("structured", "overgroundFloors", "undergroundFloors"),
+        "total_floors": _cell("structured", "overgroundFloors"),
         # R11: balcony OR loggia, from the two top-level booleans the portal actually
         # publishes (2,309 of 10,317 active rows each, 22.4%, with a real `false`). The
         # accessory-name search this replaces matched NOTHING on any live row — 0/0 on
@@ -657,6 +657,7 @@ IGNORED: dict[str, dict[str, str]] = {
         "description": "the text lane's substrate", "image": "images phase",
         "images": "images phase", "image_urls": "images phase",
         "totalArea": "no column", "builtUpArea": "no column",
+        "undergroundFloors": "no column",
         "cellarArea": "no column", "nonResidentArea": "no column",
         "rooms": "no column", "placement": "no column", "situation": "no column",
         "hasAuction": "no column", "canBeSubjectOfAuction": "no column",
