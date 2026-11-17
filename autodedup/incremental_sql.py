@@ -456,6 +456,22 @@ select s.listing_id, s.resolved_at
  limit %(limit)s
 """
 
+# E987: every unread advert of the snapshot, ONE scan a pass outside a build: the reconcile's
+# `RC_UNREAD_BLOCKS_SQL` with the rows kept, so the entrant feed orders them by block and the
+# reconcile reads its blocks from what the pass left (`SqlWork.unread_blocks_after`).
+RT_SCOPE_UNREAD_SQL = """
+select s.block_key, s.listing_id, s.resolved_at,
+       (s.resolved_at is null
+        or s.resolved_at <= now() - make_interval(secs => %(lag)s)) as settled,
+       extract(epoch from now() - s.resolved_at)::double precision as waited_s
+  from autodedup.rt_scope_ids s
+ where s.generation = %(generation)s::text
+   and not exists (select 1
+                     from autodedup.rt_fp f
+                    where f.generation = %(generation)s::text
+                      and f.listing_id = s.listing_id)
+"""
+
 # The same feed during a BUILD (E976): the LIVE adverts first, ids ascending within each half,
 # and an advert with no `listings` row last. A widening's backlog is mostly the scope's history —
 # Praha's on 2026-10-22: 37,910 unread of 200,625, 11,864 of them live, the live ones' median id

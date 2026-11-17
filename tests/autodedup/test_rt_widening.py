@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 from autodedup import apply as AP
+from autodedup import apply_sql
 from autodedup import incremental_lane, reconcile, rt_lease
 from autodedup import incremental_sql as S
 from scraper import job_lease
@@ -308,6 +309,28 @@ def test_a_build_pass_re_claims_what_the_reconcile_handed_it(
     assert out["bootstrap"]["active"] is True
     assert out["feeds"].get("stale") == 1 and out["evidence"]["stale_claimed"] == 1
     assert world.rt_fp[(GEN, target)]["updated_at"] == world.now, "refreshed in the build"
+
+
+def test_a_steady_pass_reads_the_snapshots_unread_once_and_hands_it_to_the_reconcile(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """E987: outside a build the claim's scan of the snapshot's unread adverts is the pass's only
+    one: the reconcile is handed the blocks the pass left unread, which are exactly the ones it
+    would have read itself, and `rt_block_reads` given them issues no `RC_UNREAD_BLOCKS_SQL`."""
+    conn = _built_town(tmp_path)
+    assert conn.settings.get(bootstrap_key(GEN)) is False
+    handed: list[Any] = []
+    monkeypatch.setattr(reconcile, "run", lambda conn, generation, touched, **kw: (
+        handed.append(kw), {"counts": {}})[1])
+    conn.statements.clear()
+    out = run_incremental(lambda: conn)
+    assert not out["aborted"] and out["bootstrap"]["active"] is False
+    assert conn.statements.count(S.RT_SCOPE_UNREAD_SQL) == out["counts"]["attempts"]
+    assert apply_sql.RC_UNREAD_BLOCKS_SQL not in conn.statements
+    (kw,) = handed
+    assert kw["unread_blocks"] == AP.rt_block_reads(conn, GEN, kw["blocks"])[1]
+    conn.statements.clear()
+    AP.rt_block_reads(conn, GEN, kw["blocks"], unfingerprinted=kw["unread_blocks"])
+    assert apply_sql.RC_UNREAD_BLOCKS_SQL not in conn.statements
 
 
 @pytest.mark.parametrize(("reclaimed", "entered"), [(2, 2), (5, 1)])
