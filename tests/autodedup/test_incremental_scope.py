@@ -585,6 +585,74 @@ def test_the_straggler_sweep_looks_back_a_row_count_not_an_id_range() -> None:
     assert stragglers == [40_000, 80_000]
 
 
+def test_arrivals_behind_leave_the_entrant_feed_its_fifth_outside_a_build() -> None:
+    """E986: E985 cut the entrant feed to a twentieth while the arrivals were behind, and the
+    reconcile merges nothing in a block whose snapshot holds an unread advert: 2026-11-17
+    13:00Z-14:30Z, 2,051 groups waiting, 0 merged. Outside a build the entrant feed keeps its
+    fifth and the arrivals' slack comes out of the other feeds alone."""
+    db = FakePg()
+    entrants, arrivals = list(range(10, 30)), list(range(1001, 1061))
+    for listing_id in entrants:
+        db.listings[listing_id] = {"first_seen_at": db.now - timedelta(days=9),
+                                   "inactive_at": None, "is_active": True}
+    for listing_id in arrivals:
+        db.listings[listing_id] = {"first_seen_at": db.now - timedelta(hours=1),
+                                   "inactive_at": None, "is_active": True}
+    for listing_id in entrants + arrivals:
+        _place(db, listing_id, obec=563510)
+    db.cursors[CURSOR_NEW] = {"last_listing_id": 1000}
+    work = SqlWork(db, SCOPE, GEN, straggler_window=0, revive_slice=0, drift_slice=0)
+    items = work.claim(50)  # a fifth is 10, a twentieth 2
+    entered = [item.listing_id for item in items if item.feed == "entered"]
+    new = [item.listing_id for item in items if item.feed == "new"]
+    assert work.claim_bound["behind"] and len(entered) == 10 == work.claim_bound["enter"]
+    assert new == arrivals[:34], "50 less 2 x 3 other feeds, less the entrants' 10"
+
+
+def test_a_block_with_unread_adverts_completes_while_the_arrivals_are_behind() -> None:
+    """E986, pinned against the reconcile's own rule (`apply.rt_block_reads`: a block whose
+    snapshot holds an unread advert merges nothing): the town's snapshot holds 20 unread adverts
+    and Praha's arrivals stay behind for every pass; at a limit of 50 the town is read whole in two
+    passes and its groups may merge, where E985's twentieth needed ten."""
+    from autodedup.apply import rt_block_reads
+
+    db = FakePg()
+    db.admin_parents[490245] = 554782
+    town, quarter = "obec:563510", "cast_obce:490245"
+    unread_town = list(range(10, 30))
+    arrivals = list(range(1001, 1401))
+    for listing_id in unread_town:
+        db.listings[listing_id] = {"first_seen_at": db.now - timedelta(days=9),
+                                   "inactive_at": None, "is_active": True}
+        _place(db, listing_id, obec=563510)
+        db.scope_ids[(GEN, town, listing_id)] = {"resolved_at": db.now - timedelta(days=9)}
+    for listing_id in arrivals:
+        db.listings[listing_id] = {"first_seen_at": db.now - timedelta(hours=1),
+                                   "inactive_at": None, "is_active": True}
+        _place(db, listing_id, obec=554782, cast_obce=490245)
+    for block in (town, quarter):              # both walked a moment ago: no walk is due
+        db.scope_scans.append({"generation": GEN, "block_key": block, "scanned_at": db.now,
+                               "rows_found": 0})
+    db.settings[f"rt_scope_pages:{GEN}"] = {town: {"of": 1, "page": 1, "after": 0},
+                                            quarter: {"of": 1, "page": 1, "after": 0}}
+    db.cursors[CURSOR_NEW] = {"last_listing_id": 1000}
+
+    def one_pass() -> bool:
+        work = SqlWork(db, SCOPE, GEN, straggler_window=0, revive_slice=0, drift_slice=0,
+                       parents={490245: 554782})
+        items = work.claim(50)
+        work.commit(items)
+        for item in items:                     # the pass fingerprints what it decided
+            db.rt_fp[(GEN, item.listing_id)] = _fp_row()
+        return bool(work.claim_bound["behind"])
+
+    assert town in rt_block_reads(db, GEN, [town, quarter])[1]
+    assert one_pass() and one_pass(), "Praha's arrivals are behind on both passes"
+    unwalked, unfingerprinted = rt_block_reads(db, GEN, [town, quarter])
+    assert town not in unwalked | unfingerprinted, "the town is fully read: its groups may merge"
+    assert any((GEN, listing_id) not in db.rt_fp for listing_id in arrivals)
+
+
 def test_a_listing_whose_location_resolves_into_the_scope_later_is_claimed() -> None:
     """`listing_location` is written asynchronously, so an in-scope listing can carry no obec
     when its window passes. The sixth feed is the only thing that ever claims it."""

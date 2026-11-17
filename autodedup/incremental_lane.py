@@ -1460,11 +1460,17 @@ class SqlWork:
         # E985: arrivals before backlog. Behind their share, the arrivals (stragglers, then new
         # rows) keep the fifth each held before and take the slack past it: the limit less a
         # twentieth for each other feed that runs; every other feed keeps that twentieth.
+        # E986: the entrant feed keeps its fifth outside a build. It reads the same arrivals
+        # block by block, and the reconcile merges nothing in a block whose snapshot still holds
+        # an unread advert (`apply.rt_block_reads`): cut to a twentieth, no block completed
+        # until the whole backlog had, and 2026-11-17 13:00Z-14:30Z merged nothing.
+        entrant = bool(self.enter_slice and self.enter_blocks)
         rest_feeds = 2 + sum(1 for on in (self.revive_slice, self.drift_slice,
-                                          self.enter_slice and self.enter_blocks,
                                           self.evidence_slice) if on)
         rest_share = max(1, limit // REST_SHARE_DIVISOR)
-        rest = rest_feeds * rest_share
+        rest = rest_feeds * rest_share + ((rest_share if self.bootstrap else share) if entrant
+                                          else 0)
+        fifth = share
         reserved = len(self.stale_claims) if self.bootstrap and self.attempt == 0 else 0
         scope = self.scope.params()
         items: list[WorkItem] = []
@@ -1511,7 +1517,7 @@ class SqlWork:
         # before E964.
         extra = arrivals - sum(held)
         share = rest_share if behind else share
-        enter_share = max(share, limit - reserved - extra) if self.bootstrap else share
+        enter_share = max(share, limit - reserved - extra) if self.bootstrap else fifth
         self.claim_bound.update(enter=enter_share, arrivals=arrivals, behind=behind,
                                 rest_share=share)
 
