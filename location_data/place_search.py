@@ -2,8 +2,9 @@
 
 One read over the current registry version, by name: tiers exact, prefix, then fuzzy (word similarity, only while the
 first two fall short of the limit); within a tier, served properties of any deal type (`place_served_counts`), then the
-town's latest population, then code (Q12 a: one ranking for every place box), except that on an exact name tie the
-obec comes first, before its namesake okres or část (#2497). Counts rank rows and are never returned.
+town's latest population, then code (Q12 a: one ranking for every place box), except that a town ranks right above
+its own okres and kraj on its tier, and before any other place on equal served properties (#2497 ruling 1 as #2548
+ruling 2 narrows it: Praha's Karlín, served, goes before the village Karlín). Counts rank rows and are never returned.
 A row is a chip: level, RÚIAN code, register name, context (the parent's name) and a fly-to point from `place_facts`,
 or none. It answers kraj, okres, obec, část obce and street, never a cadastral area, cohesion region or the country
 (Q6 a, Q9). A městská část, no served level (#2380), answers as a place shortcut (#2450): its `places` are its
@@ -149,18 +150,28 @@ quarters AS (
     FROM ruian_admin_unit_relations rel JOIN ruian_admin_units q ON q.id = rel.to_id
    WHERE rel.relation_type = 'momc_cast_obce' AND rel.registry_version_id = (SELECT id FROM cur)
      AND rel.from_id IN (SELECT h.unit_id FROM hits h WHERE h.level = 'momc')),
-ranked AS (
-  SELECT h.*, coalesce(c.n, parts.n, 0) AS served, pop.population
+scored AS (
+  SELECT h.*, coalesce(c.n, parts.n, 0) AS served, pop.population, hu.path
     FROM hits h
+    LEFT JOIN ruian_admin_units hu ON hu.id = h.unit_id
     LEFT JOIN place_served_counts c ON c.level = h.level AND c.code = h.code
     LEFT JOIN LATERAL (SELECT sum(qc.n) AS n FROM quarters q
                          JOIN place_served_counts qc ON qc.level = q.level AND qc.code = q.code
                         WHERE q.unit_id = h.unit_id) parts ON true
     LEFT JOIN LATERAL (SELECT p.population FROM obec_population p
                         WHERE h.level = 'obec' AND p.obec_kod = h.code
-                        ORDER BY p.year DESC LIMIT 1) pop ON true
-   ORDER BY h.tier, (h.tier = 0 AND h.level <> 'obec'), served DESC, pop.population DESC NULLS LAST, h.code,
-            h.level
+                        ORDER BY p.year DESC LIMIT 1) pop ON true),
+ranked AS (
+  SELECT s.*, coalesce(t.served, s.served) AS k_served, s.level <> 'obec' AND t.code IS NULL AS k_not_town,
+         CASE WHEN t.code IS NULL THEN s.population ELSE t.population END AS k_population,
+         coalesce(t.code, s.code) AS k_code, t.code IS NOT NULL AS k_after
+    FROM scored s
+    LEFT JOIN LATERAL (SELECT o.served, o.population, o.code FROM scored o
+                        WHERE s.level IN ('kraj', 'okres') AND o.level = 'obec' AND o.tier = s.tier
+                          AND o.path <@ s.path
+                        ORDER BY o.served DESC, o.population DESC NULLS LAST, o.code LIMIT 1) t ON true
+   ORDER BY s.tier, k_served DESC, k_not_town, k_population DESC NULLS LAST, k_code, k_after,
+            nlevel(s.path) DESC NULLS LAST, s.level
    LIMIT %(limit)s)
 SELECT r.level::text, r.code, r.name, par.name, f.lat, f.lng,
        (SELECT json_agg(json_build_array(q.level, q.code, q.name, qp.name)) FROM quarters q
@@ -170,7 +181,8 @@ SELECT r.level::text, r.code, r.name, par.name, f.lat, f.lng,
   FROM ranked r
   LEFT JOIN ruian_admin_units par ON par.id = r.parent_id AND par.level IN ('kraj', 'okres', 'obec')
   LEFT JOIN place_facts f ON f.level = r.level AND f.code = r.code
- ORDER BY r.tier, (r.tier = 0 AND r.level <> 'obec'), r.served DESC, r.population DESC NULLS LAST, r.code, r.level
+ ORDER BY r.tier, r.k_served DESC, r.k_not_town, r.k_population DESC NULLS LAST, r.k_code, r.k_after,
+          nlevel(r.path) DESC NULLS LAST, r.level
 """
 
 # THE DOOR READ (#2451): one batched read over EVERY exact namesake street, and every exact namesake část obce for a
