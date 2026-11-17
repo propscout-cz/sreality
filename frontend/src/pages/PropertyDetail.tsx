@@ -40,7 +40,7 @@ import {
   fetchImagesByListing,
   type PropertyPublic,
 } from '@/lib/queries';
-import { portalLabel } from '@/lib/portals';
+import { advertLink, portalLabel } from '@/lib/portals';
 import { fetchPropertyOrigins } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { fmtCzk } from '@/lib/format';
@@ -262,15 +262,16 @@ export default function PropertyDetail() {
 
   /* The status pill opens the latest active advert on its portal (operator
      2026-10-23) — the one seen most recently, the canonical one on a tie; with
-     none active, the advert seen last. Its stored URL, never rebuilt (rule 21). */
+     none active, the advert seen last. Its advertLink, never rebuilt (rule 21). */
   const statusHref = useMemo(() => {
-    const live = sources.filter((s) => s.is_active && s.source_url);
-    const pool = live.length > 0 ? live : sources.filter((s) => s.source_url);
+    const live = sources.filter((s) => s.is_active && advertLink(s));
+    const pool = live.length > 0 ? live : sources.filter((s) => advertLink(s));
     const latest = [...pool].sort(
       (a, b) => b.last_seen_at.localeCompare(a.last_seen_at) || Number(b.id === advertId) - Number(a.id === advertId),
     )[0];
-    return latest?.source_url ?? property?.source_url ?? null;
-  }, [sources, advertId, property?.source_url]);
+    const advert = latest ?? property;
+    return advert ? advertLink(advert) : null;
+  }, [sources, advertId, property]);
 
   // The open tab, from the address. Above the early returns (#310).
   const [tab, setTab] = usePropertyTab(property?.id ?? null);

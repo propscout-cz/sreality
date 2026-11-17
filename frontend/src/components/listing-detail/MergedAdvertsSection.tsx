@@ -47,7 +47,7 @@ import {
 import { imageSrc } from '@/lib/imageUrl';
 import { areaKindOf } from '@/lib/measure';
 import { mergeOriginLabel, mergedAdvertsKeys, splitPlan } from '@/lib/mergedAdverts';
-import { portalBadge } from '@/lib/portals';
+import { advertLink, portalBadge } from '@/lib/portals';
 import { fetchListingsForListingIds } from '@/lib/queries';
 import { ROUTES, withQuery } from '@/lib/routes';
 import type { ImagePublic, ListingPublic, PropertySource } from '@/lib/types';
@@ -284,6 +284,7 @@ function MergedAdvertRow({
   }, [opened]);
   const panelId = `merged-advert-${source.id}`;
   const portal = portalBadge(source.source, source.source_url, 'long');
+  const link = advertLink(source);
   const facts = [
     detail?.area_m2 != null ? fmtArea(detail.area_m2, areaKindOf(detail.category_main)) : null,
     detail?.disposition ?? null,
@@ -351,9 +352,9 @@ function MergedAdvertRow({
               </span>
             </span>
           </button>
-          {source.source_url && (
+          {link && (
             <a
-              href={source.source_url}
+              href={link}
               target="_blank"
               rel="noopener noreferrer"
               aria-label={`Na portálu ${portal}`}
@@ -429,7 +430,7 @@ function MergedAdvertRow({
             )}
             <BrokerLine read={brokerRead} />
             {originRead && <OriginLine read={originRead} />}
-            {!source.source_url && (
+            {!link && (
               <p className="text-[0.75rem] text-[var(--color-ink-4)]">Odkaz na portál chybí</p>
             )}
           </div>

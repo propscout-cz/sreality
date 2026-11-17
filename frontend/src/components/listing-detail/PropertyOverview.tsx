@@ -31,7 +31,7 @@ import {
 } from '@/lib/format';
 import { ppm2BasisFromToken } from '@/lib/measure';
 import { mfShape, mfYieldText } from '@/lib/mfReference';
-import { portalLabel } from '@/lib/portals';
+import { advertLink, portalLabel } from '@/lib/portals';
 import { buildPriceSeries, lastMoveByTrack, type PriceAdvert, type PriceSeries } from '@/lib/priceHistory';
 import {
   fetchSoldComparables,
@@ -371,6 +371,7 @@ function AdvertsPriceCard({
             const i = trackIndex.get(s.id);
             const style = i != null ? trackStyle(i) : null;
             const move = lastMove.get(s.id);
+            const link = advertLink(s);
             return (
               <li key={s.id} className="flex items-center gap-3 py-2 text-sm">
                 <span
@@ -397,9 +398,9 @@ function AdvertsPriceCard({
                 <span className={`font-mono tabular-nums ${s.is_active ? 'text-[var(--color-ink)]' : 'text-[var(--color-ink-3)]'}`}>
                   {fmtCzk(s.price_czk)}
                 </span>
-                {s.source_url ? (
+                {link ? (
                   <a
-                    href={s.source_url}
+                    href={link}
                     target="_blank"
                     rel="noopener noreferrer"
                     aria-label={`Inzerát na webu ${portal}`}
