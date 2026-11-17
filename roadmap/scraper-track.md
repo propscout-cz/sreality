@@ -59,10 +59,10 @@ Independent of the analytical, UI, and map tracks.
 - **Done (in the PR):** a flat (or unknown category) reads bare `N. podlaží` (N−1) and spelled-out
   ordinals up to the tenth; 'přízemí' is 0 only when tied to the flat and no other storey is named
   (both said → None, for the text lane).
-  Every other category keeps the legacy miner. `scripts/heal_bazos_floor_zero.py` (dry run default,
-  `--apply --backup`) re-reads or NULLs the measured rows.
-- **Next:** run the heal after merge (dry run first); then `reparse` `--fields floor` on bazos to fill
-  the NULL flats that now read a `N. podlaží` (5,915 measured, 568 active).
+  Every other category keeps the legacy miner. The one-off heal ran 2026-10-26 and its script is gone
+  (#2552); a number worded only as "patro" is unread since #2552.
+- **Next (#2552):** `reparse` `--fields floor` on ceskereality, then bazos; a data migration blanks the
+  stored floors that came from a patro wording.
 
 ### Condition scoring PARKED — no surface reads the frozen 1–5 levels (2026-10-20, done)
 - **Done:** operator ruling 2026-10-20 ("keep the scoring engine for now, but make sure it does
