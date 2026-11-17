@@ -419,6 +419,8 @@ def test_the_revived_feed_takes_its_fifth_and_skips_no_revived_id() -> None:
                                        "fp_digest": "d", "cell_key": "o1", "cell_group": "byt",
                                        "is_active": False}
     _place(db, *revived, *still_inactive)
+    # The new feed has read them all, so the arrivals are not behind (E985).
+    db.cursors[CURSOR_NEW] = {"last_listing_id": max(still_inactive)}
 
     def one_pass(limit: int) -> list[int]:
         work = SqlWork(db, SCOPE, GEN, straggler_window=0, revive_slice=10, drift_slice=0,
@@ -449,6 +451,51 @@ def test_each_feed_advances_only_its_own_cursor() -> None:
     assert out[CURSOR_NEW] == 5
     assert out[CURSOR_CHANGED] == 99
     assert CURSOR_FLIPPED not in out
+
+
+def _arrivals_and_delistings(arrivals: int, delistings: int) -> FakePg:
+    """`arrivals` new rows past the new cursor and `delistings` flipped rows behind it."""
+    db = FakePg()
+    flipped = list(range(100, 100 + delistings))
+    for listing_id in flipped:
+        db.listings[listing_id] = {"first_seen_at": db.now - timedelta(days=30),
+                                   "inactive_at": db.now - timedelta(hours=2),
+                                   "is_active": False}
+    new = list(range(1000, 1000 + arrivals))
+    for listing_id in new:
+        db.listings[listing_id] = {"first_seen_at": db.now - timedelta(hours=1),
+                                   "inactive_at": None, "is_active": True}
+    _place(db, *flipped, *new)
+    db.cursors[CURSOR_NEW] = {"last_listing_id": 999}
+    return db
+
+
+def test_arrivals_behind_their_share_go_before_the_backlog() -> None:
+    """E985: 2026-11-11..14 the new feed took a fifth of every claim, oldest first, and fell 2.4
+    days behind. Behind its share, the arrivals take the limit less a twentieth for each other
+    feed that runs; the delistings keep that twentieth, and the cursor stops at the last taken."""
+    db = _arrivals_and_delistings(arrivals=50, delistings=10)
+    work = SqlWork(db, SCOPE, GEN, straggler_window=0, revive_slice=0, drift_slice=0,
+                   enter_slice=0, evidence_slice=0)
+    items = work.claim(40)  # a fifth is 8, a twentieth 2; two feeds run beside the arrivals
+    new = [item.listing_id for item in items if item.feed == "new"]
+    assert new == list(range(1000, 1036)), "40 less 2 x 2"
+    assert [item.listing_id for item in items if item.feed == "flipped"] == [100, 101]
+    bound = work.claim_bound
+    assert (bound["behind"], bound["arrivals"], bound["rest_share"], bound["cut"]) == (
+        True, 36, 2, True)
+    assert work.commit(items)[CURSOR_NEW] == 1035
+
+
+def test_arrivals_within_their_share_leave_every_feed_its_fifth() -> None:
+    db = _arrivals_and_delistings(arrivals=5, delistings=10)
+    work = SqlWork(db, SCOPE, GEN, straggler_window=0, revive_slice=0, drift_slice=0,
+                   enter_slice=0, evidence_slice=0)
+    items = work.claim(40)
+    assert [item.listing_id for item in items if item.feed == "new"] == list(range(1000, 1005))
+    assert [item.listing_id for item in items if item.feed == "flipped"] == list(range(100, 108))
+    assert (work.claim_bound["behind"], work.claim_bound["rest_share"]) == (False, 8)
+    assert work.claim_bound["cut"], "the delistings left two waiting"
 
 
 def test_the_changed_feed_skips_a_listings_first_snapshot_and_still_crosses_it() -> None:
