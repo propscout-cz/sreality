@@ -17,22 +17,29 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObje
 const SETTLE_IDLE_MS = 120;
 
 export interface LoopSlot {
-  /* The photo this slide shows. */
+  /* The slide this slot shows. */
   index: number;
-  /* A copy standing at the far end, not the photo's own slide. */
+  /* A copy standing at the far end, not the slide's own slot. */
   copy: boolean;
 }
 
-/* The slides in strip order: the photos, between two copies when there is more than one. */
-export function loopSlots(count: number): LoopSlot[] {
-  const own = Array.from({ length: count }, (_, index) => ({ index, copy: false }));
-  if (count < 2) return own;
-  return [{ index: count - 1, copy: true }, ...own, { index: 0, copy: true }];
+/* The slots in strip order: the slides, between two copies when there is more than one. */
+export function loopSlots(slideCount: number): LoopSlot[] {
+  const own = Array.from({ length: slideCount }, (_, index) => ({ index, copy: false }));
+  if (slideCount < 2) return own;
+  return [{ index: slideCount - 1, copy: true }, ...own, { index: 0, copy: true }];
 }
 
 export interface LoopStrip {
   ref: RefObject<HTMLDivElement>;
+  /* The slide on screen, the one a swipe on would show and the one a swipe back would. */
   at: number;
+  next: number;
+  prev: number;
+  /* On the first or the last slide: the only places a copy can be seen from. */
+  atAnEnd: boolean;
+  /* The strip has been used: a finger came down on it, or it left where it opened. */
+  touched: boolean;
   handlers: {
     onScroll(): void;
     onTouchStart(): void;
@@ -41,30 +48,31 @@ export interface LoopStrip {
   };
 }
 
-export function useLoopStrip(count: number): LoopStrip {
+export function useLoopStrip(slideCount: number): LoopStrip {
   const ref = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState(0);
+  const [touched, setTouched] = useState(false);
   const touching = useRef(false);
   const raf = useRef(0);
   const idle = useRef<number | undefined>(undefined);
-  const loops = count > 1;
-  const slides = useRef(0);
-  slides.current = loops ? count + 2 : count;
+  const loops = slideCount > 1;
+  const slots = useRef(0);
+  slots.current = loops ? slideCount + 2 : slideCount;
 
-  /* scrollWidth over the slide count, not clientWidth: on a fractional-width
-   * screen the rounding error would grow with the photo count. */
-  const slideWidth = useCallback((): number => {
+  /* scrollWidth over the slot count, not clientWidth: on a fractional-width
+   * screen the rounding error would grow with the slide count. */
+  const slotWidth = useCallback((): number => {
     const el = ref.current;
-    if (!el || slides.current === 0) return 0;
-    return (el.scrollWidth || el.clientWidth * slides.current) / slides.current;
+    if (!el || slots.current === 0) return 0;
+    return (el.scrollWidth || el.clientWidth * slots.current) / slots.current;
   }, []);
 
-  /* Past the copy before the first photo. Keyed on `loops` alone: a photo count
+  /* Past the copy before the first slide. Keyed on `loops` alone: a slide count
    * that changes under a strip in use (a re-read) must not send it back to the start. */
   useLayoutEffect(() => {
     const el = ref.current;
-    if (el && loops) el.scrollLeft = slideWidth();
-  }, [loops, slideWidth]);
+    if (el && loops) el.scrollLeft = slotWidth();
+  }, [loops, slotWidth]);
 
   useEffect(
     () => () => {
@@ -76,11 +84,11 @@ export function useLoopStrip(count: number): LoopStrip {
 
   const settle = useCallback((): void => {
     const el = ref.current;
-    const w = slideWidth();
+    const w = slotWidth();
     if (!el || !loops || !w || touching.current) return;
-    if (el.scrollLeft <= 1) el.scrollLeft = count * w;
-    else if (el.scrollLeft >= (count + 1) * w - 1) el.scrollLeft = w;
-  }, [count, loops, slideWidth]);
+    if (el.scrollLeft <= 1) el.scrollLeft = slideCount * w;
+    else if (el.scrollLeft >= (slideCount + 1) * w - 1) el.scrollLeft = w;
+  }, [slideCount, loops, slotWidth]);
 
   const onScroll = (): void => {
     window.clearTimeout(idle.current);
@@ -89,10 +97,12 @@ export function useLoopStrip(count: number): LoopStrip {
     raf.current = requestAnimationFrame(() => {
       raf.current = 0;
       const el = ref.current;
-      const w = slideWidth();
+      const w = slotWidth();
       if (!el || !w) return;
+      /* The opening position's own scroll event is not use (a trackpad never touches). */
+      if (Math.abs(el.scrollLeft - (loops ? w : 0)) > 1) setTouched(true);
       const slot = Math.round(el.scrollLeft / w);
-      setAt(loops ? (slot - 1 + count) % count : Math.min(slot, Math.max(count - 1, 0)));
+      setAt(loops ? (slot - 1 + slideCount) % slideCount : Math.min(slot, Math.max(slideCount - 1, 0)));
       settle();
     });
   };
@@ -103,13 +113,20 @@ export function useLoopStrip(count: number): LoopStrip {
     settle();
   };
 
+  const last = Math.max(slideCount - 1, 0);
+  const here = Math.min(at, last);
   return {
     ref,
-    at,
+    at: here,
+    next: here === last ? 0 : here + 1,
+    prev: here === 0 ? last : here - 1,
+    atAnEnd: here === 0 || here === last,
+    touched,
     handlers: {
       onScroll,
       onTouchStart: () => {
         touching.current = true;
+        setTouched(true);
       },
       onTouchEnd: onLift,
       onTouchCancel: onLift,

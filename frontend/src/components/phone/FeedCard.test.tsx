@@ -336,7 +336,7 @@ describe('<FeedCard> — the photo strip', () => {
     renderCard(base);
     await waitFor(() => expect(slides()).toHaveLength(5));
     expect(srcs()).not.toContain(src(5));
-    press(strip(), 100, 100);
+    fireEvent.touchStart(strip(), { touches: [{ identifier: 1, target: strip() }] });
     await waitFor(() => expect(frames()[0].querySelector('img')).toHaveAttribute('src', src(5)));
   });
 
@@ -383,16 +383,15 @@ describe('<FeedCard> — the photo strip', () => {
     expect(screen.getByText(/fot\./).textContent).toMatch(/12/);
   });
 
-  it('closes the round on "all photos" when the read\'s set is full and the ad may hold more', async () => {
-    vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map([[9001, photos(50)]]));
+  it('keeps every photo past fifty, the last one a swipe back from the cover', async () => {
+    vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map([[9001, photos(60)]]));
     renderCard(base);
-    await waitFor(() => expect(slides()).toHaveLength(51));
-    const last = slides()[50];
-    expect(last).toHaveTextContent('Zobrazit všechny fotky');
-    expect(last).toHaveAttribute('href', expect.stringContaining('/property/304388'));
-    /* Back from the cover is that slide's copy; the counter owns up to the cut. */
-    expect(frames()[0]).toHaveTextContent('Zobrazit všechny fotky');
-    expect(strip().parentElement!.querySelector('[data-counter]')).toHaveTextContent('1 / 50+');
+    await waitFor(() => expect(slides()).toHaveLength(60));
+    expect(screen.queryByText(/Zobrazit všech/)).toBeNull();
+    expect(frames()[0]).toHaveAttribute('aria-hidden', 'true');
+    fireEvent.touchStart(strip(), { touches: [{ identifier: 1, target: strip() }] });
+    await waitFor(() => expect(frames()[0].querySelector('img')).toHaveAttribute('src', '/images/9001/00060.jpg?w=1080'));
+    expect(strip().parentElement!.querySelector('[data-counter]')).toHaveTextContent('1 / 60');
   });
 
   it('draws neither dots nor copies for a single photo', async () => {

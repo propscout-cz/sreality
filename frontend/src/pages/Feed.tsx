@@ -277,6 +277,8 @@ export default function Feed() {
       };
   /* The Filtry chip counts what the view adds to its scope (not under Skryté). */
   const shownBeyond = hidden ? 0 : beyond;
+  /* Likewise the Řazení chip names an order only where one applies: Skryté is read by dismissal date. */
+  const orderShown = !hidden && !newestFirst;
   /* The chosen chip carries a trailing "·" once the view has left its filters. */
   const scopeChip = (id: string, name: string) => {
     const on = !hidden && activeScope === id;
@@ -327,16 +329,15 @@ export default function Feed() {
             <span className="font-mono text-[11px] tabular-nums text-[var(--color-ink)]">{shownBeyond}</span>
           )}
         </button>
-        {/* The order on the roll itself (operator's ask, 2026-11-15): the Filtry sheet's own menu (SortChips). */}
         <button
           type="button"
           onClick={() => setSortOpen(true)}
           aria-haspopup="dialog"
-          aria-label={`Řazení: ${sortLabel(sort)}`}
-          className={`${CHIP} ${CHIP_MD} ${chipState(!newestFirst)}`}
+          aria-label={orderShown ? `Řazení: ${sortLabel(sort)}` : 'Řazení'}
+          className={`${CHIP} ${CHIP_MD} ${chipState(orderShown)}`}
         >
           <SortIcon className="h-3.5 w-3.5" />
-          {newestFirst ? 'Řazení' : sortLabel(sort)}
+          {orderShown ? sortLabel(sort) : 'Řazení'}
         </button>
         <span aria-hidden className={CHIP_DIVIDER} />
         {scopeChip(FEED_ALL_SCOPE, 'Vše')}

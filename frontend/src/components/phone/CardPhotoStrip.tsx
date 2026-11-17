@@ -5,15 +5,13 @@
  * 2026-11-15; ./useLoopStrip): past the last photo comes the cover, before the
  * cover the last. The position sits on the photo in the margin's own translucent
  * paper — dots up to STRIP_MAX_DOTS photos, a counter past that — so it reads as
- * the margin's material rather than a control laid on the picture. The card's read
- * keeps at most PHOTOS_PER_CARD photos an ad; when the set is full (`mayHoldMore`)
- * one plain slide closes the round and opens the property page, which holds them all.
+ * the margin's material rather than a control laid on the picture.
  *
  * PHOTOS LOAD ONE STEP AHEAD OF THE SWIPE: the photo on screen and the next get
  * an <img> (native lazy, so a card far down the roll fetches nothing); the rest
  * stay bare frames until the swipe nears them. The photo BEFORE the one on screen
- * (the last, on a fresh card) loads only once a finger has come down on the strip,
- * so a card merely scrolled past never fetches it. Native lazy loading alone
+ * (the last, on a fresh card) loads only once the strip is in use (useLoopStrip's
+ * `touched`), so a card merely scrolled past never fetches it. Native lazy loading alone
  * fetched the first three photos of every card near the viewport in Chromium, and
  * WebKit's rule inside a scroller is unverified — while the roll is newest first,
  * so each of those is a cold 1080 px copy the API makes on its first request.
@@ -33,7 +31,6 @@ import { Link } from 'react-router-dom';
 import { imageSrc } from '@/lib/imageUrl';
 import type { ImagePublic } from '@/lib/types';
 
-import { ChevronIcon } from './phoneIcons';
 import StageWash, { type StageWashProps } from './StageWash';
 import { loopSlots, useLoopStrip } from './useLoopStrip';
 
@@ -41,7 +38,8 @@ import { loopSlots, useLoopStrip } from './useLoopStrip';
  * pipeline's thumbnails and the property page's gallery take the same. */
 export const PHOTO_DARK = '[:root[data-theme=dark]_&]:brightness-[0.74]';
 
-/* More dots than this stop reading as positions; a counter takes over. */
+/* Past this a counter takes over. Fewer than the property page's twelve: here the
+ * dots share the photo's width with the margin column. */
 const STRIP_MAX_DOTS = 8;
 
 /* How far a press may travel and still be a tap (px). */
@@ -53,8 +51,6 @@ export interface CardPhotoStripProps {
   /* The property page the strip opens. */
   to: string;
   photos: readonly ImagePublic[];
-  /* The read's photo set is full, so the ad may have more than the strip holds. */
-  mayHoldMore: boolean;
   /* The first page of photos is still in flight. */
   pending: boolean;
   /* The stage wash of a filed property, laid on every photo. */
@@ -85,14 +81,11 @@ export function useTapGuard() {
   };
 }
 
-export default function CardPhotoStrip({ to, photos, mayHoldMore, pending, wash, insetRight }: CardPhotoStripProps) {
+export default function CardPhotoStrip({ to, photos, pending, wash, insetRight }: CardPhotoStripProps) {
   const count = photos.length;
-  /* The slides of one round: the photos, then the "all photos" slide when there may be more. */
-  const slideCount = count + (mayHoldMore ? 1 : 0);
-  const { ref, at, handlers } = useLoopStrip(slideCount);
-  /* The slides whose photo has an <img>: grown as the swipe nears them, never shrunk. */
+  const { ref, at, next, prev, atAnEnd, touched, handlers } = useLoopStrip(count);
+  /* The photos that have an <img>: grown as the swipe nears them, never shrunk. */
   const [loaded, setLoaded] = useState<ReadonlySet<number>>(() => new Set([0, 1]));
-  const [touched, setTouched] = useState(false);
   const [broken, setBroken] = useState<ReadonlySet<number>>(() => new Set());
   const guard = useTapGuard();
 
@@ -114,10 +107,8 @@ export default function CardPhotoStrip({ to, photos, mayHoldMore, pending, wash,
     );
   }
 
-  const toLoad = [at, (at + 1) % slideCount, ...(touched ? [(at - 1 + slideCount) % slideCount] : [])];
+  const toLoad = touched ? [at, next, prev] : [at, next];
   if (toLoad.some((i) => !loaded.has(i))) setLoaded(new Set([...loaded, ...toLoad]));
-  /* A copy stands beside the first or the last slide and is only ever seen from there. */
-  const atAnEnd = at === 0 || at === slideCount - 1;
 
   return (
     <div className="relative">
@@ -126,34 +117,10 @@ export default function CardPhotoStrip({ to, photos, mayHoldMore, pending, wash,
         role="group"
         aria-label={`Fotky, ${count}`}
         {...handlers}
-        onPointerDown={(e) => {
-          guard.onPointerDown(e);
-          setTouched(true);
-        }}
-        onClickCapture={guard.onClickCapture}
+        {...guard}
         className="flex snap-x snap-mandatory overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
-        {loopSlots(slideCount).map(({ index, copy }) => {
-          if (index === count) {
-            return (
-              <Link
-                key={copy ? 'copy-all' : 'all'}
-                to={to}
-                tabIndex={-1}
-                draggable={false}
-                aria-hidden={copy || undefined}
-                className={SLIDE}
-              >
-                <span
-                  className="absolute inset-0 flex items-center justify-center gap-1 font-display text-[17px] text-[var(--color-ink)]"
-                  style={{ paddingRight: insetRight }}
-                >
-                  Zobrazit všechny fotky
-                  <ChevronIcon className="h-4 w-4 text-[var(--color-ink-3)]" />
-                </span>
-              </Link>
-            );
-          }
+        {loopSlots(count).map(({ index, copy }) => {
           const img = photos[index];
           return (
             <Link
@@ -191,9 +158,7 @@ export default function CardPhotoStrip({ to, photos, mayHoldMore, pending, wash,
       {count > 1 && (
         <div
           aria-hidden
-          className={`pointer-events-none absolute bottom-4 left-0 flex justify-center transition-opacity duration-150 motion-reduce:transition-none ${
-            at < count ? 'opacity-100' : 'opacity-0'
-          }`}
+          className="pointer-events-none absolute bottom-4 left-0 flex justify-center"
           style={{ right: insetRight }}
         >
           <span className="flex h-3.5 items-center gap-1 rounded-full bg-[var(--color-paper-2)]/88 px-1.5">
@@ -209,8 +174,7 @@ export default function CardPhotoStrip({ to, photos, mayHoldMore, pending, wash,
               ))
             ) : (
               <span data-counter className="font-mono text-[10px] leading-none tabular-nums text-[var(--color-ink)]">
-                {Math.min(at + 1, count)} / {count}
-                {mayHoldMore && '+'}
+                {at + 1} / {count}
               </span>
             )}
           </span>

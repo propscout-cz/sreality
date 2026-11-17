@@ -160,7 +160,7 @@ export default function FilterSheet({ filters, sort, base, preset, onApply, onCl
           open={sortOpen}
           onToggle={() => setSortOpen((o) => !o)}
         >
-          <SortChips sort={draftSort} onPick={setDraftSort} />
+          <SortChips tone="desktop" sort={draftSort} onPick={setDraftSort} />
         </Row>
         <FilterSheetBody draft={draft} setDraft={setDraft} />
       </div>

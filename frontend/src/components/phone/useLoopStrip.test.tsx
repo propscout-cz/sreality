@@ -14,7 +14,7 @@ describe('useLoopStrip', () => {
     expect(loopSlots(1)).toEqual([{ index: 0, copy: false }]);
   });
 
-  it('keeps its place when the photo count changes under it', () => {
+  it('keeps its place when the slide count changes under it', () => {
     const { getByTestId, rerender } = render(<Strip count={4} />);
     const el = getByTestId('strip');
     Object.defineProperty(el, 'clientWidth', { configurable: true, value: 390 });

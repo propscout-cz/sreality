@@ -284,9 +284,9 @@ describe('<Feed>', () => {
     const user = userEvent.setup();
     renderFeed();
     await screen.findByText('Místo 1', { exact: false });
-    await user.click(screen.getByRole('button', { name: 'Řazení: Newest first' }));
+    await user.click(screen.getByRole('button', { name: 'Řazení' }));
     const sheet = screen.getByRole('dialog', { name: 'Řazení' });
-    /* A menu that acts as you tap closes on "Hotovo"; the orders are the Filtry sheet's chips. */
+    /* A menu that acts as you tap closes on "Hotovo"; the orders are the Filtry sheet's, in the feed's ink chips. */
     expect(within(sheet).getByRole('button', { name: 'Hotovo' })).toBeInTheDocument();
     expect(within(sheet).getByRole('button', { name: 'Newest first' })).toHaveAttribute('aria-pressed', 'true');
     await user.click(within(sheet).getByRole('button', { name: 'Price: low → high' }));
@@ -305,9 +305,13 @@ describe('<Feed>', () => {
     await screen.findByText('Místo 1', { exact: false });
     await user.click(screen.getByRole('button', { name: /^Skryté/ }));
     expect(screen.getByRole('button', { name: /^Skryté/ })).toHaveAttribute('aria-pressed', 'true');
-    await user.click(screen.getByRole('button', { name: /^Řazení/ }));
+    await user.click(screen.getByRole('button', { name: 'Řazení' }));
     await user.click(within(screen.getByRole('dialog', { name: 'Řazení' })).getByRole('button', { name: 'Oldest first' }));
     expect(screen.getByRole('button', { name: /^Skryté/ })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Řazení: Oldest first' })).toBeInTheDocument();
+    /* Back under Skryté the chip names no order: none applies there. */
+    await user.click(screen.getByRole('button', { name: /^Skryté/ }));
+    expect(screen.getByRole('button', { name: 'Řazení' })).toHaveTextContent(/^Řazení$/);
   });
 
   it('opens the Filtry sheet and applies its draft to the roll', async () => {

@@ -16,7 +16,8 @@ import type { ImagePublic } from '@/lib/types';
 import { PHOTO_DARK } from './CardPhotoStrip';
 import { loopSlots, useLoopStrip } from './useLoopStrip';
 
-/* More dots than this stop reading as positions; a counter takes over. */
+/* More dots than this stop reading as positions; a counter takes over (the feed
+ * card's strip, narrower, turns at eight). */
 const MAX_DOTS = 12;
 
 export const photosWord = (n: number): string => `${n} ${czPlural(n, 'fotka', 'fotky', 'fotek')}`;

@@ -28,7 +28,6 @@ describe('cardPhotos', () => {
     const strip = cardPhotos(all, 'default');
     expect(strip.cover?.id).toBe(10);
     expect(seqs(strip.photos)).toEqual([1, 2, 3]);
-    expect(strip.total).toBe(3);
   });
 
   it('puts the chosen cover first and keeps the rest in position order', () => {
@@ -44,7 +43,6 @@ describe('cardPhotos', () => {
     const all = Array.from({ length: 12 }, (_, i) => photo(i + 1, i + 1));
     const strip = cardPhotos(all, 'default');
     expect(seqs(strip.photos)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-    expect(strip.total).toBe(12);
   });
 
   it('leads with a cover found deep in the set — the reason the read is not position-capped', () => {
@@ -55,7 +53,6 @@ describe('cardPhotos', () => {
     const strip = cardPhotos(all, 'exterior_facade');
     expect(strip.cover?.sequence).toBe(11);
     expect(seqs(strip.photos)).toEqual([11, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12]);
-    expect(strip.total).toBe(12);
   });
 
   it('orders photos without a position last, by id', () => {
@@ -64,6 +61,6 @@ describe('cardPhotos', () => {
   });
 
   it('is empty for an ad without photos', () => {
-    expect(cardPhotos([], 'kitchen')).toEqual({ cover: null, photos: [], total: 0 });
+    expect(cardPhotos([], 'kitchen')).toEqual({ cover: null, photos: [] });
   });
 });

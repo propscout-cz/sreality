@@ -114,14 +114,13 @@ export default function FeedCard({ r, coverTag }: { r: CardRow; coverTag: CoverT
         <CardPhotoStrip
           to={to}
           photos={strip.photos}
-          mayHoldMore={strip.mayHoldMore}
           pending={strip.pending}
           wash={member ? { color: accent.fg, badge, label: member.stage_label } : null}
           insetRight={MARGIN_PX}
         />
         <MarginMarks
           subject={{ property_id: r.property_id, text: line2, figure: price.text ? priceLabel : null }}
-          photoCount={strip.pending ? null : strip.total}
+          photoCount={strip.pending ? null : strip.photos.length}
         />
       </div>
       {/* `relative`: the price link's stretched hit area covers this text, not the strip. */}
