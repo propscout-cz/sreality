@@ -340,7 +340,7 @@ describe('<AutodedupResidual>', () => {
     /* The diff table is the only table on the row; the cards use <dl>. */
     const diff = within(row).getByRole('table');
     /* Floor 3 vs 5 — both known and different. */
-    const floor = within(diff).getByText('Patro').closest('tr')!;
+    const floor = within(diff).getByText('Podlaží').closest('tr')!;
     expect(floor.className).toContain('brick-soft');
     /* Price known on one side only: a gap, not a disagreement. */
     const price = within(diff).getByText('Cena').closest('tr')!;

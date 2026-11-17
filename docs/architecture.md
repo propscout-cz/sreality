@@ -4427,7 +4427,7 @@ renumber.** Navigate by area:
     multi-image read for one photo per card is the fetch-everything-then-discard W4 measured at
     901 rows / 3,995 buffers for 44 cards (Browse cards also opt into `floors` —
     `useListingFloors`, `id,floor,total_floors` from `listings_public` per page-sized bucket, the
-    storey as a small tag beside the place ("2. patro z 5", never in the headline) for apartments and
+    storey as a small tag beside the place ("3. podlaží z 5", never in the headline) for apartments and
     commercial units — because `browse_list` carries no
     floor column); the **property's broker list** per card (MS7: the
     property page's `propertyBrokers` rule, shown as its first entry plus "+N") via two batched

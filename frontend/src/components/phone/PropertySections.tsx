@@ -115,7 +115,7 @@ export function phoneFacts(p: ListingPublic): Array<{ label: string; value: stri
   const head = [
     kind.length > 0 ? { label: 'Dispozice', value: kind.join(' · ') } : null,
     p.area_m2 != null ? { label: 'Plocha', value: fmtArea(p.area_m2, areaKindOf(p.category_main)) } : null,
-    floor != null ? { label: 'Patro', value: floor } : null,
+    floor != null ? { label: 'Podlaží', value: floor } : null,
   ].filter((f): f is { label: string; value: string } => f != null);
   const facts = buildFacts(p).map((f) => ({ label: FACT_CS[f.label] ?? f.label, value: f.value ?? '' }));
   const amenities = buildAmenities(p).map((a) => ({

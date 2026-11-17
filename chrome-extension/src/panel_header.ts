@@ -4,7 +4,7 @@
  * property's. Every label and number comes from the app's own modules. */
 
 import { categoryMainLabel, categoryTypeLabel, enumLabel, subtypeLabel } from '../../frontend/src/lib/enums';
-import { fmtArea, fmtCzk, fmtFloorTag, fmtMeasuredPricePerM2, fmtTomDays } from '../../frontend/src/lib/format';
+import { fmtArea, fmtCzk, fmtFloor, fmtMeasuredPricePerM2, fmtTomDays } from '../../frontend/src/lib/format';
 import { areaBasisLabel, areaKindOf, ppm2BasisFromToken } from '../../frontend/src/lib/measure';
 import { MF_YIELD_LABEL, MF_YIELD_TITLE, mfShape, mfYieldText } from '../../frontend/src/lib/mfReference';
 import { h } from './dom';
@@ -57,7 +57,7 @@ export function header(l: PortalListing, move: number | null): HTMLElement {
   }
 
   const facts = factChips(l, {
-    floor: fmtFloorTag,
+    floor: fmtFloor,
     label: (column, slug) => (column === 'subtype' ? subtypeLabel(slug) : enumLabel(column, slug)),
     plot: (m2) => fmtArea(m2, 'plot'),
   });
@@ -65,7 +65,6 @@ export function header(l: PortalListing, move: number | null): HTMLElement {
     const row = h('div', 'facts');
     for (const f of facts) {
       const chip = h('span', 'fact', f.text);
-      if (f.title != null && f.title !== f.text) chip.title = f.title;
       row.appendChild(chip);
     }
     ident.appendChild(row);

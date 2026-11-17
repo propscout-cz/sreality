@@ -272,7 +272,7 @@ describe('the phone property page', () => {
 
     /* Facts, in Czech, from the one facts definition. */
     const facts = within(screen.getByRole('region', { name: 'Fakta' }));
-    expect(facts.getByText('Patro').nextSibling).toHaveTextContent('4. patro z 8 podlaží');
+    expect(facts.getByText('Podlaží').nextSibling).toHaveTextContent('5. podlaží z 8');
     expect(facts.getByText('Výtah').nextSibling).toHaveTextContent('ano');
     expect(facts.getByText('Vlastnictví').nextSibling).toHaveTextContent('Osobní');
 

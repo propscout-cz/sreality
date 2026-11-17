@@ -79,7 +79,7 @@ test('the edge tab marks the stage, a price DROP only, and MF, each only when th
 });
 
 const FMT = {
-  floor: (f: number, t: number | null) => ({ text: `${f}/${t}`, title: `${f} of ${t}` }),
+  floor: (f: number, t: number | null) => `${f}/${t}`,
   label: (col: string, slug: string) => `${col}:${slug}`,
   plot: (m2: number) => `${m2} m² pozemku`,
 };
@@ -109,11 +109,6 @@ test('a missing fact is left out, never drawn as a dash', () => {
   assert.deepEqual(texts({ ...BASE, floor: 0, condition: null, ownership: null }, FMT), ['0/6']);
   // A formatter that has no label leaves the chip out.
   assert.deepEqual(texts(BASE, { ...FMT, label: () => null }), ['4/6']);
-});
-
-test('the floor chip keeps its formatter\'s tooltip; a label chip has none', () => {
-  assert.deepEqual(factChips(BASE, FMT).slice(0, 2),
-    [{ text: '4/6', title: '4 of 6' }, { text: 'condition:velmi_dobry' }]);
 });
 
 test('a chip row shows three, then +N for the rest', () => {
