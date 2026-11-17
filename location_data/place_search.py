@@ -43,6 +43,7 @@ from location_data.resolver.normalize import TYP_CP, house_number, split_street_
 LOG = logging.getLogger("location_data.place_search")
 
 _FUZZY_MIN_CHARS = 3
+_SPELLED_SLOTS = 3
 _LETTER = re.compile(r"[a-z]")
 # "<street> <number> <town>": the town is what follows the LAST number that whitespace and a letter follow, so an
 # ordinal ("28. října") and a č.o. ("12/3") never split, and "Praha 6" keeps its digit.
@@ -85,6 +86,10 @@ _BOUNDS_SQL = (
 # it publishes); a street, which has no index, by the version's membership (location_data/ruian_boundaries.py). A NULL
 # prefix or fuzzy key switches its arm off. A městská část is a candidate only with pairs at that version, gated in both
 # unit arms so one without never counts toward `near` and switches fuzzy off; `unit_id` carries its row to the pairs.
+# A street is exact under every spelling the resolver's abbreviation folds make equal, and starts under each, so "nám."
+# reaches Praha's náměstí as exactly as Třebíč's "nám." (#2548). Three spelled prefix slots, each its own index condition
+# (`LIKE ANY` takes no trigram index) and NULL when unused, cover a text with two abbreviations; past that a further
+# spelling is still exact, just not a prefix.
 # A unit is also exact by its number (#2497 a městská část, #2499 every level): named the key's twin (the number in the
 # other numeral form), or the key or the twin and then the register's suffix ("Plzeň 2-Slovany", "Liberec I-Staré
 # Město"), never a longer number ("Praha 10" for "Praha 1"). The register writes that suffix after a hyphen or a dot
@@ -115,9 +120,10 @@ units AS (
    ORDER BY u.level, u.code, tier, u.valid_from DESC),
 streets AS (
   SELECT DISTINCT ON (s.code) 'ulice'::ruian_level AS level, s.code, s.name, s.obec_unit_id AS parent_id,
-         NULL::bigint AS unit_id, CASE WHEN s.name_norm = %(street_key)s THEN 0 ELSE 1 END AS tier
+         NULL::bigint AS unit_id, CASE WHEN s.name_norm = ANY(%(street_keys)s::text[]) THEN 0 ELSE 1 END AS tier
     FROM ruian_streets s
-   WHERE s.name_norm LIKE %(street_prefix)s
+   WHERE (s.name_norm LIKE %(street_prefix)s OR s.name_norm LIKE %(street_spelled_1)s
+          OR s.name_norm LIKE %(street_spelled_2)s OR s.name_norm LIKE %(street_spelled_3)s)
      AND s.first_version_id <= (SELECT id FROM cur) AND s.last_version_id >= (SELECT id FROM cur)
      AND (s.valid_to IS NULL OR s.last_version_id > (SELECT id FROM cur))
    ORDER BY s.code, tier, s.valid_from DESC),
@@ -413,11 +419,14 @@ def suggest(conn: psycopg.Connection, query: str, *, limit: int) -> list[Place]:
     if unit_prefix is None:
         return []
     street_prefix, street_fuzzy = _arm(street_key)
+    street_keys = sorted(abbreviation_spellings(street_key) | {street_key}) if street_prefix else []
+    spelled = [f"{key}%" for key in street_keys if key != street_key][:_SPELLED_SLOTS]
     unit_twin, unit_suffix, unit_twin_suffix = _by_number(unit_key)
     params = {
         "unit_key": unit_key, "unit_prefix": unit_prefix, "unit_fuzzy": unit_fuzzy,
         "unit_twin": unit_twin, "unit_suffix": unit_suffix, "unit_twin_suffix": unit_twin_suffix,
-        "street_key": street_key, "street_prefix": street_prefix, "street_fuzzy": street_fuzzy,
+        "street_keys": street_keys, "street_prefix": street_prefix, "street_fuzzy": street_fuzzy,
+        **{f"street_spelled_{n}": (spelled[n - 1] if n <= len(spelled) else None) for n in range(1, _SPELLED_SLOTS + 1)},
         "limit": limit,
     }
     door_params = [bound for bound in (r.params(limit) for r in _addresses(query)) if bound["street_keys"]]

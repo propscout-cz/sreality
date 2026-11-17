@@ -1393,3 +1393,37 @@ def test_a_town_typed_by_its_start_answers_right_above_its_own_okres_and_kraj_th
         ("okres", OLOMOUC_OKRES, "Olomouc", "Olomoucký kraj"),
         ("kraj", OLOMOUCKY, "Olomoucký kraj", None),
     ]
+
+
+VACLAVSKE_PRAHA, VACLAVSKE_TREBIC, TREBIC_OKRES, TREBIC = 477265, 470701, 3710, 590266
+TR_SVOBODY, TRIDA_SVOBODY_NOVA = 326780, 326781
+
+
+def test_a_street_typed_short_is_exact_under_every_spelling_the_register_uses_and_served_decides(mirror, client):
+    """Gap 2: "nám." and "náměstí" name one street. Třebíč's register spells it short, Praha's long; both are exact,
+    so Praha's, which serves properties, answers first (before, Třebíč's was exact and Praha's only a prefix)."""
+    praha = _praha(mirror)
+    trebic = mirror.unit("obec", TREBIC, "Třebíč", mirror.unit("okres", TREBIC_OKRES, "Třebíč"))
+    mirror.street(VACLAVSKE_PRAHA, "Václavské náměstí", praha)
+    mirror.street(VACLAVSKE_TREBIC, "Václavské nám.", trebic)
+    mirror.served(obec=PRAHA, street=VACLAVSKE_PRAHA)
+    mirror.served(obec=PRAHA, street=VACLAVSKE_PRAHA)
+    mirror.publish()
+    assert _chips(_suggest(client, "Václavské nám."))[:2] == [
+        ("ulice", VACLAVSKE_PRAHA, "Václavské náměstí", "Praha"),
+        ("ulice", VACLAVSKE_TREBIC, "Václavské nám.", "Třebíč"),
+    ]
+
+
+def test_a_street_typed_long_is_exact_under_the_register_s_short_spelling_before_one_it_only_starts(mirror, client):
+    """Gap 2: the register writes Olomouc's "tř. Svobody"; "třída Svobody" is that exact name, so it answers before
+    "třída Svobody Nová", which the text only starts, though that one serves a property."""
+    olomouc = mirror.unit("obec", OLOMOUC, "Olomouc", mirror.unit("okres", OLOMOUC_OKRES, "Olomouc"))
+    mirror.street(TR_SVOBODY, "tř. Svobody", olomouc)
+    mirror.street(TRIDA_SVOBODY_NOVA, "třída Svobody Nová", olomouc)
+    mirror.served(obec=OLOMOUC, street=TRIDA_SVOBODY_NOVA)
+    mirror.publish()
+    assert _chips(_suggest(client, "třída Svobody"))[:2] == [
+        ("ulice", TR_SVOBODY, "tř. Svobody", "Olomouc"),
+        ("ulice", TRIDA_SVOBODY_NOVA, "třída Svobody Nová", "Olomouc"),
+    ]
