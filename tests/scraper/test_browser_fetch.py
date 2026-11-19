@@ -229,3 +229,93 @@ def test_close_from_a_foreign_thread_is_clean_and_final() -> None:
 def test_close_without_a_launched_browser_is_safe() -> None:
     BrowserFetcher(page=_FakePage(200, [REAL_HTML]), proxy_url=None).close()
     BrowserFetcher(proxy_url=None).close()
+
+
+# --- retiring a blocked exit IP -------------------------------------------------------
+
+URL = "https://www.ceskereality.cz/prodej/byty/"
+
+
+class _RelaunchingFetcher(BrowserFetcher):
+    """Records the sticky session each launch would pin, with no real browser.
+
+    `_ensure_page` is the seam a launch goes through, so overriding it here exercises
+    rotation honestly: a rotation must CLEAR the page, so the next fetch comes back
+    through this and pins the new session.
+    """
+
+    def __init__(self, **kw: object) -> None:
+        super().__init__(proxy_url=PROXY, **kw)  # type: ignore[arg-type]
+        self.launched: list[str] = []
+
+    def _ensure_page(self) -> object:
+        if self._page is None:
+            self.launched.append(self._session_id)
+            self._page = _FakePage(200, [REAL_HTML] * 64)
+        return self._page
+
+
+def test_a_rotation_retires_the_exit_ip_and_relaunches_on_a_new_sticky_session() -> None:
+    """One sticky session is ONE residential exit IP. When the portal blocks it, keeping
+    it is pointless — every later page gets the same 403 (measured 2026-11-16: a 30-minute
+    403 window cost three category groups their walk). Rotating must therefore both pick a
+    new session AND drop the browser holding the old one."""
+    fetcher = _RelaunchingFetcher()
+    fetcher.fetch(URL)
+    blocked = fetcher.session_id
+    fetcher.rotate("403")
+    fetcher.fetch(URL)
+    assert fetcher.session_id != blocked
+    assert fetcher.launched == [blocked, fetcher.session_id]
+    fetcher.close()
+
+
+def test_a_long_walk_rotates_on_its_own_before_the_portal_blocks_it() -> None:
+    """A whole walk on one exit IP is what drew the block, so the fetcher retires its
+    session every N pages without waiting to be refused."""
+    fetcher = _RelaunchingFetcher(rotate_after=3)
+    for _ in range(7):
+        fetcher.fetch(URL)
+    assert len(fetcher.launched) == 3, fetcher.launched
+    assert len(set(fetcher.launched)) == 3, "each stretch must pin a DIFFERENT exit IP"
+    fetcher.close()
+
+
+def test_rotate_after_zero_keeps_one_session_for_the_whole_run() -> None:
+    fetcher = _RelaunchingFetcher(rotate_after=0)
+    for _ in range(5):
+        fetcher.fetch(URL)
+    assert fetcher.launched == [fetcher.session_id]
+    fetcher.close()
+
+
+def test_a_rotation_asked_from_a_foreign_thread_runs_on_the_owner() -> None:
+    """Playwright is thread-affine, and a rotation CLOSES a browser. The drain calls from
+    its own pool threads, so a rotation must reach the owner like every other call."""
+    fetcher = _RelaunchingFetcher()
+    fetcher.fetch(URL)
+    errors: list[BaseException] = []
+
+    def work() -> None:
+        try:
+            fetcher.rotate("403")
+            fetcher.fetch(URL)
+        except BaseException as exc:  # noqa: BLE001 - surfaced below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=work) for _ in range(3)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert not errors, errors
+    page = fetcher._page
+    assert page is not None and len(page.threads if hasattr(page, "threads") else {0}) <= 1
+    fetcher.close()
+
+
+def test_rotating_a_closed_fetcher_is_refused_like_a_fetch() -> None:
+    fetcher = _RelaunchingFetcher()
+    fetcher.close()
+    with pytest.raises(BrowserTransportError):
+        fetcher.rotate("403")

@@ -8,7 +8,10 @@
    point, earliest first seen among active / latest last seen among inactive, trust, id). Every
    advert field is its own: price, area (no fallback), layout, category, subtype, source,
    condition with both derived levels (rule 14), furnished, and `repr_listing_ref_id`, through
-   which the read models take floor, description, photos, broker and link. The location advert
+   which the read models take description, photos, broker and link. The storey and the
+   above-ground count are each the value MOST adverts state, a tie going to the advert first in
+   the canonical order (#2552: 2,400 of 17,134 multi-advert flats held adverts that disagreed,
+   and the canonical one decided alone). The location advert
    (`location_listing_ref_id`) is rank 1 of the same function's location order (migration 635:
    a map point, then determined foreign, then the finest rung, then the canonical order), set in
    the same statement as the canonical advert, so both are set or neither is; every read model
@@ -151,6 +154,8 @@ _ROLLUP = {
     "building_type": "r.building_type",
     "ownership": "r.ownership",
     "energy_rating": "r.energy_rating",
+    "floor": "sy.floor",
+    "total_floors": "sy.total_floors",
     "price_drop_count": "coalesce(ph.drops, 0)",
     "price_rise_count": "coalesce(ph.rises, 0)",
     "max_price_drop_pct": "ph.max_drop_pct",
@@ -215,6 +220,22 @@ _RECOMPUTE_BATCH_SQL = f"""
         min(k.energy_rating)       AS energy_rating
       FROM kids k
       GROUP BY k.property_id
+    ),
+    -- The storey and the above-ground count: the value most adverts state, a tie going to the
+    -- advert first in the canonical order.
+    storey AS (
+      SELECT v.pid,
+        (array_agg(v.value ORDER BY v.ads DESC, v.first_rank) FILTER (WHERE v.fact = 'floor'))[1] AS floor,
+        (array_agg(v.value ORDER BY v.ads DESC, v.first_rank) FILTER (WHERE v.fact = 'total'))[1] AS total_floors
+      FROM (
+        SELECT k.property_id AS pid, f.fact, f.value,
+               count(*) AS ads, min(k.canonical_rank) AS first_rank
+        FROM kids k
+        CROSS JOIN LATERAL (VALUES ('floor', k.floor), ('total', k.total_floors)) f(fact, value)
+        WHERE f.value IS NOT NULL
+        GROUP BY k.property_id, f.fact, f.value
+      ) v
+      GROUP BY v.pid
     ),
     -- The canonical advert and its same-portal predecessors (MS10): each predecessor is the advert
     -- on that portal last seen latest, strictly before the later link was first seen, so adverts
@@ -305,6 +326,7 @@ _RECOMPUTE_BATCH_SQL = f"""
     FROM child_agg r
     JOIN canon c ON c.property_id = r.pid
     JOIN loc la ON la.property_id = r.pid
+    LEFT JOIN storey sy ON sy.pid = r.pid
     LEFT JOIN price_hist ph ON ph.pid = r.pid
     LEFT JOIN lineage_span cs ON cs.pid = r.pid
     LEFT JOIN changes ch ON ch.pid = r.pid

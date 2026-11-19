@@ -410,7 +410,16 @@ stopped nominating (pages/walk fell ~2,400 → ~140 the day the wall went up; #2
 (Python Playwright, imported lazily, the `browser` pyproject extra, chromium baked into the scraper
 image by `EXTRAS=api,browser`): one chromium context per phase solves the interstitial ONCE and
 carries its ~7-day cookie, pinned to ONE residential exit IP (the gateway rotates per request and a
-rotating IP re-challenges every page). Everything around that call — pacing, `penalize()`, the
+rotating IP re-challenges every page). **That exit IP is RETIRED every 250 pages, and after 2
+consecutive 403s** (`rotate()`: a new sticky session, and the browser goes with it, since the
+interstitial cookie is bound to both the old IP and that browser). The first full walk after the wall
+fell put all 1,558 pages on one IP and the portal blocked it for ~30 minutes mid-walk, costing
+`byt/prodej`, `byt/pronajem` and `dum/prodej` their end and so their nominations (2026-11-16;
+end-reached 7/10 against a 96% baseline). A 403 is the portal refusing the IP and is distinct from an
+unsolved interstitial, which logs `CHALLENGE unsolved` — that walk had ZERO of those in 1,558 pages,
+so Anubis itself is solved and what remains is IP-level. A 404/410 never rotates: that is the listing
+speaking, and rotating would buy a fresh solve for every delisted ad the drain verifies. Everything
+around that call — pacing, `penalize()`, the
 retry/backoff, gone detection, `walk_reached_end`, nomination — stays shared and portal-generic
 (rule #21); the parser is untouched. **A page still challenged after the solve is a FAILED FETCH
 (classified 403), never content**, so a difficulty bump reads red (the empty-walk check, #2376)
@@ -506,13 +515,21 @@ searched), OpenGraph/meta, the gallery (the JSON-LD images + `og:image`; the pag
 when the JSON-LD lists none, and only from the main block's own container), the stable main text
 as `description` (JSON-LD, `og:description`, the container with the most text in its OWN `<p>`
 children once the site's landmark header/footer, nav, aside, prose-free forms and every
-similar/related block are dropped, the meta description last — never page chrome or another
-ad's card, which would snapshot on every fetch), and the shared grammars (`price_text`'s per-m²
-guard, `,-` spelling included; the first CZK amount no deposit/fee/commission word names;
-`area`, `vocabulary.disposition`, `floor.floor_from_text`, the prodej/pronájem +
-byt/dům/pozemek/komerční/garáž words of the first of JSON-LD name, og:title, `<h1>`, `<title>`
-that says — NULL when none does). Contacts (JSON-LD, `mailto:`, `tel:`, a `+420` number in the
-ad text) become `raw['broker']` keyed by the email, else the phone. The text lane is the
+similar/related block are dropped, the meta description last; the main block beats a metadata
+excerpt of itself, cut with "…"/"[…]" or a prefix of its text — never page chrome or another
+ad's card, which would snapshot on every fetch), the page's labelled facts (`th`/`td`, `dt`/`dd`,
+label/value class pairs, `li`/`p` "Label: value", a price box; never in a hidden block or a dialog;
+kept in `raw['facts']`), and ONE shared text grammar over title + description + facts,
+`scraper/text_grammar.py` `parse_text` — importable without HTML, so the file portal reads a
+document's lines with it: a label table folded with `vocabulary.fold` (an unknown label is counted
+under `label/<portal>/<label>` in the vocabulary's unmapped counter, never guessed; enum values
+through `vocabulary.canonical`), the price (a labelled one, else the first CZK amount no
+deposit/fee/commission word names; `price_text`'s per-m² guard, `,-` and dotted thousands
+included), `area`, `vocabulary.disposition`, `floor.floor_from_text`, and the prodej/pronájem +
+byt/dům/pozemek/komerční/garáž words of a labelled type, else the first of JSON-LD name,
+og:title, `<h1>`, `<title>` that says — NULL when none does. Contacts (JSON-LD, `mailto:`, `tel:`,
+a labelled phone/e-mail, a `+420` number in the ad text) become `raw['broker']` keyed by the
+email, else the phone. The text lane is the
 portal's only reader of prose: its one call returns the location block from `web.yaml`. Every
 deterministic reading sits at the TOP LEVEL of `raw_json` (the field census reads
 `coalesce(raw->'params', raw)`). **Delisting:** `web` has no index, so it declares `indexless`
@@ -1157,13 +1174,21 @@ rules. Identify which one a task belongs to before you start.
   street by version membership).
   One read, three tiers: exact (`name_norm` equal on a gazetteer row that is not `qualifier_stripped`), prefix
   (`LIKE`; each arm is gated on its own normalised key, so `ulice .` never becomes `LIKE '%'`), then fuzzy (pg_trgm
-  word similarity at a pinned 0.6, ≥ 3 characters, only while the first two fall short of the limit). Within a tier:
+  word similarity pinned at 0.55 for a place name and 0.6 for a street, ≥ 3 characters, only while the first two fall
+  short of the limit; #2548: the typo "Olomuc" is 0.57 to Olomouc). Within a tier:
   served properties of any deal type, then the town's latest population, then code. ONE ranking for every place box;
-  counts rank rows and are never returned. **Town first** (#2497, ruling 2026-11-13): on an exact name tie the obec
-  answers before every other exact row, its namesake okres (68 of 77 okresy share a town's name, and an okres's served
-  count takes in its town's) or a část of that name included; the other exact rows, and the prefix and fuzzy tiers, keep
-  the order above. Both ORDER BYs carry it, the one that feeds the LIMIT and the final one; each row carries its level.
-  "Praha 6" keeps its městská část first, as the town Praha is no exact match for it. **A unit by its number** (#2497
+  counts rank rows and are never returned. **Town first** (#2497, ruling 2026-11-13, narrowed by #2548's ruling
+  2026-11-17): a town ranks right above its own okres and kraj, on every tier (68 of 77 okresy share a town's name, and
+  an okres's served count takes in its town's): a kraj or okres row whose tier holds an obec under it (`path <@`) takes
+  that obec's sort keys and follows it, the nearer region first. Every other row keeps the order above, so Praha's
+  Karlín, served, answers before the village Karlín; on equal served properties a row lying under an obec of its tier
+  (its own část or městská část, `path <@`) follows that town. Both ORDER BYs carry it, the one that feeds the LIMIT and the final
+  one; each row carries its level. "Praha 6" keeps its městská část first, as the town Praha is no exact match for it.
+  **Also #2548** (found by a simulated run of gate #2465): a street is exact under every spelling the resolver's
+  abbreviation folds make equal ("Václavské nám." reaches Praha's Václavské náměstí as exactly as Třebíč's "nám."), and
+  a prefix under each (the exact keys one `= ANY` condition, three spelled prefix slots each its own trigram index
+  condition, as `LIKE ANY` takes none, so a spelling past them is still read when exact); "okres X"
+  answers okresy named X alone, no street or door; a digit typed straight after a letter starts a word ("Praha6"). **A unit by its number** (#2497
   a městská část, #2499 every level; rulings 2026-11-13). When the key's last token is a number 1–39, in Arabic or
   Roman numerals (I–XXXIX), after at least one other token, its twin is the key with that number in the other form
   ("pardubice 2" and "pardubice ii"). A unit is then exact when its name is the key or the twin, or either followed by
@@ -1269,7 +1294,17 @@ rules. Identify which one a task belongs to before you start.
   for #2497 (2026-11-13): "Nádražní 12, Plzeň 2" 54 ms (planning 37 ms), its town a BitmapOr of four index scans; it
   answers no door, as production's Nádražní in Plzeň has no number 12 ("Nádražní 9, Plzeň 2" answers Nádražní 102/9).
   The name read of "Pardubice 2" reads its units by a BitmapOr of three index scans in 10 ms of 317 ms (the fuzzy arm,
-  unchanged, runs below 10 near rows); "Jihlava" keeps its single index scan, 24 ms warm.
+  unchanged, runs below 10 near rows); "Jihlava" keeps its single index scan, 24 ms warm. **A place with its town, no
+  number** (#2548): "Masarykova, Brno", "Brno, Masarykova", "Údolní Brno", "Praha 6 Dejvice". One more statement, read
+  only when the whole text has no exact row and no door answered: every split of the text is a pair (a comma's two
+  sides, or else each split of up to six words on spaces and dashes), each piece tried as the place and as the town.
+  The town is the door read's, by its exact name or its number's other form (not the suffix form, "Plzeň 2" for Plzeň
+  2-Slovany: one `= ANY` index condition over every pair's keys); it answers the streets of its obce (exact under every
+  spelling, then by start) and, for an obec or a městská část, its části obce (a městská část's through its pairs, so
+  "Praha 6 Žižkov" answers no Žižkov), ranked exact, served, code. Its rows go after the whole text's prefix tier
+  ("Frýdek-Mís" is the town typed so far before Frýdek's street Místecká; a builder decision beyond #2548's "before
+  similar rows", for the operator's ruling) and before its fuzzy tier; a row found both ways shows once. "Praha6" reads
+  as "Praha 6" in every town piece, the door read's too.
   Two read models (migration 738,
   service-role only): `place_served_counts` (level, code, n), GROUPING SETS over the kraj, okres, obec, část and street
   ids of active `browse_list` rows, refreshed hourly at :37 by pg_cron through `refresh_matview`; and `place_facts`
@@ -4405,7 +4440,7 @@ renumber.** Navigate by area:
     multi-image read for one photo per card is the fetch-everything-then-discard W4 measured at
     901 rows / 3,995 buffers for 44 cards (Browse cards also opt into `floors` —
     `useListingFloors`, `id,floor,total_floors` from `listings_public` per page-sized bucket, the
-    storey as a small tag beside the place ("2. patro z 5", never in the headline) for apartments and
+    storey as a small tag beside the place ("3. podlaží z 5", never in the headline) for apartments and
     commercial units — because `browse_list` carries no
     floor column); the **property's broker list** per card (MS7: the
     property page's `propertyBrokers` rule, shown as its first entry plus "+N") via two batched

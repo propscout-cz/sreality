@@ -54,6 +54,7 @@ import {
 } from '@/lib/format';
 import { areaBasisLabel, ppm2BasisFromToken } from '@/lib/measure';
 import { usePipelineMembers } from '@/lib/pipelineReads';
+import { advertLink } from '@/lib/portals';
 import {
   fetchSoldComparables,
   fetchSoldCoverage,
@@ -532,12 +533,13 @@ function Thumb({ row }: { row: SoldComparable }) {
 }
 
 function SourceLink({ row }: { row: SoldComparable }) {
-  if (!row.source_url) {
+  const link = advertLink(row);
+  if (!link) {
     return <span className="text-[var(--color-ink-4)]">—</span>;
   }
   return (
     <a
-      href={row.source_url}
+      href={link}
       target="_blank"
       rel="noopener noreferrer"
       onClick={(e) => e.stopPropagation()}
@@ -560,6 +562,7 @@ function SoldDialog({ row, onClose }: { row: SoldComparable; onClose: () => void
   }));
   const gap = askToSoldPct(row);
   const days = daysListed(row);
+  const link = advertLink(row);
   return (
     <Dialog
       open
@@ -621,11 +624,11 @@ function SoldDialog({ row, onClose }: { row: SoldComparable; onClose: () => void
         <p className="text-[0.78rem] text-[var(--color-ink-4)]">
           {row.source} · record {row.source_record_id} · fetched{' '}
           {fmtShortDate(row.fetched_at)}
-          {row.source_url && (
+          {link && (
             <>
               {' · '}
               <a
-                href={row.source_url}
+                href={link}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-[var(--color-ink-3)] hover:text-[var(--color-copper)] transition-colors"

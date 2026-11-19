@@ -148,7 +148,8 @@ export default function PhoneProperty({
 
   return (
     <article aria-label="Nemovitost" className={`pb-6 ${NO_FOCUS_ZOOM}`}>
-      <PropertyGallery images={images} loading={imagesLoading} isActive={property.is_active} />
+      {/* Keyed: the page stays mounted from one property to the next, and the swiper must open on the new cover. */}
+      <PropertyGallery key={property.id} images={images} loading={imagesLoading} isActive={property.is_active} />
 
       <header className="flex flex-col gap-1 px-4 pb-4 pt-2">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">

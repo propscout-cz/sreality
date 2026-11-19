@@ -14,7 +14,7 @@ import type { ImagePublic, ListingPublic, ListingSummaryBody } from '@/lib/types
 import { listingKindLabel, priceUnitLabel } from '@/lib/enums';
 import { imageSrc } from '@/lib/imageUrl';
 import ImageTagBadge from '@/components/ImageTagBadge';
-import { portalBadge } from '@/lib/portals';
+import { advertLink, portalBadge } from '@/lib/portals';
 import { listingPath } from '@/lib/listingUrl';
 import Dialog, { DialogClose } from '@/components/Dialog';
 import { Hairline } from '@/components/section';
@@ -345,9 +345,8 @@ function Facts({ listing }: { listing: ListingPublic }) {
 }
 
 function Footer({ listing }: { listing: ListingPublic }) {
-  // The origin-portal link is the row's stored `source_url` (migration 494) for
-  // every portal; null → only the in-app "View in full" link shows.
-  const external = listing.source_url;
+  // The origin-portal link (lib/portals advertLink); null → only the in-app "View in full" link shows.
+  const external = advertLink(listing);
   /* "View in full" opens a new tab: the run and this modal stay open behind it. */
   const newTab = useNewTabProps();
   return (

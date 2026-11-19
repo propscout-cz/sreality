@@ -12,7 +12,6 @@ only: R2 objects are never deleted (a split's note copy once shared them; an orp
 
 from __future__ import annotations
 
-import hashlib
 import io
 import logging
 import os
@@ -27,6 +26,7 @@ from fastapi import HTTPException, Response, UploadFile
 
 from api.shares import party_label
 from scraper import image_storage
+from scraper.hashing import file_sha256
 from toolkit.property_identity import resolve_active_property_id
 
 if TYPE_CHECKING:
@@ -148,7 +148,7 @@ def read_upload(file: UploadFile, allowed: Collection[str] = ALLOWED) -> Upload:
     mime = image[0] if image else resolve_mime(filename, file.content_type)
     if mime is None or mime not in allowed or (image is None and mime.startswith("image/")):
         raise HTTPException(415, f"this file type cannot be attached: {filename}")
-    return Upload(data, filename, mime, hashlib.sha256(data).hexdigest(),
+    return Upload(data, filename, mime, file_sha256(data),
                   (image[1], image[2]) if image else None)
 
 

@@ -46,6 +46,7 @@ class FakeFetcher:
         self._responses = list(responses)
         self.calls: list[str] = []
         self.closed = 0
+        self.rotations: list[str] = []
 
     def fetch(self, url: str) -> FakeResponse:
         self.calls.append(url)
@@ -53,6 +54,9 @@ class FakeFetcher:
 
     def close(self) -> None:
         self.closed += 1
+
+    def rotate(self, reason: str = "") -> None:
+        self.rotations.append(reason)
 
 
 def _client(responses: list[FakeResponse], **kw) -> CeskerealityClient:
@@ -233,3 +237,31 @@ def test_no_browser_is_launched_until_the_first_fetch():
     """A run that never reaches this portal must pay no browser cost, and constructing a
     client must not need playwright installed."""
     assert CeskerealityClient()._fetcher is None
+
+
+def test_a_run_of_refusals_retires_the_exit_ip() -> None:
+    """A 403 here is the portal refusing the IP, NOT an unsolved interstitial (the browser
+    solved 1,558 of 1,558 on 2026-11-16; the refusals were nginx, in front of Anubis).
+    Retrying the same blocked exit IP is what turned one block into a 30-minute outage, so
+    a run of them retires the session and the next attempt leaves on a fresh IP."""
+    c = _client([FakeResponse(403, "<html>nope</html>")] * 4)
+    with pytest.raises(Exception):
+        c.fetch_index("prodej", "byty")
+    assert c._fetcher.rotations, "a blocked exit IP must be retired, not retried forever"
+
+
+def test_a_single_refusal_does_not_retire_the_exit_ip() -> None:
+    """One 403 among successes is noise; rotating on it would throw away a good IP and pay
+    a fresh interstitial solve for nothing."""
+    c = _client([FakeResponse(403, "<html>nope</html>"), FakeResponse(200, "<html>index</html>")])
+    c.fetch_index("prodej", "byty")
+    assert c._fetcher.rotations == []
+
+
+def test_a_gone_status_never_retires_the_exit_ip() -> None:
+    """404/410 is the LISTING speaking, not the portal refusing us — rotating would be
+    wrong and would cost a solve on every delisted ad the drain verifies."""
+    c = _client([FakeResponse(404, "<html>gone</html>")])
+    with pytest.raises(Exception):
+        c.fetch_index("prodej", "byty")
+    assert c._fetcher.rotations == []

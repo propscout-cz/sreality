@@ -1,9 +1,12 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   fmtArea,
   fmtDistanceM,
   fmtFloor,
-  fmtFloorTag,
+  storeyFromOrdinal,
+  storeyOrdinal,
   fmtMeasuredPricePerM2,
   fmtPct,
   fmtPP,
@@ -160,39 +163,26 @@ describe('fmtDistanceM', () => {
 });
 
 describe('fmtFloor', () => {
-  /* The column is ground = 0 on every portal (W8), and the word is the only thing on
-     screen that says so — a bare "0" reads as missing data, a bare "3" reads as
-     whichever convention the reader assumes. */
-  it('names the storey in Czech under the ground = 0 convention', () => {
-    expect(fmtFloor(0)).toBe('přízemí');
-    expect(fmtFloor(3)).toBe('3. patro');
-    expect(fmtFloor(-1)).toBe('suterén');
-  });
+  /* One wording on every surface, and the same one `storey_label` gives the PDF sheet:
+     both formatters read this fixture. */
+  const cases: Array<{ floor: number | null; total: number | null; label: string | null }> =
+    JSON.parse(readFileSync(resolve(__dirname, '../../../tests/fixtures/storey_labels.json'), 'utf8'));
 
-  it('spells the building total as podlaží, not as the second half of a slash', () => {
-    expect(fmtFloor(2, 5)).toBe('2. patro z 5 podlaží');
-    expect(fmtFloor(0, 4)).toBe('přízemí z 4 podlaží');
-  });
-
-  it('keeps the magnitude below ground so two basements never read as one', () => {
-    /* AttrDiffTable diffs the RENDERED strings, so 'suterén' for both −1 and −2 hid a
-       distinguishing fact on the surface whose whole job is same-or-different. */
-    expect(fmtFloor(-2)).toBe('2. podzemní podlaží');
-    expect(fmtFloor(-3, 6)).toBe('3. podzemní podlaží z 6 podlaží');
+  it.each(cases)('words $floor of $total as $label', ({ floor, total, label }) => {
+    expect(fmtFloor(floor, total)).toBe(label);
   });
 
   it('returns null for an absent storey so each surface renders its own gap', () => {
-    expect(fmtFloor(null, 5)).toBeNull();
     expect(fmtFloor(undefined)).toBeNull();
   });
-});
 
-describe('fmtFloorTag', () => {
-  it('shortens the count to "z N" and keeps the full wording as the title', () => {
-    expect(fmtFloorTag(4, 6)).toEqual({ text: '4. patro z 6', title: '4. patro z 6 podlaží' });
-    expect(fmtFloorTag(0, 4)).toEqual({ text: 'přízemí z 4', title: 'přízemí z 4 podlaží' });
-    expect(fmtFloorTag(3)).toEqual({ text: '3. patro', title: '3. patro' });
-    expect(fmtFloorTag(null, 5)).toBeNull();
+  it('turns a typed ordinal into the stored storey and back, with no storey 0', () => {
+    expect(storeyOrdinal(6)).toBe(7);
+    expect(storeyFromOrdinal(7)).toBe(6);
+    expect(storeyOrdinal(-1)).toBe(-1);
+    expect(storeyFromOrdinal(-1)).toBe(-1);
+    expect(storeyFromOrdinal(0)).toBeNull();
+    expect(storeyOrdinal(null)).toBeNull();
   });
 });
 

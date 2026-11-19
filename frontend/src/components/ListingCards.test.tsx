@@ -338,8 +338,7 @@ describe('<ListingCards> the storey tag', () => {
 
     renderGrid({ floors: true });
 
-    const tag = await screen.findByText('2. patro z 5');
-    expect(tag).toHaveAttribute('title', '2. patro z 5 podlaží');
+    expect(await screen.findByText('3. podlaží z 5')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: TITLE_RE })).toBeInTheDocument();
   });
 
@@ -351,7 +350,7 @@ describe('<ListingCards> the storey tag', () => {
     renderGrid({ floors: true });
 
     expect(await screen.findByRole('link', { name: TITLE_RE })).toBeInTheDocument();
-    expect(screen.queryByText(/patro|přízemí/)).toBeNull();
+    expect(screen.queryByText(/podlaží/)).toBeNull();
   });
 
   it('reads the cohort once, keyed on the surrogate listing id', async () => {
@@ -359,7 +358,7 @@ describe('<ListingCards> the storey tag', () => {
 
     renderGrid({ floors: true });
 
-    await screen.findByText('2. patro z 5');
+    await screen.findByText('3. podlaží z 5');
     expect(queries.fetchListingFloors).toHaveBeenCalledTimes(1);
     expect(queries.fetchListingFloors).toHaveBeenCalledWith([111], expect.anything());
   });
@@ -369,7 +368,7 @@ describe('<ListingCards> the storey tag', () => {
 
     renderGrid({ floors: true, row: { ...ROW, display_label: null } as CardRow });
 
-    expect(await screen.findByText('2. patro z 5')).toBeInTheDocument();
+    expect(await screen.findByText('3. podlaží z 5')).toBeInTheDocument();
   });
 
   it('drops the count when the building\'s podlaží is unknown', async () => {
@@ -377,8 +376,7 @@ describe('<ListingCards> the storey tag', () => {
 
     renderGrid({ floors: true });
 
-    const tag = await screen.findByText('3. patro');
-    expect(tag).toHaveAttribute('title', '3. patro');
+    expect(await screen.findByText('4. podlaží')).toBeInTheDocument();
   });
 
   it('says nothing for an ad with no floor, rather than a gap or a zero', async () => {
@@ -388,17 +386,17 @@ describe('<ListingCards> the storey tag', () => {
 
     await waitFor(() => expect(queries.fetchListingFloors).toHaveBeenCalled());
     expect(await screen.findByRole('link', { name: TITLE_RE })).toBeInTheDocument();
-    expect(screen.queryByText(/patro|přízemí|\bz 5\b/)).toBeNull();
+    expect(screen.queryByText(/podlaží|\bz 5\b/)).toBeNull();
   });
 
-  it('keeps a house\'s ground floor off the card — "přízemí" on a house is noise', async () => {
+  it('keeps a house\'s ground floor off the card — a storey on a house is noise', async () => {
     storeyOf(0, 2);
 
     renderGrid({ floors: true, row: { ...ROW, category_main: 'dum' } as CardRow });
 
     await waitFor(() => expect(queries.fetchListingFloors).toHaveBeenCalled());
     expect(await screen.findByRole('link', { name: /^Dům na prodej/ })).toBeInTheDocument();
-    expect(screen.queryByText(/přízemí/)).toBeNull();
+    expect(screen.queryByText(/podlaží/)).toBeNull();
   });
 
   it('tags a commercial unit\'s ground floor', async () => {
@@ -406,7 +404,7 @@ describe('<ListingCards> the storey tag', () => {
 
     renderGrid({ floors: true, row: { ...ROW, category_main: 'komercni', disposition: null } as CardRow });
 
-    expect(await screen.findByText('přízemí z 3')).toBeInTheDocument();
+    expect(await screen.findByText('1. podlaží z 3')).toBeInTheDocument();
   });
 });
 
@@ -1187,7 +1185,7 @@ describe('<ListingCards> the storey label', () => {
   it('is an inset label with no border', async () => {
     floors();
     renderGrid({ floors: true });
-    const tag = await screen.findByText('2. patro z 5');
+    const tag = await screen.findByText('3. podlaží z 5');
     expect(tag).toHaveClass('bg-[var(--color-inset)]');
     expect(tag.className).not.toMatch(/\bborder\b/);
   });
@@ -1195,7 +1193,7 @@ describe('<ListingCards> the storey label', () => {
   it('sits one step up on a delisted card, whose surface is the inset', async () => {
     floors();
     renderGrid({ floors: true, row: { ...ROW, is_active: false, active_sources: [] } as CardRow });
-    expect(await screen.findByText('2. patro z 5')).toHaveClass('bg-[var(--color-paper)]');
+    expect(await screen.findByText('3. podlaží z 5')).toHaveClass('bg-[var(--color-paper)]');
   });
 });
 

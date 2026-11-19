@@ -1626,16 +1626,18 @@ def _retire_legacy(
                                  stream=GENERATION if generation == GENERATION else None))
 
 
-def rt_block_reads(conn: Any, generation: str, blocks: Iterable[str]
-                   ) -> tuple[set[str], set[str]]:
+def rt_block_reads(conn: Any, generation: str, blocks: Iterable[str], *,
+                   unfingerprinted: set[str] | None = None) -> tuple[set[str], set[str]]:
     """The live stream's two reasons a block (`obec:` / `cast_obce:` / `okres:` key) is not fully
     read, apart (E977): the `blocks` never read to their end — never walked, or inside their first
     cycle of pages (E940), so their snapshot may lack adverts — and every block whose snapshot,
-    whole, still holds an advert with no fingerprint."""
+    whole, still holds an advert with no fingerprint (`unfingerprinted` when the caller read it
+    already, E987)."""
     walked = {str(row[0]) for row in _rows(conn, RT_SCOPE_SCAN_SEEN_SQL,
                                            {"generation": generation})}
-    unfingerprinted = {str(row[0]) for row in _rows(conn, S.RC_UNREAD_BLOCKS_SQL,
-                                                    {"generation": generation})}
+    if unfingerprinted is None:
+        unfingerprinted = {str(row[0]) for row in _rows(conn, S.RC_UNREAD_BLOCKS_SQL,
+                                                        {"generation": generation})}
     return {block for block in blocks if block not in walked}, unfingerprinted
 
 

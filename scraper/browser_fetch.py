@@ -222,6 +222,7 @@ class BrowserFetcher:
         locale: str = "cs-CZ",
         block_subresources: bool = True,
         timeout_s: float | None = None,
+        rotate_after: int = 0,
         page: Any | None = None,
     ) -> None:
         self._proxy_url = (
@@ -235,6 +236,12 @@ class BrowserFetcher:
         budget_ms = int(timeout_s * 1000) if timeout_s else None
         self._nav_timeout_ms = budget_ms or NAV_TIMEOUT_MS
         self._solve_timeout_ms = budget_ms or SOLVE_TIMEOUT_MS
+        # One sticky session is ONE residential exit IP. A whole walk on a single IP is
+        # what the portal blocked (2026-11-16: a 30-minute 403 window cost three category
+        # groups their walk), so the session is retired every `rotate_after` pages and
+        # whenever a caller reports a refusal. 0 keeps one session for the whole run.
+        self._rotate_after = max(0, int(rotate_after))
+        self._on_session = 0
         self._playwright: Any = None
         self._browser: Any = None
         self._context: Any = None
@@ -300,7 +307,10 @@ class BrowserFetcher:
             LOG.debug("BROWSER response listener: %r", exc)
 
     def _fetch_on_owner(self, url: str) -> BrowserResponse:
+        if self._rotate_after and self._on_session >= self._rotate_after:
+            self._rotate_on_owner(f"{self._on_session} pages on this exit IP")
         page = self._ensure_page()
+        self._on_session += 1
         self._last_doc_status = None
         try:
             return fetch_through_page(
@@ -321,6 +331,35 @@ class BrowserFetcher:
             if self._closed:
                 raise BrowserTransportError("this browser fetcher is closed")
         return self._on_owner(lambda: self._fetch_on_owner(url))
+
+    @property
+    def session_id(self) -> str:
+        """The sticky session currently pinned — i.e. which residential exit IP we are."""
+        return self._session_id
+
+    def rotate(self, reason: str = "") -> None:
+        """Retire this exit IP: drop the browser holding it and pick a new sticky session,
+        so the next fetch launches on a different residential IP.
+
+        Keeping a blocked session is pointless — every later page draws the same refusal
+        until the portal lifts it, which is how one 30-minute block cost a whole walk three
+        category groups. The browser must go too: its context carries the interstitial
+        cookie, which is bound to both the old IP and that browser."""
+        with self._lifecycle:
+            if self._closed:
+                raise BrowserTransportError("this browser fetcher is closed")
+        self._on_owner(lambda: self._rotate_on_owner(reason))
+
+    def _rotate_on_owner(self, reason: str) -> None:
+        """Runs ON the owner thread: it closes a browser, which is thread-affine."""
+        retired = self._session_id
+        self._close_on_owner()
+        self._session_id = uuid.uuid4().hex[:12]
+        self._on_session = 0
+        LOG.warning(
+            "BROWSER rotating exit IP: session %s retired -> %s (%s)",
+            retired, self._session_id, reason or "requested",
+        )
 
     def close(self) -> None:
         """Tear the browser down on its owner thread. Safe to call twice and never raises:

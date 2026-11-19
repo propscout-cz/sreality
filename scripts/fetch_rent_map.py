@@ -23,11 +23,11 @@ from pathlib import Path
 
 from api.rent_map import fetch_latest_xlsx, ingest_bytes
 from scraper.db import connect
+from scraper.hashing import file_sha256
 from scripts import ingest_map_overlays
 from toolkit.rent_map import (
     MF_INFOGRAPHIC_URL,
     parse_rent_map_xlsx,
-    sha256_bytes,
     source_date_from_filename,
 )
 
@@ -58,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         LOG.info(
             "DRY RUN sha256=%s source_date=%s territories=%d adjustments=%d",
-            sha256_bytes(data)[:12], parsed.source_date,
+            file_sha256(data)[:12], parsed.source_date,
             len({v.ruian_code for v in parsed.values}), len(parsed.adjustments),
         )
         return ingest_map_overlays.main(["--sections", "rent_map", "--dry-run"])

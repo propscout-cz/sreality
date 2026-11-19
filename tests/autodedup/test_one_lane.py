@@ -1816,6 +1816,38 @@ def test_the_re_claims_on_top_of_the_limit_fill_none_of_it() -> None:
     assert _measure_rate(429, 480.0, rate, bound) == (round(2.0 * rate, 6), True)
 
 
+def test_a_steady_clock_cut_claim_with_work_waiting_is_measured_however_small() -> None:
+    """E984, 2026-11-13: the stored rate 0.025404 gave a limit of 13; the feeds fed 12 (one ran
+    dry) in 221.1 s, under 20 and short of the limit, so nothing was measured and the rate stood
+    for days. On a steady pass with no re-claims, a feed that left work waiting fills the claim."""
+    from autodedup.incremental_lane import _measure_rate
+
+    rate = 0.025404
+    bound = {**_bound("time", int(525.0 * rate), 525.0), "building": False}
+    assert bound["limit"] == 13
+    assert _measure_rate(12, 221.1, rate, bound) == (None, False)
+    assert _measure_rate(12, 221.1, rate, {**bound, "cut": True}) == (round(2 * rate, 6), True)
+    assert _measure_rate(12, 600.0, rate, {**bound, "cut": True}) == (
+        round(0.5 * 12 / 600.0 + 0.5 * rate, 6), False)
+    assert _measure_rate(12, 221.1, rate, {**_bound("cap", 13, 525.0), "cut": True}) == (
+        None, False), "a cap is memory, not the clock"
+
+
+@pytest.mark.parametrize("extra", [
+    {"building": True},               # a build's seconds are the build's
+    {"stale": 5},                     # a re-claim's seconds are not the feeds' (E971)
+    {"building": True, "stale": 5},   # a build pass carrying re-claims
+])
+def test_work_waiting_never_doubles_a_build_or_a_pass_with_re_claims(extra: dict) -> None:
+    from autodedup.incremental_lane import _measure_rate
+
+    rate = 0.025404
+    bound = {**_bound("time", 13, 525.0), "cut": True, **extra}
+    claimed = 12 + int(extra.get("stale", 0))
+    rate_out, doubled = _measure_rate(claimed, 221.1, rate, bound)
+    assert doubled is False and (rate_out is None or rate_out < 2 * rate)
+
+
 class _LaneClock:
     """The lane's `time`, its pass `elapsed_s` seconds long: the first `perf_counter` (the
     pass's start) is real, every later one that start plus `elapsed_s`."""

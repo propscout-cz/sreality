@@ -35,7 +35,7 @@ import {
   type SortSpec,
 } from '@/lib/queries';
 import {
-  fmtArea, fmtCzk, fmtFloorTag, fmtMeasuredPricePerM2,
+  fmtArea, fmtCzk, fmtFloor, fmtMeasuredPricePerM2,
   fmtShortDate, fmtTomDays,
 } from '@/lib/format';
 import type { CohortKind } from '@/lib/filters';
@@ -637,18 +637,16 @@ function Card({
               </p>
             )}
             {storeyTag && (
-              /* `card-tip` keeps the tooltip hit-testable under the stretched link.
-                 A quiet inset label, no border (P06 note); on a delisted card,
+              /* A quiet inset label, no border (P06 note); on a delisted card,
                  whose surface is already the inset, it sits one step up. */
               <span
-                title={storeyTag.title}
                 className={[
-                  'card-tip ml-auto shrink-0 px-1.5 py-px text-[0.6rem] tabular-nums whitespace-nowrap',
+                  'ml-auto shrink-0 px-1.5 py-px text-[0.6rem] tabular-nums whitespace-nowrap',
                   'rounded-[var(--radius-xs)] text-[var(--color-ink-3)]',
                   inactive ? 'bg-[var(--color-paper)]' : 'bg-[var(--color-inset)]',
                 ].join(' ')}
               >
-                {storeyTag.text}
+                {storeyTag}
               </span>
             )}
           </div>
@@ -743,13 +741,13 @@ function focusFromPointer(button: HTMLButtonElement | null): void {
 
 /* A storey is a fact about a UNIT in a building: 91 % of apartments and 25 % of
  * commercial units carry one, but a house's is almost always the ground floor
- * ("přízemí" on a house reads as a claim) and a plot has none. */
+ * ("1. podlaží" on a house reads as a claim) and a plot has none. */
 const STOREY_CATEGORIES: ReadonlySet<string | null> = new Set(['byt', 'komercni']);
 
 /* The small tag beside the place, never part of the headline. */
-function storeyTagOf(r: CardRow, storey: ListingFloor | null): ReturnType<typeof fmtFloorTag> {
+function storeyTagOf(r: CardRow, storey: ListingFloor | null): string | null {
   if (storey == null || !STOREY_CATEGORIES.has(r.category_main)) return null;
-  return fmtFloorTag(storey.floor, storey.total_floors);
+  return fmtFloor(storey.floor, storey.total_floors);
 }
 
 function formatTitle(r: CardRow, cohortKind: CohortKind | null): string {

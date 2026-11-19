@@ -8,9 +8,11 @@ only contact is a +420 number and a mailto link.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
+from scraper import vocabulary
 from scraper.portal_identity import WEB
 from scraper.web_parser import parse_detail
 from toolkit.filter_registry import COLUMN_CANONICAL_VALUES
@@ -81,7 +83,8 @@ def test_a_jsonld_page_gives_its_structured_facts() -> None:
     assert (got.category_type, got.category_main) == ("prodej", "byt")
     assert (got.price_czk, got.price_unit) == (6_490_000, "za nemovitost")
     assert (got.area_m2, got.area_basis) == (78.0, "floor")
-    assert got.disposition == "3+1" and got.floor == 4
+    # "ve 4. patře": a patro wording names no scale (#2552).
+    assert got.disposition == "3+1" and got.floor is None
     assert (got.lat, got.lon) == (49.2112, 16.5794)
     assert got.description.startswith("Nabízíme světlý byt 3+1 ve 4. patře")
     assert "<b>" not in got.description
@@ -115,7 +118,7 @@ def test_a_bare_czech_page_is_read_by_the_shared_grammars_and_never_its_chrome()
     got = _parse(CZECH_PAGE, "https://reality-xy.example/inzerat/123")
     assert (got.category_type, got.category_main) == ("prodej", "byt")
     assert (got.price_czk, got.disposition, got.area_m2) == (5_990_000, "2+kk", 54.0)
-    assert (got.floor, got.total_floors) == (2, 6)
+    assert (got.floor, got.total_floors) == (None, 6)
     assert "Prodáváme byt 2+kk" in got.description
     for chrome in ("Nejlepší realitka", "Podobné nabídky", "Copyright"):
         assert chrome not in got.description
@@ -302,7 +305,7 @@ def test_a_webforms_page_wrapped_in_one_form_is_read() -> None:
             "</div></div><input type='submit'></form></body></html>")
     got = _parse(page, "https://rk-plzen.example/detail.aspx?id=5")
     assert got.description.startswith("Prodej bytu 3+1 o výměře 72 m²")
-    assert (got.price_czk, got.area_m2, got.floor) == (3_900_000, 72.0, 4)
+    assert (got.price_czk, got.area_m2, got.floor) == (3_900_000, 72.0, None)
     assert got.raw["image_urls"] == ["https://rk-plzen.example/img/a.jpg"]
 
 
@@ -333,3 +336,63 @@ def test_a_listing_under_a_webpages_main_entity_is_found() -> None:
             "</script></head><body></body></html>")
     got = _parse(page, "https://rk.example/4")
     assert (got.raw["title"], got.price_czk, got.lat, got.lon) == ("Prodej domu 5+1", 8_900_000, 49.5, 17.1)
+
+
+# --- the page's labelled facts (one text grammar, scraper.text_grammar) ---------------------------
+
+FACT_TABLE = Path(__file__).resolve().parents[1] / "fixtures" / "portal_html" / "web_fact_table.html"
+FACT_TABLE_URL = ("https://www.quantumreality.cz/nemovitosti/"
+                  "prodej-bytu-2kk-675-m%c2%b2-ov-praha-2-vinohrady-machova/")
+
+
+def test_a_fact_table_a_price_box_and_the_full_prose_are_read() -> None:
+    """The operator's paste of 2026-11-10 (#2540): every fact the page states in its table and
+    its price box reaches the ad, and the page's prose beats the "[…]"-cut og:description."""
+    vocabulary.take_unmapped()
+    got = _parse(FACT_TABLE.read_text(encoding="utf-8"), FACT_TABLE_URL)
+    assert (got.price_czk, got.price_unit) == (8_950_000, "za nemovitost")
+    assert (got.category_main, got.category_type, got.disposition) == ("byt", "prodej", "2+kk")
+    assert (got.ownership, got.building_type) == ("osobni", "cihla")
+    assert got.condition == vocabulary.canonical("condition", WEB, "Velmi dobrý") == "velmi_dobry"
+    assert got.cellar is True and got.floor == -1
+    # The labelled užitná plocha leads the title's unlabelled 67,5 m² (scraper.area's order).
+    assert (got.usable_area, got.area_m2, got.area_basis) == (67.0, 67.0, "usable")
+    og = got.raw["og"]["description"]
+    assert og.endswith("[…]") and len(got.description) > len(og)
+    assert got.description.startswith("Exkluzivní nabídka") and not got.description.endswith("[…]")
+    assert got.raw["facts"] == [
+        ["Lokalita", "Praha"], ["Adresa", "Máchova"], ["Typ nabídky", "Prodej"],
+        ["Dispozice", "2+kk"], ["Podlaží", "-1"], ["Užitná plocha", "67 m2"],
+        ["Vlastnictví", "Osobní"], ["Budova", "Cihlová"], ["Stav", "Velmi dobrý"],
+        ["Sklep", "Ano"], ["Plocha sklepu", "3 m2"],
+        ["Cena nemovitosti", "8.950.000 Kč"],
+        ["Poznámka k ceně", "včetně provize RK"],
+    ]
+    assert vocabulary.take_unmapped() == []  # every label it states is known
+
+
+def test_dt_dd_and_label_value_blocks_are_facts_and_an_unknown_label_is_counted() -> None:
+    page = ("<html><head><title>Pronájem bytu 2+kk, Olomouc</title></head><body><main>"
+            "<dl><dt>Nájemné</dt><dd>14 500 Kč/měsíc</dd><dt>Orientace</dt><dd>jih</dd></dl>"
+            "<div class='param'><span class='param-label'>Výtah:</span>"
+            "<span class='param-value'>Ano</span></div>"
+            "<ul><li>Vybavení: částečně vybaveno</li><li>PENB: B</li></ul>"
+            "<p>Pronajmeme byt 2+kk v Olomouci, 3. patro, nájem včetně parkovacího stání.</p>"
+            "<div role='dialog'><p>Chyba: formulář nebyl nalezen.</p></div>"
+            "</main></body></html>")
+    vocabulary.take_unmapped()
+    got = _parse(page, "https://najmy.example/2")
+    assert (got.price_czk, got.price_unit) == (14_500, "za mesic")
+    assert (got.has_lift, got.furnished, got.energy_rating) == (True, "castecne", "B")
+    assert got.raw["facts"] == [["Nájemné", "14 500 Kč/měsíc"], ["Orientace", "jih"],
+                                ["Výtah", "Ano"], ["Vybavení", "částečně vybaveno"], ["PENB", "B"]]
+    assert vocabulary.take_unmapped() == [("label/web/orientace", 1)]
+
+
+def test_page_prose_beats_a_metadata_excerpt_that_is_its_prefix() -> None:
+    body = ("Prodáváme světlý byt 2+kk v Brně - Králově Poli o výměře 54 m² ve 3. patře "
+            "cihlového domu, po celkové rekonstrukci, se sklepem a s balkonem do dvora.")
+    page = (f"<html><head><title>Prodej bytu 2+kk, Brno</title>"
+            f"<meta property='og:description' content='{body[:70]}'></head>"
+            f"<body><article><p>{body}</p></article></body></html>")
+    assert _parse(page, "https://rk.example/5").description == body

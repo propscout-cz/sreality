@@ -1442,6 +1442,12 @@ component is slimmed twice — each wave rewrites one component and slims its st
   covers every level: "Kolín 3" answers the část Kolín III, "Liberec 1" Liberec I-Staré Město, "Horka 2" the obec Horka
   II before its namesake část, "Nádražní 12, Kolín 3" the door in Kolín III. A suffix follows the number after a hyphen
   or a dot, never a space, so "Jablonné v Podještědí" (a preposition "v") is no numbered name.
+- **The simulated gate run's gaps — built 2026-11-17** (#2548; operator rulings 2026-11-17; no migration; as built:
+  `docs/architecture.md` § own place search). 244 register-written questions scored 86.5 % top-1 and 95.1 % top-5
+  (bars 90 / 97). Fixed: a street or část with its town and no number ("Masarykova, Brno", "Praha 6 Dejvice"); a street
+  exact under every abbreviation spelling ("nám."/"náměstí"); "okres X"; "Praha6"; place-name typos at 0.55; and "town
+  first" narrowed to a town above its own okres and kraj (Praha's Karlín before the village). **Next:** re-run the 244
+  on production and post the tallies on #2465 (ruling: the simulation stands in for its 200 real picks).
 - **The gate's eval — built 2026-11-09** (#2452; spec #2441 Part 4 (1)–(4), Q2 c, ruling 2026-11-08; no migration; as
   built: `docs/architecture.md` § the gate's eval). `scripts/place_search_gate_eval.py`, read-only on production:
   picks only through `picks_between`, in one READ ONLY transaction closed before any request; only `POST
