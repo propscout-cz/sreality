@@ -289,8 +289,10 @@ class _Logged:
 
 
 def _clock(conn: psycopg.Connection) -> _Clock:
-    """Three days after the transaction, so its Prague day and the next are over, DST or not."""
-    return _Clock(conn.execute("SELECT now()").fetchone()[0] + timedelta(days=3))
+    """Three days after the transaction, so its Prague day and the next are over, DST or not; 0.1 s before a minute
+    turns, so a test that reads the clock after the run where the eval read it before fails every time (#2567)."""
+    return _Clock((conn.execute("SELECT now()").fetchone()[0] + timedelta(days=3)).replace(second=59,
+                                                                                          microsecond=900000))
 
 
 def _today(conn: psycopg.Connection) -> Any:
@@ -611,7 +613,7 @@ def test_a_mapy_span_cut_short_by_mapy_from_leaves_latency_incomplete(
     cache_went = clock.at - timedelta(days=2, hours=12)
     code, out = _run(conn, capsys, route, "--mapy-from", cache_went.isoformat(), clock=clock, railway=railway, size=1)
     assert "Mapy · 200s n 1 · p50 344 ms · p95 344 ms · aborts 1 of 2 (50.0 %) · statuses 200: 1, 499: 1" in out
-    complete = clock.at + timedelta(days=4, hours=12)
+    complete = cache_went + timedelta(days=7)
     assert (f"Mapy: only 2 d since --mapy-from; its 7 days are complete on {complete.astimezone(UTC):%Y-%m-%d %H:%M}Z:"
             " latency incomplete") in out
     assert "own · 200s n 4 · p50 200 ms · p95 200 ms · statuses 200: 4" in out
