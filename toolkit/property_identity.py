@@ -148,8 +148,9 @@ VALUES (%(group)s, %(table)s, %(row_key)s, %(row_at)s, %(account_id)s, %(from_pr
         %(survivor)s, %(kind)s, %(snapshot)s)
 """
 
-# Publication never regresses on a merge (migrations 668/747): a published retired property's
-# stamp passes to a survivor not yet published.
+# Publication never regresses on a merge or a split (migrations 668/747): a published retired
+# property's stamp passes to a survivor not yet published, a published property's to the one a
+# split bears from it.
 _CARRY_SETTLED_SQL = (
     "UPDATE properties s SET settled_at = r.settled_at FROM properties r "
     "WHERE s.id = %s AND r.id = %s AND s.settled_at IS NULL AND r.settled_at IS NOT NULL"
@@ -833,6 +834,7 @@ def _born(
     (born,) = create_singleton_properties(conn, [listing_id])
     group = str(uuid.uuid4())
     with conn.cursor() as cur:
+        cur.execute(_CARRY_SETTLED_SQL, (born, current))
         cur.execute(_INGEST_GROUPING_SQL, {
             "group": group, "left": current, "born": born, "by": decided_by,
             "listing": listing_id, "reason": "split_new" if live else "ingest_grouping",

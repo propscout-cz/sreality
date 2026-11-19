@@ -673,8 +673,11 @@ def _drain_dirty(
 #   - the engine holds no pending question about any of them (a pair held for evidence);
 #   - no engine group puts one of its ads with an ad on another property, or on none yet: the
 #     merge that would retire it, or fold another into it, has not landed;
-# or when it is CAP old: the one bounded wait, for photos and for an engine decision, and the
-# whole wait outside the scope (ruling 4, 2026-10-23: no special case there).
+# or when CAP has passed since it was first seen AND since the engine first read each of its ads
+# (`rt_fp.first_decided_at`): the one bounded wait, for photos and for an engine decision, and the
+# whole wait outside the scope (ruling 4, 2026-10-23: no special case there). A decision can only
+# be waited for once the engine has read the ad, so a late read restarts the wait: counted from
+# first sight alone, an ad read after its cap would be published with no decision wait at all.
 # Every unstamped property is a candidate, off `properties_unsettled_idx` (migration 747): the
 # fresh ones and those waiting for the engine. ONE query judges and locks: the row lock lands only
 # on the rows it stamps, never on every candidate; a property a merge, a split or a drain slice's
@@ -697,7 +700,12 @@ _SETTLE_SQL = f"""
                                               AND (ll.obec_kod = any(%(obec)s::bigint[])
                                                    OR ll.cast_obce_kod = any(%(cast_obce)s::bigint[])
                                                    OR ll.okres_kod = any(%(okres)s::bigint[])))))
-        AND (p.first_seen_at <= now() - {CAP_SQL}
+        AND ((p.first_seen_at <= now() - {CAP_SQL}
+              AND NOT EXISTS (SELECT 1 FROM listings l
+                                JOIN autodedup.rt_fp f
+                                  ON f.generation = %(generation)s AND f.listing_id = l.id
+                               WHERE l.property_id = p.id
+                                 AND f.first_decided_at > now() - {CAP_SQL}))
              OR ((EXISTS (SELECT 1 FROM listings l JOIN images i ON i.listing_id = l.id
                            WHERE l.property_id = p.id AND i.storage_path IS NOT NULL)
                   OR NOT EXISTS (SELECT 1 FROM listings l JOIN images i ON i.listing_id = l.id

@@ -34,7 +34,7 @@ begin
   select count(*) into v_left from public.properties
    where settled_at is null and first_seen_at <= now() - interval '7 days';
   if v_left > 0 then
-    raise exception '748 refused: % properties older than 7 d carry no stamp (apply 747 first)', v_left;
+    raise exception '748 refused: % properties older than 7 d carry no stamp (747 has not run, or the stamper holds them: read dedup:held_unpublished)', v_left;
   end if;
 end
 $pre$;

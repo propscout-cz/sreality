@@ -35,9 +35,10 @@ def _fresh(cur: Any, hours_ago: float = 1) -> int:
     return int(cur.fetchone()[0])
 
 
-def _read(cur: Any, listing_id: int) -> None:
-    """The engine has read this ad in its live generation."""
-    cur.execute("INSERT INTO autodedup.rt_fp (generation, listing_id) VALUES (%s, %s)", (GENERATION, listing_id))
+def _read(cur: Any, listing_id: int, hours_ago: float = 0) -> None:
+    """The engine first read this ad `hours_ago` before now(), in its live generation."""
+    cur.execute("INSERT INTO autodedup.rt_fp (generation, listing_id, first_decided_at) "
+                "VALUES (%s, %s, now() - make_interval(secs => %s))", (GENERATION, listing_id, hours_ago * 3600))
 
 
 def _ad(cur: Any, pid: int, *, photo: bool | None = True, read: bool = True) -> int:
@@ -194,16 +195,21 @@ def _unread(cur: Any, hours_ago: float, *, located: bool = True, photo: bool | N
 def test_the_cap_ends_the_wait_for_a_photo(cur: Any) -> None:
     waiting, old = _fresh(cur), _fresh(cur, hours_ago=7)
     _ad(cur, waiting, photo=False)
-    _ad(cur, old, photo=False)
+    _read(cur, _ad(cur, old, photo=False, read=False), hours_ago=7)
     _settle(cur)
     assert _settled(cur, waiting, old) == {waiting: False, old: True}
 
 
-def test_the_cap_ends_the_wait_for_an_engine_decision(cur: Any) -> None:
-    pid = _fresh(cur, hours_ago=7)
-    _pair(cur, _ad(cur, pid), _loose(cur))
+def test_the_cap_ends_the_wait_for_an_engine_decision_counted_from_the_read(cur: Any) -> None:
+    """A decision can be waited for only once the engine has read the ad: an ad read after its property's cap
+    (the engine was behind) still gets the whole wait, and the cap ends it."""
+    late, done = _fresh(cur, hours_ago=30), _fresh(cur, hours_ago=30)
+    for pid, read_hours_ago in ((late, 1), (done, 7)):
+        lid = _ad(cur, pid, read=False)
+        _read(cur, lid, hours_ago=read_hours_ago)
+        _pair(cur, lid, _loose(cur))
     _settle(cur)
-    assert _settled(cur, pid) == {pid: True}
+    assert _settled(cur, late, done) == {late: False, done: True}
 
 
 def test_no_clock_publishes_an_ad_the_engine_will_read_and_has_not(cur: Any) -> None:

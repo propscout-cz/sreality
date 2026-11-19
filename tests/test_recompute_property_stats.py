@@ -640,7 +640,9 @@ def test_the_settle_statement_reads_the_engine_and_locks_only_what_it_stamps():
     flat = " ".join(rps._SETTLE_SQL.split())
     assert "WHERE p.settled_at IS NULL AND NOT EXISTS" in flat and "LIMIT" not in flat
     assert "p.status" not in flat and "first_seen_at >=" not in flat
-    assert f"AND (p.first_seen_at <= now() - {CAP_SQL} OR (" in flat, "the cap is one arm, after the read"
+    assert (f"AND ((p.first_seen_at <= now() - {CAP_SQL} AND NOT EXISTS (SELECT 1 FROM listings l JOIN autodedup.rt_fp f "
+            f"ON f.generation = %(generation)s AND f.listing_id = l.id WHERE l.property_id = p.id "
+            f"AND f.first_decided_at > now() - {CAP_SQL})) OR (") in flat, "the cap is one arm, counted from the read too"
     assert all(f"%({k})s" in flat for k in ("all_scope", "obec", "cast_obce", "okres"))
     assert flat.count("FOR ") == 1 and "FOR NO KEY UPDATE OF p SKIP LOCKED" in flat
     assert flat.index("autodedup.cluster_members") < flat.index("FOR NO KEY UPDATE"), "judge first, lock last"

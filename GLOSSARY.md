@@ -134,16 +134,17 @@ _Avoid_: sold, sale speed, time to sell
 **Settled**:
 A property the pipeline is done with: its first photo is stored (or it has none), and the engine has
 read every one of its ads, holds no pending question about them and keeps none of them in a group
-that also holds an ad on another property, or on none yet. Stamped once, by property maintenance; a
-merge passes a settled property's stamp to the survivor only when that publishes the survivor
-earlier, so publication never regresses, and never moves later.
+that also holds an ad on another property, or on none yet. Settled is one of the two ways a property
+becomes published; it has no stamp of its own.
 _Avoid_: evaluated, checked, dedup-checked
 
 **Published**:
 A property Browse, the map, Stats and the watchdog serve: from the moment the maintenance pass
 stamps it. The pass never stamps it before the engine has read every ad on it that lies in the
-engine's scope; after that it stamps it once settled, or 6 hours after it was first seen (the cap,
-which also is the whole wait outside the scope). Its page opens by its link either way.
+engine's scope; after that it stamps it once settled, or 6 hours after it was first seen and after
+the engine first read its ads (the cap, which also is the whole wait outside the scope). Stamped
+once; a merge or a split passes the stamp on, so publication never regresses. Its page opens by its
+link either way.
 _Avoid_: gated-in, live (for this)
 
 **Valuo valuation**:

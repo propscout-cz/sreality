@@ -1396,8 +1396,9 @@ def test_a_property_held_unpublished_past_a_day_is_a_watch_and_many_are_a_proble
     assert _cell("held_unpublished")["message"] == "No active property is unpublished past 24 h"
     one = _cell("held_unpublished", held=(1, _ago(hours=40), 1_234_567))
     assert one["status"] == "warn" and one["facts"]["oldest_property_id"] == 1_234_567
-    assert one["message"] == ("1 active property is unpublished past 24 h, each held by an ad the engine "
-                              "has not read; the oldest (property 1234567) was first seen 40.0 h ago "
+    assert one["message"] == ("1 active property is unpublished past 24 h, held by an ad the engine has "
+                              "not read, or the stamper is not running; the oldest (property 1234567) was "
+                              "first seen 40.0 h ago "
                               "(Watch at 1)")
     many = _cell("held_unpublished", held=(26, _ago(days=3), 7))
     assert many["status"] == "fail" and many["message"].endswith("(Problem over 25)")

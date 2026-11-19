@@ -754,7 +754,7 @@ def _held_unpublished_cell(conn: Any, engine: _Engine, thresholds: dict[str, Any
         return cell(subject, "ok", f"No active property is unpublished past {hours} h", value=0,
                     facts=facts)
     said = (f"{n:,} active {_n(n, 'property is', 'properties are')} unpublished past {hours} h, "
-            f"each held by an ad the engine has not read; the oldest (property {oldest_id}) was "
+            f"held by an ad the engine has not read, or the stamper is not running; the oldest (property {oldest_id}) was "
             f"first seen {ago(engine.age(oldest) or 0)} ago")
     fail = int(thresholds["dedup_held_fail"])
     level = "fail" if n > fail else "warn"

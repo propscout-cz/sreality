@@ -362,16 +362,16 @@ NEW_WINDOW = "24 hours"
 #   - not from a retired watchdog (a delete retires it, F21; its rows stay for analysis).
 # And not RETRACTED (operator ruling 2026-10-23, Q5): a 'new' told as newly listed (match_reason
 # 'listed', or NULL: every 'new' before migration 735) is hidden exactly when the property it now
-# names was first seen more than NEW_WINDOW before the alert was told. No newly listed one is told so
-# (the producer's window), but a merge re-points alerts to the oldest property, so a 'new' the 6 h
-# cap released for a duplicate hides itself once the engine merges it; a New match for any other
+# names was PUBLISHED more than NEW_WINDOW before the alert was told. No newly listed one is told so
+# (the producer's window, on the same stamp), but a merge re-points alerts to the oldest property, so
+# a 'new' the cap released for a duplicate hides itself once the engine merges it; a New match for any other
 # reason names an older property by design, and stays. And a 'new' is hidden when the same watchdog
 # told an earlier, unretracted 'new' about the property it now names less than NEW_WINDOW before:
 # a slice re-tells a property only after it was out for a day (SLICE_BLINK), so two inside the
 # window are twins a merge joined (each entry has its own event_ref, so the carrier marks none).
 # Derived, no column: it
-# survives a split (a detach leaves alerts where they are), and a survivor first seen 6 to 24 h
-# before the alert keeps it (a known residue). The interval is a literal, so every statement
+# survives a split (a detach leaves alerts where they are), and a survivor published less than
+# NEW_WINDOW before the alert keeps it (a known residue). The interval is a literal, so every statement
 # embedding the fragment keeps its own parameters. A retraction withdraws an alert from attention —
 # feed, badge, push — never from a direct tap: the tap path (mark_dispatch_seen, _fetch_dispatch)
 # reads REACHABLE, so a push the user was already sent opens the property the alert now names (a
@@ -386,10 +386,10 @@ REACHABLE_SQL = (
     "AND (d.subscription_id IS NULL OR EXISTS (SELECT 1 FROM notification_subscriptions ws "
     "WHERE ws.id = d.subscription_id AND ws.retired_at IS NULL))"
 )
-# A 'new' (`alias`) told as newly listed about a property first seen before the window.
+# A 'new' (`alias`) told as newly listed about a property published before the window.
 def _stale_listed_sql(alias: str) -> str:
     return (f"(coalesce({alias}.match_reason, 'listed') = 'listed' AND EXISTS (SELECT 1 FROM properties rp "
-            f"WHERE rp.id = {alias}.property_id AND rp.first_seen_at <= {alias}.dispatched_at - "
+            f"WHERE rp.id = {alias}.property_id AND {visible_since_sql('rp')} <= {alias}.dispatched_at - "
             f"interval '{NEW_WINDOW}'))")
 
 
@@ -1019,8 +1019,8 @@ _SLICE_LOCK_SQL = (
 )
 _SLICE_RESTART_SQL = "DELETE FROM watchdog_slice_members WHERE subscription_id = %(subscription_id)s"
 
-# A start: every property in the slice becomes a member. Told: one first seen inside NEW_WINDOW that
-# became visible after the start (`toolkit/publication.py`; held while unpublished), unless this watchdog already told it a 'new' since the start (the
+# A start: every property in the slice becomes a member. Told: one published inside NEW_WINDOW and
+# after the start (`toolkit/publication.py`; held while unpublished), unless this watchdog already told it a 'new' since the start (the
 # matcher before the slice wrote no event_ref).
 _SLICE_SEED_SQL = (
     f"WITH {_SLICE_CTE}, "
@@ -1033,7 +1033,7 @@ _SLICE_SEED_SQL = (
     "  SELECT %(subscription_id)s, 'watchdog', s.property_id, s.listing_id, 'new', s.price_czk, NULL, "
     f"         {_ENTRY_REF}, 'listed' "
     "  FROM slice s JOIN properties p ON p.id = s.property_id "
-    "  WHERE p.first_seen_at > now() - %(new_window)s::interval "
+    f"  WHERE {visible_since_sql('p')} > now() - %(new_window)s::interval "
     f"   AND {visible_since_sql('p')} > %(active_since)s::timestamptz "
     "    AND NOT EXISTS (SELECT 1 FROM notification_dispatches d "
     "      WHERE d.source_kind = 'watchdog' AND d.subscription_id = %(subscription_id)s::uuid "
@@ -1049,7 +1049,7 @@ _SLICE_SEED_SQL = (
 )
 
 # Why an entry entered, of what changed about the property since `since` (the last pass, less
-# SLICE_SETTLE), in MATCH_REASONS order: first seen inside NEW_WINDOW or published since (a filter on
+# SLICE_SETTLE), in MATCH_REASONS order: published inside NEW_WINDOW or since (a filter on
 # data filled in later, a place resolved or a proximity computed within the hour, lets a new property
 # in after its publication); back on the market (migration 735's stamp); its
 # canonical advert's price step (`listing_price_steps`, migration 559, as the price step reads it);
@@ -1059,7 +1059,7 @@ _SLICE_SEED_SQL = (
 _SINCE = "%(since)s::timestamptz"
 _ENTRY_SIGNAL = (
     "CASE "
-    "  WHEN p.first_seen_at > now() - %(new_window)s::interval "
+    f"  WHEN {visible_since_sql('p')} > now() - %(new_window)s::interval "
     f"    OR {visible_since_sql('p')} > {_SINCE} THEN 'listed' "
     f"  WHEN p.back_on_market_at > {_SINCE} THEN 'back' "
     "  WHEN st.price_czk IS NOT NULL THEN 'price' "

@@ -3116,21 +3116,26 @@ renumber.** Navigate by area:
     Otherwise it stamps when the pipeline is done with the property (its first photo is stored or
     it has none, the engine has read every ad, holds no pending question about them
     (`autodedup.pairs` at the evidence hold) and keeps none in a group that also holds an ad on
-    another property, or on none yet (`autodedup.cluster_members`)) or when the property is 6 h old:
+    another property, or on none yet (`autodedup.cluster_members`)) or when 6 h have passed since the
+    property was first seen AND since the engine first read each of its ads (`rt_fp.first_decided_at`):
     the cap bounds the wait for photos and for an engine DECISION, and is the whole wait outside the
-    scope (ruling 4: no special case there). The stamp commits ALONE (it
+    scope (ruling 4: no special case there). A decision can be waited for only once the ad is read, so
+    a late read restarts the wait; a merge that lands after the cap is the residue ruling 5's
+    retraction withdraws (measured 21 d: on a healthy day 97–98 % of merges land within 6 h of the
+    read, on a backlog day 30–40 %). The stamp commits ALONE (it
     row-locks what it stamps, and the engine's merges run under a 5 s lock timeout, so a merge waits
     behind one statement at most); then `sync_browse_list` patches the stamped properties' Browse
     rows in its own transaction, best-effort (the next pass's published enqueue re-queues a miss). The stamper reads
     the engine's own tables and decides nothing — no second opinion on duplicates anywhere. A merge
-    passes a published retired property's stamp to a survivor not yet published
-    (`toolkit/property_identity._CARRY_SETTLED_SQL`): publication never regresses.
+    passes a published retired property's stamp to a survivor not yet published, and a split passes
+    a published property's to the one it bears (`toolkit/property_identity._CARRY_SETTLED_SQL`):
+    publication never regresses.
     **Why the read is not capped (2026-11-17):** until then the rule was `coalesce(settled_at,
     first_seen_at + 6 h) <= now()`, read off the clock by every surface. The clock cannot tell "the
     engine found no duplicate" from "the engine has not read the ad": the engine's read lag passed
     6 h on six of nine days (database strain, then a 10 h brake for a resize), and each re-list of a
     held property was told as New match at its 6 h mark; a retraction needs a merge, which never
-    came for a singleton nobody had read. 747 stamped the 1.13M properties the clock had published
+    came for a singleton nobody had read. 747 stamped the 1.15M properties the clock had published
     with the moment the clock gave them, so the stamp alone could say "published".
     **Why:** the watchdog told 'new' about a singleton minutes after its birth, before the engine
     had read it (audit F13: ~2.6 % of new properties were a cross-post of a live older property,
@@ -3138,7 +3143,7 @@ renumber.** Navigate by area:
     is what migration 273's gate lacked (its only stamper was the removed engine, so it would have
     hidden the market, rule 15): a slow engine delays a property, never hides it. One cap
     everywhere, no flags, no special case outside the apply scope (an ad the engine does not read
-    waits for the cap). **Measured at the ruling:** fleet-wide ~4–9 % of new properties settle
+    waits for the cap). **Measured at the ruling (10-23):** fleet-wide ~4–9 % of new properties settle
     before the cap and the rest publish at 6 h; inside the area the engine reads ~15–25 %; photos are
     never the binding condition. It folded in and deleted the images-first alert gate (2026-07-02;
     its two settings rows, `notifications_new_requires_image[_timeout_minutes]`, never existed in
@@ -3150,17 +3155,17 @@ renumber.** Navigate by area:
     extension, the boards, push rendering), the collection monitor, estimation subjects and
     comparables, broker lists and the engine's candidates — the gate is about a property's FIRST
     APPEARANCE; a change on a property a user already curates is not one, and a direct link must
-    open (rule 25 keeps the same boundary for location). Crossing the cap writes nothing, so the
-    maintenance pass opens by queueing into `dirty_properties` every active, served, published
+    open (rule 25 keeps the same boundary for location). A place resolved after the stamp or a patch
+    a rebuild's swap superseded writes nothing, so the maintenance pass also queues into `dirty_properties` every active, served, published
     property first seen within the cap plus two hours that `browse_list` lacks
     (`recompute_property_stats._enqueue_published`, browse_projection's WHERE rendered from the two
-    rules); its drain patches the row in, ~30 s after the 6 h mark (before #2505: the */15 rebuild,
+    rules); its drain patches the row in, ~30 s after the stamp (before #2505: the */15 rebuild,
     up to ~22 min on Large), and a patch a rebuild's swap superseded is re-queued the pass after;
     the publishing health check counts a held property in its expected `unpublished` stage, judged
     at the newest rebuild's start, never as a blocker. **A false 'new' withdraws itself (ruling 5):** `VISIBLE_SQL` (the feed, the badge,
     push) = `REACHABLE_SQL` (not a repeat, not dismissed, its watchdog not retired) AND NOT
     retracted: a 'new' told as newly listed (`match_reason` 'listed', or NULL before migration 735) is retracted
-    when the property it now names was first seen more than `NEW_WINDOW` (24 h) before the alert was told, and a
+    when the property it now names was published more than `NEW_WINDOW` (24 h) before the alert was told, and a
     'new' its watchdog already told about the same property inside `NEW_WINDOW` (twins a merge joined: each entry
     has its own `event_ref`, so the carrier marks none) — a merge re-points alerts to the survivor, the
     oldest property, so a cap-fired 'new' for a duplicate leaves the feed, the badge and push once the

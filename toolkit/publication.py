@@ -4,8 +4,9 @@ A property is PUBLISHED once it carries `properties.settled_at`: ONE stored fact
 the maintenance pass (`scripts/recompute_property_stats._SETTLE_SQL`) and read by every surface.
 The pass stamps a property when the engine has read every ad it will read on it (an ad outside the
 engine's scope is never read and never waited for) and either the pipeline has settled it (first
-photo stored or none, no pending engine question, no group with an ad on another property) or it is
-`CAP_SQL` old. So the cap bounds the wait for photos and for an engine DECISION, never for the
+photo stored or none, no pending engine question, no group with an ad on another property) or
+`CAP_SQL` has passed since its first sight and since the engine's first read of its ads. So the cap
+bounds the wait for photos and for an engine DECISION, counted from the read, never the wait for the
 engine's READ: an ad the engine has not read yet may be a re-list of a property already told, and
 publishing it would tell it again (the 2026-11-17 ruling; the engine's read lag has its own alarms,
 dedup:unread_arrivals and dedup:held_unpublished).

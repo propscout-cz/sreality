@@ -98,6 +98,20 @@ def test_747_stamps_what_the_clock_published_with_the_moment_the_clock_gave_it()
         "where settled_at is null")
 
 
+def test_747_runs_once_and_its_index_build_can_be_run_again() -> None:
+    """A valid index marks the fill done, so a re-run after the deploy stamps nothing (an unstamped property 6 h
+    old is then one the stamper holds for the engine). A cancelled build's INVALID index is moved aside and
+    dropped before the build, which waits for older transactions under no lock timeout (the 605/746 recipe)."""
+    code = " ".join(_code(S747).split())
+    done = code.index("to_regclass('') and i.indisvalid) then raise notice")
+    assert done < code.index("return;") < code.index("update public.properties")
+    steps = ("alter index public.properties_unsettled_idx rename to properties_unsettled_idx_invalid",
+             "set lock_timeout = 0;",
+             "drop index concurrently if exists public.properties_unsettled_idx_invalid;",
+             "create index concurrently if not exists properties_unsettled_idx")
+    assert [code.index(s) for s in steps] == sorted(code.index(s) for s in steps)
+
+
 def test_669_refuses_any_body_but_665s_and_any_schema_without_668() -> None:
     """Before any lock: a body that is neither 665's (md5 of its pg_get_viewdef, as 665 records it for its own
     re-run) nor already gated is refused, and so is a schema without the column the arm names."""
