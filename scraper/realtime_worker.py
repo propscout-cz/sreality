@@ -28,10 +28,10 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              without R2 env vars the lane logs once and idles (the proxy-skip
              posture).
 - maintenance: every `realtime_maintenance_interval_seconds` (default 30), one
-             incremental property-maintenance pass — queue what the 6 h cap
-             published (`_enqueue_published`) + straggler attach + dirty-set
-             recompute + settle (`settled_at` on fresh properties the pipeline is
-             done with, migration 668), via scripts.recompute_property_stats.
+             incremental property-maintenance pass — queue what is published
+             but not in Browse (`_enqueue_published`) + straggler attach + dirty-set
+             recompute + settle (`settled_at`, the publication stamp, on properties
+             the pipeline is done with, migrations 668/747), via scripts.recompute_property_stats.
              run_incremental_pass — the pass's only scheduled runtime: it is
              what delivers "a new/changed listing reaches properties (and the
              Browse read model) within minutes". Safe beside the daily sweep

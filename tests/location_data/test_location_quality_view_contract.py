@@ -26,7 +26,8 @@ from toolkit import publication
 
 ROOT = Path(__file__).resolve().parents[2]
 VIEW = "public.location_quality_by_source"
-# The view's live text is its newest restatement (698 first, 733 adds the position metric): the rails read that one.
+# The view's live text is its newest restatement (698 first, 733 the position metric, 749 the publication stamp):
+# the rails read that one.
 MIGRATION = sorted(p for p in (ROOT / "migrations").glob("*.sql")
                    if f"create or replace view {VIEW}" in p.read_text(encoding="utf-8"))[-1]
 # W6-c's position audit (migration 733): the matview, its admin-gated list view and its refresh.
@@ -143,13 +144,13 @@ def test_no_grain_is_compared_by_enum_order() -> None:
 
 
 def test_the_listing_cohort_and_the_sample_start_where_publishing_ends() -> None:
-    """NEW_AD_H is the one edge between publishing's new ads and this scorecard; the only other interval is the
-    publication cap."""
+    """NEW_AD_H is the one edge between publishing's new ads and this scorecard, and its only interval: the
+    served cohort reads the publication stamp, never a clock."""
     code = _squeeze(_view_body())
     edge = f"l.is_active and l.first_seen_at < now() - interval '{NEW_AD_H} hours'"
     assert code.count(_squeeze(edge)) == 2, "the listing cohort and the sample"
     hours = set(re.findall(r"interval '(\d+) hours'", code))
-    assert hours == {str(NEW_AD_H), re.search(r"\d+", publication.CAP_SQL).group(0)}
+    assert hours == {str(NEW_AD_H)}
 
 
 def test_the_served_cohort_is_published_properties_at_their_location_ad() -> None:

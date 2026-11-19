@@ -36,7 +36,7 @@ _NOW = _dt.datetime(2026, 10, 19, 9, 0, tzinfo=_UTC)
 _CONTRACT: dict[str, Any] = {
     "dedup_rulings_fail": 1, "dedup_build_window_h": 3, "dedup_build_eta_warn_d": 7,
     "dedup_pause_warn_h": 48, "dedup_lag_warn": 0.01, "dedup_lag_fail": 0.10,
-    "dedup_lag_min_n": 20, "dedup_lease_fail_past_expiry_min": 10, "dedup_splits_warn": 0.02,
+    "dedup_lag_min_n": 20, "dedup_unread_fail_h": 2, "dedup_held_fail": 25, "dedup_lease_fail_past_expiry_min": 10, "dedup_splits_warn": 0.02,
     "dedup_splits_min_groups": 100,
 }
 T: dict[str, Any] = {key: THRESHOLDS[key] for key in _CONTRACT}
@@ -49,7 +49,9 @@ _OPEN = {"blocks": ["town:563510", "quarter:490245"], "category_types": ["prodej
          "all_blocks": False, "listing_ids": None, "max_clusters_per_run": 600}
 _CLOSED = {**_OPEN, "blocks": []}
 _LANE_SCOPE = [{"grain": "obec", "code": 563510}, {"grain": "cast_obce", "code": 490245}]
-_SUBJECTS = ["state", "stream", "build", "merge_pause", "decision_lag", "lease", "rulings/ads",
+_SUBJECTS = ["state", "stream", "build", "merge_pause", "decision_lag", "unread_arrivals", "held_unpublished",
+             "lease",
+             "rulings/ads",
              "rulings/brokers", "splits"]
 
 
@@ -101,6 +103,7 @@ _DEFAULT: dict[str, Any] = {
     "rulings": (765, 1, 0, 3), "brokers": (0, 0, 0), "decisions": 0, "backlog": 0,
     "walked": ["obec:563510", "cast_obce:490245"], "floor": 19_340_583,
     "arrivals": _arrivals(400, 0), "previous": None, "previous_at": _ago(minutes=10),
+    "held": (0, None, None),
 }
 
 
@@ -131,6 +134,7 @@ def _answers(**overrides: Any) -> dict[str, Any]:
         isql.RT_SCOPE_SCAN_SEEN_SQL: [(block,) for block in w["walked"]],
         dd._ARRIVAL_FLOOR_SQL: [(w["floor"],)],
         isql.RT_NEW_LISTINGS_SQL: [window],
+        dd._HELD_SQL: [w["held"]],
         isql.RT_FP_READ_SQL: lambda p: [row for row in fp if row[0] in set(p["ids"])],
         common.PREVIOUS_CELLS_SQL: ([] if w["previous"] is None
                                     else [(w["previous_at"], w["previous"])]),
@@ -157,6 +161,13 @@ def _params(conn: _Conn, sql: str) -> Any:
 def _building(**overrides: Any) -> dict[str, Any]:
     """A build seeded `flag_at` ago, the lane on since long before."""
     return {"flag": True, "flag_at": _ago(hours=10), "seed_at": _ago(hours=10), **overrides}
+
+
+def _lag_only(results: list[tuple[Any, dict[str, Any]]]) -> list[tuple[Any, dict[str, Any]]]:
+    """The results without the unread arm, for the scenarios that walk the lag's own ladder."""
+    return [(at, common.result(out["check_key"], [c for c in out["details"]["cells"]
+                                                  if c["subject"] != "unread_arrivals"], {}))
+            for at, out in results]
 
 
 def _held(subject: str, status: str, **facts: Any) -> dict[str, Any]:
@@ -508,7 +519,8 @@ def test_brakes_builds_seeds_and_engine_changes_inside_the_day_are_not_lag(
     assert lag["status"] == "unknown" and lag["facts"]["excused"] == [reason]
     assert lag["message"] == (f"Not measured: {reason}, inside the last 24 h; brakes, builds, "
                               "seeds and engine changes are not lag")
-    assert isql.RT_NEW_LISTINGS_SQL not in {sql for sql, _, _ in conn.sent}
+    # Nothing excuses the ads the engine has not READ: their properties are unpublished.
+    assert _cells(out)["unread_arrivals"]["status"] == "fail"
 
 
 def test_off_and_building_leave_the_lag_not_measured() -> None:
@@ -652,7 +664,6 @@ def test_without_an_open_lag_reading_the_excuses_still_hold(previous: Any) -> No
     lag = _cells(out)["decision_lag"]
     assert (lag["status"], lag["message"]) == ("unknown", _ENGINE_CHANGED)
     assert _memory(lag) == {}
-    assert isql.RT_NEW_LISTINGS_SQL not in {sql for sql, _, _ in conn.sent}
 
 
 def test_with_no_excuse_an_open_reading_reads_as_any_and_keeps_the_ladders_clock() -> None:
@@ -814,12 +825,12 @@ def test_a_lag_problem_recovers_through_the_ladder_while_its_excuse_still_holds(
     assert [lag["status"] for lag in lags] == [
         "fail", *["unknown"] * (first_ok - 1), *["ok"] * 5, *["unknown"] * (5 - first_ok)]
     assert {c["status"] for _, out in results for c in out["details"]["cells"]
-            if c["subject"] != "decision_lag"} == {"ok"}
+            if c["subject"] not in ("decision_lag", "unread_arrivals")} == {"ok"}
     assert [_memory(lag).get("recovering_since") for lag in lags[first_ok:first_ok + 5]] == [
         _tick(first_ok).isoformat()] * 5
     assert {lag["facts"].get("opened_at") for lag in lags[:first_ok + 5]} == {_NOW.isoformat()}
     assert [_memory(lag) for lag in lags[first_ok + 5:]] == [{}] * (5 - first_ok)
-    ladder = _told("dedup", 600, results)
+    ladder = _told("dedup", 600, _lag_only(results))
     assert [(i["subject"], i["first_seen_at"], i["resolved_at"])
             for i in _incidents(ladder, "dedup")] == [
         ("decision_lag", _tick(0), _tick(first_ok + 3))]
@@ -840,7 +851,7 @@ def test_a_watch_opens_nothing_so_the_backlog_a_brake_leaves_reads_not_measured(
     assert [lag["status"] for lag in lags] == ["warn", *["unknown"] * 27]
     assert lags[-1]["message"].startswith("Not measured: a brake lifted 23 min ago, inside")
     assert [_memory(lag) for lag in lags] == [{}] * 28
-    ladder = _told("dedup", 600, results)
+    ladder = _told("dedup", 600, _lag_only(results))
     assert _incidents(ladder, "dedup") == [] and ladder.told == []
 
 
@@ -865,7 +876,7 @@ def test_a_recovered_problem_rings_no_second_onset_on_the_backlog_a_later_brake_
         assert lag["message"].startswith("Not measured: a brake lifted ")
         assert lag["message"].endswith(" engine changes are not lag")
     assert {bool(_memory(lag)) for lag in lags[last_ok + 1:]} == {last_ok == 4}
-    ladder = _told("dedup", 600, results)
+    ladder = _told("dedup", 600, _lag_only(results))
     assert [(i["first_seen_at"], i["resolved_at"]) for i in _incidents(ladder, "dedup")] == [
         (_tick(0), _tick(4))]
     assert _kinds(ladder) == ["onset", "recovery"]
@@ -889,7 +900,7 @@ def test_a_problem_braked_past_a_week_closes_with_the_ladder_and_its_lift_tells_
     assert [lag["status"] for lag in lags] == ["fail", *["unknown"] * (braked_for + 3)]
     assert [bool(_memory(lag)) for lag in lags].index(False) == week + 1
     assert lags[-1]["message"].startswith("Not measured: a brake lifted 23 min ago, inside")
-    ladder = _told("dedup", 600, results)
+    ladder = _told("dedup", 600, _lag_only(results))
     (incident,) = _incidents(ladder, "dedup")
     assert (incident["resolved_at"], incident["resolve_reason"]) == (_tick(week + 1),
                                                                      "unmeasured 7d")
@@ -907,7 +918,7 @@ def test_a_first_ok_then_an_hour_with_no_stored_cells_still_recovers_at_the_next
     assert [lag["status"] for lag in lags] == ["fail", "ok", "ok", "unknown"]
     assert lags[2]["facts"]["recovering_since"] == ticks[1].isoformat()
     assert _memory(lags[3]) == {}
-    ladder = _told("dedup", 600, results)
+    ladder = _told("dedup", 600, _lag_only(results))
     assert [(i["first_seen_at"], i["resolved_at"]) for i in _incidents(ladder, "dedup")] == [
         (ticks[0], ticks[2])]
     assert _kinds(ladder) == ["onset", "recovery"]
@@ -927,7 +938,7 @@ def test_a_seed_after_a_problem_closes_its_open_reading() -> None:
     assert [lag["message"] for lag in lags[1:3]] == ["Not measured: building"] * 2
     assert [bool(_memory(lag)) for lag in lags] == [True, False, False, False, False]
     assert lags[3]["facts"]["excused"] == ["a build ended 5 min ago", "a seed began 25 min ago"]
-    ladder = _told("dedup", 600, results)
+    ladder = _told("dedup", 600, _lag_only(results))
     assert [i["subject"] for i in _incidents(ladder, "dedup")] == ["decision_lag"]
     assert _kinds(ladder) == ["onset"]
 
@@ -947,7 +958,7 @@ def test_a_watch_stops_the_recovery_clock_as_it_stops_the_ladders() -> None:
                                                "unknown", "unknown"]
     assert [_memory(lag).get("recovering_since") for lag in lags[:8]] == [
         None, _tick(1).isoformat(), None, *[_tick(3).isoformat()] * 5]
-    ladder = _told("dedup", 600, results)
+    ladder = _told("dedup", 600, _lag_only(results))
     assert [(i["first_seen_at"], i["resolved_at"]) for i in _incidents(ladder, "dedup")] == [
         (_tick(0), _tick(6))]
     assert _kinds(ladder) == ["onset", "recovery"]
@@ -1171,7 +1182,7 @@ def _merging_statements() -> set[str]:
     return {common.CLOCK_SQL, isql.RT_STORE_PRESENT_SQL, SETTING_SQL, dd._HISTORY_SQL,
             ui_sql.LIVE_STREAM_SQL, dd._STAMPS_SQL, isql.RT_CALIBRATION_PRESENT_SQL,
             dd._MERGES_SQL, isql.RT_LEASE_READ_SQL, dd._WORKER_SQL, dd._RULINGS_SQL,
-            dd._BROKER_SUPPRESSION_SQL, dd._ARRIVAL_FLOOR_SQL, isql.RT_NEW_LISTINGS_SQL,
+            dd._BROKER_SUPPRESSION_SQL, dd._ARRIVAL_FLOOR_SQL, isql.RT_NEW_LISTINGS_SQL, dd._HELD_SQL,
             isql.RT_FP_READ_SQL, common.PREVIOUS_CELLS_SQL}
 
 
@@ -1180,11 +1191,8 @@ def test_every_statement_runs_on_the_per_check_clock() -> None:
     assert {sql for sql, _, _ in conn.sent} == _merging_statements()
     assert all(armed for _, _, armed in conn.sent)
     _, conn = _check(**_building())
-    assert {sql for sql, _, _ in conn.sent} == (
-        _merging_statements() - {dd._ARRIVAL_FLOOR_SQL, isql.RT_NEW_LISTINGS_SQL,
-                                 isql.RT_FP_READ_SQL}) | {dd._DECISIONS_SQL,
-                                                          isql.RT_SCOPE_BACKLOG_SQL,
-                                                          isql.RT_SCOPE_SCAN_SEEN_SQL}
+    assert {sql for sql, _, _ in conn.sent} == _merging_statements() | {
+        dd._DECISIONS_SQL, isql.RT_SCOPE_BACKLOG_SQL, isql.RT_SCOPE_SCAN_SEEN_SQL}
     assert all(armed for _, _, armed in conn.sent)
     _, conn = _check(**_reopened())
     assert {sql for sql, _, _ in conn.sent} == _merging_statements()
@@ -1343,3 +1351,54 @@ def test_the_check_reads_exactly_the_thresholds_the_contract_names() -> None:
 
 def test_the_harness_declares_every_threshold_this_check_reads_with_the_contracts_value() -> None:
     assert T == _CONTRACT
+
+
+# ------------------------------------------------------------------ the unread arm
+
+
+def test_every_in_scope_ad_read_is_ok_and_names_how_many() -> None:
+    cell = _cell("unread_arrivals")
+    assert (cell["status"], cell["value"]) == ("ok", 0)
+    assert cell["message"] == "The engine has read all 400 in-scope ads first seen 1-24 h ago"
+
+
+def test_an_unread_ad_past_two_hours_is_a_problem_and_a_brake_does_not_excuse_it() -> None:
+    """2026-11-16: a 10 h brake left every arrival unread; decision_lag read Not measured and the
+    cap told eight re-lists as new. The unread arm reads the same window with no excuse."""
+    braked = {"interval": 0, "history": [(_INTERVAL, 60, _ago(hours=10))],
+              "arrivals": _arrivals(400, 170)}
+    out, _ = _check(**braked)
+    cells = _cells(out)
+    assert cells["decision_lag"]["message"] == "Not measured: the lane is off; a brake is not lag"
+    unread = cells["unread_arrivals"]
+    assert unread["status"] == "fail" and unread["facts"]["unread"] == 170
+    assert 9 < unread["facts"]["oldest_h"] < 11
+    assert "the lane is off (the brake)" in unread["message"]
+    assert unread["message"].endswith("(Problem past 2 h)")
+    assert out["status"] == "fail"
+
+
+def test_an_unread_ad_inside_two_hours_is_ok_and_still_counted() -> None:
+    unread = _cell("unread_arrivals", arrivals=_arrivals(400, 10))
+    assert unread["status"] == "ok" and unread["facts"]["unread"] == 10
+    assert unread["facts"]["oldest_h"] < 2
+
+
+def test_the_unread_arm_is_not_measured_without_the_store_or_the_scope() -> None:
+    assert _cell("unread_arrivals", present=False)["message"] == (
+        "Not measured: the engine's store is absent")
+    assert _cell("unread_arrivals", lane_scope=None)["message"].startswith(
+        "Not measured: the lane's scope cannot be read")
+
+
+def test_a_property_held_unpublished_past_a_day_is_a_watch_and_many_are_a_problem() -> None:
+    """The arrivals window forgets an ad after 24 h; its property is still hidden, so this arm counts it."""
+    assert _cell("held_unpublished")["message"] == "No active property is unpublished past 24 h"
+    one = _cell("held_unpublished", held=(1, _ago(hours=40), 1_234_567))
+    assert one["status"] == "warn" and one["facts"]["oldest_property_id"] == 1_234_567
+    assert one["message"] == ("1 active property is unpublished past 24 h, held by an ad the engine has "
+                              "not read, or the stamper is not running; the oldest (property 1234567) was "
+                              "first seen 40.0 h ago "
+                              "(Watch at 1)")
+    many = _cell("held_unpublished", held=(26, _ago(days=3), 7))
+    assert many["status"] == "fail" and many["message"].endswith("(Problem over 25)")

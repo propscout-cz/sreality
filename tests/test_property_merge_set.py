@@ -275,6 +275,15 @@ def test_each_step_writes_its_carry_rows_after_every_carrier_and_before_its_reti
     assert quiet.carries == [] and quiet.sql("property_merge_carries") == []
 
 
+def test_a_split_passes_the_publication_stamp_to_the_property_it_bears():
+    """A property split off a published one is published: unstamped, the stamper would publish it as new."""
+    import inspect
+
+    body = inspect.getsource(pi._born)
+    assert body.index("create_singleton_properties(conn, [listing_id])") < body.index(
+        "cur.execute(_CARRY_SETTLED_SQL, (born, current))")
+
+
 def test_each_step_carries_the_publication_stamp_after_its_carriers_and_before_its_retire():
     """Publication never regresses on a merge (migration 668): once its carriers and carry rows
     are written, each step hands the retired property's `settled_at` to a survivor holding none,

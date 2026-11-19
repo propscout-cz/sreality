@@ -805,7 +805,7 @@ def test_a_start_takes_the_slice_and_tells_only_what_was_published_after_it() ->
     [(sql, params)] = _slice_statements(conn)
     assert statements[at + 4] == sql and sql.startswith(" ".join(nf._SLICE_SEED_SQL.split())[:40])
     assert "FROM properties_public l WHERE l.is_active AND " in sql
-    assert "WHERE p.first_seen_at > now() - %(new_window)s::interval " in sql
+    assert "WHERE p.settled_at > now() - %(new_window)s::interval " in sql
     assert f"AND {visible_since_sql('p')} > %(active_since)s::timestamptz " in sql
     assert ("AND d.change_kind = 'new' AND d.duplicate_of IS NULL "
             "AND d.dispatched_at >= %(active_since)s::timestamptz)") in sql
@@ -871,7 +871,7 @@ def test_a_later_pass_diffs_the_slice_and_names_why_each_entry_entered() -> None
     order = [signal.index(f"THEN '{reason}'") for reason in nf.MATCH_REASONS[:-1]]
     assert order == sorted(order)
     assert "p.back_on_market_at > %(since)s::timestamptz THEN 'back'" in signal
-    assert "WHEN p.first_seen_at > now() - %(new_window)s::interval OR " in signal, "new, whatever let it in late"
+    assert "WHEN p.settled_at > now() - %(new_window)s::interval OR " in signal, "new, whatever let it in late"
     assert "x.merged_at > %(since)s::timestamptz" in signal and "ll.resolved_at > %(since)s::timestamptz" in signal
 
 
@@ -1676,7 +1676,7 @@ def test_the_retraction_arm_hides_a_new_its_property_now_predates() -> None:
 
     assert NEW_WINDOW == "24 hours"
     stale = ("(coalesce({a}.match_reason, 'listed') = 'listed' AND EXISTS (SELECT 1 FROM properties rp "
-             "WHERE rp.id = {a}.property_id AND rp.first_seen_at <= {a}.dispatched_at - interval '24 hours'))")
+             "WHERE rp.id = {a}.property_id AND rp.settled_at <= {a}.dispatched_at - interval '24 hours'))")
     assert RETRACTED_SQL == (
         f"(d.change_kind = 'new' AND ({stale.format(a='d')}"
         " OR EXISTS (SELECT 1 FROM notification_dispatches tw WHERE tw.account_id = d.account_id"

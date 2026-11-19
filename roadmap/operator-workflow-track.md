@@ -175,6 +175,13 @@ account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, e
       badge and push (a tap still lands); the publishing check's `unpublished` stage ("not yet published", never a
       blocker). Apply: 668 before the merge, 669 promptly after the worker's rollout (it stamps `settled_at =
       first_seen_at` on the properties first seen in the 24 h before it, which were served ungated).
+- [x] **No clock publishes (this PR; migrations 747–749; operator ruling 2026-11-17)** — eight re-lists of held
+      properties were told as New match at their 6 h mark while the engine was braked for 10 h: the cap could not tell
+      "no duplicate found" from "not read yet". Now `settled_at` alone is publication and the maintenance pass alone
+      writes it: never while an in-scope ad is unread by the engine, otherwise once settled or 6 h old. The clock arm
+      left Browse, the scorecard, the watchdog, the health check and the merge carry. New alarms
+      `dedup:unread_arrivals` (red past 2 h, a brake not excused) and `dedup:held_unpublished` (past a day). Apply: 747 before the merge, 748 + 749 after the
+      rollout. The engine reading arrivals before its backlog is its owner's PR #2537.
 - [ ] **Next after the publication gate:** (a) the phone feed's day buckets and "Newest first" on the visible-since
       moment, not `first_seen_at` — needs a ruling; (b) drop `properties.published_at` + `publish_reason` + their three
       indexes (the autodedup session's owed drop, now moot for serving too); (c) a worker CLIP lane, so settlement

@@ -222,7 +222,7 @@ UNGATED: dict[str, Ungated] = {
     "location_position_mv": Ungated(
         "matview", "acl", ("733_location_w6c_position_audit.sql",), _OPS_MATVIEW),
     "location_quality_by_source": Ungated(
-        "view", "acl", ("733_location_w6c_position_audit.sql",),
+        "view", "acl", ("733_location_w6c_position_audit.sql", "749_publication_stamp_scorecard.sql"),
         "The location scorecard (698, restated by 733 with the position metric), read by the location gauge as "
         "service_role; security invoker, every privilege revoked from public, anon and authenticated. The browser "
         "reads the gauge's stored cells and, for the list, the admin-gated location_position_audit_public."),

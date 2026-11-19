@@ -577,27 +577,35 @@ def test_the_replayed_cohort_is_the_one_the_store_reads_as_of_each_hour(at: str,
 # --- the ladder over 28 days ---------------------------------------------------------------------
 
 
-def test_in_28_days_the_ladder_opens_one_incident_the_abort_loop_of_10_19() -> None:
-    """The first real incident the check sees: 10-19 09:00Z, no pass committed since 07:55:08Z."""
+def test_in_28_days_the_ladder_opens_the_abort_loop_of_10_19_and_the_unread_ads_before_it() -> None:
+    """The first real incident the lag sees: 10-19 09:00Z, no pass committed since 07:55:08Z. The unread arm,
+    which nothing excuses, opens twice: over the 10-18/19 sitting's brake (16-27 in-scope ads unread 2.4-4.4 h,
+    closed once the lift read them) and an hour ahead of the lag on the loop itself."""
     # Every pass aborted on its pair budget (failed_passes 0), so at 09:00Z 55 of the 421 in-scope
     # ads first seen 1-24 h before had no decision. Nothing else opens in 28 days: fourteen brake
     # windows, the Prague build and its 52.3 h merge pause, the 10-18/19 sitting and the 851 merge
     # groups that followed it.
     ladder, _ = _replay()
     opened = _incidents(ladder, _KEY)
-    assert [(i["subject"], i["first_seen_at"]) for i in opened] == [("decision_lag", _END)]
-    assert opened[0]["resolved_at"] is None
+    assert [(i["subject"], i["first_seen_at"], i["resolved_at"]) for i in opened] == [
+        ("unread_arrivals", _utc("2026-10-19T00:00:00Z"), _utc("2026-10-19T04:00:00Z")),
+        ("unread_arrivals", _utc("2026-10-19T08:00:00Z"), None),
+        ("decision_lag", _END, None)]
 
 
 def test_every_other_reading_past_ok_is_the_prague_builds_merge_pause() -> None:
-    """28 days of every arm: Watch only for the build's merge pause, Problem only for the loop."""
+    """28 days of every arm: Watch only for the build's merge pause, Problem only for the loop and for the
+    ads left unread past 2 h (three hours of one brake of fourteen, then the loop from 08:00Z)."""
     # The state and the stream never read past OK, and no tick reads a lease (none is on record).
     _, results = _replay()
     flagged = [(at, c["subject"], c["status"]) for at, r in results
                for c in r["details"]["cells"] if c["status"] in ("warn", "fail")]
     pause = _ticks(_utc("2026-10-18T17:00:00Z"), _utc("2026-10-18T20:00:00Z"), _HOUR)
+    braked = _ticks(_utc("2026-10-19T00:00:00Z"), _utc("2026-10-19T02:00:00Z"), _HOUR)
     assert flagged == [*((at, "merge_pause", "warn") for at in pause),
-                       (_END, "decision_lag", "fail")]
+                       *((at, "unread_arrivals", "fail") for at in braked),
+                       (_utc("2026-10-19T08:00:00Z"), "unread_arrivals", "fail"),
+                       (_END, "decision_lag", "fail"), (_END, "unread_arrivals", "fail")]
     assert {c["message"] for _, c in _arm(results, "lease")} == {"no lease on record"}
 
 
@@ -716,7 +724,7 @@ def test_the_10_19_abort_loop_reads_problem_once_no_pass_committed_for_an_hour()
                                      "build and engine change of the last 24 h do not excuse it "
                                      "(Problem over 10%)")
     _, last = results[-1]
-    assert last["status"] == "fail" and last["message"].startswith("1 Problem — decision_lag: ")
+    assert last["status"] == "fail" and last["message"].startswith("2 Problem — decision_lag: ")
 
 
 # --- the merges and the rulings ----------------------------------------------------------------

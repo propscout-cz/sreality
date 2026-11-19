@@ -29,12 +29,12 @@
    a row whose location advert moved while it ran (migration 636). The broker book
    (`broker_book`, migration 692: one row per property and canonical broker) is stored from its
    one view beside every rollup, in the same transaction.
-3. Settle (the incremental pass only, after the drain): stamp `settled_at` once on each fresh
-   property the pipeline is done with and patch its Browse row at once (`_settle_fresh`,
-   migrations 668/669). A property is published once settled or 6 h old (`toolkit/publication.py`);
-   the incremental pass opens by queueing what the cap published (`_enqueue_published`), so its
-   drain patches it into Browse. The full sweep, which holds the lease the pass needs, queues and
-   drains after each batch (`_drain_published`).
+3. Settle (after the drain): stamp `settled_at` once on each property the pipeline is done with
+   and patch its Browse row at once (`_settle_fresh`, migrations 668/747). The stamp IS publication
+   (`toolkit/publication.py`). The incremental pass opens by queueing what is published and served
+   but not yet in Browse (`_enqueue_published`: a place resolved after the stamp, a lost patch), so
+   its drain patches it in. The full sweep, which holds the lease the pass needs, settles, queues
+   and drains after each batch (`_drain_published`).
 
 Batched by property-id range so each statement stays well under the
 transaction-pooler statement timeout. autocommit=True means each batch
@@ -572,12 +572,12 @@ def _attach_stragglers(conn: Any, limit: int = STRAGGLER_BATCH, hold: job_lease.
 _DRAIN_LOCK_TIMEOUT = "5s"
 
 
-# Rule 20's mark for the one change no writer makes, the clock: the cap publishes a property with
-# nothing written, so nothing told the drain. This is browse_projection's WHERE (status, the served
-# rule on the location ad, the publication rule) less what browse_list already holds, over properties
-# first seen within the cap plus two hours. No watermark: a row drops out once its patch lands, and a
-# patch a rebuild's swap superseded comes back on the pass after the swap. Anything older was
-# published before the newest hourly rebuild began (pg_cron, migration 740), which carries it.
+# Rule 20's mark for the changes that dirty nothing: a place resolved after the stamp (the resolver
+# never patches browse_list) and a settle patch a rebuild's swap superseded. This is
+# browse_projection's WHERE (status, the served rule on the location ad, the publication rule) less
+# what browse_list already holds, over properties first seen within the cap plus two hours. No
+# watermark: a row drops out once its patch lands. Anything older waits for the hourly rebuild
+# (pg_cron, migration 740).
 _ENQUEUE_PUBLISHED_SQL = f"""
     INSERT INTO dirty_properties (property_id)
     SELECT p.id FROM properties p
@@ -609,8 +609,9 @@ def _enqueue_published(conn: Any, hold: job_lease.Hold | None = None) -> None:
 def _drain_published(conn: Any, batch_size: int, hold: job_lease.Hold | None = None) -> int:
     """The full sweep's Browse half, run after each of its batches: the sweep holds the maintenance
     lease for its whole run (20 min on 2XL, its whole 6,000 s budget on Large, 2026-11-13) and the
-    lane skips meanwhile, so a cap release, and every change the drain carries, would otherwise wait
-    for the run's end or the hourly rebuild. The pass's order: queue, cut off, drain."""
+    lane skips meanwhile, so publication, and every change the drain carries, would otherwise wait
+    for the run's end. The order: settle, queue, cut off, drain."""
+    _settle_fresh(conn, hold)
     _enqueue_published(conn, hold)
     with conn.cursor() as cur:
         cur.execute("SELECT now()")
@@ -656,49 +657,75 @@ def _drain_dirty(
     return total
 
 
-# The publication stamp (migration 668, operator rulings 2026-10-23): a property is served once
-# the pipeline has SETTLED it, or once it is CAP old (`toolkit/publication.py`; browse_projection
-# carries the rule from migration 669, the watchdog renders it). Settled is read off what the
-# pipeline has already written, never a judgement of our own:
-#   - its first photo is stored, or none of its ads has a photo to wait for (ruling 3: the
-#     images-first alert gate folds into this);
-#   - the engine has read every ad (an `rt_fp` row in its generation);
+# The publication stamp (migrations 668/747, operator rulings 2026-10-23 and 2026-11-17): a property
+# is served once it carries `settled_at` (`toolkit/publication.py`), and this statement alone
+# writes it. Everything is read off what the pipeline has already written, never a judgement of
+# our own.
+# NEVER stamped while an ad on it AWAITS THE ENGINE'S READ: an ad with no `rt_fp` row in the
+# engine's generation whose place is not determined yet (the served rule; the scope cannot be
+# judged) or lies inside the engine's scope (`rt_scope`, the lane's own predicate on
+# `listing_location` by primary key). Such an ad may be a re-list of a property already told, and
+# only the engine can say; no clock ends this wait (dedup:unread_arrivals alarms on it). An ad
+# outside the scope is never read and never waited for.
+# Otherwise stamped when SETTLED:
+#   - its first photo is stored, or none of its ads has a photo to wait for;
+#   - the engine has read every ad (so none is outside the scope);
 #   - the engine holds no pending question about any of them (a pair held for evidence);
 #   - no engine group puts one of its ads with an ad on another property, or on none yet: the
-#     merge that would retire it, or fold another into it, has not landed. Outside the apply scope
-#     it never lands and the cap publishes the property (ruling 4: no special case).
-# Only active, unsettled properties first seen within the cap are candidates: past it a stamp
-# changes nothing, so the cap bounds the statement (~1.7k rows, 134 ms measured) and it takes no
-# LIMIT. ONE query judges and locks: the row lock lands only on the rows that settle (a few per
-# pass), never on every candidate; a property a merge, a split or a drain slice's changed rollup holds is skipped
-# (SKIP LOCKED) and taken next pass; the engine's tables are read, never locked. Stamped once: no
-# later change takes it back.
+#     merge that would retire it, or fold another into it, has not landed;
+# or when CAP has passed since it was first seen AND since the engine first read each of its ads
+# (`rt_fp.first_decided_at`): the one bounded wait, for photos and for an engine decision, and the
+# whole wait outside the scope (ruling 4, 2026-10-23: no special case there). A decision can only
+# be waited for once the engine has read the ad, so a late read restarts the wait: counted from
+# first sight alone, an ad read after its cap would be published with no decision wait at all.
+# Every unstamped property is a candidate, off `properties_unsettled_idx` (migration 747): the
+# fresh ones and those waiting for the engine. ONE query judges and locks: the row lock lands only
+# on the rows it stamps, never on every candidate; a property a merge, a split or a drain slice's
+# changed rollup holds is skipped (SKIP LOCKED) and taken next pass; the engine's tables are read,
+# never locked. Stamped once: no later change takes it back.
+_UNREAD_SQL = """NOT EXISTS (SELECT 1 FROM autodedup.rt_fp f
+                                            WHERE f.generation = %(generation)s
+                                              AND f.listing_id = l.id)"""
 _SETTLE_SQL = f"""
     WITH settled AS (
       SELECT p.id FROM properties p
-      WHERE p.settled_at IS NULL AND p.status = 'active'
-        AND p.first_seen_at >= now() - {CAP_SQL}
-        AND (EXISTS (SELECT 1 FROM listings l JOIN images i ON i.listing_id = l.id
-                      WHERE l.property_id = p.id AND i.storage_path IS NOT NULL)
-             OR NOT EXISTS (SELECT 1 FROM listings l JOIN images i ON i.listing_id = l.id
-                             WHERE l.property_id = p.id))
+      WHERE p.settled_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM listings l
                          WHERE l.property_id = p.id
-                           AND NOT EXISTS (SELECT 1 FROM autodedup.rt_fp f
-                                            WHERE f.generation = %(generation)s
-                                              AND f.listing_id = l.id))
-        AND NOT EXISTS (SELECT 1 FROM listings l
-                          JOIN autodedup.pairs x
-                            ON x.generation = %(generation)s AND x.decision = %(held)s
-                           AND (x.listing_lo = l.id OR x.listing_hi = l.id)
-                         WHERE l.property_id = p.id)
-        AND NOT EXISTS (SELECT 1 FROM listings l
-                          JOIN autodedup.cluster_members m
-                            ON m.generation = %(generation)s AND m.listing_id = l.id
-                          JOIN autodedup.cluster_members o
-                            ON o.generation = m.generation AND o.cluster_key = m.cluster_key
-                          JOIN listings ol ON ol.id = o.listing_id
-                         WHERE l.property_id = p.id AND ol.property_id IS DISTINCT FROM p.id)
+                           AND {_UNREAD_SQL}
+                           AND (NOT {served_location_predicate("l.id")}
+                                OR %(all_scope)s::boolean
+                                OR EXISTS (SELECT 1 FROM listing_location ll
+                                            WHERE ll.listing_id = l.id
+                                              AND (ll.obec_kod = any(%(obec)s::bigint[])
+                                                   OR ll.cast_obce_kod = any(%(cast_obce)s::bigint[])
+                                                   OR ll.okres_kod = any(%(okres)s::bigint[])))))
+        AND ((p.first_seen_at <= now() - {CAP_SQL}
+              AND NOT EXISTS (SELECT 1 FROM listings l
+                                JOIN autodedup.rt_fp f
+                                  ON f.generation = %(generation)s AND f.listing_id = l.id
+                               WHERE l.property_id = p.id
+                                 AND f.first_decided_at > now() - {CAP_SQL}))
+             OR ((EXISTS (SELECT 1 FROM listings l JOIN images i ON i.listing_id = l.id
+                           WHERE l.property_id = p.id AND i.storage_path IS NOT NULL)
+                  OR NOT EXISTS (SELECT 1 FROM listings l JOIN images i ON i.listing_id = l.id
+                                  WHERE l.property_id = p.id))
+                 AND NOT EXISTS (SELECT 1 FROM listings l
+                                  WHERE l.property_id = p.id
+                                    AND {_UNREAD_SQL})
+                 AND NOT EXISTS (SELECT 1 FROM listings l
+                                   JOIN autodedup.pairs x
+                                     ON x.generation = %(generation)s AND x.decision = %(held)s
+                                    AND (x.listing_lo = l.id OR x.listing_hi = l.id)
+                                  WHERE l.property_id = p.id)
+                 AND NOT EXISTS (SELECT 1 FROM listings l
+                                   JOIN autodedup.cluster_members m
+                                     ON m.generation = %(generation)s AND m.listing_id = l.id
+                                   JOIN autodedup.cluster_members o
+                                     ON o.generation = m.generation AND o.cluster_key = m.cluster_key
+                                   JOIN listings ol ON ol.id = o.listing_id
+                                  WHERE l.property_id = p.id
+                                    AND ol.property_id IS DISTINCT FROM p.id)))
       FOR NO KEY UPDATE OF p SKIP LOCKED
     )
     UPDATE properties p SET settled_at = now()
@@ -707,30 +734,50 @@ _SETTLE_SQL = f"""
     RETURNING p.id
 """
 
+_ENGINE_SCOPE_SQL = "SELECT s.value FROM autodedup.settings s WHERE s.key = %s"
+
+
+def _engine_scope(conn: Any) -> dict[str, Any]:
+    """The four parameters of the engine's scope predicate, as its lane takes them. No scope row:
+    the engine reads nothing (a pass without one refuses itself), so no ad awaits it. A row that
+    cannot be parsed raises `ScopeError`: the caller stamps nothing rather than guess."""
+    from autodedup.incremental import GENERATION
+    from autodedup.incremental_lane import parse_scope, scope_setting_key
+
+    with conn.cursor() as cur:
+        cur.execute(_ENGINE_SCOPE_SQL, (scope_setting_key(GENERATION),))
+        row = cur.fetchone()
+    if row is None or row[0] is None:
+        return {"all_scope": False, "obec": [], "cast_obce": [], "okres": []}
+    return parse_scope(row[0]).params()
+
 
 def _settle_fresh(conn: Any, hold: job_lease.Hold | None = None) -> int:
-    """Stamp the fresh properties the pipeline is done with (`_SETTLE_SQL`), then patch their Browse
+    """Stamp the properties the pipeline is done with (`_SETTLE_SQL`), then patch their Browse
     rows in; returns how many it stamped. The stamp commits ALONE: it row-locks what it stamps, and
     the engine's reconcile merges under a 5 s lock_timeout, so a merge waits behind one statement at
     most (autodedup session, 2026-10-23). The patch is `sync_browse_list` on its own -- no recompute
     (a stamp changes no rolled-up fact), no row lock, best-effort (the next pass's
-    `_enqueue_published` carries a lost patch). A database error in the stamp costs this step only
-    (the next pass retries, and the cap publishes a property meanwhile), never the pass; a lost lease
-    still stops it."""
+    `_enqueue_published` carries a lost patch). A database error in the stamp, or an engine scope
+    that cannot be read, costs this step only (the next pass retries; nothing is published
+    meanwhile), never the pass; a lost lease still stops it."""
     import psycopg
 
     from autodedup.incremental import EVIDENCE_HOLD_REASON, GENERATION
+    from autodedup.incremental_scope import ScopeError
 
-    if hold is not None:
-        _renew_lease(conn, hold)
     try:
+        scope = _engine_scope(conn)
+        if hold is not None:
+            _renew_lease(conn, hold)
         with _bounded(conn):
             with conn.cursor() as cur:
                 cur.execute(f"SET LOCAL lock_timeout = '{_DRAIN_LOCK_TIMEOUT}'")
-                cur.execute(_SETTLE_SQL, {"generation": GENERATION, "held": EVIDENCE_HOLD_REASON})
+                cur.execute(_SETTLE_SQL, {"generation": GENERATION, "held": EVIDENCE_HOLD_REASON,
+                                          **scope})
                 ids = [int(r[0]) for r in cur.fetchall()]
             _fence(conn, hold)
-    except psycopg.Error as exc:
+    except (psycopg.Error, ScopeError) as exc:
         LOG.warning("MAINTENANCE settle failed, the next pass retries: %s", exc)
         return 0
     sync_browse_list(conn, ids)
@@ -888,11 +935,11 @@ def _maintenance_lease(
 def run_incremental_pass(conn: Any, batch_size: int = 2000) -> dict[str, Any]:
     """ONE incremental property-maintenance pass — THE shared implementation
     behind `--incremental` and the realtime worker's
-    maintenance lane: queue what the cap published (`_enqueue_published`), attach new stragglers,
+    maintenance lane: queue what is published but not in Browse (`_enqueue_published`), attach new stragglers,
     then bring the dirty set current through `properties_changed` (recompute, broker book,
     `browse_list` patch), so a change reaches Browse on this lane's cadence rather than at the
-    next hourly wholesale rebuild, then settle the fresh properties the pipeline is done with
-    (`_settle_fresh`).
+    next hourly wholesale rebuild, then stamp the properties the pipeline is done with
+    (`_settle_fresh`): the stamp is publication.
     Serialized by the maintenance lease; a caller that
     finds the lease held returns {"skipped": True} — the concurrent pass is
     doing the same work, and the next tick is seconds away. A pass normally
