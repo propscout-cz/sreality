@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
-import { createMap } from '@/lib/basemap';
+import { addBasemapLayers, createMap, useBasemapPicks } from '@/lib/basemap';
 import { fmtArea, fmtCzk } from '@/lib/format';
 import { listingKindLabel } from '@/lib/enums';
 import { imageSrc, type ImageRef } from '@/lib/imageUrl';
@@ -111,6 +111,7 @@ export default function ComparablesMap({
     mapRef.current = map;
 
     map.on('load', () => {
+      addBasemapLayers(map);
       map.addSource('subject', {
         type: 'geojson',
         data: {
@@ -240,6 +241,7 @@ export default function ComparablesMap({
     };
   }, [subject.lat, subject.lng, clearCloseTimer, scheduleClose]);
 
+  useBasemapPicks(mapRef.current, ready, overlayLayers);
   useMapOverlays(mapRef.current, ready, overlayRegistry, overlayLayers, 'comparables-point');
 
   useEffect(() => {

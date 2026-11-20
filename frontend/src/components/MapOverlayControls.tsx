@@ -1,6 +1,14 @@
-import type { ReactNode } from 'react';
+import { useContext, type ReactNode } from 'react';
 
-import { MapLegendCard, OverlayChip, OverlayPanel } from '@/components/OverlayChip';
+import { SegmentedBar, type SegmentOption } from '@/components/controls';
+import {
+  MapControlsToneContext,
+  MapLegendCard,
+  OverlayChip,
+  OverlayPanel,
+  useMapControlsTone,
+  type MapControlsTone,
+} from '@/components/OverlayChip';
 import {
   OVERLAY_DASH,
   OVERLAY_FILL_OPACITY,
@@ -12,6 +20,7 @@ import {
   type OverlayPlaces,
 } from '@/lib/mapOverlayDraw';
 import {
+  type BasemapPicks,
   type LayerSelection,
   type MapOverlayRegistry,
   type OverlayLayer,
@@ -19,27 +28,36 @@ import {
   type OverlayScale,
   type OverlaySection,
   activeVariant,
+  CONTOURS_MINZOOM,
+  basemapPicks,
   layersOf,
   overlayHasAreaCard,
   parseLayers,
   pickVariant,
   readRememberedVariant,
   serializeLayers,
+  withBasemap,
 } from '@/lib/mapOverlays';
+
 
 type Edit = (apply: (next: Map<string, string | null>) => void) => void;
 
-/* The reference-overlay toggles: one chip per registry section, checked when
- * every layer of it is on. While any is on, the panel under the chip holds the
- * per-layer toggles, the zoom hint, the source's caveats and its provenance (a
- * layer's variant is picked on its area card, on the map). `compact` is the
- * chips alone. */
+/* Every layer a map offers, in one list (docs/design/map-overlays.md): the base
+ * (Podklad: Mapa | Letecká), then `children` (Browse's own Města and Růst cen a
+ * nájmů), then one toggle per registry section, checked when every layer of it is
+ * on, then ČÚZK's Reliéf a vrstevnice. While a section is on, the panel under it
+ * holds the per-layer toggles, the zoom hint, the source's caveats and its
+ * provenance (a layer's variant is picked on its area card, on the map). Every
+ * pick is a key of the one `layers` selection. `compact` is the chips alone (the
+ * comparables map); `tone` sizes the list for the phone's sheet. */
 export default function MapOverlayControls({
   registry,
   selection,
   onChange,
   zoom = null,
   compact = false,
+  tone = 'web',
+  children,
 }: {
   registry: MapOverlayRegistry | undefined;
   selection: string;
@@ -47,27 +65,150 @@ export default function MapOverlayControls({
   /* The map's floored zoom; below a section's minzoom its panel says to zoom in. */
   zoom?: number | null;
   compact?: boolean;
+  tone?: MapControlsTone;
+  children?: ReactNode;
 }) {
   const sections = (registry?.sections ?? []).filter((s) => s.layers.length > 0);
-  if (sections.length === 0) return null;
   const sel = layersOf(parseLayers(selection), registry);
   const edit: Edit = (apply) => {
     const next = new Map(sel);
     apply(next);
     onChange(serializeLayers(layersOf(next, registry)));
   };
-  return (
-    <div className={compact ? 'flex flex-wrap gap-1' : 'flex flex-col'}>
-      {sections.map((section) => (
-        <SectionControl
-          key={section.key}
-          section={section}
-          sel={sel}
-          zoom={zoom}
-          compact={compact}
-          edit={edit}
+  const picks = basemapPicks(selection);
+  const setPicks = (patch: Partial<BasemapPicks>) => onChange(withBasemap(selection, patch));
+  const sectionControls = sections.map((section) => (
+    <SectionControl key={section.key} section={section} sel={sel} zoom={zoom} compact={compact} edit={edit} />
+  ));
+  if (compact) {
+    return (
+      <div className="flex flex-wrap gap-1">
+        <OverlayChip compact label="Letecká" checked={picks.aerial} onChange={(aerial) => setPicks({ aerial })} />
+        {sectionControls}
+        <OverlayChip
+          compact
+          label="Reliéf a vrstevnice"
+          checked={picks.relief && picks.contours}
+          indeterminate={picks.relief !== picks.contours}
+          onChange={(checked) => setPicks({ relief: checked, contours: checked })}
         />
-      ))}
+      </div>
+    );
+  }
+  const row = TONE_ROW[tone];
+  return (
+    <MapControlsToneContext.Provider value={tone}>
+      <div className="flex flex-col divide-y divide-[var(--color-rule)]">
+        <div className={row}>
+          <BasemapPick aerial={picks.aerial} onChange={(aerial) => setPicks({ aerial })} />
+        </div>
+        {children}
+        {sectionControls.length > 0 && <div className={`${row} flex flex-col`}>{sectionControls}</div>}
+        <div className={row}>
+          <TerrainControls relief={picks.relief} contours={picks.contours} zoom={zoom} onChange={setPicks} />
+        </div>
+      </div>
+    </MapControlsToneContext.Provider>
+  );
+}
+
+/* A row of the list; Browse's own rows (MapOverlayControls' children) wear it too. */
+export const TONE_ROW: Record<MapControlsTone, string> = { web: 'py-1', phone: 'py-1.5' };
+
+const BASES: ReadonlyArray<SegmentOption<'map' | 'aerial'>> = [
+  { value: 'map', label: 'Mapa' },
+  { value: 'aerial', label: 'Letecká' },
+];
+
+/* The base the map is drawn on: OpenFreeMap's map, or ČÚZK's aerial photo over it. */
+function BasemapPick({ aerial, onChange }: { aerial: boolean; onChange: (aerial: boolean) => void }) {
+  const phone = useContext(MapControlsToneContext) === 'phone';
+  return (
+    <div className={`flex items-center justify-between gap-3 ${phone ? 'min-h-11' : 'py-1'}`}>
+      <span className={phone ? 'text-[15px] text-[var(--color-ink-2)]' : 'text-[0.8rem] text-[var(--color-ink)]'}>
+        Podklad
+      </span>
+      <SegmentedBar
+        tone={phone ? 'phone' : 'desktop'}
+        label="Podklad mapy"
+        options={BASES}
+        value={aerial ? 'aerial' : 'map'}
+        onChange={(v) => onChange(v === 'aerial')}
+      />
+    </div>
+  );
+}
+
+/* ČÚZK's terrain, drawn like a registry section of two layers: one tri-state row turns
+ * both on, and while either is, the panel under it holds each one's own box, the
+ * contours' zoom hint and the source. */
+export function TerrainControls({
+  relief,
+  contours,
+  zoom,
+  onChange,
+}: {
+  relief: boolean;
+  contours: boolean;
+  zoom: number | null;
+  onChange: (patch: { relief?: boolean; contours?: boolean }) => void;
+}) {
+  const tone = useMapControlsTone();
+  const toggle = `inline-flex items-center gap-1.5 ${tone.sub} cursor-pointer`;
+  return (
+    <div className="flex flex-col">
+      <OverlayChip
+        label="Reliéf a vrstevnice"
+        checked={relief && contours}
+        indeterminate={relief !== contours}
+        onChange={(checked) => onChange({ relief: checked, contours: checked })}
+      />
+      {(relief || contours) && (
+        <OverlayPanel>
+          <div className="flex flex-col gap-1">
+            <label className={toggle}>
+              <input
+                type="checkbox"
+                className={tone.box || undefined}
+                checked={relief}
+                onChange={(e) => onChange({ relief: e.target.checked })}
+              />
+              <span>Stínovaný reliéf</span>
+            </label>
+            <label className={toggle}>
+              <input
+                type="checkbox"
+                className={tone.box || undefined}
+                checked={contours}
+                onChange={(e) => onChange({ contours: e.target.checked })}
+              />
+              <span>Vrstevnice</span>
+            </label>
+          </div>
+          <div className="flex flex-col gap-1">
+            {contours && zoom != null && zoom < CONTOURS_MINZOOM && (
+              <p
+                className={`${tone.hint} font-medium text-[var(--color-ink-2)]`}
+                title={`Vrstevnice se kreslí od přiblížení ${CONTOURS_MINZOOM}`}
+              >
+                Vrstevnice: přibližte mapu
+              </p>
+            )}
+            <p className={`${tone.foot} text-[var(--color-ink-3)]`}>
+              Jen území ČR ·{' '}
+              <a
+                href="https://geoportal.cuzk.gov.cz/"
+                target="_blank"
+                rel="noreferrer"
+                title="CC BY 4.0"
+                className="underline-offset-2 hover:underline hover:text-[var(--color-ink-2)]"
+              >
+                © ČÚZK
+              </a>
+            </p>
+          </div>
+        </OverlayPanel>
+      )}
     </div>
   );
 }
@@ -166,11 +307,14 @@ export function MapOverlayLegends({
   selection,
   places,
   onChange,
+  inline = false,
 }: {
   registry: MapOverlayRegistry | undefined;
   selection: string;
   places?: OverlayPlaces;
   onChange?: (next: string) => void;
+  /* Under the map rather than on it (MapLegendCard). */
+  inline?: boolean;
 }) {
   const sel = layersOf(parseLayers(selection), registry);
   return (
@@ -183,7 +327,7 @@ export function MapOverlayLegends({
         const scales = on.filter((layer) => layer.scale && !overlayHasAreaCard(layer));
         if (classes.length === 0 && scales.length === 0 && cards.length === 0) return null;
         return (
-          <MapLegendCard key={section.key} title={section.label}>
+          <MapLegendCard key={section.key} title={section.label} inline={inline}>
             {cards.map((layer) => (
               <AreaCard
                 key={layer.key}
@@ -302,21 +446,22 @@ function AreaCard({
 /* Why the layer may not show yet, what the source says about itself, and whose
  * data it is as of when. */
 function SectionAbout({ section, zoom }: { section: OverlaySection; zoom: number | null }) {
+  const tone = useMapControlsTone();
   const date = overlayDataDate(section);
   return (
     <div className="flex flex-col gap-1">
       {zoom != null && zoom < section.minzoom && (
         <p
-          className="text-[0.68rem] font-medium text-[var(--color-ink-2)]"
+          className={`${tone.hint} font-medium text-[var(--color-ink-2)]`}
           title={`Vrstva se kreslí od přiblížení ${section.minzoom}`}
         >
           Přibližte mapu
         </p>
       )}
       {section.note && (
-        <p className="text-[0.65rem] leading-snug text-[var(--color-ink-3)]">{section.note}</p>
+        <p className={`${tone.note} leading-snug text-[var(--color-ink-3)]`}>{section.note}</p>
       )}
-      <p className="text-[0.62rem] text-[var(--color-ink-3)]">
+      <p className={`${tone.foot} text-[var(--color-ink-3)]`}>
         {date ? `Data k ${date} · ` : ''}
         {/^https?:\/\//.test(section.source_url) ? (
           <a
@@ -345,10 +490,16 @@ function LayerToggle({
   checked: boolean;
   onChange: (next: boolean) => void;
 }) {
+  const tone = useMapControlsTone();
   const only = !layer.scale && layer.legend.length === 1 ? layer.legend[0] : null;
   return (
-    <label className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-ink-2)] cursor-pointer">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+    <label className={`inline-flex items-center gap-1.5 ${tone.sub} cursor-pointer`}>
+      <input
+        type="checkbox"
+        className={tone.box || undefined}
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+      />
       {only && <LegendSwatch entry={only} />}
       <span>{only?.label ?? layer.label}</span>
     </label>

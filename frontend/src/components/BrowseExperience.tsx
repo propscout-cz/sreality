@@ -46,7 +46,7 @@ import type { AnchorPoint, MapFlyToCommand, MapFrameCommand } from '@/components
 import type { MapySuggestion } from '@/lib/maps';
 import { fetchDatasets, fetchGrowth, fetchGrowthShapes, fetchSeries, priceStatsKeys } from '@/lib/priceStats';
 import { buildHoverData, type GrowthMetric } from '@/lib/growthChoropleth';
-import { useMapOverlayRegistry } from '@/lib/mapOverlays';
+import { hasRegistryLayers, useMapOverlayRegistry } from '@/lib/mapOverlays';
 import {
   countedWords,
   isDefault,
@@ -311,7 +311,7 @@ export default function BrowseExperience({
    * read. */
   const overlayRegistryQuery = useMapOverlayRegistry(mapVisible);
   /* Only worth a toast when layers are selected: they would silently not draw. */
-  const overlayRegistryFailed = overlayRegistryQuery.isError && overlay.layers !== '';
+  const overlayRegistryFailed = overlayRegistryQuery.isError && hasRegistryLayers(overlay.layers);
   useEffect(() => {
     if (overlayRegistryFailed) {
       pushToast('err', 'Referenční vrstvy mapy se nepodařilo načíst — zůstanou skryté.');
@@ -740,9 +740,6 @@ export default function BrowseExperience({
                     overlayRegistry={overlayRegistryQuery.data}
                     overlayLayers={overlay.layers}
                     onOverlayLayersChange={(layers) => view.setOverlay({ layers })}
-                    relief={overlay.relief}
-                    contours={overlay.contours}
-                    onTerrainChange={(patch) => view.setOverlay(patch)}
                     growthRows={psGrowthQuery.data ?? []}
                     growthShapes={psShapesQuery.data ?? []}
                     growthDatasets={psDatasetsQuery.data ?? []}

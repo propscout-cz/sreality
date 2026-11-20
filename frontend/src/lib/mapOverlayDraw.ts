@@ -10,6 +10,7 @@ import type {
   FilterSpecification,
   LayerSpecification,
   Map as MaplibreMap,
+  PointLike,
   VectorSourceSpecification,
 } from 'maplibre-gl';
 
@@ -331,6 +332,52 @@ export function overlayFillOwner(
     }
   }
   return null;
+}
+
+/* What a click at `point` opens on a reference area: the popup's html, or null when no
+ * area answers it — nothing drawn there, a layer of `above` (the caller's own pins) hit
+ * first, or a choropleth inside the curated city `cityHit` finds there (overlayClickOwner). */
+export function overlayPopupAt(
+  map: MaplibreMap,
+  point: PointLike,
+  registry: MapOverlayRegistry | undefined,
+  selection: string,
+  { above = [], cityHit = () => false }: { above?: readonly string[]; cityHit?: () => boolean } = {},
+): string | null {
+  if (!registry) return null;
+  const fills = overlayFillIds(registry).filter((id) => map.getLayer(id));
+  if (fills.length === 0) return null;
+  const top = map.queryRenderedFeatures(point, { layers: [...above, ...fills] })[0];
+  const owner = overlayClickOwner(registry, top?.layer.id ?? null, cityHit);
+  if (!top || !owner) return null;
+  const variant = parseLayers(selection).get(owner.layer.key) ?? null;
+  return overlayPopupHtml(owner.section.label, top.properties, owner.layer, variant);
+}
+
+/* A reference area answers a click (overlayPopupAt), so it shows the pointer — over the
+ * whole country while the rent map is on. MapLibre skips the ids of sections not drawn yet. */
+export function useOverlayCursor(
+  map: MaplibreMap | null,
+  ready: boolean,
+  registry: MapOverlayRegistry | undefined,
+): void {
+  useEffect(() => {
+    if (!map || !ready || !registry) return;
+    const ids = overlayFillIds(registry);
+    if (ids.length === 0) return;
+    const enter = () => {
+      map.getCanvas().style.cursor = 'pointer';
+    };
+    const leave = () => {
+      map.getCanvas().style.cursor = '';
+    };
+    map.on('mouseenter', ids, enter);
+    map.on('mouseleave', ids, leave);
+    return () => {
+      map.off('mouseenter', ids, enter);
+      map.off('mouseleave', ids, leave);
+    };
+  }, [map, ready, registry]);
 }
 
 /* --------------------------------------------------------------------- hook */

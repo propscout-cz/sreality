@@ -213,3 +213,14 @@ export function ContactAddIcon(p: IconProps) {
     </Svg>
   );
 }
+
+/* A map's layers: three sheets stacked (MapRail's LayersIcon, at the phone's grammar). */
+export function LayersIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 3.5 21 8.3 12 13.1 3 8.3Z" />
+      <path d="M3 12.4 12 17.2 21 12.4" />
+      <path d="M3 16.6 12 21.4 21 16.6" />
+    </Svg>
+  );
+}

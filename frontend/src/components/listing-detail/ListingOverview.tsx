@@ -202,6 +202,7 @@ export function LocationMap({
             lng={lng}
             isActive={listing.is_active}
             heightClass={heightClass}
+            label={listing.display_label}
           />
         </Suspense>
       ) : (

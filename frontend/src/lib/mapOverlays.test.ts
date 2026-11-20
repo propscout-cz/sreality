@@ -31,7 +31,10 @@ import {
   type MapOverlayRegistry,
   type OverlayLayer,
   type OverlaySection,
+  basemapPicks,
   canonicalLayers,
+  hasRegistryLayers,
+  layerGroupsOn,
   layersFromSearchParams,
   layersOf,
   overlayHasAreaCard,
@@ -39,8 +42,10 @@ import {
   pickVariant,
   readRememberedLayers,
   readRememberedVariant,
+  registrySectionsOn,
   serializeLayers,
   useRememberedLayers,
+  withBasemap,
   writeRememberedLayers,
   writeRememberedVariant,
 } from './mapOverlays';
@@ -188,6 +193,56 @@ describe('layersFromSearchParams — the URL rule and the legacy key', () => {
   it('lets an explicit `layers` win over the legacy key', () => {
     expect(read('kraje=1&layers=metro')).toBe('metro');
     expect(read('kraje=1&layers=')).toBe('');
+  });
+
+  it('reads the terrain’s own keys `relief=1` / `contours=1` as their layer keys, beside the rest', () => {
+    expect(read('relief=1')).toBe('relief');
+    expect(read('contours=1&relief=1')).toBe('contours,relief');
+    expect(read('relief=0')).toBeNull();
+    expect(read('layers=metro&contours=1')).toBe('contours,metro');
+    expect(read('layers=&relief=1')).toBe('relief');
+    expect(read('rentmap=1&relief=1')).toBe('relief,rent_map');
+  });
+});
+
+/* ČÚZK's photo, relief and contours: keys of the same selection, never the registry's. */
+describe('the basemap picks', () => {
+  const REG: MapOverlayRegistry = {
+    sections: [
+      section({ key: 'metro', layers: [layer({ key: 'metro' })] }),
+      section({ key: 'flood', layers: [layer({ key: 'flood_q5' }), layer({ key: 'flood_q100', sort: 2 })] }),
+    ],
+  };
+
+  it('reads each pick from its key', () => {
+    expect(basemapPicks('')).toEqual({ aerial: false, relief: false, contours: false });
+    expect(basemapPicks('aerial,contours,metro')).toEqual({ aerial: true, relief: false, contours: true });
+  });
+
+  it('switches picks and keeps every other key, canonical', () => {
+    expect(withBasemap('metro', { aerial: true })).toBe('aerial,metro');
+    expect(withBasemap('aerial,metro,rent_map:vk2', { aerial: false, relief: true })).toBe('metro,relief,rent_map:vk2');
+    expect(withBasemap('relief', {})).toBe('relief');
+  });
+
+  it('survive layersOf with or without a registry, as no variant', () => {
+    expect(serializeLayers(layersOf(parseLayers('aerial,ghost,metro,relief:x'), REG))).toBe('aerial,metro,relief');
+    expect(serializeLayers(layersOf(parseLayers('contours,metro'), undefined))).toBe('contours');
+  });
+
+  it('need no registry: hasRegistryLayers asks for a registry key only', () => {
+    expect(hasRegistryLayers('aerial,contours,relief')).toBe(false);
+    expect(hasRegistryLayers('aerial,metro')).toBe(true);
+    expect(hasRegistryLayers('')).toBe(false);
+  });
+
+  it('count as a group each in the Vrstvy badge: the photo, the terrain, each section drawn', () => {
+    expect(layerGroupsOn('', REG)).toBe(0);
+    expect(layerGroupsOn('aerial', REG)).toBe(1);
+    expect(layerGroupsOn('contours,relief', REG)).toBe(1);
+    expect(layerGroupsOn('aerial,flood_q100,flood_q5,metro,relief', REG)).toBe(4);
+    expect(registrySectionsOn('aerial,flood_q100,flood_q5,metro,relief', REG)).toBe(2);
+    expect(layerGroupsOn('aerial,metro', undefined)).toBe(1);
   });
 });
 
