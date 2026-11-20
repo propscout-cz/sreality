@@ -335,8 +335,7 @@ chip (only when checked) holds per-layer checkboxes when the section has > 1 lay
 checkbox is tri-state), the legend (swatch per class: filled square,
 line, dashed line, dot), a hint "Přibližte mapu" when the map zoom < minzoom, the note, and a footer
 "Data k {source_revised_at ?? fetched_at} · {attribution}". `compact` (ComparablesMap): chips only,
-no panel. (The property page's header minimap, `DetailMap`, carries no overlays since 2026-10-23 —
-operator: zoom is its only control.) The chip markup is ONE component, `OverlayChip`, also adopted by
+no panel. The chip markup is ONE component, `OverlayChip`, also adopted by
 `RentMapControls`, `GrowthMapControls` and `CityMapControls` (four copies of the same class string
 today).
 
@@ -350,10 +349,30 @@ toggle: Města + "Obarvit podle" + Min., Růst cen a nájmů + its settings, the
 above, its toggle a plain row (`OverlayChip` without `compact`) and its settings indented under it
 (`OverlayPanel`), then "Reliéf a vrstevnice" (#2494), drawn like a two-layer section: ČÚZK's shaded
 relief and contours, raster images from ČÚZK's own servers rather than geometry we ingest, so they sit
-in `lib/basemap` beside the aerial photo, not in this registry (URL `relief=1` / `contours=1`, view
-knobs like `labels`, not remembered). The legends left the panel: `MapOverlayLegends` (plus the growth and city-index keys)
-draws a card per layer group that is on in the map's bottom-left corner, so a choropleth reads with the
-panel closed; the stack folds to one button, remembered per browser.
+in `lib/basemap` beside the aerial photo, not in this registry. The legends left the panel: `MapOverlayLegends` (plus the growth and city-index keys)
+draws a card per layer group that is on in the map's bottom-left corner (`MapLegendDock`), so a
+choropleth reads with the panel closed; the stack folds to one button, remembered per browser.
+
+**Every map's one list (2026-11-20, operator: layers on the property map, web and phone).**
+`MapOverlayControls` IS the list, on every map: Podklad (`SegmentedBar` "Mapa" / "Letecká": ČÚZK's aerial
+photo over the whole basemap), then its `children` (Browse's Města and Růst cen a nájmů — Browse's alone,
+by ruling), then the registry sections, then "Reliéf a vrstevnice" (`TerrainControls`, moved out of
+`ListingMap`). `tone="phone"` sizes it for the phone's bottom sheet (15 px rows, 44 px tall; one context,
+`MapControlsToneContext`, read by `OverlayChip`, `OverlayPanel` and the rows). `compact` (ComparablesMap)
+adds a "Letecká" and a "Reliéf a vrstevnice" chip around the section chips. Where it shows:
+- Browse: the Vrstvy flyout, as above.
+- The property page's header minimap (`DetailMap`, 170 px): draws the remembered picks; its rail holds
+  Vrstvy and zoom. Vrstvy opens `PropertyMapDialog`, the large map: the minimap's view in a `Dialog`,
+  the same rail, the list open from the start, the keys in `MapLegendDock`, the area card's `CentreMark`.
+  This supersedes the 2026-10-23 "zoom only" ruling: the minimap's face stays clean, the panel and the
+  keys live on the large map.
+- The phone's Poloha (`PhoneMap`): a "Vrstvy" button on the plate opens a `BottomSheet` with the list,
+  `tone="phone"`; the keys go under the plate (`MapOverlayLegends inline`, portalled into
+  `LocationBody`'s slot), never on a map that small.
+The three point maps (minimap, large map, phone) are ONE hook, `lib/usePointMap`: `createMap`,
+`guardMap`, `addBasemapLayers`, `addPointPin`, `useBasemapPicks`, `useMapOverlays` (under 'pin'),
+`useOverlayCursor`, the click popup (`overlayPopupAt`, which Browse's click handler calls too, with
+its listing layers first) and `useOverlayPlacesAtCenter`. Rendering is all each one owns.
 
 **The area card (#2489, variant D of the 2026-11-09 design page).** A scale layer with variants (the rent
 map) is keyed by an area card instead of a bare scale: the place under the map's centre (its `level` word and
@@ -375,10 +394,20 @@ stays clear of it. The count pill keeps the pin key
   absent = the remembered selection. Every change writes `layers=` to the URL (Browse) and the
   remembered value. Add `layers` to `OVERLAY_URL_KEYS`, `setOverlay`, `browseUrlFromState`, the
   round-trip test. Memory adapter (Explore modal): initial = remembered.
-- `ComparablesMap`: local state initialised from the remembered selection, written back on change;
-  it mounts the hook (`beforeId` 'comparables-point') and the compact controls. (`DetailMap` did too
-  until 2026-10-23.) `ListingMap`: under the first growth-choropleth layer (where the rent map and the
-  kraj borders have always sat), so a choropleth on top still tints them as before.
+- `ComparablesMap`, `DetailMap`, `PropertyMapDialog`, `PhoneMap`: the remembered selection itself
+  (`useRememberedLayers`, one live store per page, so the minimap and its large map always agree); the
+  comparables map mounts the hook (`beforeId` 'comparables-point') and the compact controls, the point
+  maps `lib/usePointMap`. `ListingMap`: under the first growth-choropleth layer (where the rent map and
+  the kraj borders have always sat), so a choropleth on top still tints them as before.
+- **The basemap picks are keys of the same selection (2026-11-20):** `aerial`, `relief`, `contours`
+  (`BASEMAP_KEYS`, `basemapPicks`, `withBasemap`), never registry keys; `layersOf` keeps them with or
+  without a registry, so a registry edit never drops them. `lib/basemap` `addBasemapLayers` adds all three
+  hidden at load (terrain under the basemap's roads, the photo over the whole basemap, both under every
+  layer of ours); `setBasemapPicks` / `useBasemapPicks` show the picked ones and move the terrain over
+  the photo while it shows, back under the roads when the map does. `MapOverlayState` lost `relief` /
+  `contours`: Browse's 2026-11-11 URL keys `relief=1` / `contours=1` read into `layers` as legacy
+  spellings (`LEGACY_LAYER_KEYS`), rewritten by the next layer change. So the terrain is now remembered
+  per browser like every other pick (it was a URL-only view knob for its first nine days).
 - Delete: `rent_map_kraje_public` fetch (`fetchRentMapKraje`, `RentMapKraj`), `rentKrajeQuery`,
   `toKrajFC`, the `rent-kraje` source/layer/effect, the nested Kraje checkbox, `showKraje`,
   `onToggleShowKraje`, `rentMapKraje`. The view itself is dropped by migration 601 after deploy.

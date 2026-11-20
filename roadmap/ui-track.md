@@ -7,6 +7,19 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Map layers on the property map, web and phone; one list for every map (2026-11-20, no migration)
+- **Done** (operator ask 2026-11-20: "turn on the various map layers on the property detail map, both
+  apps; reuse/unify"). Rulings 2026-11-20: (1) the 170 px web minimap keeps a clean face, its Vrstvy
+  button opens a large map dialog with Browse's rail, list and keys, a pick there drawn on the minimap
+  too; (2) ČÚZK's aerial photo on every map, Browse included (Podklad Mapa / Letecká); (3) reference
+  layers only (no Města / Růst cen a nájmů on the property map); (4) phone Poloha: one Vrstvy button →
+  a bottom sheet with the same list, the keys under the plate. Supersedes the 2026-10-23 "minimap = zoom
+  only" ruling.
+- Unified: the photo, relief and contours are keys of the one `layers` selection (one memory, one URL key);
+  `lib/usePointMap` is the one hook of the three point maps; `MapOverlayControls` is every map's one list.
+- Next (unruled): Města / Růst cen a nájmů stay Browse's; the photo carries no street names (a "hybrid"
+  would need the basemap's buildings hidden under it).
+
 ### Terrain on the map: ČÚZK relief and contours (2026-11-11, no migration, #2494)
 - **Done** (operator ask 2026-11-11: turn on "relief" and "vrstevnice" to judge the terrain). OpenFreeMap
   carries no elevation; ČÚZK, already the aerial photo's source, serves DMR 5G shaded relief and ZABAGED
