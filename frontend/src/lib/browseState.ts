@@ -93,11 +93,6 @@ export interface MapOverlayState {
    * absent = the limit this browser remembers, else PIN_LIMIT_DEFAULT). A view knob like
    * `priceMetric`: URL-serialised, carried by preserveExtras, outside preset identity. */
   pinLimit: number;
-  /* ČÚZK's shaded relief and contour lines over the basemap (lib/basemap addTerrainLayers),
-   * each its own switch: URL keys `relief=1` and `contours=1`, absent = off. View knobs like
-   * `priceLabels`, not remembered per browser. */
-  relief: boolean;
-  contours: boolean;
 }
 
 /* The two things a pin can be labelled with. */
@@ -145,8 +140,6 @@ export const DEFAULT_OVERLAY: MapOverlayState = {
   priceMetric: 'total',
   priceLabels: true,
   pinLimit: PIN_LIMIT_DEFAULT,
-  relief: false,
-  contours: false,
 };
 
 /* The contract <BrowseExperience> consumes. Setters carry the page's history
@@ -201,13 +194,14 @@ export interface BrowseViewState {
   setBoard: (patch: Partial<BoardOptions>) => void;
 }
 
-/* The legacy spellings of a `layers` selection — `kraje` and the rent map's
- * `rentmap` + `rentvk` (layersFromSearchParams) — carried until a layer change
- * rewrites them, so an old link keeps its layers through filtering. */
-const LEGACY_LAYER_KEYS = ['kraje', 'rentmap', 'rentvk'];
+/* The legacy spellings of a `layers` selection — `kraje`, the rent map's
+ * `rentmap` + `rentvk` and the terrain's `relief` + `contours`
+ * (layersFromSearchParams) — carried until a layer change rewrites them, so an
+ * old link keeps its layers through filtering. */
+const LEGACY_LAYER_KEYS = ['kraje', 'rentmap', 'rentvk', 'relief', 'contours'];
 const OVERLAY_URL_KEYS = [
   'tab', 'sort', 'cities', 'colorby', 'layers', ...LEGACY_LAYER_KEYS, 'preset', 'pm', 'labels', 'pins',
-  'relief', 'contours', 'dashboard', 'market', 'small', ...BOARD_URL_KEYS,
+  'dashboard', 'market', 'small', ...BOARD_URL_KEYS,
 ];
 
 /* A saved filter (a preset's, a dashboard's: the preset blob, lib/filters
@@ -251,8 +245,6 @@ export function useUrlBrowseState(): BrowseViewState {
       priceMetric: searchParams.get('pm') === 'per_m2' ? 'per_m2' : 'total',
       priceLabels: searchParams.get('labels') !== '0',
       pinLimit: searchParams.has('pins') ? parsePinLimit(searchParams.get('pins')) : rememberedPinLimit,
-      relief: searchParams.get('relief') === '1',
-      contours: searchParams.get('contours') === '1',
     };
   }, [searchParams, rememberedLayers, rememberedPinLimit]);
   const activePresetId = searchParams.get('preset');
@@ -330,8 +322,6 @@ export function useUrlBrowseState(): BrowseViewState {
         limit === PIN_LIMIT_DEFAULT ? sp.delete('pins') : sp.set('pins', String(limit));
         writeRememberedPinLimit(limit);
       }
-      if ('relief' in patch) patch.relief ? sp.set('relief', '1') : sp.delete('relief');
-      if ('contours' in patch) patch.contours ? sp.set('contours', '1') : sp.delete('contours');
       setSearchParams(sp, { replace: true });
     },
     [searchParams, setSearchParams],
@@ -578,8 +568,6 @@ export const browseUrlFromState = (s: {
   if (s.overlay.priceMetric === 'per_m2') sp.set('pm', 'per_m2');
   if (!s.overlay.priceLabels) sp.set('labels', '0');
   if (s.overlay.pinLimit !== PIN_LIMIT_DEFAULT) sp.set('pins', String(s.overlay.pinLimit));
-  if (s.overlay.relief) sp.set('relief', '1');
-  if (s.overlay.contours) sp.set('contours', '1');
   if (s.activeDashboardId) sp.set('dashboard', s.activeDashboardId);
   if (s.statsMarket && s.statsMarket !== 'filter') sp.set('market', s.statsMarket);
   if (s.statsSmall) sp.set('small', '1');

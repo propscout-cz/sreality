@@ -4,8 +4,8 @@
  * style layers, the hook and the popup — is lib/mapOverlayDraw.ts, imported
  * only by the lazily loaded maps, so neither it nor maplibre-gl reaches the
  * first-visit bundle (scripts/bundle-budget.mjs). Nothing here names a layer
- * but the legacy URL keys it still reads: adding one is a registry row and an
- * ingest run. */
+ * but the basemap's own three and the legacy URL keys it still reads: adding
+ * one is a registry row and an ingest run. */
 
 import { useSyncExternalStore } from 'react';
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
@@ -140,14 +140,68 @@ export function serializeLayers(sel: LayerSelection): string {
 export const canonicalLayers = (s: string | null | undefined): string =>
   serializeLayers(parseLayers(s));
 
-/* The part of a selection the registry can draw: unknown keys dropped, an
- * unknown variant — or the first one, spelled out — folded to null, so one
- * state has one spelling. */
+/* ------------------------------------------------------------ basemap picks */
+
+/* ČÚZK's aerial photo, shaded relief and contour lines (lib/basemap): raster images
+ * from ČÚZK's own servers, not registry layers, but spelled in the same selection, so
+ * one `layers` knob, one memory and one URL key carry every pick a map offers. The
+ * photo is the base (Podklad: Mapa | Letecká); relief and contours draw over either. */
+export interface BasemapPicks {
+  aerial: boolean;
+  relief: boolean;
+  contours: boolean;
+}
+
+export const BASEMAP_KEYS: readonly (keyof BasemapPicks)[] = ['aerial', 'relief', 'contours'];
+
+/* ZABAGED draws its contours only at 1:10 000 or closer: zoom 16 for a 256 px tile. */
+export const CONTOURS_MINZOOM = 16;
+
+const isBasemapKey = (key: string): key is keyof BasemapPicks =>
+  (BASEMAP_KEYS as readonly string[]).includes(key);
+
+export function basemapPicks(selection: string): BasemapPicks {
+  const sel = parseLayers(selection);
+  return { aerial: sel.has('aerial'), relief: sel.has('relief'), contours: sel.has('contours') };
+}
+
+/* The selection with the basemap picks in `patch` switched; every other key kept. */
+export function withBasemap(selection: string, patch: Partial<BasemapPicks>): string {
+  const sel = new Map(parseLayers(selection));
+  for (const key of BASEMAP_KEYS) {
+    if (!(key in patch)) continue;
+    if (patch[key]) sel.set(key, null);
+    else sel.delete(key);
+  }
+  return serializeLayers(sel);
+}
+
+/* Whether the selection names any registry layer (the basemap picks need no registry). */
+export const hasRegistryLayers = (selection: string): boolean =>
+  [...parseLayers(selection).keys()].some((key) => !isBasemapKey(key));
+
+/* The registry sections with a layer drawn: the cards a legend dock holds. */
+export function registrySectionsOn(selection: string, registry: MapOverlayRegistry | undefined): number {
+  const sel = parseLayers(selection);
+  return (registry?.sections ?? []).filter((s) => s.layers.some((l) => sel.has(l.key))).length;
+}
+
+/* A map's Vrstvy badge: each registry section drawn, the photo, the terrain (one
+ * group for its two layers, as in the panel). */
+export function layerGroupsOn(selection: string, registry: MapOverlayRegistry | undefined): number {
+  const { aerial, relief, contours } = basemapPicks(selection);
+  return registrySectionsOn(selection, registry) + (aerial ? 1 : 0) + (relief || contours ? 1 : 0);
+}
+
+/* The part of a selection a map can draw: the basemap picks, then the registry's
+ * layers — unknown keys dropped, an unknown variant — or the first one, spelled
+ * out — folded to null, so one state has one spelling. */
 export function layersOf(
   sel: LayerSelection,
   registry: MapOverlayRegistry | undefined,
 ): LayerSelection {
   const out = new Map<string, string | null>();
+  for (const key of BASEMAP_KEYS) if (sel.has(key)) out.set(key, null);
   for (const section of registry?.sections ?? []) {
     for (const layer of section.layers) {
       if (!sel.has(layer.key)) continue;
@@ -173,20 +227,27 @@ export function activeVariant(
 }
 
 /* The URL's selection, or null when the URL says nothing and the remembered
- * one applies. `layers` present — even empty — is explicit. Two legacy
+ * one applies. `layers` present — even empty — is explicit. Three legacy
  * spellings still read until a layer change rewrites the URL: `kraje=1` (the
- * rent-map panel's old checkbox) as `kraje` when `layers` is absent, and
+ * rent-map panel's old checkbox) as `kraje` when `layers` is absent;
  * `rentmap=1` + `rentvk=N` (the rent map before it was a registry layer) as
- * `rent_map:vkN`, added to whatever else the URL selects — a link from the
- * weeks the two knobs lived side by side carries both (a `rent_map` that
- * `layers` names itself wins: the later token of a selection does). */
+ * `rent_map:vkN`; and `relief=1` / `contours=1` (the terrain before it joined
+ * the selection, 2026-11-11→20) as `relief` / `contours`. The last two are
+ * added to whatever else the URL selects — a link from the weeks a knob lived
+ * beside `layers` carries both (a `rent_map` that `layers` names itself wins:
+ * the later token of a selection does). */
 export function layersFromSearchParams(sp: URLSearchParams): string | null {
   const explicit = sp.get('layers');
   const layers = explicit ?? (sp.get('kraje') === '1' ? 'kraje' : null);
-  if (sp.get('rentmap') !== '1') return layers == null ? null : canonicalLayers(layers);
-  const vk = sp.get('rentvk') ?? '';
-  const rent = /^[1-4]$/.test(vk) ? `rent_map:vk${vk}` : 'rent_map';
-  return canonicalLayers(layers ? `${rent},${layers}` : rent);
+  const legacy: string[] = [];
+  if (sp.get('rentmap') === '1') {
+    const vk = sp.get('rentvk') ?? '';
+    legacy.push(/^[1-4]$/.test(vk) ? `rent_map:vk${vk}` : 'rent_map');
+  }
+  if (sp.get('relief') === '1') legacy.push('relief');
+  if (sp.get('contours') === '1') legacy.push('contours');
+  if (legacy.length === 0) return layers == null ? null : canonicalLayers(layers);
+  return canonicalLayers([...legacy, layers ?? ''].join(','));
 }
 
 const REMEMBERED_LAYERS_KEY = 'map.layers';

@@ -18,6 +18,7 @@ describe('map imports stay behind lazyChunk', { timeout: 30_000 }, () => {
     ["import maplibregl from 'maplibre-gl';", 'src/components/phone/LocationBody.tsx'],
     ["import { createMap } from '@/lib/basemap';", 'src/components/phone/LocationBody.tsx'],
     ["import { createMap } from './basemap';", 'src/lib/foo.ts'],
+    ["import { usePointMap } from '@/lib/usePointMap';", 'src/components/listing-detail/ListingOverview.tsx'],
   ])('refuses %s in %s', async (code, filePath) => {
     expect(await restrictedImports(code, filePath)).toBe(1);
   });
@@ -29,6 +30,7 @@ describe('map imports stay behind lazyChunk', { timeout: 30_000 }, () => {
       'src/components/phone/LocationBody.tsx',
     ],
     ["import { createMap } from '@/lib/basemap';", 'src/components/phone/PhoneMap.tsx'],
+    ["import { usePointMap } from '@/lib/usePointMap';", 'src/components/listing-detail/PropertyMapDialog.tsx'],
   ])('allows %s in %s', async (code, filePath) => {
     expect(await restrictedImports(code, filePath)).toBe(0);
   });

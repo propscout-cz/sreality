@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useNewTabProps, useSpaLinkDelegation } from '@/lib/linkGestures';
 import { YmPicker, YM_SELECT_CLS } from '@/components/YmPicker';
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
-import { CONTOURS_LAYER, CONTOURS_MINZOOM, RELIEF_LAYER, addTerrainLayers, createMap } from '@/lib/basemap';
+import { addBasemapLayers, createMap, useBasemapPicks } from '@/lib/basemap';
 import type { HaloPoint } from '@/lib/hoverSync';
 import { haloFeatures, useMapFeatureHover } from '@/lib/useMapFeatureHover';
 import {
@@ -35,30 +35,25 @@ import {
 } from '@/lib/growthChoropleth';
 import HoverChart from '@/components/HoverChart';
 import { SegmentedBar, type SegmentOption } from '@/components/controls';
-import MapOverlayControls, { MapOverlayLegends } from '@/components/MapOverlayControls';
-import { MapLegendCard, OverlayChip, OverlayPanel } from '@/components/OverlayChip';
+import MapOverlayControls, { MapOverlayLegends, TONE_ROW } from '@/components/MapOverlayControls';
+import { MapLegendCard, MapLegendDock, OverlayChip, OverlayPanel } from '@/components/OverlayChip';
 import {
   LayersIcon, MinusIcon, PlusIcon, RailButton, RailFlyout, RailGroup, ShowAllIcon, SlidersIcon, useRailPanel,
 } from '@/components/MapRail';
 import { escapeHtml } from '@/lib/escapeHtml';
-import { usePersistedFlag } from '@/lib/persistedFlag';
 import { circleRing } from '@/lib/geoRing';
 import { listingPopupHtml } from '@/lib/listingPopupHtml';
 import {
-  overlayFillIds,
-  overlayClickOwner,
-  overlayPopupHtml,
+  overlayPopupAt,
   useMapOverlays,
   useMapZoom,
+  useOverlayCursor,
   useOverlayPlacesAtCenter,
 } from '@/lib/mapOverlayDraw';
-import { parseLayers, type MapOverlayRegistry } from '@/lib/mapOverlays';
+import { layerGroupsOn, registrySectionsOn, type MapOverlayRegistry } from '@/lib/mapOverlays';
 import { isPinExact } from '@/lib/pinPrecision';
 
 const psgLayerId = (m: GrowthMetric) => `psg-${m}`;
-
-/* Whether the map's layer keys are folded to their button (per browser). */
-const LEGENDS_FOLDED_KEY = 'sreality.browse.mapLegendsFolded';
 
 /* The reference overlays sit under the growth choropleth's first layer — so
  * under the city polygons and the listings too — where the MF rent map and the
@@ -340,18 +335,15 @@ interface Props {
    * budget the map query was fetched with). */
   pinLimit: number;
   onPinLimitChange?: (next: number) => void;
-  /* Reference overlays (lib/mapOverlays) — the MF rent choropleth among them:
-   * the registry, the canonical `layers` selection, and where a change goes
-   * (the URL + the remembered selection — MapOverlayState.layers). Drawn under
-   * the growth choropleth, the city polygons and the listings. */
+  /* Reference overlays (lib/mapOverlays) — the MF rent choropleth among them —
+   * and the basemap picks (ČÚZK's aerial photo, relief, contours): the registry,
+   * the canonical `layers` selection, and where a change goes (the URL + the
+   * remembered selection — MapOverlayState.layers). The overlays draw under the
+   * growth choropleth, the city polygons and the listings; the basemap picks
+   * under every layer of ours. */
   overlayRegistry?: MapOverlayRegistry;
   overlayLayers?: string;
   onOverlayLayersChange?: (next: string) => void;
-  /* ČÚZK's terrain (lib/basemap addTerrainLayers): MapOverlayState.relief / .contours,
-   * URL keys `relief` / `contours`. Under the basemap's roads, so under every layer of ours. */
-  relief?: boolean;
-  contours?: boolean;
-  onTerrainChange?: (patch: { relief?: boolean; contours?: boolean }) => void;
   /* Price-stats growth overlay ("Růst cen a nájmů"). The Browse page hands in
    * the per-obec growth rows for the chosen dataset + window (price_stat_growth
    * RPC), the dataset list for the picker, and the active metric. Fill sits
@@ -411,9 +403,6 @@ export default function ListingMap({
   overlayRegistry,
   overlayLayers = '',
   onOverlayLayersChange,
-  relief = false,
-  contours = false,
-  onTerrainChange,
   growthRows,
   growthShapes,
   growthDatasets,
@@ -533,7 +522,7 @@ export default function ListingMap({
     mapRef.current = map;
 
     map.on('load', () => {
-      addTerrainLayers(map);
+      addBasemapLayers(map);
       /* Price-stats growth overlay — one fill layer per metric, all hidden
        * until the data-effect flips the active one on. Added FIRST: a
        * background layer, below the listing dots + city pins; the reference
@@ -964,20 +953,11 @@ export default function ListingMap({
        * always has. Registered after the city handler, so this popup replaces
        * the city's inside any other area. */
       map.on('click', (e) => {
-        const registry = overlayRegistryRef.current;
-        if (!registry) return;
-        const fills = overlayFillIds(registry).filter((id) => map.getLayer(id));
-        if (fills.length === 0) return;
-        const top = map.queryRenderedFeatures(e.point, {
-          layers: [...LISTING_HIT_LAYERS, ...fills],
-        })[0];
-        const owner = overlayClickOwner(
-          registry,
-          top?.layer.id ?? null,
-          () => map.queryRenderedFeatures(e.point, { layers: ['city-fill'] }).length > 0,
-        );
-        if (!top || !owner) return;
-        const variant = parseLayers(overlayLayersRef.current).get(owner.layer.key) ?? null;
+        const html = overlayPopupAt(map, e.point, overlayRegistryRef.current, overlayLayersRef.current, {
+          above: LISTING_HIT_LAYERS,
+          cityHit: () => map.queryRenderedFeatures(e.point, { layers: ['city-fill'] }).length > 0,
+        });
+        if (!html) return;
         popupRef.current?.remove();
         popupRef.current = new maplibregl.Popup({
           closeButton: true,
@@ -986,7 +966,7 @@ export default function ListingMap({
           className: 'listing-popup overlay-popup',
         })
           .setLngLat(e.lngLat)
-          .setHTML(overlayPopupHtml(owner.section.label, top.properties, owner.layer, variant))
+          .setHTML(html)
           .addTo(map);
       });
 
@@ -1321,12 +1301,7 @@ export default function ListingMap({
     map.setLayoutProperty('point-price', 'visibility', priceLabels ? 'visible' : 'none');
   }, [priceLabels, ready]);
 
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!ready || !map?.getLayer(RELIEF_LAYER)) return;
-    map.setLayoutProperty(RELIEF_LAYER, 'visibility', relief ? 'visible' : 'none');
-    map.setLayoutProperty(CONTOURS_LAYER, 'visibility', contours ? 'visible' : 'none');
-  }, [relief, contours, ready]);
+  useBasemapPicks(mapRef.current, ready, overlayLayers);
 
   /* Imperative flyTo on each new command (identity-based via ts).
    * Marks didInitialFitRef so the rows-effect doesn't subsequently
@@ -1392,27 +1367,7 @@ export default function ListingMap({
   useMapOverlays(mapRef.current, ready, overlayRegistry, overlayLayers, OVERLAY_BEFORE_ID);
   const overlayPlaces = useOverlayPlacesAtCenter(mapRef.current, ready, overlayRegistry, overlayLayers);
 
-  /* A reference area answers a click (the popup above), so it shows the
-   * pointer — over the whole country while the rent map is on, as it always
-   * has. MapLibre skips the ids of sections not drawn yet. */
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !ready || !overlayRegistry) return;
-    const ids = overlayFillIds(overlayRegistry);
-    if (ids.length === 0) return;
-    const enter = () => {
-      map.getCanvas().style.cursor = 'pointer';
-    };
-    const leave = () => {
-      map.getCanvas().style.cursor = '';
-    };
-    map.on('mouseenter', ids, enter);
-    map.on('mouseleave', ids, leave);
-    return () => {
-      map.off('mouseenter', ids, enter);
-      map.off('mouseleave', ids, leave);
-    };
-  }, [ready, overlayRegistry]);
+  useOverlayCursor(mapRef.current, ready, overlayRegistry);
 
   /* Locator halo data: the hovered rows' own points, whatever the map holds. */
   useEffect(() => {
@@ -1461,18 +1416,49 @@ export default function ListingMap({
   };
 
   const rail = useRailPanel<'layers' | 'pins'>();
+  const overlaySectionsOn = registrySectionsOn(overlayLayers, overlayRegistry);
   /* The rail's badge: every layer group that is drawn. */
-  const overlaySectionsOn = useMemo(() => {
-    const sel = parseLayers(overlayLayers);
-    return (overlayRegistry?.sections ?? []).filter((s) => s.layers.some((l) => sel.has(l.key))).length;
-  }, [overlayRegistry, overlayLayers]);
   const layersOn =
     (cities && cities.length > 0 && showCities ? 1 : 0) +
     (showGrowth ? 1 : 0) +
-    (relief || contours ? 1 : 0) +
-    overlaySectionsOn;
+    layerGroupsOn(overlayLayers, overlayRegistry);
   const cityKey = cities && cities.length > 0 && showCities ? colorByIndex ?? null : null;
-  const legendsFolded = usePersistedFlag(LEGENDS_FOLDED_KEY, false);
+  /* Browse's own two layers, rows of the Vrstvy list. */
+  const browseRows = (
+    <>
+      {cities && cities.length > 0 && (
+        <div className={TONE_ROW.web}>
+          <CityMapControls
+            showCities={showCities}
+            onToggleShowCities={onToggleShowCities}
+            colorByIndex={colorByIndex ?? null}
+            cityIndexDefinitions={cityIndexDefinitions ?? []}
+            onColorByIndexChange={onColorByIndexChange}
+            colorByMin={colorByMin}
+            onColorByMinChange={setColorByMin}
+            cityCount={cities.length}
+          />
+        </div>
+      )}
+      <div className={TONE_ROW.web}>
+        <GrowthMapControls
+          showGrowth={showGrowth}
+          datasets={growthDatasets ?? []}
+          datasetId={growthDatasetId}
+          metric={growthMetric}
+          from={growthFrom}
+          to={growthTo}
+          onToggle={onToggleShowGrowth}
+          onDatasetChange={onGrowthDatasetChange}
+          onMetricChange={onGrowthMetricChange}
+          onFromChange={onGrowthFromChange}
+          onToChange={onGrowthToChange}
+          chartOnHover={growthChartOnHover}
+          onToggleChartOnHover={onToggleGrowthChartOnHover}
+        />
+      </div>
+    </>
+  );
   const countText = isLoading
     ? 'Načítání…'
     : total == null
@@ -1591,59 +1577,20 @@ export default function ListingMap({
         </div>
         {rail.open === 'layers' && (
           <RailFlyout title="Vrstvy" onClose={rail.close}>
-            <div className="flex flex-col divide-y divide-[var(--color-rule)]">
-              {cities && cities.length > 0 && (
-                <div className="py-1">
-                  <CityMapControls
-                    showCities={showCities}
-                    onToggleShowCities={onToggleShowCities}
-                    colorByIndex={colorByIndex ?? null}
-                    cityIndexDefinitions={cityIndexDefinitions ?? []}
-                    onColorByIndexChange={onColorByIndexChange}
-                    colorByMin={colorByMin}
-                    onColorByMinChange={setColorByMin}
-                    cityCount={cities.length}
-                  />
-                </div>
-              )}
-              <div className="py-1">
-                <GrowthMapControls
-                  showGrowth={showGrowth}
-                  datasets={growthDatasets ?? []}
-                  datasetId={growthDatasetId}
-                  metric={growthMetric}
-                  from={growthFrom}
-                  to={growthTo}
-                  onToggle={onToggleShowGrowth}
-                  onDatasetChange={onGrowthDatasetChange}
-                  onMetricChange={onGrowthMetricChange}
-                  onFromChange={onGrowthFromChange}
-                  onToChange={onGrowthToChange}
-                  chartOnHover={growthChartOnHover}
-                  onToggleChartOnHover={onToggleGrowthChartOnHover}
-                />
-              </div>
-              {onOverlayLayersChange && (
-                <div className="py-1">
-                  <MapOverlayControls
-                    registry={overlayRegistry}
-                    selection={overlayLayers}
-                    onChange={onOverlayLayersChange}
-                    zoom={zoomLevel}
-                  />
-                </div>
-              )}
-              {onTerrainChange && (
-                <div className="py-1">
-                  <TerrainControls
-                    relief={relief}
-                    contours={contours}
-                    zoom={zoomLevel}
-                    onChange={onTerrainChange}
-                  />
-                </div>
-              )}
-            </div>
+            {/* Every map's one list (the basemap, the registry, the terrain), Browse's
+                own two layers inside it under the base. */}
+            {onOverlayLayersChange ? (
+              <MapOverlayControls
+                registry={overlayRegistry}
+                selection={overlayLayers}
+                onChange={onOverlayLayersChange}
+                zoom={zoomLevel}
+              >
+                {browseRows}
+              </MapOverlayControls>
+            ) : (
+              <div className="flex flex-col divide-y divide-[var(--color-rule)]">{browseRows}</div>
+            )}
           </RailFlyout>
         )}
         {rail.open === 'pins' && (
@@ -1661,121 +1608,26 @@ export default function ListingMap({
           </RailFlyout>
         )}
       </div>
-      {/* The point an area card reads, while one is on the map. */}
-      {overlayPlaces.size > 0 && !legendsFolded.value && <CentreMark />}
-      {/* Bottom-left, over the scale: the key to every layer that is on, so a
-          choropleth reads with the panel closed. It folds to one button (and
-          stays folded in this browser) when the map is too narrow to spare it. */}
+      {/* Bottom-left, over the scale: the key to every layer that is on (and the
+          point an area card reads, while one is on the map). */}
       {(showGrowth || cityKey || overlaySectionsOn > 0) && (
-        <div className="pointer-events-none absolute z-[3] bottom-9 left-2 flex flex-col gap-1.5 items-start max-h-[45%] max-w-[calc(100%-4rem)]">
-          {!legendsFolded.value && (
-            <div className="pointer-events-auto flex flex-col gap-1.5 items-start min-h-0 overflow-y-auto">
-              {showGrowth && <GrowthLegend metric={growthMetric} rowCount={growthRows?.length ?? 0} />}
-              {cityKey && <CityIndexLegend index={cityKey} />}
-              <MapOverlayLegends
-                registry={overlayRegistry}
-                selection={overlayLayers}
-                places={overlayPlaces}
-                onChange={onOverlayLayersChange}
-              />
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={legendsFolded.toggle}
-            aria-expanded={!legendsFolded.value}
-            className="pointer-events-auto shrink-0 inline-flex items-center gap-1 px-2 py-0.5 text-[0.7rem] rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] shadow-[0_2px_6px_rgba(0,0,0,0.04)]"
-          >
-            {legendsFolded.value ? 'Ukázat legendu' : 'Skrýt legendu'}
-          </button>
-        </div>
+        <MapLegendDock centreMark={overlayPlaces.size > 0}>
+          {showGrowth && <GrowthLegend metric={growthMetric} rowCount={growthRows?.length ?? 0} />}
+          {cityKey && <CityIndexLegend index={cityKey} />}
+          <MapOverlayLegends
+            registry={overlayRegistry}
+            selection={overlayLayers}
+            places={overlayPlaces}
+            onChange={onOverlayLayersChange}
+          />
+        </MapLegendDock>
       )}
     </div>
-  );
-}
-
-
-/* A small cross at the map's centre, over the tiles and under every control. */
-function CentreMark() {
-  return (
-    <svg
-      aria-hidden="true"
-      width="22"
-      height="22"
-      viewBox="0 0 22 22"
-      className="pointer-events-none absolute z-[2] left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-    >
-      <path d="M1 11h6M15 11h6M11 1v6M11 15v6" stroke="#ffffff" strokeWidth="4" strokeLinecap="round" />
-      <path d="M1 11h6M15 11h6M11 1v6M11 15v6" stroke="#16181d" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
   );
 }
 
 /* The settings of the "Růst cen a nájmů" layer in the Vrstvy panel; its key is
  * GrowthLegend, on the map. */
-/* ČÚZK's terrain in the Vrstvy panel, drawn like a registry section of two layers: one
- * tri-state row turns both on, and while either is, the panel under it holds each one's
- * own box, the contours' zoom hint and the source. */
-export function TerrainControls({
-  relief,
-  contours,
-  zoom,
-  onChange,
-}: {
-  relief: boolean;
-  contours: boolean;
-  zoom: number | null;
-  onChange: (patch: { relief?: boolean; contours?: boolean }) => void;
-}) {
-  const toggle = 'inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-ink-2)] cursor-pointer';
-  return (
-    <div className="flex flex-col">
-      <OverlayChip
-        label="Reliéf a vrstevnice"
-        checked={relief && contours}
-        indeterminate={relief !== contours}
-        onChange={(checked) => onChange({ relief: checked, contours: checked })}
-      />
-      {(relief || contours) && (
-        <OverlayPanel>
-          <div className="flex flex-col gap-1">
-            <label className={toggle}>
-              <input type="checkbox" checked={relief} onChange={(e) => onChange({ relief: e.target.checked })} />
-              <span>Stínovaný reliéf</span>
-            </label>
-            <label className={toggle}>
-              <input type="checkbox" checked={contours} onChange={(e) => onChange({ contours: e.target.checked })} />
-              <span>Vrstevnice</span>
-            </label>
-          </div>
-          <div className="flex flex-col gap-1">
-            {contours && zoom != null && zoom < CONTOURS_MINZOOM && (
-              <p
-                className="text-[0.68rem] font-medium text-[var(--color-ink-2)]"
-                title={`Vrstevnice se kreslí od přiblížení ${CONTOURS_MINZOOM}`}
-              >
-                Vrstevnice: přibližte mapu
-              </p>
-            )}
-            <p className="text-[0.62rem] text-[var(--color-ink-3)]">
-              Jen území ČR ·{' '}
-              <a
-                href="https://geoportal.cuzk.gov.cz/"
-                target="_blank"
-                rel="noreferrer"
-                title="CC BY 4.0"
-                className="underline-offset-2 hover:underline hover:text-[var(--color-ink-2)]"
-              >
-                © ČÚZK
-              </a>
-            </p>
-          </div>
-        </OverlayPanel>
-      )}
-    </div>
-  );
-}
-
 function GrowthMapControls({
   showGrowth, datasets, datasetId, metric, from, to,
   onToggle, onDatasetChange, onMetricChange, onFromChange, onToChange,

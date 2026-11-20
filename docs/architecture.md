@@ -1015,24 +1015,29 @@ rules. Identify which one a task belongs to before you start.
   its 4:3 plate then mounts `PhoneMap` (#2446), a lazy chunk over `lib/basemap` `createMap`
   (OpenFreeMap): cooperative gestures with the Czech hint "Mapou posunete dvěma prsty", no zoom
   buttons, no scale bar, dimmed after dusk like the photos (`PHOTO_DARK`), DetailMap's pin
-  (`addPointPin`). Once the map has loaded, a "Mapa" / "Letecká" `SegmentedBar` (phone tone, top
-  right, on a paper backing) shows ČÚZK's aerial photo (#2447): `lib/basemap` `addAerialLayer`
-  adds Ortofoto ČR's `ORTOFOTO_WM` raster hidden, over the basemap and under the pin (256 px
+  (`addPointPin`); the map itself is `lib/usePointMap`, the one hook DetailMap and its large map
+  share. Once the map has loaded, a "Vrstvy" button (top right, on a paper backing, the count of
+  layer groups on beside it) opens a bottom sheet with every map's one list (`MapOverlayControls`
+  `tone="phone"`, 2026-11-20): Podklad "Mapa" / "Letecká", the reference overlays, "Reliéf a
+  vrstevnice"; the keys of the overlays that are on go under the plate (`legendSlot`), never on it.
+  Letecká is ČÚZK's aerial photo (#2447): `lib/basemap` `addBasemapLayers` adds Ortofoto ČR's
+  `ORTOFOTO_WM` raster hidden, over the whole basemap and under every layer of ours (256 px
   tiles, y before x, source `maxzoom` 20 so deeper zooms overscale; "© ČÚZK, CC BY 4.0" linked to
   the geoportal; CORS echoes the app's origin). Hidden, MapLibre fetches none of its tiles and
-  leaves its credit out of the (i). The bar flips the layer's visibility in its own effect, never
-  building a new map; a map rebuilt for a moved point takes the pick once it has loaded. Abroad
-  its tiles 404 and the map shows through: no abroad gate, no memory of the choice, no tile
-  stored, and the privacy page names ČÚZK. A third segment, "Terén" (#2494), shows ČÚZK's terrain
-  instead: `addTerrainLayers` adds DMR 5G's shaded relief (`dmr5g` ImageServer `exportImage`,
+  leaves its credit out of the (i). A pick flips visibility (`setBasemapPicks`), never building a
+  new map; a map rebuilt for a moved point takes the picks once it has loaded. Abroad its tiles
+  404 and the map shows through: no abroad gate, no tile stored, and the privacy page names ČÚZK.
+  "Reliéf a vrstevnice" (#2494) is ČÚZK's terrain: DMR 5G's shaded relief (`dmr5g` ImageServer `exportImage`,
   `GrayscaleHillshade`, 35 % with contrast 0.3 so flat ground stays light) and ZABAGED's contours
   (`ZABAGED_VRSTEVNICE` MapServer `export`, `ZOBRAZ_K='1'` = ZABAGED's own pick that thins the base
   lines on steep slopes, 512 px at 192 dpi so lines stay sharp, source `minzoom` 16 because ZABAGED
   draws nothing coarser than 1:10 000), both hidden and under the basemap's first `transportation`
-  layer, so roads, buildings and names stay on top. Neither service is cached as tiles: each tile is
-  an export of its bbox, drawn on request (~0.3 s relief, ~0.5–1 s contours), transparent abroad.
-  Browse's map offers the same two in Vrstvy ("Reliéf a vrstevnice", URL `relief=1` / `contours=1`);
-  the listing-detail minimap keeps none (ruling 2026-10-23). PhoneMap's zoom is `lib/zoomByLevel`'s by precision
+  layer, so roads, buildings and names stay on top — lifted over the photo while it shows. Neither
+  service is cached as tiles: each tile is an export of its bbox, drawn on request (~0.3 s relief,
+  ~0.5–1 s contours), transparent abroad. The three are keys of every map's one `layers` selection
+  (`aerial`, `relief`, `contours`; docs/design/map-overlays.md § State), remembered per browser like
+  the overlays, so Browse, the property maps and the comparables map offer and keep the same picks
+  (Browse's 2026-11-11 `relief=1` / `contours=1` read as legacy spellings). PhoneMap's zoom is `lib/zoomByLevel`'s by precision
   (street 15, quarter 13, town 11, coarse 9); the links take one step more, since the map apps
   count 256 px tiles and MapLibre 512.
   The map degrades, the place does not: `MapSlot` (an `ErrorBoundary` with `fallback={null}` and
@@ -2478,8 +2483,10 @@ renumber.** Navigate by area:
     canonical advert's photo mosaic beside the identity column and the map (`ListingOverview`'s
     `PropertyIdentity` + `LocationMap`, the pieces Estimation Detail renders too). The status pill
     links to the latest active advert on its portal (the one seen last, the canonical one on a tie;
-    with none active, the one seen last), its stored URL. The minimap (`DetailMap`) has zoom and
-    nothing else: no overlays, no scale, the attribution folded to its (i). Then the notes section
+    with none active, the one seen last), its stored URL. The minimap (`DetailMap`) draws the layers
+    this browser remembers; its rail holds Vrstvy and zoom, no scale, the attribution folded to its
+    (i). Vrstvy opens the large map (`PropertyMapDialog`, operator 2026-11-20): the minimap's view in a
+    dialog with Browse's rail, every map's one layer list and the keys of what is on. Then the notes section
     (`CurationBlock`, read as the acting identity): notes read, written, edited and shared in place,
     the artifact link (or "+ Odkaz na artefakt") in its header. A VIEWING is a note with a date
     (`property_notes.viewing_at`, migration 666; the text then optional): the composer's "Prohlídka"

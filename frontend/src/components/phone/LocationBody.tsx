@@ -1,6 +1,7 @@
 /* Poloha on the phone: where the property is, drawn the same in the feed card's sheet and
  * on the property page. A 4:3 plate holding a map of the location ad's point (a lazy
- * chunk, so the place never waits for it), under it the place as the page names it, a muted
+ * chunk, so the place never waits for it), under it the keys of the map's layers that are
+ * on (PhoneMap draws them into that slot), then the place as the page names it, a muted
  * note when the point is only a town or a part of one, and the three map apps an iPhone
  * hands the point to.
  *
@@ -41,6 +42,7 @@ export default function LocationBody({
 }) {
   const loc = usePropertyLocation(propertyId, enabled);
   const [mapFailed, setMapFailed] = useState(false);
+  const [legendSlot, setLegendSlot] = useState<HTMLDivElement | null>(null);
 
   if (loc.isError) {
     if (loc.error instanceof ApiError && loc.error.status === 404) {
@@ -68,12 +70,13 @@ export default function LocationBody({
         <div className={PLATE}>
           {data && (
             <MapSlot onError={() => setMapFailed(true)}>
-              <PhoneMap lat={data.lat} lon={data.lon} zoom={mapZoom(data.precision)} />
+              <PhoneMap lat={data.lat} lon={data.lon} zoom={mapZoom(data.precision)} legendSlot={legendSlot} />
             </MapSlot>
           )}
           <PlateRule />
         </div>
       )}
+      {!mapFailed && <div ref={setLegendSlot} className="flex flex-col gap-3 empty:hidden" />}
       {data ? (
         <div className="flex flex-col gap-0.5">
           {data.label && <p className="text-[15px] text-[var(--color-ink)]">{data.label}</p>}
