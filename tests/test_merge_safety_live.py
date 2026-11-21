@@ -640,6 +640,36 @@ def test_the_storey_is_the_one_most_adverts_state(cur, canonical, others, chosen
     assert cur.fetchone() == chosen
 
 
+@pytest.mark.parametrize(("canonical", "others", "chosen"), [
+    # (category, subtype, condition, active) per advert; the canonical one is sreality, active.
+    (("dum", None, "dobry", True),
+     [("dum", "rodinny_dum", "pred_rekonstrukci", True), ("dum", "rodinny_dum", "pred_rekonstrukci", True)],
+     ("rodinny_dum", "pred_rekonstrukci")),      # most adverts agree, against the canonical one
+    (("dum", "vila", "dobry", True), [("dum", "rodinny_dum", "po_rekonstrukci", True)],
+     ("vila", "dobry")),                          # a tie goes to the canonical order
+    (("dum", None, None, True),
+     [("komercni", "ubytovani", "dobry", False), ("dum", "rodinny_dum", "po_rekonstrukci", False)],
+     ("rodinny_dum", "dobry")),                   # another category's house type never votes; no active
+                                                  # advert states a condition, so every advert votes
+    (("dum", None, "dobry", True),
+     [("dum", None, "po_rekonstrukci", False), ("dum", None, "po_rekonstrukci", False)],
+     (None, "dobry")),                            # ended adverts do not outvote an active one
+])
+def test_the_house_type_and_the_condition_are_what_most_adverts_state(cur, canonical, others, chosen):
+    """#2574: neither follows the canonical advert alone. The house type is the one most adverts of the
+    property's category state, an ended advert too; the condition the one most ACTIVE adverts state."""
+    pid = _property(cur)
+    canon = _advert(cur, pid, source="sreality")
+    ads = [canon] + [_advert(cur, pid, source=source, active=fact[3])
+                     for source, fact in zip(("idnes", "realitymix"), others)]
+    for lid, (category, subtype, condition, _) in zip(ads, [canonical, *others]):
+        cur.execute("UPDATE listings SET category_main = %s, subtype = %s, condition = %s WHERE id = %s",
+                    (category, subtype, condition, lid))
+    assert _recomputed_canonical(cur, pid) == canon
+    cur.execute("SELECT subtype, condition FROM properties WHERE id = %s", (pid,))
+    assert cur.fetchone() == chosen
+
+
 def test_the_portal_lists_and_newest_ad_dates_follow_every_advert(cur):
     """MS19: both portal lists and each portal's newest-advert date follow a merge and a detach."""
     from toolkit.filter_registry import PORTAL_OPTIONS
