@@ -829,8 +829,8 @@ def test_a_later_pass_diffs_the_slice_and_names_why_each_entry_entered() -> None
     """A pass after the start keeps the members and diffs them in ONE statement: a leaver is stamped, one
     gone past SLICE_BLINK forgotten, an entrant upserted as entering now (so nothing that changed while a
     blinking property was out is told later), and an entry is told unless it blinked, is a member's merge
-    survivor or split off a member, or nothing about it changed since the last pass (less SLICE_SETTLE)
-    while its spec reads our own data (`_always_told`)."""
+    survivor or split off a member, or nothing about it changed since the last pass (less SLICE_SETTLE):
+    only a spec with a Velocity filter tells that one (`_always_told`)."""
     from api import notifications as nf
 
     sub_id = UUID("46a6005f-dc32-4d94-9ced-4d262b57ef6b")
@@ -848,7 +848,7 @@ def test_a_later_pass_diffs_the_slice_and_names_why_each_entry_entered() -> None
     assert ("members AS ( SELECT w.property_id, w.entered_at, w.left_at FROM watchdog_slice_members w "
             "WHERE w.subscription_id = %(subscription_id)s::uuid), ") in sql
     assert params["since"] == last - nf.SLICE_SETTLE and params["blink"] == "24 hours"
-    assert params["always_told"] is False, "a city-population bound reads our own data"
+    assert params["always_told"] is False, "no Velocity filter: an entry needs a reason"
     for part in (
         "UPDATE watchdog_slice_members w SET left_at = now() WHERE w.subscription_id = %(subscription_id)s::uuid "
         "AND w.left_at IS NULL AND NOT EXISTS (SELECT 1 FROM slice s WHERE s.property_id = w.property_id)",
@@ -875,22 +875,19 @@ def test_a_later_pass_diffs_the_slice_and_names_why_each_entry_entered() -> None
     assert "x.merged_at > %(since)s::timestamptz" in signal and "ll.resolved_at > %(since)s::timestamptz" in signal
 
 
-def test_every_entry_is_told_unless_the_spec_reads_our_own_data_alone() -> None:
-    """Ruling Q11: an entry nothing about the property explains is still a New match unless the spec uses a
-    filter on our own data (a city index or population, proximity, the rent map, the parked condition
-    levels); a Velocity filter makes every entry told again, since time passing brings a property in."""
+def test_an_entry_with_no_reason_is_told_only_by_a_spec_with_a_velocity_filter() -> None:
+    """#2574: an entry nothing about the property explains is no market event (the canonical ad switched, a
+    city index was revised), so it is not told. Ruling Q11's one exception stays: a Velocity filter, where
+    time passing brings a property in."""
     from api import notifications as nf
-    from toolkit.filter_registry import CATEGORY_CITY_QUALITY, CATEGORY_VELOCITY, REGISTRY
+    from toolkit.filter_registry import CATEGORY_VELOCITY, REGISTRY
 
-    assert nf._always_told(WatchdogFilterSpec(category_type="prodej", max_price_czk=5_000_000))
+    assert not nf._always_told(WatchdogFilterSpec(category_type="prodej", max_price_czk=5_000_000))
     assert not nf._always_told(WatchdogFilterSpec(min_mf_gross_yield_pct=4.0))
-    assert not nf._always_told(WatchdogFilterSpec(near_pop_5km_min=10_000))
+    assert not nf._always_told(WatchdogFilterSpec(subtype=["rodinny_dum"], min_area_m2=200))
     assert nf._always_told(WatchdogFilterSpec(min_mf_gross_yield_pct=4.0, price_change_count_min=2))
     spec_fields = set(WatchdogFilterSpec.model_fields)
-    assert {k for k, f in REGISTRY.items() if f.category == CATEGORY_CITY_QUALITY} & spec_fields \
-        <= nf._OUTSIDE_DATA_FIELDS
     assert nf._VELOCITY_FIELDS == {k for k, f in REGISTRY.items() if f.category == CATEGORY_VELOCITY} & spec_fields
-    assert nf._OUTSIDE_DATA_FIELDS <= spec_fields, "every name is a spec field"
 
 
 def test_a_pass_another_worker_holds_is_skipped() -> None:

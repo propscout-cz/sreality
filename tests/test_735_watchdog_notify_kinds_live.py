@@ -230,26 +230,26 @@ def test_a_return_within_the_day_is_silent_and_one_after_it_is_a_new_match(cur: 
     assert _new_matches(cur, sid, pid) == [(pid, "back", 5_000_000, None)]
 
 
-def test_an_entry_nothing_about_the_property_explains_is_told_unless_our_own_data_could_have(cur: Any,
-                                                                                              monkeypatch: Any) -> None:
+def test_an_entry_nothing_about_the_property_explains_is_told_only_by_a_velocity_spec(cur: Any,
+                                                                                       monkeypatch: Any) -> None:
     from api import notifications as nf
 
     acc = _account(cur)
     market = _watchdog(cur, acc, None)
-    ours = _watchdog(cur, acc, None, '{"category_type": "prodej", "min_area_m2": 10}')
-    # Stand for a filter on our own data (a city index, the rent map) on the second watchdog's spec.
-    monkeypatch.setattr(nf, "_always_told", lambda spec: spec.min_area_m2 is None)
+    velocity = _watchdog(cur, acc, None, '{"category_type": "prodej", "min_area_m2": 10}')
+    # Stand for a Velocity filter on the second watchdog's spec.
+    monkeypatch.setattr(nf, "_always_told", lambda spec: spec.min_area_m2 is not None)
     pid, lid = _old(cur, served=False)
     nf.match_once(cur.connection)
-    for sid in (market, ours):
+    for sid in (market, velocity):
         assert _members(cur, sid, pid) == {}, "unplaced: not served"
         _later_pass(cur, sid)
     # Placed long ago (a row a backfill writes): no change of the property's is newer than the last pass.
     _served(cur, pid, lid, datetime.now(timezone.utc) - timedelta(days=20))
     nf.match_once(cur.connection)
-    assert _members(cur, market, pid) == {pid: True} == _members(cur, ours, pid)
-    assert _new_matches(cur, market, pid) == [(pid, "other", 5_000_000, None)]
-    assert _new_matches(cur, ours, pid) == []
+    assert _members(cur, market, pid) == {pid: True} == _members(cur, velocity, pid)
+    assert _new_matches(cur, market, pid) == [], "no market event: a member, never told"
+    assert _new_matches(cur, velocity, pid) == [(pid, "other", 5_000_000, None)]
 
 
 def test_a_merge_survivor_of_a_member_takes_its_place_silently(cur: Any) -> None:
