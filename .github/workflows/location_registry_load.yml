@@ -22,7 +22,15 @@ name: "Location: RÚIAN registry load"
 # Required secrets: LOCATION_DB_DIRECT_URL (a direct 5432 URL) or SUPABASE_DB_SESSION_URL —
 # a registry load wants a session it owns, never the transaction pooler — plus the R2_*
 # vars, because the vintage archive (04 §C1.8) is what keeps a past registry_version
-# reproducible after ČÚZK rotates the directory.
+# reproducible after ČÚZK rotates the directory, and SUPABASE_DB_URL for the lease below.
+#
+# The load never runs beside the claim intake (2026-08-10: four heavy location lanes at once
+# dropped backends across the shared instance). The intake runs on the job runner, so a
+# GitHub group cannot reach it: the load's own main claims the `location-heavy` resource
+# through scraper.job_lease (`held_job`), waits as long as an intake run can hold it, and
+# exits 1 with nothing loaded if it never got it. The wait counts against this job's 6-hour
+# ceiling; a load it cuts stays staged and the next dispatch resumes it (W5, #2033, moves
+# the load to the runner).
 
 on:
   workflow_dispatch:
@@ -40,31 +48,12 @@ on:
   schedule:
     - cron: "0 10 1 * *"
 
-concurrency:
-  # OUTER, cross-lane: every heavy location batch lane (registry load, claim intake, the
-  # churn probe, the payload backfill/prune and both re-mine sweeps) shares
-  # ONE group so at most one of them runs at a time. The RESOLVE DRAIN left the group on
-  # 2026-09-10: it is latency-bound rather than instance-bound (11 small indexed reads and
-  # one projection write per listing, no COPY, no scan, no detoast), so it contributed
-  # least to the incident below and lost most to the queueing — the self-chaining archive
-  # sweeps starved it to zero ticks in three hours. See location_resolve.yml. On
-  # 2026-08-10 four of them ran concurrently against the shared 75 GB production instance
-  # and took the whole database with them — backends dropped ("SSL connection has been
-  # closed unexpectedly" plus one AdminShutdown), two lanes wedged mid-statement for hours,
-  # and the live Browse rebuild degraded to multi-minute DataFileReads. These lanes are IO
-  # hogs by construction (a 3 M-row COPY, per-unit PostGIS, a full-corpus raw_json scan),
-  # so they queue instead of competing. `cancel-in-progress: false` keeps the running lane;
-  # GitHub keeps one pending run per group and supersedes older pending ones, so a cadenced
-  # lane collapses to its newest tick rather than piling up.
-  group: location-batch
-  cancel-in-progress: false
-
 jobs:
   load:
     runs-on: ubuntu-latest
     concurrency:
-      # INNER, per-lane: the design's `registry group`, exclusive — two loads of the same
-      # registry_version must never overlap. Kept under the outer group, not replaced by it.
+      # The design's `registry group`, exclusive — two loads of the same registry_version
+      # must never overlap; a second dispatch queues here rather than waiting on the lease.
       group: location-registry
       cancel-in-progress: false
     timeout-minutes: 360

@@ -29,6 +29,7 @@ import pytest
 
 from location_data import claims_intake
 from location_data.claims_intake import run
+from scraper import stop
 from tests.location_data.claim_intake_fixtures import (
     SREALITY_POST_CUTOVER,
     entries_for,
@@ -38,9 +39,10 @@ BASE_TS = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
 
 
 class _Listing:
-    def __init__(self, listing_id: int, last_seen_at: datetime) -> None:
+    def __init__(self, listing_id: int, last_seen_at: datetime, source: str = "sreality") -> None:
         self.id = listing_id
         self.last_seen_at = last_seen_at
+        self.source = source
 
     def record(self, snapshot_cursor: int | None) -> tuple[Any, ...]:
         # The selections' column order, verbatim: identity, payload, sighting, the two geom
@@ -48,7 +50,7 @@ class _Listing:
         # unmined, page_kind, first seen), the portal's active contract version and the
         # snapshot cursor — the LAST column since W1-c deleted the legacy-column tail. This
         # listing has no stored body.
-        return (self.id, "sreality", f"n{self.id}", dict(SREALITY_POST_CUTOVER),
+        return (self.id, self.source, f"n{self.id}", dict(SREALITY_POST_CUTOVER),
                 self.last_seen_at,
                 None, None, None, None, 1, snapshot_cursor)
 
@@ -166,6 +168,23 @@ class _Conn:
                 cur._result = [(last["outcome"], last["cursor_after_id"],
                                 last["cursor_after_ts"])]
             return
+        if "DISTINCT ON (source)" in sql:
+            # The walk an incremental run carries on: each source's newest finished full row, then the newest of
+            # those still unfinished. A source's older stop is never picked over its own newer `ok`.
+            newest: dict[str | None, dict[str, Any]] = {}
+            for b in self.batches:
+                if (b.get("lane", claims_intake.LANE) == params["lane"] and b["scan_mode"] == "full"
+                        and b["resumable"] and b["cursor_after_id"] is not None
+                        and b["outcome"] in ("ok", "stopped", "failed")
+                        and (params["source"] is None or b["source"] == params["source"])):
+                    kept = newest.get(b["source"])
+                    if kept is None or (b["started_at"], b["id"]) > (kept["started_at"], kept["id"]):
+                        newest[b["source"]] = b
+            unfinished = [b for b in newest.values() if b["outcome"] in ("stopped", "failed")]
+            if unfinished:
+                last = max(unfinished, key=lambda b: (b["started_at"], b["id"]))
+                cur._result = [(last["source"], last["cursor_after_id"])]
+            return
         if "FROM listing_snapshots s" in sql or "FROM listings l" in sql:
             cur._result = self._scan(sql, params)
             self.seen.extend(r[0] for r in cur._result)
@@ -187,16 +206,17 @@ class _Conn:
         return [row for row in self.snapshots if row[2] < self.now - lag]
 
     def _scan(self, sql: str, params: dict[str, Any]) -> list[tuple[Any, ...]]:
+        by_id = {row.id: row for row in self.listings
+                 if params["source"] is None or row.source == params["source"]}
         if "FROM listing_snapshots s" in sql:
             window = [(sid, lid) for sid, lid, _ in self._visible_snapshots(params)
                       if sid > params["after_id"]][:params["batch_size"]]
             newest: dict[int, int] = {}
             for sid, lid in window:
                 newest[lid] = max(newest.get(lid, 0), sid)
-            by_id = {row.id: row for row in self.listings}
             return [by_id[lid].record(sid)
                     for lid, sid in sorted(newest.items()) if lid in by_id]
-        rows = [r for r in sorted(self.listings, key=lambda r: r.id)
+        rows = [r for r in sorted(by_id.values(), key=lambda r: r.id)
                 if r.id > params["after_id"]]
         return [r.record(None) for r in rows[:params["batch_size"]]]
 
@@ -248,6 +268,30 @@ def test_a_budget_stopped_full_run_is_stamped_stopped_and_resumes_where_it_left_
     fourth = _run(conn, limit=10)
     assert fourth["resumed_from_id"] == 0
     assert conn.seen[-10:] == list(range(1, 11))
+
+
+def test_a_stop_ends_the_scan_after_the_batch_in_hand_and_stamps_where_it_got(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2028: the job runner SIGTERMs its child at every deploy (50+ a week, gate #2123) and SIGKILLs it 90 s later.
+    A run that walked on was killed with its batch row 'running', which no resume reads, so the next run redid it all.
+    It stops between batches as a spent budget does: the next run resumes at the batch it committed last."""
+    conn = _Conn([_Listing(i, BASE_TS) for i in range(1, 26)])
+    scan = conn._scan
+
+    def scan_then_stop(sql: str, params: dict[str, Any]) -> list[tuple[Any, ...]]:
+        stop.EVENT.set()
+        return scan(sql, params)
+
+    monkeypatch.setattr(conn, "_scan", scan_then_stop)
+    try:
+        stats = _run(conn)
+    finally:
+        stop.reset()
+
+    assert (stats["outcome"], stats["stopped_early"]) == ("stopped", True)
+    assert conn.seen == list(range(1, 11))
+    assert (conn.batches[-1]["outcome"], conn.batches[-1]["cursor_after_id"]) == ("stopped", 10)
 
 
 def test_a_failed_full_run_is_resumed_from_and_never_resets_the_walk_to_zero():
@@ -497,6 +541,32 @@ def test_an_incremental_run_never_starts_a_full_walk_of_its_own():
     assert quiet["reached_end"] is True
     assert conn.seen == []
     assert len(conn.batches) == batches_before + 1, "one row, no full row opened"
+
+
+def test_an_unscoped_run_carries_on_a_one_portal_walk_in_that_portal_s_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#2028. A one-portal re-mine (`--mode full --source X`, owed after every activation or retract) is a request on
+    the job runner, and its exit 75 re-dues the registry's argv: unscoped and incremental. The workflow's chain carried
+    the source forward; the scheduled run carries the walk on instead, scoped to that portal and in that portal's row,
+    so the hop after it resumes there and no other portal's listing is opened."""
+    monkeypatch.setattr(claims_intake, "load_entries",
+                        lambda conn: {s: entries_for("sreality") for s in claims_intake.SOURCES})
+    conn = _Conn([_Listing(i, BASE_TS, "sreality" if i <= 20 else "bazos") for i in range(1, 26)])
+    assert _run(conn, mode="full", source="sreality", limit=10)["outcome"] == "stopped"
+    conn.seen.clear()
+
+    carried = _run(conn, mode="incremental", source=None, batch_size=10)
+
+    assert carried["full_walk_continued"] is True and carried["full_walk_cursor"] == 10
+    assert conn.seen == list(range(11, 21)), "that portal's walk from where it stopped, and nothing else"
+    full_row = conn.batches[-1]
+    assert (full_row["source"], full_row["scan_mode"], full_row["outcome"], full_row["cursor_after_id"]) == (
+        "sreality", "full", "ok", 20)
+
+    conn.seen.clear()
+    after = _run(conn, mode="incremental", source=None)
+    assert after["full_walk_continued"] is False and conn.seen == [], "a finished walk is never reopened at an older stop"
 
 
 def test_a_run_with_no_room_for_another_batch_hands_off_nothing(
