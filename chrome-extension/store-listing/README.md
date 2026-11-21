@@ -11,7 +11,7 @@ https://propscout.cz/soukromi must keep matching the build).
 
 | Field | Value |
 | --- | --- |
-| Item name | from the manifest: **PropScout.cz — výnos & pipeline** (31 of 75 characters; not editable in the dashboard) |
+| Item name | from the manifest: **PropScout.cz** (12 of 75 characters; not editable in the dashboard) |
 | Summary | from the manifest `description` (130 of 132 characters; not editable in the dashboard) |
 | Language | Čeština (Czech). The package has no `_locales`, so the manifest's Czech texts are the listing's. |
 | Category | **Workflow & Planning** |
@@ -50,7 +50,7 @@ Show the signed-in user's own PropScout.cz data next to the property ad they are
 
 `storage`
 ```
-Keeps the user's PropScout.cz sign-in session (access and refresh token) and two panel preferences (whether the panel is folded, a dismissed hint) in chrome.storage on the user's device, so the user stays signed in and the panel keeps its state between pages.
+Keeps the user's PropScout.cz sign-in session (access and refresh token) and two display preferences (how dismissed ads are drawn on search pages, where the user left the page tab that opens the panel) in chrome.storage on the user's device, so the user stays signed in and the extension keeps these choices between pages.
 ```
 
 `identity`
@@ -114,8 +114,7 @@ Sign-in is Google only. 1) Install, open any flat-for-sale ad on www.sreality.cz
 | `screenshot-1-ad-panel.png` | 1280×800 | an ad on bezrealitky.cz with the side panel: price history across 6 portals, MF yield, Moje |
 | `screenshot-2-search.png` | 1280×800 | a bezrealitky.cz search page: the card icons and the "Výnos MF" badge |
 | `screenshot-3-sign-in.png` | 1280×800 | the sign-in card with the data disclosure |
-| `promo-tile-440x280.png` | 440×280 | small promo tile (optional, but items without one are listed after items with one) |
-| `icon-128-padded.png` | 128×128 | optional: the store wants 96×96 artwork with 16 px transparent padding; today's `icon-128.png` fills the square. Swapping it changes the package icon too (a separate, operator-approved PR). |
+| `promo-tile-440x280.png` | 440×280 | small promo tile (optional, but items without one are listed after items with one); drawn by `frontend/scripts/make-icons.py` |
 
 How they were made (2026-11-01): the build from #2277 loaded unpacked in headless Chromium, signed in as the
 non-admin smoke-test account (no pipeline, collections or notes, so no private data); public ads only. The side panel

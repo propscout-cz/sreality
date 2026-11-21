@@ -125,6 +125,15 @@ body {
   font-size: 12px; line-height: 16px; font-weight: 500;
   color: var(--color-ink-2); background: var(--color-inset);
 }
+.links { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-height: 24px; }
+.link-out {
+  height: 24px; padding: 0 8px; border-radius: var(--radius-xs);
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap;
+  font-size: 12px; line-height: 16px; font-weight: 500; text-decoration: none;
+  color: var(--color-ink-2); background: var(--color-inset);
+}
+.link-out:hover { color: var(--color-ink); }
+.link-out svg.i { width: 13px; height: 13px; }
 .pricing { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; }
 .price-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .price {

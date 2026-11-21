@@ -11,8 +11,8 @@
  *   - the extension side panel's wordmark and page title (chrome-extension/src/frame.ts,
  *     sidepanel.ts), the edge tab's (edge_tab.ts) and the search-page notice's
  *     (index_overlay.ts)
- *   - the extension's chrome://extensions name and toolbar icon title (manifest, built
- *     from EXTENSION_NAME and APP_NAME by chrome-extension/vite.config.ts)
+ *   - the extension's name (chrome://extensions, the store, the side panel's own strip) and
+ *     toolbar icon title (manifest, built from APP_NAME by chrome-extension/vite.config.ts)
  * and is COPIED, by hand, into the installed app's name and home-screen label
  * (`public/manifest.webmanifest` is JSON, so it can't import this file;
  * lib/manifest.test.ts fails when the copy drifts).
@@ -27,6 +27,3 @@ export const APP_NAME = 'PropScout.cz';
 
 /** Abbreviation for tight spots (the phone shell's header fallback); the tab title carries no prefix. */
 export const APP_SHORT = 'PS';
-
-/** chrome://extensions display name — brand + what the panel does. */
-export const EXTENSION_NAME = `${APP_NAME} — výnos & pipeline`;
