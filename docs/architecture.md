@@ -3227,8 +3227,8 @@ renumber.** Navigate by area:
     `watchdog_slice_members`, and each pass diffs it (`_slice_pass`, one transaction per watchdog holding its
     `watchdog_slices` row FOR UPDATE SKIP LOCKED, so a deploy overlap never tells one entry twice). An entry is told with
     its `match_reason` (listed, price, portal, changed, other: what changed about the property since the last pass),
-    except a return to the market (`properties.back_on_market_at` newer than the last pass: Back on the market, its own
-    kind since migration 754, never a New match too), a return within 24 h of leaving (a blink
+    or, on its return to the market (`properties.back_on_market_at` newer than the last pass), as Back on the market,
+    its own kind since migration 754 and never a New match too; neither is told for a return within 24 h of leaving (a blink
     re-enters silently, and nothing that changed while it was out is told), a member's merge survivor, a property an ad
     was detached to from a member within the day (a split or an engine undo), and an entry nothing about the property
     explains (the canonical ad switched, a city index or the rent map was revised: no market event, #2574) unless the
@@ -3249,8 +3249,10 @@ renumber.** Navigate by area:
     market-wide read held the events lock SHARED 11–25 s a pass, past a merge's 5 s lock_timeout), a watchdog by joining its spec to
     each event directly (from `active_since`; behind a CTE of matching properties the planner scanned a broad
     watchdog's cohort once per step). `inactive` waits out 24 h gone, and
-    `reactivated` reads ONE fact for both producers, `properties.back_on_market_at`, which migration 754's trigger stamps only
-    on a return after 24 h or more away (`left_market_at`, stamped on leaving), on the spec for a watchdog (a
+    `reactivated` reads ONE fact for every producer, `properties.back_on_market_at`, which migration 754's trigger stamps only
+    on a return after 24 h or more away (`left_market_at`, stamped on leaving) that is not a merge bringing in a
+    published property; a collection and a watchdog with no slice read it through `_reactivated_sql`, a watchdog
+    telling `new` as the property re-enters its slice, under the slice's merge and split exemptions (a
     portal blink sends neither Left the market nor Back on the market). Every row writes `event_ref` (the discriminator within
     source, kind and property: snapshot id, inactive epoch, for `reactivated` the epoch of the
     return, introducing listing, dashboard id, pipeline mode) and a share its

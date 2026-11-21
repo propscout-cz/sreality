@@ -216,6 +216,53 @@ def test_a_member_is_told_a_price_drop_after_it_entered(cur: Any) -> None:
     assert _told(cur, pid) == [(sid, "price_drop", str(down))]
 
 
+@pytest.mark.parametrize(("published", "returned"), [(True, False), (False, True)])
+def test_a_merge_bringing_in_a_published_property_is_no_return(cur: Any, published: bool, returned: bool) -> None:
+    """Review of #2580: a survivor long off the market flips active when a live property is merged into it. If
+    that property was published, the unit never left the market in our records (whoever follows it was told
+    there), so nothing is stamped; an ad the engine merged before it was ever published IS the unit's return."""
+    survivor, retired = _property(cur), _property(cur)
+    cur.execute("UPDATE properties SET is_active = false WHERE id = %s", (survivor,))
+    cur.execute("UPDATE properties SET left_market_at = now() - interval '90 days' WHERE id = %s", (survivor,))
+    cur.execute("UPDATE properties SET status = 'merged_away', merged_into = %s, merged_at = now(), is_active = false, "
+                "settled_at = CASE WHEN %s THEN now() - interval '3 days' END WHERE id = %s",
+                (survivor, published, retired))
+    cur.execute("UPDATE properties SET is_active = true WHERE id = %s "
+                "RETURNING back_on_market_at IS NOT NULL, left_market_at", (survivor,))
+    assert cur.fetchone() == (returned, None)
+
+
+def test_a_property_born_off_the_market_is_stamped_as_left(cur: Any) -> None:
+    """A record born with no active ad (a split's, an ad first fetched gone) left now, so its first active ad
+    within the day is no return."""
+    cur.execute("INSERT INTO properties (is_active) VALUES (false) RETURNING id, left_market_at = now()")
+    pid, stamped = cur.fetchone()
+    assert stamped is True
+    cur.execute("UPDATE properties SET is_active = true WHERE id = %s RETURNING back_on_market_at", (pid,))
+    assert cur.fetchone() == (None,)
+    cur.execute("INSERT INTO properties (is_active) VALUES (true) RETURNING left_market_at")
+    assert cur.fetchone() == (None,)
+
+
+def test_a_watchdog_with_no_slice_is_told_a_return_on_its_spec(cur: Any) -> None:
+    from api import notifications as nf
+
+    sid = _watchdog(cur, _account(cur), ["price_drop", "reactivated"])
+    pid, lid = _old(cur)
+    cur.execute("UPDATE listings SET is_active = false, inactive_at = now() WHERE id = %s", (lid,))
+    _recompute(cur, pid)
+    cur.execute("UPDATE properties SET left_market_at = now() - interval '2 days' WHERE id = %s", (pid,))
+    cur.execute("UPDATE listings SET is_active = true, inactive_at = NULL WHERE id = %s", (lid,))
+    _recompute(cur, pid)
+    cur.execute("UPDATE properties SET back_on_market_at = now() + interval '1 second' WHERE id = %s "
+                "RETURNING floor(extract(epoch FROM back_on_market_at))::bigint::text", (pid,))
+    back = cur.fetchone()[0]
+    nf.match_once(cur.connection)
+    nf.match_lifecycle_once(cur.connection)
+    nf.match_lifecycle_once(cur.connection)
+    assert _told(cur, pid) == [(sid, "reactivated", back)]
+
+
 def test_a_return_within_the_day_is_silent_and_one_after_it_is_back_on_the_market_never_a_new_match(
         cur: Any) -> None:
     from api import notifications as nf

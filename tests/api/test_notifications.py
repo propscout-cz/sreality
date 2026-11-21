@@ -861,8 +861,11 @@ def test_a_later_pass_diffs_the_slice_and_names_why_each_entry_entered() -> None
         "DO UPDATE SET entered_at = excluded.entered_at, left_at = NULL",
         "WHERE NOT e.blinked AND NOT EXISTS (SELECT 1 FROM members w JOIN properties x ON x.id = w.property_id "
         "WHERE x.merged_into = e.property_id",
-        "AND (sig.reason IS NOT NULL OR %(always_told)s)",
-        f"{nf._ENTRY_REF}, coalesce(sig.reason, 'other')",
+        "AND CASE WHEN back.returned THEN %(tells_return)s ELSE sig.reason IS NOT NULL OR %(always_told)s END",
+        "CASE WHEN back.returned THEN 'reactivated' ELSE 'new' END",
+        f"CASE WHEN back.returned THEN floor(extract(epoch FROM p.back_on_market_at))::bigint::text "
+        f"ELSE {nf._ENTRY_REF} END, CASE WHEN NOT back.returned THEN coalesce(sig.reason, 'other') END",
+        "(SELECT coalesce(p.back_on_market_at > %(since)s::timestamptz, false) AS returned) back",
         "UPDATE watchdog_slices SET sliced_at = now()",
     ):
         assert part in sql, part
@@ -871,7 +874,7 @@ def test_a_later_pass_diffs_the_slice_and_names_why_each_entry_entered() -> None
     order = [signal.index(f"THEN '{reason}'") for reason in nf.MATCH_REASONS[:-1] if reason != "back"]
     assert order == sorted(order)
     assert "'back'" not in signal, "a return is Back on the market, its own kind (migration 754)"
-    assert "AND NOT coalesce(p.back_on_market_at > %(since)s::timestamptz, false)" in sql, "never a New match too"
+    assert params["tells_return"] is ("reactivated" in _DEFAULT_KINDS), "one alert, named by its cause"
     assert "WHEN p.settled_at > now() - %(new_window)s::interval OR " in signal, "new, whatever let it in late"
     assert "x.merged_at > %(since)s::timestamptz" in signal and "ll.resolved_at > %(since)s::timestamptz" in signal
 
@@ -1231,8 +1234,8 @@ def test_every_producer_writes_only_the_columns_the_migrations_keep() -> None:
     statements = [s for s, _ in conn.executed if "INSERT INTO notification_dispatches" in s]
     statements.append(" ".join(shares._INSERT_SHARE_DISPATCH_SQL.split()))
     columns = [re.search(r"INSERT INTO notification_dispatches \(([^)]*)\)", s) for s in statements]
-    # The slice's 1, price's 2 (watchdog, collections), lifecycle's 3 + 3, the share's 1.
-    assert len(columns) == 10 and all(columns), statements
+    # The slice's 1, price's 2 (watchdog, collections), lifecycle's 2 + 3, the share's 1.
+    assert len(columns) == 9 and all(columns), statements
     for match in columns:
         named = {c.strip() for c in match.group(1).split(",")}
         assert named <= _DISPATCH_COLUMNS, named - _DISPATCH_COLUMNS
@@ -1475,12 +1478,16 @@ def test_back_on_the_market_is_one_fact_for_both_producers() -> None:
         assert "floor(extract(epoch FROM e.back_on_market_at))::bigint::text" in sql
         assert sql.count("notification_dispatches") == 1, "the INSERT alone"
     assert nf._watchdog_statements(["reactivated"], nf.LIFECYCLE_KINDS) == [nf._WATCHDOG_REACTIVATED_SQL]
-    assert nf._watchdog_statements(["new", "reactivated"], nf.LIFECYCLE_KINDS) == [nf._WATCHDOG_REACTIVATED_SQL], \
-        "on the spec, never the slice: the property re-entered it after the return"
+    assert nf._watchdog_statements(["new", "reactivated"], nf.LIFECYCLE_KINDS) == [], \
+        "a watchdog with a slice tells a return as the property re-enters it, under the slice's exemptions"
     sql = " ".join((MIGRATIONS / "754_back_on_market_one_fact.sql").read_text().split())
     assert "old.left_market_at <= now() - interval '24 hours'" in sql and nf.INACTIVE_DWELL == "24 hours"
-    assert ("when (old.is_active is distinct from new.is_active and old.status = 'active' "
-            "and new.status = 'active')") in sql
+    assert ("create or replace trigger properties_back_on_market_at before update of is_active on "
+            "public.properties for each row when (old.is_active is distinct from new.is_active "
+            "and old.status = 'active' and new.status = 'active')") in sql
+    assert "drop trigger" not in sql, "replaced in one statement: properties is never without it"
+    assert ("where x.merged_into = new.id and x.merged_at = now() and x.settled_at is not null") in sql, \
+        "a merge bringing in a published property is no return"
     watchdog, collection = sql.split("alter table public.collections drop constraint", 1)
     allowed = watchdog.split("notify_kinds <@ array[", 1)[1].split("]", 1)[0]
     assert tuple(re.findall(r"'(\w+)'", allowed)) == nf.WATCHDOG_KINDS
@@ -1488,7 +1495,11 @@ def test_back_on_the_market_is_one_fact_for_both_producers() -> None:
     allowed = collection.split("notify_kinds <@ array[", 1)[1].split("]", 1)[0]
     assert tuple(re.findall(r"'(\w+)'", allowed)) == nf.COLLECTION_KINDS
     assert "'inactive' = any" not in collection.split("update public.notification_subscriptions", 1)[0]
-    assert "update public.properties" not in sql and "delete from" not in sql, "nothing stored is erased"
+    fill = sql.split("update public.properties p", 1)[1].split(";", 1)[0]
+    assert "set left_market_at = g.left_at" in fill and "is_active =" not in fill.split("where", 1)[0]
+    assert "p.left_market_at is null" in fill and "delete from" not in sql, "a fill of NULLs: nothing is erased"
+    kinds = sql.split("do $kinds$", 1)[1].split("$kinds$", 1)[0]
+    assert "set active_since = w.active_since" in kinds, "no watchdog restarts"
 
 
 def test_detection_never_consults_dismissals() -> None:

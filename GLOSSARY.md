@@ -452,9 +452,9 @@ _Avoid_: change kind, alert kind, event (alone)
 
 **New match** (UI: "Nová shoda"):
 A property event: a property enters a watchdog's slice because something about it changed (newly
-listed, its price, back on the market, a new ad, an ad's facts, its place) or, for a watchdog with a velocity
+listed, its price, a new ad, an ad's facts, its place) or, for a watchdog with a velocity
 filter, because time passed. It names why; a property that leaves and later re-enters is a new match
-again.
+again, except on its return to the market, which is back on the market.
 _Avoid_: new listing, new ad (for this)
 
 **Left the market** (UI: "Opustilo trh"):
