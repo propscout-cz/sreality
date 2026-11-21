@@ -80,11 +80,35 @@ describe('<Login> already-authed deep link', () => {
   });
 });
 
+describe('<Login> a waitlist invitation', () => {
+  it('opens on account creation, in Czech', () => {
+    asAuth(null);
+    render(
+      <MemoryRouter initialEntries={['/login?signup=1']}>
+        <Routes><Route path="/login" element={<Login />} /></Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('heading', { name: 'Vytvořit účet' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Pokračovat přes Google' })).toBeTruthy();
+  });
+
+  it('explains a Google sign-in the invitation check refused, and drops it from the way back', async () => {
+    asAuth(null);
+    const message = 'Tato adresa zatím nemá pozvánku. Přidejte se na čekací listinu na propscout.cz.';
+    renderLogin({ from: { pathname: '/browse', search: `?error=access_denied&error_description=${encodeURIComponent(message)}`, hash: '' } });
+    expect(screen.getByText(message)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('E-mail'), { target: { value: 'a@b.cz' } });
+    fireEvent.change(screen.getByLabelText('Heslo'), { target: { value: 'pw' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Přihlásit se' }));
+    expect(await screen.findByTestId('landed')).toHaveTextContent(/^\/$/);
+  });
+});
+
 describe('<Login> post-sign-in redirect', () => {
   async function signIn() {
-    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'a@b.cz' } });
-    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'pw' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    fireEvent.change(screen.getByLabelText('E-mail'), { target: { value: 'a@b.cz' } });
+    fireEvent.change(screen.getByLabelText('Heslo'), { target: { value: 'pw' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Přihlásit se' }));
     await waitFor(() => expect(signInWithPassword).toHaveBeenCalled());
   }
 
