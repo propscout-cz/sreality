@@ -148,22 +148,23 @@ describe('<CreateWatchdogModal> notify me about', () => {
     return vi.mocked(createWatchdogSubscription).mock.calls.at(-1)![0].notify_kinds;
   };
 
-  it('starts on new matches and price drops, the default every watchdog told before', async () => {
+  it('starts on new matches, price drops and returns, the default every watchdog told before', async () => {
     renderHost();
     open();
     expect(kind('New match')).toHaveAttribute('aria-pressed', 'true');
     expect(kind('Price drop')).toHaveAttribute('aria-pressed', 'true');
+    expect(kind('Back on the market')).toHaveAttribute('aria-pressed', 'true');
     expect(kind('Left the market')).toHaveAttribute('aria-pressed', 'false');
     create();
-    expect(await lastSavedKinds()).toEqual(['new', 'price_drop']);
+    expect(await lastSavedKinds()).toEqual(['new', 'price_drop', 'reactivated']);
   });
 
-  it('saves the events picked, and offers no Back on the market: a return is a New match', async () => {
+  it('saves the events picked, Back on the market switched on its own', async () => {
     renderHost();
     open();
     fireEvent.click(kind('Price drop'));
     fireEvent.click(kind('Left the market'));
-    expect(screen.queryByRole('button', { name: 'Back on the market' })).toBeNull();
+    fireEvent.click(kind('Back on the market'));
     create();
     expect(await lastSavedKinds()).toEqual(['new', 'inactive']);
   });
@@ -173,6 +174,7 @@ describe('<CreateWatchdogModal> notify me about', () => {
     open();
     fireEvent.click(kind('New match'));
     fireEvent.click(kind('Price drop'));
+    fireEvent.click(kind('Back on the market'));
     expect(screen.getByRole('alert')).toHaveTextContent(NOTIFY_KINDS_EMPTY);
     expect(screen.getByRole('button', { name: 'Create watchdog' })).toBeDisabled();
   });

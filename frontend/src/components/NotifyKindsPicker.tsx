@@ -1,7 +1,5 @@
 /* "Notify me about": the property events a watchdog or a watched collection tells (migration 735). A
- * pick-several, so chips (system.md § Option groups), drawn as MultiselectChips draws them, with the
- * one click rule of lib/notifyKinds (`toggleNotifyKind`: a collection's Back on the market comes with
- * its Left the market).
+ * pick-several, so chips (system.md § Option groups), drawn as MultiselectChips draws them.
  * The words are the feed's own labels, so the chip a user turned on reads like the alerts it sends.
  * An empty set tells nothing: the hosting form refuses to save it, and this says why. */
 import { PickButton } from '@/components/controls';
@@ -22,16 +20,12 @@ export default function NotifyKindsPicker<K extends NotifyKind = WatchdogKind>({
   value: ReadonlyArray<K>;
   onChange: (next: K[]) => void;
   labelledBy: string;
-  /* The kinds this source can tell, in stored order: a watchdog's five by default. */
+  /* The kinds this source can tell, in stored order: a watchdog's six by default. */
   kinds?: ReadonlyArray<{ kind: K; hint: string }>;
-  /* Whose properties the events are about, the helper line's first sentence. */
+  /* Whose properties the events are about: the helper line. */
   about?: string;
   disabled?: boolean;
 }) {
-  /* A collection's Back on the market comes with its Left the market (toggleNotifyKind). */
-  const helper = kinds.some((k) => k.kind === 'reactivated')
-    ? `${about} Back on the market comes with Left the market.`
-    : about;
   return (
     <div>
       <div role="group" aria-labelledby={labelledBy} className="flex flex-wrap gap-1">
@@ -53,7 +47,7 @@ export default function NotifyKindsPicker<K extends NotifyKind = WatchdogKind>({
         className={`mt-1.5 text-[0.75rem] ${value.length ? 'text-[var(--color-ink-3)]' : 'text-[var(--color-brick)]'}`}
         role={value.length ? undefined : 'alert'}
       >
-        {value.length ? helper : NOTIFY_KINDS_EMPTY}
+        {value.length ? about : NOTIFY_KINDS_EMPTY}
       </p>
     </div>
   );

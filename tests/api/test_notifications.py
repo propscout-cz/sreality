@@ -861,16 +861,22 @@ def test_a_later_pass_diffs_the_slice_and_names_why_each_entry_entered() -> None
         "DO UPDATE SET entered_at = excluded.entered_at, left_at = NULL",
         "WHERE NOT e.blinked AND NOT EXISTS (SELECT 1 FROM members w JOIN properties x ON x.id = w.property_id "
         "WHERE x.merged_into = e.property_id",
-        "AND (sig.reason IS NOT NULL OR %(always_told)s)",
-        f"{nf._ENTRY_REF}, coalesce(sig.reason, 'other')",
+        "AND CASE WHEN back.told THEN true WHEN back.returned THEN coalesce(sig.reason = 'price', false) "
+        "ELSE sig.reason IS NOT NULL OR %(always_told)s END",
+        "CASE WHEN back.told THEN 'reactivated' ELSE 'new' END",
+        f"CASE WHEN back.told THEN floor(extract(epoch FROM p.back_on_market_at))::bigint::text "
+        f"ELSE {nf._ENTRY_REF} END, CASE WHEN NOT back.told THEN coalesce(sig.reason, 'other') END",
+        "(SELECT r.returned, r.returned AND %(tells_return)s AS told FROM "
+        "(SELECT coalesce(p.back_on_market_at > %(since)s::timestamptz, false) AS returned) r) back",
         "UPDATE watchdog_slices SET sliced_at = now()",
     ):
         assert part in sql, part
     # The reasons, in MATCH_REASONS order, each of a change after `since`.
     signal = " ".join(nf._ENTRY_SIGNAL.split())
-    order = [signal.index(f"THEN '{reason}'") for reason in nf.MATCH_REASONS[:-1]]
+    order = [signal.index(f"THEN '{reason}'") for reason in nf.MATCH_REASONS[:-1] if reason != "back"]
     assert order == sorted(order)
-    assert "p.back_on_market_at > %(since)s::timestamptz THEN 'back'" in signal
+    assert "'back'" not in signal, "a return is Back on the market, its own kind (migration 754)"
+    assert params["tells_return"] is ("reactivated" in _DEFAULT_KINDS), "one alert, named by its cause"
     assert "WHEN p.settled_at > now() - %(new_window)s::interval OR " in signal, "new, whatever let it in late"
     assert "x.merged_at > %(since)s::timestamptz" in signal and "ll.resolved_at > %(since)s::timestamptz" in signal
 
@@ -932,7 +938,7 @@ def test_lifecycle_noop_when_nothing_monitored_and_no_watchdog_tells_it() -> Non
         "INSERT INTO notification_dispatches" in s for s, _ in conn.executed
     )
     subs_params = next(p for s, p in conn.executed if "FROM notification_subscriptions" in s)
-    assert subs_params == (["inactive", "new_source"],), "a watchdog tells a return as a New match"
+    assert subs_params == (["inactive", "reactivated", "new_source"],)
 
 
 def test_collection_monitor_emits_the_five_clean_kinds() -> None:
@@ -986,12 +992,12 @@ def test_new_source_names_one_introducing_ad_on_every_pass() -> None:
         assert "count(DISTINCT" not in new_source
 
 
-# Each source, and the detectors rendered for it: a watchdog tells a return as a New match, so it has no
-# Back on the market; one telling 'new' reads its slice for the price and new-portal kinds, and its Left the
-# market stays on the spec (a property leaving the market leaves the slice with it).
+# Each source, and the detectors rendered for it: a watchdog telling 'new' reads its slice for the price and
+# new-portal kinds, and its Left the market and Back on the market stay on the spec (a property leaving the
+# market leaves the slice with it, and re-enters on its return).
 _SOURCE_DETECTORS = {
     "MONITOR": ("PRICE", "INACTIVE", "REACTIVATED", "NEW_SOURCE"),
-    "WATCHDOG": ("PRICE", "INACTIVE", "NEW_SOURCE"),
+    "WATCHDOG": ("PRICE", "INACTIVE", "REACTIVATED", "NEW_SOURCE"),
     "WATCHDOG_SLICE": ("PRICE", "NEW_SOURCE"),
 }
 
@@ -1001,9 +1007,9 @@ def test_every_detector_is_one_definition_gated_on_its_sources_since(source: str
     """Each kind is ONE detector rendered for every source: the statements differ only in the
     source's own text (its CTE, its join, its column and kind). Each fires only for changes
     AFTER the source began watching (`m.since`: a collection's greatest(added_at,
-    monitoring_enabled_at), a watchdog's active_since, a slice member's entry), reactivated
-    through the inactive dispatch it answers, which must itself postdate it. 'inactive' also
-    waits out the delist dwell (F14): a blink sends neither Left the market nor Back on the market."""
+    monitoring_enabled_at), a watchdog's active_since, a slice member's entry). 'inactive' waits
+    out the delist dwell (F14) and 'reactivated' reads a return the trigger stamps only after the same
+    dwell (migration 754): a blink sends neither Left the market nor Back on the market."""
     from api import notifications as nf
 
     renders = {"PRICE": nf._price_sql, "INACTIVE": nf._inactive_sql, "REACTIVATED": nf._reactivated_sql,
@@ -1016,7 +1022,8 @@ def test_every_detector_is_one_definition_gated_on_its_sources_since(source: str
         assert "max(g.inactive_at) < now() - %(inactive_dwell)s::interval" in sql["INACTIVE"]
         assert "g.inactive_at > now() - %(monitor_window)s::interval" in sql["INACTIVE"]
     if "REACTIVATED" in sql:
-        assert "WHERE m.source_id = e.told_source AND e.told_at > m.since" in sql["REACTIVATED"]
+        assert "WHERE e.back_on_market_at > m.since" in sql["REACTIVATED"]
+        assert "b.back_on_market_at > now() - %(monitor_window)s::interval" in sql["REACTIVATED"]
     # Each fires only for a kind its source tells (migration 735), from the one `m.kinds`.
     assert "CASE WHEN e.price_czk < e.prev_price_czk THEN 'price_drop' ELSE 'price_rise' END = ANY(m.kinds)" \
         in sql["PRICE"]
@@ -1061,7 +1068,8 @@ def test_a_source_with_members_reads_only_their_delistings_and_new_portals() -> 
         assert (f"AND l.property_id {narrows}" in window) is narrowed, source.ctes
         assert (f"AND g.property_id {narrows}" in group) is narrowed, source.ctes
         assert portal.count(narrows) == gone.count(narrows) == int(narrowed), "the events only, a semi-join"
-        assert narrows not in nf._price_sql(source) + nf._reactivated_sql(source)
+        assert narrows not in nf._price_sql(source)
+        assert (f"AND b.id {narrows}" in " ".join(nf._reactivated_sql(source).split())) is narrowed
 
 
 def test_a_watchdog_tells_only_the_kinds_it_is_set_to() -> None:
@@ -1095,22 +1103,22 @@ def test_a_watchdog_tells_only_the_kinds_it_is_set_to() -> None:
     assert "canonical_steps" in price and "watchdog_slice_members" in price
     assert "'inactive'" in gone and "watchdog_slice_members" not in gone
     assert "'new_source'" in portal and "watchdog_slice_members" in portal
-    assert not any("'reactivated'" in s for s, _ in watchdog)
+    assert not any("'reactivated'" in s for s, _ in watchdog), "neither is set to tell it"
 
 
 def test_the_kinds_a_watchdog_stores_are_one_ordered_set() -> None:
     """Once each in KIND_ORDER, so re-saving the same set is no change (no restamp of active_since);
-    never empty; a watchdog never chooses Back on the market (it re-enters as a New match), and a
-    collection's Back on the market only beside its Left the market, whose dispatch it answers."""
+    never empty; a collection chooses from every kind but New match, and Back on the market stands on
+    its own for both (migration 754: it reads the property's return, not a Left the market alert)."""
     from api.notifications import KIND_ORDER, normalize_notify_kinds
 
-    assert WATCHDOG_KINDS == ("new", "price_drop", "price_rise", "inactive", "new_source")
+    assert WATCHDOG_KINDS == KIND_ORDER == (
+        "new", "price_drop", "price_rise", "inactive", "reactivated", "new_source")
     assert COLLECTION_KINDS == KIND_ORDER[1:]
     assert normalize_notify_kinds(["new_source", "new", "new"]) == ["new", "new_source"]
     with pytest.raises(ValueError, match="at least one"):
         normalize_notify_kinds([])
-    with pytest.raises(ValueError, match="needs 'inactive'"):
-        normalize_notify_kinds(["reactivated"])
+    assert normalize_notify_kinds(["reactivated"]) == ["reactivated"]
     assert normalize_notify_kinds(["reactivated", "inactive"]) == ["inactive", "reactivated"]
 
 
@@ -1123,8 +1131,6 @@ def test_migration_735_checks_what_the_api_refuses() -> None:
     sql = " ".join((MIGRATIONS / "735_watchdog_notify_kinds.sql").read_text().split())
     watchdog, collection = sql.split("alter table public.collections", 1)
     assert "add column if not exists notify_kinds text[] not null default array['new', 'price_drop']" in watchdog
-    allowed = watchdog.split("notify_kinds <@ array[", 1)[1].split("]", 1)[0]
-    assert tuple(re.findall(r"'(\w+)'", allowed)) == WATCHDOG_KINDS
     assert "cardinality(notify_kinds) > 0" in watchdog
     assert "or new.notify_kinds is distinct from old.notify_kinds then new.active_since := now();" in watchdog
     assert "before insert or update of is_active, filter_spec, notify_kinds" in watchdog
@@ -1152,7 +1158,6 @@ def test_migration_735_checks_what_the_api_refuses() -> None:
 
 @pytest.mark.parametrize(("body", "detail"), [
     ({"notify_kinds": []}, "at least one"),
-    ({"notify_kinds": ["reactivated"]}, "literal_error"),
     ({"notify_kinds": ["sold"]}, "literal_error"),
 ])
 def test_the_routes_refuse_a_kind_set_the_check_would(
@@ -1461,21 +1466,43 @@ def test_mark_seen_follows_a_duplicate_to_the_row_it_duplicates() -> None:
     assert len(nothing.executed) == 1, "nothing is stamped for an id that resolves to nothing"
 
 
-def test_reactivated_is_anchored_on_events_never_on_a_merges_duplicates() -> None:
-    """A merge re-points the retired property's 'inactive' (and 'reactivated') rows and marks the
-    ones the survivor already holds; such a duplicate must neither anchor a 'reactivated' (the
-    latest 'inactive' it told) nor stand in for one already told (the NOT EXISTS)."""
+def test_back_on_the_market_is_one_fact_for_both_producers() -> None:
+    """Migration 754: a return is the property's own fact (`back_on_market_at`, stamped only after a day or
+    more away), so the collection and the watchdog tell it from one detector, identified by that return's
+    epoch; neither reads an alert it sent, so a merge's duplicates cannot anchor or hide one."""
     from api import notifications as nf
+    from tests.migration_defs import MIGRATIONS
 
     for source in (nf._MONITOR, nf._WATCHDOG):
         sql = " ".join(nf._reactivated_sql(source).split())
-        told = sql.split("told AS (", 1)[1].split(") INSERT", 1)[0]
-        assert (f"WHERE {source.scope} AND change_kind = 'inactive' AND duplicate_of IS NULL "
-                f"ORDER BY {source.column}, property_id, dispatched_at DESC") in told
-        again = sql.split("AND NOT EXISTS (", 1)[1]
-        assert ("AND r.change_kind = 'reactivated' AND r.duplicate_of IS NULL "
-                "AND r.dispatched_at > e.told_at") in again
-    assert nf._WATCHDOG.scope.endswith("subscription_id = %(subscription_id)s::uuid"), "its own alerts only"
+        assert ("FROM properties b WHERE b.back_on_market_at > now() - %(monitor_window)s::interval "
+                "AND b.status = 'active' AND b.is_active") in sql
+        assert "floor(extract(epoch FROM e.back_on_market_at))::bigint::text" in sql
+        assert sql.count("notification_dispatches") == 1, "the INSERT alone"
+    assert nf._watchdog_statements(["reactivated"], nf.LIFECYCLE_KINDS) == [nf._WATCHDOG_REACTIVATED_SQL]
+    assert nf._watchdog_statements(["new", "reactivated"], nf.LIFECYCLE_KINDS) == [], \
+        "a watchdog with a slice tells a return as the property re-enters it, under the slice's exemptions"
+    sql = " ".join((MIGRATIONS / "754_back_on_market_one_fact.sql").read_text().split())
+    assert "old.left_market_at <= now() - interval '24 hours'" in sql and nf.INACTIVE_DWELL == "24 hours"
+    assert ("create or replace trigger properties_back_on_market_at before update of is_active on "
+            "public.properties for each row when (old.is_active is distinct from new.is_active "
+            "and old.status = 'active' and new.status = 'active')") in sql
+    assert "drop trigger" not in sql, "replaced in one statement: properties is never without it"
+    assert ("where x.merged_into = new.id and x.merged_at = now() and x.settled_at is not null") in sql, \
+        "a merge bringing in a published property is no return"
+    watchdog, collection = sql.split("alter table public.collections drop constraint", 1)
+    allowed = watchdog.split("notify_kinds <@ array[", 1)[1].split("]", 1)[0]
+    assert tuple(re.findall(r"'(\w+)'", allowed)) == nf.WATCHDOG_KINDS
+    assert "alter column notify_kinds set default array['new', 'price_drop', 'reactivated']" in watchdog
+    allowed = collection.split("notify_kinds <@ array[", 1)[1].split("]", 1)[0]
+    assert tuple(re.findall(r"'(\w+)'", allowed)) == nf.COLLECTION_KINDS
+    assert "'inactive' = any" not in collection.split("update public.notification_subscriptions", 1)[0]
+    fill = sql.split("update public.properties p", 1)[1].split(";", 1)[0]
+    assert "set left_market_at = g.left_at" in fill and "is_active =" not in fill.split("where", 1)[0]
+    assert "p.left_market_at is null" in fill and "delete from" not in sql, "a fill of NULLs: nothing is erased"
+    kinds = sql.split("do $kinds$", 1)[1].split("$kinds$", 1)[0]
+    assert "set active_since = w.active_since" in kinds, "no watchdog restarts"
+    assert "temporary table" not in sql, "the apply receipt would look for it"
 
 
 def test_detection_never_consults_dismissals() -> None:
@@ -1901,29 +1928,6 @@ _PRICE_ROW = {"property_id": 101, "listing_id": 9001, "price_czk": 4_900_000,
               "prev_price_czk": 5_000_000, "snapshot_id": 5001, "collection_id": 7, "source_id": 7}
 
 
-@pytest.mark.parametrize(("statement", "kind", "row", "event_ref"), [
-    ("_WATCHDOG_PRICE_SQL", "wd_price", {**_PRICE_ROW, "source_id": _SUB}, "5001"),
-    ("_MONITOR_PRICE_SQL", "cm_price", _PRICE_ROW, "5001"),
-    ("_MONITOR_PRICE_SQL", "cm_price",
-     {**_PRICE_ROW, "price_czk": 5_100_000, "snapshot_id": 5002}, "5002"),
-    ("_MONITOR_INACTIVE_SQL", "inactive",
-     {"collection_id": 7, "source_id": 7, "property_id": 101, "listing_id": 9001,
-      "inactive_at": _GONE_AT}, str(int(_GONE_AT.timestamp()))),
-    ("_MONITOR_REACTIVATED_SQL", "reactivated",
-     {"collection_id": 7, "source_id": 7, "property_id": 101, "listing_id": 9001,
-      "told_at": _FLAGGED_AT}, str(int(_FLAGGED_AT.timestamp()))),
-    ("_MONITOR_NEW_SOURCE_SQL", "new_source",
-     {"collection_id": 7, "source_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": 3141592},
-     "402678"),
-    ("_MONITOR_NEW_SOURCE_SQL", "new_source",
-     {"collection_id": 7, "source_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": None},
-     "402678"),
-    # A legacy handle is signed (2026-10-21: the one live new_source row keys on -248427).
-    ("_MONITOR_NEW_SOURCE_SQL", "new_source",
-     {"collection_id": 7, "source_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": -248427},
-     "402678"),
-], ids=["wd-price", "cm-drop", "cm-rise", "inactive", "reactivated", "new-source",
-        "new-source-no-sreality", "new-source-legacy-handle"])
 def _backfilled_652(kind: str, key: str, row: dict[str, Any]) -> str | None:
     """event_ref as migration 652 (and 653's re-run of it) fills it from a pre-W3 key."""
     seg = key.split(":")
@@ -1945,11 +1949,6 @@ def _backfilled_652(kind: str, key: str, row: dict[str, Any]) -> str | None:
     ("_MONITOR_INACTIVE_SQL", "inactive",
      {"collection_id": 7, "source_id": 7, "property_id": 101, "listing_id": 9001,
       "inactive_at": _GONE_AT}, str(int(_GONE_AT.timestamp()))),
-    # event_ref = the epoch of the inactive dispatch it answers, as the key always was (it
-    # supersedes the program's "the id of the inactive dispatch": production's grammar wins).
-    ("_MONITOR_REACTIVATED_SQL", "reactivated",
-     {"collection_id": 7, "source_id": 7, "property_id": 101, "listing_id": 9001,
-      "told_at": _FLAGGED_AT}, str(int(_FLAGGED_AT.timestamp()))),
     ("_MONITOR_NEW_SOURCE_SQL", "new_source",
      {"collection_id": 7, "source_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": 3141592},
      "402678"),
@@ -1960,7 +1959,7 @@ def _backfilled_652(kind: str, key: str, row: dict[str, Any]) -> str | None:
     ("_MONITOR_NEW_SOURCE_SQL", "new_source",
      {"collection_id": 7, "source_id": 7, "property_id": 101, "listing_id": 402678, "sreality_id": -248427},
      "402678"),
-], ids=["wd-price", "cm-drop", "cm-rise", "inactive", "reactivated", "new-source",
+], ids=["wd-price", "cm-drop", "cm-rise", "inactive", "new-source",
         "new-source-no-sreality", "new-source-legacy-handle"])
 def test_every_producer_renders_the_identity_its_pre_w3_row_carries(
     statement: str, kind: str, row: dict[str, Any], event_ref: str | None,
