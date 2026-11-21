@@ -44,7 +44,7 @@ from api.cursor import decode_cursor, encode_cursor
 from api.location_filter import DistrictChip, MapBounds, MapCircle, area_where, district_where, one_area
 from location_data.claims_common import served_location_predicate
 from toolkit.filter_compiler import PROPERTIES_GRAIN, compile_filter_where
-from toolkit.filter_registry import CATEGORY_CITY_QUALITY, CATEGORY_CURATION, CATEGORY_VELOCITY, REGISTRY
+from toolkit.filter_registry import CATEGORY_VELOCITY, REGISTRY
 from toolkit.property_carriers import NOTIFICATION_EVENTS_SHARED_LOCK_SQL
 from toolkit.publication import published_property_predicate, visible_since_sql
 
@@ -963,8 +963,9 @@ def _insert_per_watchdog(
 #     bouncing across a cap re-enters silently, and what changed while it was out is never told;
 #   - it is the merge survivor of a member, or an ad was detached from a member within SLICE_BLINK
 #     (a split or an engine undo): the slice was already showing it;
-#   - nothing about the property changed since the last pass and the spec uses a filter on our own
-#     data (`_always_told`, ruling Q11): a city index, the rent map or a proximity revised.
+#   - nothing about the property changed since the last pass (no reason in MATCH_REASONS): the
+#     canonical ad switched, or a city index, the rent map or a proximity was revised. Only a spec
+#     with a Velocity filter tells such an entry (`_always_told`, ruling Q11), as 'other'.
 # A start (created, switched on, edited: `active_since`) takes the slice afresh, silently, telling
 # only what was published after the start, as the matcher before the slice did (R6 (a)).
 
@@ -974,22 +975,17 @@ SLICE_BLINK = "24 hours"
 # How far before the last pass a change still names an entry's reason: a change is stamped when it is
 # fetched and reaches the slice once its write commits and the rollup has run (30 s, dirty-set).
 SLICE_SETTLE = timedelta(minutes=30)
-# The filters that answer from our own data, not the property's: an entry through one of them alone
-# is not told (Q11)...
-_OUTSIDE_DATA_FIELDS = frozenset(
-    {k for k, f in REGISTRY.items() if f.category in (CATEGORY_CITY_QUALITY, CATEGORY_CURATION)}
-    | {"min_mf_gross_yield_pct", "max_mf_gross_yield_pct", "near_city_proximity"}
-) & set(WatchdogFilterSpec.model_fields)
-# ...unless the spec uses a Velocity filter, where time passing brings a property in (Q11, the
-# operator's addition): such an entry cannot be told apart, so every one is told.
+# An entry with no reason is no market event, so it is not told (#2574): the canonical ad switching
+# moves a property's price, area or category with nothing changed on the market. The one exception
+# is a spec with a Velocity filter, where time passing brings a property in (Q11, the operator's
+# addition): such an entry cannot be told apart, so every one is told.
 _VELOCITY_FIELDS = frozenset(
     k for k, f in REGISTRY.items() if f.category == CATEGORY_VELOCITY) & set(WatchdogFilterSpec.model_fields)
 
 
 def _always_told(spec: WatchdogFilterSpec) -> bool:
     """Whether every entry into this spec's slice is a New match, a change seen or not."""
-    used = {field for field, value in spec if value not in (None, [], {})}
-    return bool(used & _VELOCITY_FIELDS) or not used & _OUTSIDE_DATA_FIELDS
+    return any(value not in (None, [], {}) for field, value in spec if field in _VELOCITY_FIELDS)
 
 
 # The slice: `l` is properties_public, `listing_id` its canonical advert (migration 561).

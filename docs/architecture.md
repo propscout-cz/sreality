@@ -3230,8 +3230,8 @@ renumber.** Navigate by area:
     `properties.back_on_market_at` stamped by a trigger on every return), except a return within 24 h of leaving (a blink
     re-enters silently, and nothing that changed while it was out is told), a member's merge survivor, a property an ad
     was detached to from a member within the day (a split or an engine undo), and an entry nothing about the property
-    explains while the spec uses a filter on our own data (city index or population, proximity, the rent map:
-    `_always_told`) and no Velocity filter. A start (`active_since`, stamped by a trigger on create, on every switch-on and
+    explains (the canonical ad switched, a city index or the rent map was revised: no market event, #2574) unless the
+    spec uses a Velocity filter (`_always_told`). A start (`active_since`, stamped by a trigger on create, on every switch-on and
     on every filter or kinds edit: an edited watchdog is a new start) takes the slice afresh, silently, telling only what
     was first seen inside 24 h and published after it, so a resumed watchdog never floods. **A watchdog tells only the
     kinds it is set to** (`notification_subscriptions.notify_kinds`: any of five property events, default `new` +
