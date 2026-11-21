@@ -6,9 +6,13 @@
 2. Recompute, ONE RULE PER FIELD (docs/design/merge-sprint/PROGRAM.md MS11). The canonical advert
    is rank 1 of `property_canonical_listings(property_id)` (migration 588, MS5: active, a map
    point, earliest first seen among active / latest last seen among inactive, trust, id). Every
-   advert field is its own: price, area (no fallback), layout, category, subtype, source,
-   condition with both derived levels (rule 14), furnished, and `repr_listing_ref_id`, through
-   which the read models take description, photos, broker and link. The storey and the
+   advert field is its own: price, area (no fallback), layout, category, source, both derived
+   condition levels (rule 14, parked), furnished, and `repr_listing_ref_id`, through
+   which the read models take description, photos, broker and link. The house type and the
+   condition are each the value MOST adverts state, a tie going to the canonical order (#2574: the
+   canonical advert alone decided, so a switch of it moved a property in and out of a filter with
+   nothing changed on the market): the house type among the adverts of the canonical advert's
+   category, the condition among the active adverts, or among all when none is active. The storey and the
    above-ground count are each the value MOST adverts state, a tie going to the advert first in
    the canonical order (#2552: 2,400 of 17,134 multi-advert flats held adverts that disagreed,
    and the canonical one decided alone). The location advert
@@ -130,11 +134,11 @@ _ROLLUP = {
     "category_main": "c.category_main",
     "category_type": "c.category_type",
     "category_sub_cb": "c.category_sub_cb",
-    "subtype": "c.subtype",
+    "subtype": "sd.subtype",
     "disposition": "c.disposition",
     "area_m2": "c.area_m2",
     "current_price_czk": "c.price_czk",
-    "condition": "c.condition",
+    "condition": "sd.condition",
     "building_condition_level": "c.building_condition_level",
     "apartment_condition_level": "c.apartment_condition_level",
     "furnished": "c.furnished",
@@ -237,6 +241,28 @@ _RECOMPUTE_BATCH_SQL = f"""
       ) v
       GROUP BY v.pid
     ),
+    -- The house type and the condition: the value most adverts state, a tie going to the advert
+    -- first in the canonical order. A house type belongs to one category, so only the adverts of
+    -- the canonical advert's category vote; for the condition the active adverts vote, and every
+    -- advert only when no active one states it.
+    stated AS (
+      SELECT v.pid,
+        (array_agg(v.value ORDER BY v.ads DESC, v.first_rank) FILTER (WHERE v.fact = 'subtype'))[1] AS subtype,
+        (array_agg(v.value ORDER BY v.live DESC, CASE WHEN v.live > 0 THEN 0 ELSE v.ads END DESC, v.first_rank)
+           FILTER (WHERE v.fact = 'condition'))[1] AS condition
+      FROM (
+        SELECT k.property_id AS pid, f.fact, f.value, count(*) AS ads,
+               count(*) FILTER (WHERE k.is_active) AS live, min(k.canonical_rank) AS first_rank
+        FROM kids k
+        JOIN canon c ON c.property_id = k.property_id
+        CROSS JOIN LATERAL (VALUES
+          ('subtype', CASE WHEN k.category_main IS NOT DISTINCT FROM c.category_main THEN k.subtype END),
+          ('condition', k.condition)) f(fact, value)
+        WHERE f.value IS NOT NULL
+        GROUP BY k.property_id, f.fact, f.value
+      ) v
+      GROUP BY v.pid
+    ),
     -- The canonical advert and its same-portal predecessors (MS10): each predecessor is the advert
     -- on that portal last seen latest, strictly before the later link was first seen, so adverts
     -- that ran at the same time never link; first_seen_at falls along the chain, so it ends.
@@ -327,6 +353,7 @@ _RECOMPUTE_BATCH_SQL = f"""
     JOIN canon c ON c.property_id = r.pid
     JOIN loc la ON la.property_id = r.pid
     LEFT JOIN storey sy ON sy.pid = r.pid
+    LEFT JOIN stated sd ON sd.pid = r.pid
     LEFT JOIN price_hist ph ON ph.pid = r.pid
     LEFT JOIN lineage_span cs ON cs.pid = r.pid
     LEFT JOIN changes ch ON ch.pid = r.pid

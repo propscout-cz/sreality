@@ -1512,7 +1512,7 @@ MIGRATION_561 = MIGRATIONS / "561_one_property_view.sql"
 MIGRATION_588 = MIGRATIONS / "588_canonical_order_and_portal_dates.sql"
 ADVERT_FIELDS = (
     "repr_listing_id", "repr_listing_ref_id", "category_main", "category_type",
-    "category_sub_cb", "subtype", "disposition", "area_m2", "current_price_czk", "condition",
+    "category_sub_cb", "disposition", "area_m2", "current_price_czk",
     "building_condition_level", "apartment_condition_level", "furnished", "source",
 )
 AMENITIES = ("has_lift", "has_balcony", "has_parking", "terrace", "garage", "cellar")
@@ -1557,9 +1557,10 @@ def test_the_one_order_is_spelled_once_in_the_function():
 
 
 def test_every_advert_field_comes_from_the_canonical_advert():
-    """Price and area from one row and condition with both derived levels from that same row
-    (rule 14): the canonical advert, never a mix. The two write-only columns are not written
-    (W6 dropped them, migration 618)."""
+    """Price, area and category from one row, and both derived condition levels from it (rule 14,
+    parked): the canonical advert, never a mix. The house type and the condition are the property's
+    own (#2574): what most adverts state, so a switch of the canonical advert changes neither. The
+    two write-only columns are not written (W6 dropped them, migration 618)."""
     from scripts.recompute_property_stats import _RECOMPUTE_BATCH_SQL
 
     setc = _set_clause(_RECOMPUTE_BATCH_SQL)
@@ -1567,6 +1568,10 @@ def test_every_advert_field_comes_from_the_canonical_advert():
         assert _rhs(setc, column).startswith("c."), f"{column} must be the canonical advert's"
     for gone in ("price_per_m2_source", "distinct_site_count"):
         assert gone not in _RECOMPUTE_BATCH_SQL
+    assert (_rhs(setc, "subtype"), _rhs(setc, "condition")) == ("sd.subtype", "sd.condition")
+    sql = " ".join(_RECOMPUTE_BATCH_SQL.split())
+    assert "CASE WHEN k.category_main IS NOT DISTINCT FROM c.category_main THEN k.subtype END" in sql
+    assert "ORDER BY v.live DESC, CASE WHEN v.live > 0 THEN 0 ELSE v.ads END DESC, v.first_rank" in sql
 
 
 def test_every_physical_fact_is_the_first_non_empty_value_in_the_same_order():
