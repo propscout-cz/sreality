@@ -463,8 +463,8 @@ withdrawn; the platform cannot tell which, and an ad may still come back.
 _Avoid_: delisted, withdrawn, sold, removed
 
 **Back on the market** (UI: "Znovu na trhu"):
-A property event of a watched collection: a property told as having left the market has an active
-ad again, by a revival or a re-list. A watchdog tells the same return as a new match.
+A property event: a property off the market for a day or more has an active ad again, by a revival
+or a re-list. A watchdog and a watched collection tell it alike, each when set to.
 _Avoid_: relisted, reactivated
 
 **New portal** (UI: "Nový portál"):

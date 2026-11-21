@@ -601,7 +601,7 @@ def test_a_collection_keeps_the_events_it_is_set_to_tell_and_a_new_one_takes_the
 
 
 @pytest.mark.parametrize(("kinds", "error"), [
-    ([], "at least one"), (["reactivated"], "needs 'inactive'"), (["new"], "literal_error"),
+    ([], "at least one"), (["new"], "literal_error"),
 ])
 def test_a_collection_refuses_the_kind_sets_its_check_would(kinds, error):
     with pytest.raises(ValidationError, match=error):

@@ -1,0 +1,162 @@
+-- Back on the market: one fact on the property, one kind for watchdogs and collections (#2576, spec #2574).
+--
+-- Until now one market event had two definitions. A collection told 'reactivated' by reading its own
+-- earlier 'inactive' alert; a watchdog told the same return as a New match with reason 'back', off
+-- properties.back_on_market_at, which 735's trigger stamped on EVERY return, a portal blink included.
+-- From here the property carries the fact and both producers read it (api/notifications._reactivated_sql):
+--
+--   1. properties + left_market_at timestamptz: when the property last left the market (is_active true ->
+--      false on a live property); NULL while it is on the market, and on a property that left before this
+--      migration. Nullable, no default: catalog-only, no rewrite, NO backfill.
+--   2. properties_stamp_back_on_market_at restated, its trigger firing on both flips: leaving stamps
+--      left_market_at; returning stamps back_on_market_at ONLY when the property was away 24 hours or more
+--      (api/notifications.INACTIVE_DWELL: the dwell after which Left the market is told), then clears
+--      left_market_at. A property that left before this migration (left_market_at NULL) counts as away long
+--      enough. Stored back_on_market_at values stay as they are: nothing is erased.
+--   3. properties_back_on_market_at_idx, partial (back_on_market_at IS NOT NULL): the detector reads the
+--      returns of the last 7 days for each watchdog. Built CONCURRENTLY with no lock_timeout (605/746/747:
+--      at the house 5 s the build's wait for a long reader cancels it and leaves it INVALID); an INVALID
+--      one from a cancelled run is moved aside and dropped, so the file can be run again.
+--   4. A watchdog may tell 'reactivated'; a collection may tell it without 'inactive' (the detector no
+--      longer reads the 'inactive' alert). Both CHECKs restated. notification_subscriptions (17 rows) and
+--      collections are small and cold, so each CHECK is replaced in one step.
+--   5. Every watchdog telling 'new' gains 'reactivated' (operator ruling 2026-11-21: they are told returns
+--      today, inside New match), and the column default gains it for a new one. The UPDATE restamps
+--      active_since (735's trigger), so each such watchdog takes its slice afresh, silently: a return that
+--      came before this migration is never told again as Back on the market.
+--
+-- Not transactional as a whole (step 3 is CONCURRENTLY): apply through apply_migration.yml, never the MCP.
+-- Every step is idempotent. APPLY BEFORE THE CODE MERGES: the old code ignores a kind it does not detect.
+-- Enqueues nothing into dirty_properties: no row of properties is updated.
+
+set lock_timeout = '5s';
+
+alter table public.properties add column if not exists left_market_at timestamptz;
+
+comment on column public.properties.left_market_at is
+  'When this property last left the market (migration 754): is_active true -> false while it stays a live '
+  'property, stamped by properties_stamp_back_on_market_at and cleared on its return. NULL while on the '
+  'market, and on a property that left before 754.';
+
+comment on column public.properties.back_on_market_at is
+  'When this property last came back on the market after 24 hours or more away (migration 754; before it, '
+  'after any absence): is_active false -> true while it stays a live property, stamped by '
+  'properties_stamp_back_on_market_at. Back on the market reads it for watchdogs and collections alike.';
+
+create or replace function public.properties_stamp_back_on_market_at()
+returns trigger language plpgsql set search_path = '' as $$
+begin
+  if new.is_active then
+    if old.left_market_at is null or old.left_market_at <= now() - interval '24 hours' then
+      new.back_on_market_at := now();
+    end if;
+    new.left_market_at := null;
+  else
+    new.left_market_at := now();
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.properties_stamp_back_on_market_at() from public, anon, authenticated;
+
+drop trigger if exists properties_back_on_market_at on public.properties;
+create trigger properties_back_on_market_at
+  before update of is_active on public.properties
+  for each row
+  when (old.is_active is distinct from new.is_active and old.status = 'active' and new.status = 'active')
+  execute function public.properties_stamp_back_on_market_at();
+
+do $invalid$
+begin
+  if exists (select 1 from pg_index i
+              where i.indexrelid = to_regclass('public.properties_back_on_market_at_idx') and not i.indisvalid) then
+    alter index public.properties_back_on_market_at_idx rename to properties_back_on_market_at_idx_invalid;
+    raise notice '754: an INVALID properties_back_on_market_at_idx from a cancelled build moved aside';
+  end if;
+end
+$invalid$;
+
+set lock_timeout = 0;
+set statement_timeout = '1900s';
+
+drop index concurrently if exists public.properties_back_on_market_at_idx_invalid;
+
+create index concurrently if not exists properties_back_on_market_at_idx
+  on public.properties (back_on_market_at) where back_on_market_at is not null;
+
+set lock_timeout = '5s';
+set statement_timeout = '600s';
+
+alter table public.notification_subscriptions drop constraint if exists notification_subscriptions_notify_kinds_ck;
+alter table public.notification_subscriptions add constraint notification_subscriptions_notify_kinds_ck check (
+  cardinality(notify_kinds) > 0
+  and notify_kinds <@ array['new', 'price_drop', 'price_rise', 'inactive', 'reactivated', 'new_source']
+);
+
+alter table public.notification_subscriptions
+  alter column notify_kinds set default array['new', 'price_drop', 'reactivated'];
+
+comment on column public.notification_subscriptions.notify_kinds is
+  'The property events this watchdog tells (migrations 735, 754), of new (New match: a property entering its '
+  'slice), price_drop, price_rise, inactive (Left the market), reactivated (Back on the market) and '
+  'new_source; each once, in that order. A change restamps active_since.';
+
+alter table public.collections drop constraint if exists collections_notify_kinds_ck;
+alter table public.collections add constraint collections_notify_kinds_ck check (
+  cardinality(notify_kinds) > 0
+  and notify_kinds <@ array['price_drop', 'price_rise', 'inactive', 'reactivated', 'new_source']
+);
+
+comment on column public.collections.notify_kinds is
+  'The property events this collection tells while monitoring is on (migrations 735, 754), of price_drop, '
+  'price_rise, inactive (Left the market), reactivated (Back on the market) and new_source; each once, in '
+  'that order. A change restamps monitoring_enabled_at.';
+
+update public.notification_subscriptions s
+   set notify_kinds = array(
+         select k from unnest(array['new', 'price_drop', 'price_rise', 'inactive', 'reactivated', 'new_source']) k
+          where k = any (s.notify_kinds || array['reactivated']))
+ where 'new' = any (s.notify_kinds) and not 'reactivated' = any (s.notify_kinds);
+
+do $post$
+declare
+  v_check text;
+begin
+  if not exists (select 1 from information_schema.columns
+                  where table_schema = 'public' and table_name = 'properties' and column_name = 'left_market_at') then
+    raise exception '754 did not land: properties.left_market_at is missing';
+  end if;
+  if (select prosrc from pg_proc
+       where oid = 'public.properties_stamp_back_on_market_at()'::regprocedure) not like '%left_market_at%' then
+    raise exception '754 did not land: the return stamp does not read left_market_at';
+  end if;
+  if not exists (select 1 from pg_trigger t
+                  where t.tgrelid = 'public.properties'::regclass and not t.tgisinternal
+                    and t.tgname = 'properties_back_on_market_at'
+                    and pg_get_triggerdef(t.oid) like '%IS DISTINCT FROM%') then
+    raise exception '754 did not land: the return trigger does not fire on both flips';
+  end if;
+  if not exists (select 1 from pg_index i
+                  where i.indexrelid = to_regclass('public.properties_back_on_market_at_idx') and i.indisvalid) then
+    raise exception '754 did not land: properties_back_on_market_at_idx is missing or invalid';
+  end if;
+  select pg_get_constraintdef(oid) into v_check from pg_constraint
+   where conrelid = 'public.notification_subscriptions'::regclass
+     and conname = 'notification_subscriptions_notify_kinds_ck';
+  if v_check is null or v_check not like '%reactivated%' then
+    raise exception '754 did not land: notification_subscriptions_notify_kinds_ck is %', v_check;
+  end if;
+  select pg_get_constraintdef(oid) into v_check from pg_constraint
+   where conrelid = 'public.collections'::regclass and conname = 'collections_notify_kinds_ck';
+  if v_check is null or v_check like '%ANY (notify_kinds)%' then
+    raise exception '754 did not land: collections_notify_kinds_ck is %', v_check;
+  end if;
+  if exists (select 1 from public.notification_subscriptions
+              where 'new' = any (notify_kinds) and not 'reactivated' = any (notify_kinds)) then
+    raise exception '754 did not land: a watchdog telling new does not tell reactivated';
+  end if;
+end
+$post$;
+
+reset statement_timeout;
+reset lock_timeout;

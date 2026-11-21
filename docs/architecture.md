@@ -3226,19 +3226,20 @@ renumber.** Navigate by area:
     watchdog telling `new` keeps its slice, the published properties on the market its spec matches, as
     `watchdog_slice_members`, and each pass diffs it (`_slice_pass`, one transaction per watchdog holding its
     `watchdog_slices` row FOR UPDATE SKIP LOCKED, so a deploy overlap never tells one entry twice). An entry is told with
-    its `match_reason` (listed, back, price, portal, changed, other: what changed about the property since the last pass,
-    `properties.back_on_market_at` stamped by a trigger on every return), except a return within 24 h of leaving (a blink
+    its `match_reason` (listed, price, portal, changed, other: what changed about the property since the last pass),
+    except a return to the market (`properties.back_on_market_at` newer than the last pass: Back on the market, its own
+    kind since migration 754, never a New match too), a return within 24 h of leaving (a blink
     re-enters silently, and nothing that changed while it was out is told), a member's merge survivor, a property an ad
     was detached to from a member within the day (a split or an engine undo), and an entry nothing about the property
     explains (the canonical ad switched, a city index or the rent map was revised: no market event, #2574) unless the
     spec uses a Velocity filter (`_always_told`). A start (`active_since`, stamped by a trigger on create, on every switch-on and
     on every filter or kinds edit: an edited watchdog is a new start) takes the slice afresh, silently, telling only what
     was first seen inside 24 h and published after it, so a resumed watchdog never floods. **A watchdog tells only the
-    kinds it is set to** (`notification_subscriptions.notify_kinds`: any of five property events, default `new` +
-    `price_drop`; a return is a New match, so no `reactivated`); a step reads only the watchdogs telling one of its kinds,
+    kinds it is set to** (`notification_subscriptions.notify_kinds`: any of six property events, default `new` +
+    `price_drop` + `reactivated`); a step reads only the watchdogs telling one of its kinds,
     and one telling `new` tells `price_drop`/`price_rise` and `new_source` only for a slice member, of a change after it
     entered (`_WATCHDOG_SLICE`): one change, one notification. A watched collection chooses likewise (`collections.notify_kinds`, any
-    of the five but `new`, default all five, Back on the market only beside the Left the market it answers; a kinds edit
+    of the six but `new`, default all five; a kinds edit
     while watching restamps `monitoring_enabled_at`, its start), and
     every detector tells a kind only to a source whose `m.kinds` holds it. `price` and `lifecycle` are **one detector per kind for both producers**
     (`_price_sql`, `_inactive_sql`, `_reactivated_sql`, `_new_source_sql`, each rendered for a `_Source`): it reads its
@@ -3247,12 +3248,14 @@ renumber.** Navigate by area:
     `monitor_since` / entry; its delistings and new portals are read for its members only, `within`, #2504: the
     market-wide read held the events lock SHARED 11–25 s a pass, past a merge's 5 s lock_timeout), a watchdog by joining its spec to
     each event directly (from `active_since`; behind a CTE of matching properties the planner scanned a broad
-    watchdog's cohort once per step). `inactive` waits out 24 h gone (a
+    watchdog's cohort once per step). `inactive` waits out 24 h gone, and
+    `reactivated` reads ONE fact for both producers, `properties.back_on_market_at`, which migration 754's trigger stamps only
+    on a return after 24 h or more away (`left_market_at`, stamped on leaving), on the spec for a watchdog (a
     portal blink sends neither Left the market nor Back on the market). Every row writes `event_ref` (the discriminator within
     source, kind and property: snapshot id, inactive epoch, for `reactivated` the epoch of the
-    inactive dispatch it answers, introducing listing, dashboard id, pipeline mode) and a share its
+    return, introducing listing, dashboard id, pipeline mode) and a share its
     `actor_account_id`; each producer's `event_ref` is what migration 652 backfilled from the old key
-    on the rows written before it (a render test pins the two), so no event already told re-fires.
+    on the rows written before it (a render test pins the two; `reactivated` left that grammar with migration 754), so no event already told re-fires.
     **A price step is one
     advert's change against its OWN previous priced snapshot** — `listing_price_steps`
     (migration 559) is the one definition, read by the watchdog, the collection monitor and
@@ -3328,8 +3331,7 @@ renumber.** Navigate by area:
     both on the lane's 300 s clock over a 7-day window, the same detectors a watchdog set to those kinds runs) emits
     `source_kind='collection_monitor'` dispatches for every property in a `monitoring_enabled`
     collection, of the kinds that collection keeps (`notify_kinds`, migration 735) — `price_drop`/`price_rise` (per-snapshot), `inactive`/`reactivated` (lifecycle;
-    `reactivated` reads the prior `inactive` dispatch as the durable "was dead" marker since
-    `listings.inactive_at` is cleared on reactivation), and `new_source` (a sibling listing on a
+    `reactivated` reads the property's own return, `back_on_market_at`, migration 754), and `new_source` (a sibling listing on a
     new portal). It is set-based (one `INSERT…SELECT` per kind across all monitored collections),
     idempotent on the one identity (collection, kind, property, `event_ref`); until W1 it also stamped
     `target_channels` from the collection's `notify_channels` (both dropped by migration 656). Every
@@ -3875,8 +3877,7 @@ renumber.** Navigate by area:
     115 ms (31 ms baseline), Stats no slower, map clusters +95 ms.
     **Notifications: a dismissal hides, it never un-detects.** The watchdog matcher, change
     detector and collection monitor are untouched — `match_once` reads its 24 h window whether or
-    not it inserts, a `new` identity is once-ever, and the `reactivated` detector keys off a
-    prior `inactive` dispatch, so suppressing an INSERT would lose the event for good on undo.
+    not it inserts, a `new` identity is once-ever, so suppressing an INSERT would lose the event for good on undo.
     Instead every in-app read of `notification_dispatches` — the feed and its total, the unread
     badge, mark-all-seen, each watchdog's dispatch count — carries the one `VISIBLE_SQL`
     fragment (since W3; its dismissal arm names the event's own account on the active row, so the

@@ -1164,11 +1164,10 @@ export type DispatchChangeKind =
   | 'shared_dashboard'
   | 'shared_pipeline';
 
-/* The property events a watchdog can tell (api/notifications.WatchdogKind): a property back on the
- * market re-enters its slice, so it is told as a New match, never as Back on the market. */
+/* The property events a watchdog can tell (api/notifications.WatchdogKind). */
 export type WatchdogKind = Extract<
   DispatchChangeKind,
-  'new' | 'price_drop' | 'price_rise' | 'inactive' | 'new_source'
+  'new' | 'price_drop' | 'price_rise' | 'inactive' | 'reactivated' | 'new_source'
 >;
 
 /* The ones a watched collection can tell: all but New match, as a property it holds is never new

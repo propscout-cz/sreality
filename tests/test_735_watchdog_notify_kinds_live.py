@@ -87,19 +87,21 @@ def _new_matches(cur: Any, sid: Any, *pids: int) -> list[tuple[int, str | None, 
 def test_the_check_refuses_what_the_api_refuses(cur: Any) -> None:
     sid = _watchdog(cur, _account(cur), None)
     cur.execute("SELECT notify_kinds FROM notification_subscriptions WHERE id = %s", (sid,))
-    assert cur.fetchone()[0] == ["new", "price_drop"], "the default is what every watchdog told before 735"
-    for bad in ([], ["sold"], ["reactivated"], ["inactive", "reactivated"]):
+    assert cur.fetchone()[0] == ["new", "price_drop", "reactivated"], \
+        "the default is what every watchdog told before 735: a return was a New match until 754"
+    for bad in ([], ["sold"]):
         cur.execute("SAVEPOINT kinds")
         with pytest.raises(psycopg.errors.CheckViolation):
             cur.execute("UPDATE notification_subscriptions SET notify_kinds = %s WHERE id = %s", (bad, sid))
         cur.execute("ROLLBACK TO SAVEPOINT kinds")
     cur.execute("UPDATE notification_subscriptions SET notify_kinds = %s WHERE id = %s",
-                (["inactive", "new_source"], sid))
+                (["inactive", "reactivated", "new_source"], sid))
 
 
 def test_a_kinds_edit_restarts_the_watchdog_and_the_same_set_does_not(cur: Any) -> None:
     sid = _watchdog(cur, _account(cur), None)
-    for kinds, restarts in ((["new", "price_drop"], False), (["new", "price_drop", "inactive"], True)):
+    for kinds, restarts in ((["new", "price_drop", "reactivated"], False),
+                            (["new", "price_drop", "inactive"], True)):
         cur.execute("UPDATE notification_subscriptions SET active_since = %s WHERE id = %s", (_AGED, sid))
         cur.execute("UPDATE notification_subscriptions SET notify_kinds = %s WHERE id = %s", (kinds, sid))
         cur.execute("SELECT active_since = now() FROM notification_subscriptions WHERE id = %s", (sid,))
@@ -121,17 +123,30 @@ def test_a_match_reason_rides_only_on_a_new_match(cur: Any) -> None:
         cur.execute("ROLLBACK TO SAVEPOINT reason")
 
 
-def test_a_return_is_stamped_and_a_detach_is_not(cur: Any) -> None:
+def test_a_return_is_stamped_after_a_day_away_and_a_blink_or_a_detach_is_not(cur: Any) -> None:
+    """Migration 754: leaving stamps left_market_at; a return clears it and stamps back_on_market_at only when
+    the property was away a day or more (one that left before 754, left_market_at NULL, counts as away)."""
+    def flip(pid: int, active: bool) -> tuple[Any, ...]:
+        cur.execute("UPDATE properties SET is_active = %s WHERE id = %s "
+                    "RETURNING left_market_at = now(), left_market_at IS NULL, back_on_market_at = now()",
+                    (active, pid))
+        return cur.fetchone()
+
     pid = _property(cur)
-    cur.execute("UPDATE properties SET is_active = false WHERE id = %s", (pid,))
-    cur.execute("UPDATE properties SET is_active = true WHERE id = %s RETURNING back_on_market_at = now()", (pid,))
-    assert cur.fetchone()[0] is True
+    assert flip(pid, False)[0] is True, "leaving is stamped"
+    assert flip(pid, True) == (None, True, None), "a blink: cleared, and no return"
+    flip(pid, False)
+    cur.execute("UPDATE properties SET left_market_at = now() - interval '25 hours' WHERE id = %s", (pid,))
+    assert flip(pid, True) == (None, True, True), "away a day or more: a return"
+    cur.execute("UPDATE properties SET is_active = false, back_on_market_at = NULL WHERE id = %s", (pid,))
+    cur.execute("UPDATE properties SET left_market_at = NULL WHERE id = %s", (pid,))
+    assert flip(pid, True) == (None, True, True), "left before 754: away long enough"
     other = _property(cur)
     cur.execute("UPDATE properties SET status = 'merged_away', merged_into = %s, is_active = false WHERE id = %s",
                 (pid, other))
     cur.execute("UPDATE properties SET status = 'active', merged_into = NULL, is_active = true WHERE id = %s "
-                "RETURNING back_on_market_at", (other,))
-    assert cur.fetchone()[0] is None, "a detach's reactivation is no return to the market"
+                "RETURNING back_on_market_at, left_market_at", (other,))
+    assert cur.fetchone() == (None, None), "a detach's reactivation is no return to the market"
 
 
 def test_a_start_takes_the_slice_silently_and_tells_only_what_was_published_after_it(cur: Any) -> None:
@@ -201,10 +216,13 @@ def test_a_member_is_told_a_price_drop_after_it_entered(cur: Any) -> None:
     assert _told(cur, pid) == [(sid, "price_drop", str(down))]
 
 
-def test_a_return_within_the_day_is_silent_and_one_after_it_is_a_new_match(cur: Any) -> None:
+def test_a_return_within_the_day_is_silent_and_one_after_it_is_back_on_the_market_never_a_new_match(
+        cur: Any) -> None:
     from api import notifications as nf
 
-    sid = _watchdog(cur, _account(cur), None)
+    acc = _account(cur)
+    sid = _watchdog(cur, acc, ["new", "price_drop", "reactivated"])
+    quiet = _watchdog(cur, acc, ["new", "price_drop"])
     pid, lid = _old(cur)
     nf.match_once(cur.connection)
 
@@ -212,22 +230,33 @@ def test_a_return_within_the_day_is_silent_and_one_after_it_is_a_new_match(cur: 
         cur.execute("UPDATE listings SET is_active = %s, inactive_at = CASE WHEN %s THEN NULL ELSE now() END "
                     "WHERE id = %s", (active, active, lid))
         _recompute(cur, pid)
-        _later_pass(cur, sid)
+        for watchdog in (sid, quiet):
+            _later_pass(cur, watchdog)
         nf.match_once(cur.connection)
+        nf.match_lifecycle_once(cur.connection)
 
     flip(False)
     assert _members(cur, sid, pid) == {pid: False}, "it left the slice and is remembered"
     flip(True)
-    assert _members(cur, sid, pid) == {pid: True} and _new_matches(cur, sid, pid) == [], "a blink re-enters silently"
+    assert _members(cur, sid, pid) == {pid: True} and _told(cur, pid) == [], "a blink re-enters silently"
 
     flip(False)
-    cur.execute("UPDATE watchdog_slice_members SET left_at = now() - interval '2 days' "
-                "WHERE subscription_id = %s AND property_id = %s", (sid, pid))
-    _later_pass(cur, sid)
+    cur.execute("UPDATE watchdog_slice_members SET left_at = now() - interval '2 days' WHERE property_id = %s",
+                (pid,))
+    cur.execute("UPDATE properties SET left_market_at = now() - interval '2 days' WHERE id = %s", (pid,))
+    for watchdog in (sid, quiet):
+        _later_pass(cur, watchdog)
     nf.match_once(cur.connection)
     assert _members(cur, sid, pid) == {}, "gone for more than a day: forgotten"
     flip(True)
-    assert _new_matches(cur, sid, pid) == [(pid, "back", 5_000_000, None)]
+    cur.execute("SELECT floor(extract(epoch FROM back_on_market_at))::bigint::text FROM properties WHERE id = %s",
+                (pid,))
+    back = cur.fetchone()[0]
+    assert back is not None and _told(cur, pid) == [(sid, "reactivated", back)], \
+        "one alert, its own kind, from the watchdog set to tell it; the other takes it back silently"
+    assert _members(cur, quiet, pid) == {pid: True}
+    nf.match_lifecycle_once(cur.connection)
+    assert len(_told(cur, pid)) == 1, "a re-run tells nothing more"
 
 
 def test_an_entry_nothing_about_the_property_explains_is_told_only_by_a_velocity_spec(cur: Any,
@@ -380,7 +409,7 @@ def test_a_watchdog_set_to_left_the_market_is_told_it_and_a_default_one_not(cur:
     from api import notifications as nf
 
     acc = _account(cur)
-    telling, silent = _watchdog(cur, acc, ["inactive"]), _watchdog(cur, acc, None)
+    telling, silent = _watchdog(cur, acc, ["inactive"]), _watchdog(cur, acc, ["new", "price_drop"])
     gone_at = datetime.now(timezone.utc) - timedelta(days=2)
     pid = _property(cur)
     lid = _advert(cur, pid, source="bezrealitky", active=False, inactive_at=gone_at)
@@ -463,7 +492,7 @@ def test_a_collection_checks_its_kinds_and_an_edit_while_watching_restarts_it(cu
     cur.execute("SELECT notify_kinds FROM collections WHERE id = %s", (cid,))
     assert cur.fetchone()[0] == ["price_drop", "price_rise", "inactive", "reactivated", "new_source"], \
         "the default is what every watched collection told before 735"
-    for bad in ([], ["new"], ["sold"], ["reactivated"], ["price_drop", "reactivated"]):
+    for bad in ([], ["new"], ["sold"]):
         cur.execute("SAVEPOINT kinds")
         with pytest.raises(psycopg.errors.CheckViolation):
             cur.execute("UPDATE collections SET notify_kinds = %s WHERE id = %s", (bad, cid))
@@ -480,7 +509,9 @@ def test_a_collection_checks_its_kinds_and_an_edit_while_watching_restarts_it(cu
         assert cur.fetchone()[0] is restarts, kinds
 
 
-def test_a_collection_set_to_left_and_back_on_the_market_is_told_both(cur: Any) -> None:
+@pytest.mark.parametrize("kinds", [["inactive", "reactivated"], ["reactivated"]])
+def test_a_collection_is_told_a_return_with_or_without_left_the_market(cur: Any, kinds: list[str]) -> None:
+    """The return is the property's fact (migration 754), so Back on the market needs no Left the market alert."""
     from api import notifications as nf
 
     acc = _account(cur)
@@ -488,19 +519,22 @@ def test_a_collection_set_to_left_and_back_on_the_market_is_told_both(cur: Any) 
     pid = _property(cur)
     lid = _advert(cur, pid, source="bezrealitky", active=False, inactive_at=gone_at)
     _served(cur, pid, lid)
-    cid = _watched(cur, acc, pid, ["inactive", "reactivated"])
+    cid = _watched(cur, acc, pid, kinds)
 
     nf.match_lifecycle_once(cur.connection)
-    cur.execute("SELECT dispatched_at FROM notification_dispatches WHERE collection_id = %s", (cid,))
-    told_at = cur.fetchone()[0]
+    cur.execute("UPDATE properties SET left_market_at = %s WHERE id = %s", (gone_at, pid))
     cur.execute("UPDATE listings SET is_active = true, inactive_at = NULL, "
                 "last_seen_at = clock_timestamp() + interval '1 minute' WHERE id = %s", (lid,))
     _recompute(cur, pid)
     nf.match_lifecycle_once(cur.connection)
+    nf.match_lifecycle_once(cur.connection)
+    cur.execute("SELECT floor(extract(epoch FROM back_on_market_at))::bigint::text FROM properties WHERE id = %s",
+                (pid,))
+    back = cur.fetchone()[0]
     cur.execute("SELECT change_kind, event_ref FROM notification_dispatches WHERE collection_id = %s "
                 "ORDER BY change_kind", (cid,))
-    assert cur.fetchall() == [("inactive", str(int(gone_at.timestamp()))),
-                              ("reactivated", str(int(told_at.timestamp())))]
+    left = [("inactive", str(int(gone_at.timestamp())))] if "inactive" in kinds else []
+    assert cur.fetchall() == [*left, ("reactivated", back)]
 
 
 def test_a_collection_set_to_price_rises_is_told_a_rise_and_not_a_drop(cur: Any) -> None:
