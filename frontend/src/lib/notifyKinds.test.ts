@@ -1,6 +1,5 @@
-/* A watchdog's and a collection's kinds as the SPA keeps them: the API's order (api/notifications.KIND_ORDER), a
- * watchdog without Back on the market (a return is a New match), and a collection's Back on the market only beside the
- * Left the market it answers, so the editor never offers a set the API refuses. */
+/* A watchdog's and a collection's kinds as the SPA keeps them: the API's order (api/notifications.KIND_ORDER),
+ * a watchdog's six and a collection's five (all but New match), each switched on its own. */
 import { describe, expect, it } from 'vitest';
 
 import { CHANGE_META, matchReasonLabel } from './changeKinds';
@@ -9,7 +8,8 @@ import { COLLECTION_KINDS, DEFAULT_NOTIFY_KINDS, WATCHDOG_KINDS, toggleNotifyKin
 describe('toggleNotifyKind', () => {
   it('keeps the API order whatever order the clicks come in', () => {
     expect(toggleNotifyKind(['new_source'], 'new')).toEqual(['new', 'new_source']);
-    expect(WATCHDOG_KINDS.map((k) => k.kind)).toEqual(['new', 'price_drop', 'price_rise', 'inactive', 'new_source']);
+    expect(WATCHDOG_KINDS.map((k) => k.kind)).toEqual(
+      ['new', 'price_drop', 'price_rise', 'inactive', 'reactivated', 'new_source']);
   });
 
   it('offers a collection every kind but New match, Back on the market among them', () => {
@@ -17,16 +17,17 @@ describe('toggleNotifyKind', () => {
       ['price_drop', 'price_rise', 'inactive', 'reactivated', 'new_source']);
   });
 
-  it('switches Left the market on with Back on the market, and Back on the market off with Left the market', () => {
-    expect(toggleNotifyKind(['new_source'], 'reactivated')).toEqual(['inactive', 'reactivated', 'new_source']);
-    expect(toggleNotifyKind(['inactive', 'reactivated'], 'inactive')).toEqual([]);
+  it('switches Back on the market on its own, with or without Left the market', () => {
+    expect(toggleNotifyKind(['new_source'], 'reactivated')).toEqual(['reactivated', 'new_source']);
+    expect(toggleNotifyKind(['inactive', 'reactivated'], 'inactive')).toEqual(['reactivated']);
     expect(toggleNotifyKind(['inactive', 'reactivated'], 'reactivated')).toEqual(['inactive']);
-    expect(toggleNotifyKind(DEFAULT_NOTIFY_KINDS, 'inactive')).toEqual(['new', 'price_drop', 'inactive']);
+    expect(DEFAULT_NOTIFY_KINDS).toEqual(['new', 'price_drop', 'reactivated']);
+    expect(toggleNotifyKind(DEFAULT_NOTIFY_KINDS, 'inactive')).toEqual(['new', 'price_drop', 'inactive', 'reactivated']);
   });
 
   it('names each kind with the word its alerts carry in the feed', () => {
     expect(WATCHDOG_KINDS.map((k) => CHANGE_META[k.kind].label)).toEqual(
-      ['New match', 'Price drop', 'Price rise', 'Left the market', 'New portal']);
+      ['New match', 'Price drop', 'Price rise', 'Left the market', 'Back on the market', 'New portal']);
   });
 });
 

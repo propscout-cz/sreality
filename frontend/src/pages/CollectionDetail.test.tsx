@@ -260,13 +260,13 @@ describe('<CollectionDetail>', () => {
       expect(screen.getByText(/^About the properties in this collection, from now on\./)).toBeInTheDocument();
     });
 
-    it('saves each click, Back on the market bringing Left the market with it', async () => {
+    it('saves each click, Back on the market on its own', async () => {
       vi.mocked(api.getCollection).mockResolvedValue(watched(['price_drop']));
       vi.mocked(api.updateCollection).mockResolvedValue(watched().collection);
       renderPage();
       fireEvent.click(within(await group()).getByRole('button', { name: 'Back on the market' }));
       await waitFor(() => expect(api.updateCollection).toHaveBeenCalledWith(
-        1, { notify_kinds: ['price_drop', 'inactive', 'reactivated'] }));
+        1, { notify_kinds: ['price_drop', 'reactivated'] }));
     });
 
     it('keeps the last event on and says why', async () => {

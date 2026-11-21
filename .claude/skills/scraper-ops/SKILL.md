@@ -382,7 +382,7 @@ Per-lane notes:
   `api/notifications` on ONE clock: CONSTANT 300 s, no flag/setting/env var (the brake is a deploy). Steps `watchdog_new` (`match_once`:
   a watchdog telling New match diffs its slice, telling each entry's reason; a start
   (create, switch-on, filter/kinds edit) takes it silently; rule 16), `price` (`match_changes_once`: canonical-ad steps, 7 days) and
-  `lifecycle` (inactive after 24 h gone, a collection's reactivated, new_source); one detector per kind (mig 735),
+  `lifecycle` (inactive after 24 h gone, reactivated, new_source); one detector per kind (mig 735),
   each on its own connection, committing per statement (one watchdog's
   INSERT or slice pass, one detector; `SET LOCAL statement_timeout` 120 s; the notification-events lock SHARED first, so a merge waits one statement
   at most and never deadlocks, architecture § rule 16). Why steps: a step that raises or has a

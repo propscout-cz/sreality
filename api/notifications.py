@@ -59,30 +59,26 @@ SourceKind = Literal["watchdog", "collection_monitor", "share"]
 SourceKindFilter = Literal[SourceKind, "all"]
 
 # The six property events the producers detect, in the order a watchdog or a collection stores the
-# ones it tells (migration 735, `notify_kinds` on each). A watchdog tells a return as a New match (the
-# property re-enters its slice), so it never chooses 'reactivated'; a collection chooses from every
-# kind but 'new': a property it holds is never new to it.
-KIND_ORDER = ("new", "price_drop", "price_rise", "inactive", "reactivated", "new_source")
-WatchdogKind = Literal["new", "price_drop", "price_rise", "inactive", "new_source"]
+# ones it tells (migrations 735, 754, `notify_kinds` on each). A watchdog chooses from all six; a
+# collection from every kind but 'new': a property it holds is never new to it.
+WatchdogKind = Literal["new", "price_drop", "price_rise", "inactive", "reactivated", "new_source"]
 WATCHDOG_KINDS: tuple[str, ...] = get_args(WatchdogKind)
+KIND_ORDER = WATCHDOG_KINDS
 CollectionKind = Literal["price_drop", "price_rise", "inactive", "reactivated", "new_source"]
 COLLECTION_KINDS: tuple[str, ...] = get_args(CollectionKind)
 PRICE_KINDS = ("price_drop", "price_rise")
-LIFECYCLE_KINDS = ("inactive", "new_source")
+LIFECYCLE_KINDS = ("inactive", "reactivated", "new_source")
 # Why a New match entered its watchdog's slice (`notification_dispatches.match_reason`, migration 735),
-# in the order the pass names one when several hold. NULL on a 'new' written before 735 = 'listed'.
+# in the order the pass names one when several hold. NULL on a 'new' written before 735 = 'listed';
+# 'back' is on rows written before migration 754 only (a return is its own kind since).
 MATCH_REASONS = ("listed", "back", "price", "portal", "changed", "other")
 
 
 def normalize_notify_kinds(kinds: list[str]) -> list[str]:
-    """The kinds as a watchdog or collection stores them: each once, in KIND_ORDER. Refused when empty,
-    and 'reactivated' without 'inactive': a collection's Back on the market answers the Left the market
-    it told."""
+    """The kinds as a watchdog or collection stores them: each once, in KIND_ORDER. Refused when empty."""
     out = [k for k in KIND_ORDER if k in kinds]
     if not out:
         raise ValueError("choose at least one event to be notified about")
-    if "reactivated" in out and "inactive" not in out:
-        raise ValueError("'reactivated' (Back on the market) needs 'inactive' (Left the market)")
     return out
 
 
@@ -956,9 +952,11 @@ def _insert_per_watchdog(
 # A watchdog telling 'new' keeps its SLICE (GLOSSARY.md: Watchdog): the properties on the market its
 # spec matches now (`{where}` over properties_public, rule 16, and `is_active`), as members of
 # watchdog_slice_members. Each pass diffs the slice against them: a property not a member ENTERS, a
-# member no longer in it LEAVES (never told, ruling Q15). An entry is a New match (ruling Q2 (b),
-# Q12: newly listed, a price change, back on the market, a new ad, an ad's facts, its place), told
-# with the reason it names, except when
+# member no longer in it LEAVES (never told, ruling Q15). An entry is ONE alert named by its cause:
+# Back on the market when the property returned to the market since the last pass (its own kind,
+# migration 754, told when the watchdog tells it), else a New match (ruling Q2 (b), Q12: newly
+# listed, a price change, a new ad, an ad's facts, its place), told with the reason it names.
+# Neither is told when
 #   - it is back within SLICE_BLINK of leaving: a portal blink, a re-resolved place or a price
 #     bouncing across a cap re-enters silently, and what changed while it was out is never told;
 #   - it is the merge survivor of a member, or an ad was detached from a member within SLICE_BLINK
@@ -997,6 +995,8 @@ _SLICE_CTE = (
 )
 # A New match's event_ref: the epoch of the pass it entered at, so each entry is its own event.
 _ENTRY_REF = "floor(extract(epoch FROM now()))::bigint::text"
+# Back on the market's event_ref, for every producer: the epoch of the property's return.
+_RETURN_REF = "floor(extract(epoch FROM {at}))::bigint::text"
 _NEW_COLUMNS = (
     "(subscription_id, source_kind, property_id, listing_id, change_kind, trigger_price_czk, "
     " prev_price_czk, event_ref, match_reason)"
@@ -1047,7 +1047,7 @@ _SLICE_SEED_SQL = (
 # Why an entry entered, of what changed about the property since `since` (the last pass, less
 # SLICE_SETTLE), in MATCH_REASONS order: published inside NEW_WINDOW or since (a filter on
 # data filled in later, a place resolved or a proximity computed within the hour, lets a new property
-# in after its publication); back on the market (migration 735's stamp); its
+# in after its publication); its
 # canonical advert's price step (`listing_price_steps`, migration 559, as the price step reads it);
 # an ad on a portal the property had none on; an ad's content (`last_change_at`, the newest
 # snapshot), a new ad, a merge into it, or a re-resolved place. NULL: nothing (time passed, or our own
@@ -1057,7 +1057,6 @@ _ENTRY_SIGNAL = (
     "CASE "
     f"  WHEN {visible_since_sql('p')} > now() - %(new_window)s::interval "
     f"    OR {visible_since_sql('p')} > {_SINCE} THEN 'listed' "
-    f"  WHEN p.back_on_market_at > {_SINCE} THEN 'back' "
     "  WHEN st.price_czk IS NOT NULL THEN 'price' "
     "  WHEN EXISTS (SELECT 1 FROM listings c WHERE c.property_id = p.id "
     f"               AND c.first_seen_at > {_SINCE} "
@@ -1108,10 +1107,12 @@ _SLICE_PASS_SQL = (
     "), "
     "told AS ("
     f"  INSERT INTO notification_dispatches {_NEW_COLUMNS} "
-    "  SELECT %(subscription_id)s, 'watchdog', e.property_id, e.listing_id, 'new', "
-    "         CASE WHEN sig.reason = 'price' THEN st.price_czk ELSE e.price_czk END, "
-    "         CASE WHEN sig.reason = 'price' THEN st.prev_price_czk END, "
-    f"         {_ENTRY_REF}, coalesce(sig.reason, 'other') "
+    "  SELECT %(subscription_id)s, 'watchdog', e.property_id, e.listing_id, "
+    "         CASE WHEN back.told THEN 'reactivated' ELSE 'new' END, "
+    "         CASE WHEN back.told THEN NULL WHEN sig.reason = 'price' THEN st.price_czk ELSE e.price_czk END, "
+    "         CASE WHEN NOT back.told AND sig.reason = 'price' THEN st.prev_price_czk END, "
+    f"         CASE WHEN back.told THEN {_RETURN_REF.format(at='p.back_on_market_at')} ELSE {_ENTRY_REF} END, "
+    "         CASE WHEN NOT back.told THEN coalesce(sig.reason, 'other') END "
     "  FROM entering e "
     "  JOIN properties p ON p.id = e.property_id "
     "  LEFT JOIN LATERAL (SELECT ps.price_czk, ps.prev_price_czk FROM listing_price_steps ps "
@@ -1119,6 +1120,8 @@ _SLICE_PASS_SQL = (
     f"                      AND ps.scraped_at > greatest(p.repr_since, {_SINCE}) "
     "                     ORDER BY ps.scraped_at DESC, ps.snapshot_id DESC LIMIT 1) st ON true "
     f"  CROSS JOIN LATERAL (SELECT {_ENTRY_SIGNAL} AS reason) sig "
+    f"  CROSS JOIN LATERAL (SELECT r.returned, r.returned AND %(tells_return)s AS told "
+    f"                      FROM (SELECT coalesce(p.back_on_market_at > {_SINCE}, false) AS returned) r) back "
     "  WHERE NOT e.blinked "
     "    AND NOT EXISTS (SELECT 1 FROM members w JOIN properties x ON x.id = w.property_id "
     "                    WHERE x.merged_into = e.property_id "
@@ -1130,7 +1133,13 @@ _SLICE_PASS_SQL = (
     "                    JOIN members w ON w.property_id = pe.survivor_property_id "
     "                     AND (w.left_at IS NULL OR w.left_at > now() - %(blink)s::interval) "
     "                    WHERE c.property_id = e.property_id) "
-    "    AND (sig.reason IS NOT NULL OR %(always_told)s) "
+    # An entry is ONE alert, named by its cause: a return to the market is Back on the market, told
+    # when the watchdog tells that kind, and never a New match too. A watchdog that does not tell it
+    # is still told a return whose price changed, as the New match that price change is; the return
+    # itself (the revived ad, the re-list's new ad or portal) is no reason of its own.
+    "    AND CASE WHEN back.told THEN true "
+    "             WHEN back.returned THEN coalesce(sig.reason = 'price', false) "
+    "             ELSE sig.reason IS NOT NULL OR %(always_told)s END "
     f"  {ON_EVENT_CONFLICT} RETURNING 1"
     "), "
     "stamped AS ("
@@ -1151,6 +1160,7 @@ _SLICE_FORGET_SQL = (
 
 def _slice_pass(
     conn: "psycopg.Connection", tally: _Tally, sub_id: Any, raw_spec: Any, active_since: datetime,
+    kinds: list[str],
 ) -> None:
     """One watchdog's pass in ONE transaction under the bound, so its members and its alerts land
     together and a failing watchdog rolls back alone; the events lock, SHARED, just before the one
@@ -1164,7 +1174,8 @@ def _slice_pass(
         tally.invalid += 1
         return
     params = {**spec_params, "subscription_id": str(sub_id), "active_since": active_since,
-              "new_window": NEW_WINDOW, "blink": SLICE_BLINK, "always_told": _always_told(spec)}
+              "new_window": NEW_WINDOW, "blink": SLICE_BLINK, "always_told": _always_told(spec),
+              "tells_return": "reactivated" in kinds}
     try:
         with conn.transaction(), conn.cursor() as cur:
             cur.execute(f"SET LOCAL statement_timeout = '{PRODUCER_STATEMENT_TIMEOUT}'")
@@ -1199,8 +1210,8 @@ def match_once(conn: "psycopg.Connection") -> dict[str, int]:
     _commit_one(conn, _SLICE_FORGET_SQL, {})
     subs = _live_watchdogs(conn, ("new",))
     tally = _Tally(evaluated=len(subs))
-    for sub_id, raw_spec, active_since, _ in subs:
-        _slice_pass(conn, tally, sub_id, raw_spec, active_since)
+    for sub_id, raw_spec, active_since, kinds in subs:
+        _slice_pass(conn, tally, sub_id, raw_spec, active_since, kinds)
     return tally.stats("matches_inserted")
 
 
@@ -1365,36 +1376,27 @@ def _inactive_sql(src: _Source) -> str:
 
 
 def _reactivated_sql(src: _Source) -> str:
-    """'Back on the market': a property this source ALREADY told had left the market, after `since`, came back active.
-    That 'inactive' dispatch is the durable "was dead" marker (listings.inactive_at is cleared on
-    reactivation, so it can't be read), and only an event counts: both reads skip a row a merge
-    marked a duplicate. event_ref = the epoch of its dispatched_at: the pre-W3 key's last segment,
-    which 652 backfilled, so a reactivation already told keeps its identity (production's grammar
-    supersedes PROGRAM.md § 3.2's "the id of the inactive dispatch")."""
+    """'Back on the market': the property came back after `since`, having been off the market for
+    INACTIVE_DWELL or more (`properties.back_on_market_at`, stamped only then by migration 754's
+    trigger: a portal blink is no return, nor is a merge that brings in a property already
+    published). event_ref = the epoch of that return, so the next return is its own event. For a
+    collection and for a watchdog with no slice; such a watchdog's spec is read NOW, so a property
+    that returned outside it and matches it within MONITOR_WINDOW is told then."""
     return (
         f"WITH {src.ctes}"
-        "told AS ("
-        f"  SELECT DISTINCT ON ({src.column}, property_id) {src.column} AS told_source, property_id, "
-        "         dispatched_at AS told_at "
-        "  FROM notification_dispatches "
-        f"  WHERE {src.scope} AND change_kind = 'inactive' AND duplicate_of IS NULL "
-        f"  ORDER BY {src.column}, property_id, dispatched_at DESC"
+        "back AS ("
+        "  SELECT b.id AS property_id, b.back_on_market_at "
+        "  FROM properties b "
+        "  WHERE b.back_on_market_at > now() - %(monitor_window)s::interval "
+        "    AND b.status = 'active' AND b.is_active"
+        f"{src.within.format(pid='b.id')}"
         ") "
         "INSERT INTO notification_dispatches "
         f"  ({src.column}, source_kind, property_id, listing_id, change_kind, event_ref) "
         f"SELECT m.source_id, '{src.kind}', e.property_id, m.listing_id, 'reactivated', "
-        "       floor(extract(epoch FROM e.told_at))::bigint::text "
-        "FROM told e "
-        "JOIN properties p ON p.id = e.property_id AND p.is_active = true "
-        "     AND p.last_seen_at > now() - %(monitor_window)s::interval "
-        f"     AND p.last_seen_at > e.told_at {src.join} "
-        "WHERE m.source_id = e.told_source AND e.told_at > m.since AND 'reactivated' = ANY(m.kinds) "
-        "  AND NOT EXISTS ("
-        "    SELECT 1 FROM notification_dispatches r "
-        f"    WHERE r.source_kind = '{src.kind}' AND r.{src.column} = e.told_source "
-        "      AND r.property_id = e.property_id AND r.change_kind = 'reactivated' "
-        "      AND r.duplicate_of IS NULL AND r.dispatched_at > e.told_at"
-        "  ) "
+        f"       {_RETURN_REF.format(at='e.back_on_market_at')} "
+        f"FROM back e {src.join} "
+        "WHERE e.back_on_market_at > m.since AND 'reactivated' = ANY(m.kinds) "
         f"{ON_EVENT_CONFLICT}"
     )
 
@@ -1439,6 +1441,7 @@ _WATCHDOG_SLICE_PRICE_SQL = _price_sql(_WATCHDOG_SLICE)
 _MONITOR_INACTIVE_SQL = _inactive_sql(_MONITOR)
 _WATCHDOG_INACTIVE_SQL = _inactive_sql(_WATCHDOG)
 _MONITOR_REACTIVATED_SQL = _reactivated_sql(_MONITOR)
+_WATCHDOG_REACTIVATED_SQL = _reactivated_sql(_WATCHDOG)
 _MONITOR_NEW_SOURCE_SQL = _new_source_sql(_MONITOR)
 _WATCHDOG_NEW_SOURCE_SQL = _new_source_sql(_WATCHDOG)
 _WATCHDOG_SLICE_NEW_SOURCE_SQL = _new_source_sql(_WATCHDOG_SLICE)
@@ -1447,7 +1450,9 @@ _WATCHDOG_SLICE_NEW_SOURCE_SQL = _new_source_sql(_WATCHDOG_SLICE)
 def _watchdog_statements(kinds: list[str], step_kinds: tuple[str, ...]) -> list[str]:
     """The statements a step runs for one watchdog: those of its kinds the step detects, over its
     slice when it tells 'new' (`_WATCHDOG_SLICE`). Left the market stays on the spec (a property
-    leaving the market leaves the slice with it)."""
+    leaving the market leaves the slice with it). Back on the market is on the spec only for a
+    watchdog with no slice: one telling 'new' tells a return as that property re-enters its slice
+    (`_SLICE_PASS_SQL`), once and under the slice's merge and split exemptions."""
     sliced = "new" in kinds
     by_kind = {
         "price_drop": _WATCHDOG_SLICE_PRICE_SQL if sliced else _WATCHDOG_PRICE_SQL,
@@ -1455,7 +1460,9 @@ def _watchdog_statements(kinds: list[str], step_kinds: tuple[str, ...]) -> list[
         "new_source": _WATCHDOG_SLICE_NEW_SOURCE_SQL if sliced else _WATCHDOG_NEW_SOURCE_SQL,
     }
     by_kind["price_rise"] = by_kind["price_drop"]
-    return list(dict.fromkeys(by_kind[k] for k in step_kinds if k in kinds))
+    if not sliced:
+        by_kind["reactivated"] = _WATCHDOG_REACTIVATED_SQL
+    return list(dict.fromkeys(by_kind[k] for k in step_kinds if k in by_kind and k in kinds))
 
 
 def match_changes_once(conn: "psycopg.Connection") -> dict[str, int]:
@@ -1486,7 +1493,7 @@ def match_changes_once(conn: "psycopg.Connection") -> dict[str, int]:
 
 def match_lifecycle_once(conn: "psycopg.Connection") -> dict[str, int]:
     """Step lifecycle: 'Left the market' (`inactive`, gone for a day, F14), 'Back on the market'
-    (`reactivated`, a collection's only: a watchdog tells a return as a New match) and 'New portal'
+    (`reactivated`, active again after a day or more away) and 'New portal'
     (`new_source`, a sibling listing appeared on another portal), one detector per kind for both
     producers; the price kinds are step price (`match_changes_once`).
 
@@ -1506,7 +1513,6 @@ def match_lifecycle_once(conn: "psycopg.Connection") -> dict[str, int]:
         cur.execute("SELECT count(*) FROM collections WHERE monitoring_enabled = true")
         row = cur.fetchone()
     monitored = int(row[0]) if row else 0
-    # In this order, each committed before the next: reactivated reads the inactive rows.
     collection_inserted = sum(_commit_one(conn, sql, params) for sql in (
         _MONITOR_INACTIVE_SQL, _MONITOR_REACTIVATED_SQL, _MONITOR_NEW_SOURCE_SQL)) if monitored else 0
     subs = _live_watchdogs(conn, LIFECYCLE_KINDS)

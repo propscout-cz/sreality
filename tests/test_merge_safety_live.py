@@ -194,6 +194,24 @@ def test_merging_then_detaching_every_advert_restores_every_original_property(cu
     assert cur.fetchone()[0] == 0
 
 
+def test_a_real_merge_of_a_live_published_property_into_one_long_gone_is_no_return(cur):
+    """Migration 754, through the one chokepoint: the survivor (the older record, months off the market) flips
+    active when a live, published property is merged into it, in the merge's own transaction, so the trigger
+    sees the retired record and stamps no return; the unit was on the market in our records all along."""
+    survivor, live = _property(cur), _property(cur)
+    _advert(cur, survivor, source="sreality", active=False)
+    _advert(cur, live, source="idnes")
+    _recompute(cur, survivor)
+    _recompute(cur, live)
+    cur.execute("UPDATE properties SET left_market_at = now() - interval '90 days', back_on_market_at = NULL "
+                "WHERE id = %s", (survivor,))
+    cur.execute("UPDATE properties SET settled_at = now() - interval '3 days' WHERE id = %s", (live,))
+    _merge(cur, [survivor, live])
+    cur.execute("SELECT status, is_active, back_on_market_at, left_market_at FROM properties WHERE id = %s",
+                (survivor,))
+    assert cur.fetchone() == ("active", True, None, None)
+
+
 def test_an_advert_named_new_is_born_a_record_and_a_merge_back_is_undone_to_it(cur):
     """`new` births the advert a record through the one birth path and writes ONE closed ledger
     row the constraints accept: a native advert's (`ingest_grouping`), and a merged one's, its
