@@ -861,11 +861,13 @@ def test_a_later_pass_diffs_the_slice_and_names_why_each_entry_entered() -> None
         "DO UPDATE SET entered_at = excluded.entered_at, left_at = NULL",
         "WHERE NOT e.blinked AND NOT EXISTS (SELECT 1 FROM members w JOIN properties x ON x.id = w.property_id "
         "WHERE x.merged_into = e.property_id",
-        "AND CASE WHEN back.returned THEN %(tells_return)s ELSE sig.reason IS NOT NULL OR %(always_told)s END",
-        "CASE WHEN back.returned THEN 'reactivated' ELSE 'new' END",
-        f"CASE WHEN back.returned THEN floor(extract(epoch FROM p.back_on_market_at))::bigint::text "
-        f"ELSE {nf._ENTRY_REF} END, CASE WHEN NOT back.returned THEN coalesce(sig.reason, 'other') END",
-        "(SELECT coalesce(p.back_on_market_at > %(since)s::timestamptz, false) AS returned) back",
+        "AND CASE WHEN back.told THEN true WHEN back.returned THEN coalesce(sig.reason = 'price', false) "
+        "ELSE sig.reason IS NOT NULL OR %(always_told)s END",
+        "CASE WHEN back.told THEN 'reactivated' ELSE 'new' END",
+        f"CASE WHEN back.told THEN floor(extract(epoch FROM p.back_on_market_at))::bigint::text "
+        f"ELSE {nf._ENTRY_REF} END, CASE WHEN NOT back.told THEN coalesce(sig.reason, 'other') END",
+        "(SELECT r.returned, r.returned AND %(tells_return)s AS told FROM "
+        "(SELECT coalesce(p.back_on_market_at > %(since)s::timestamptz, false) AS returned) r) back",
         "UPDATE watchdog_slices SET sliced_at = now()",
     ):
         assert part in sql, part
@@ -1500,6 +1502,7 @@ def test_back_on_the_market_is_one_fact_for_both_producers() -> None:
     assert "p.left_market_at is null" in fill and "delete from" not in sql, "a fill of NULLs: nothing is erased"
     kinds = sql.split("do $kinds$", 1)[1].split("$kinds$", 1)[0]
     assert "set active_since = w.active_since" in kinds, "no watchdog restarts"
+    assert "temporary table" not in sql, "the apply receipt would look for it"
 
 
 def test_detection_never_consults_dismissals() -> None:

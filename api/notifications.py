@@ -1108,11 +1108,11 @@ _SLICE_PASS_SQL = (
     "told AS ("
     f"  INSERT INTO notification_dispatches {_NEW_COLUMNS} "
     "  SELECT %(subscription_id)s, 'watchdog', e.property_id, e.listing_id, "
-    "         CASE WHEN back.returned THEN 'reactivated' ELSE 'new' END, "
-    "         CASE WHEN back.returned THEN NULL WHEN sig.reason = 'price' THEN st.price_czk ELSE e.price_czk END, "
-    "         CASE WHEN NOT back.returned AND sig.reason = 'price' THEN st.prev_price_czk END, "
-    f"         CASE WHEN back.returned THEN {_RETURN_REF.format(at='p.back_on_market_at')} ELSE {_ENTRY_REF} END, "
-    "         CASE WHEN NOT back.returned THEN coalesce(sig.reason, 'other') END "
+    "         CASE WHEN back.told THEN 'reactivated' ELSE 'new' END, "
+    "         CASE WHEN back.told THEN NULL WHEN sig.reason = 'price' THEN st.price_czk ELSE e.price_czk END, "
+    "         CASE WHEN NOT back.told AND sig.reason = 'price' THEN st.prev_price_czk END, "
+    f"         CASE WHEN back.told THEN {_RETURN_REF.format(at='p.back_on_market_at')} ELSE {_ENTRY_REF} END, "
+    "         CASE WHEN NOT back.told THEN coalesce(sig.reason, 'other') END "
     "  FROM entering e "
     "  JOIN properties p ON p.id = e.property_id "
     "  LEFT JOIN LATERAL (SELECT ps.price_czk, ps.prev_price_czk FROM listing_price_steps ps "
@@ -1120,7 +1120,8 @@ _SLICE_PASS_SQL = (
     f"                      AND ps.scraped_at > greatest(p.repr_since, {_SINCE}) "
     "                     ORDER BY ps.scraped_at DESC, ps.snapshot_id DESC LIMIT 1) st ON true "
     f"  CROSS JOIN LATERAL (SELECT {_ENTRY_SIGNAL} AS reason) sig "
-    f"  CROSS JOIN LATERAL (SELECT coalesce(p.back_on_market_at > {_SINCE}, false) AS returned) back "
+    f"  CROSS JOIN LATERAL (SELECT r.returned, r.returned AND %(tells_return)s AS told "
+    f"                      FROM (SELECT coalesce(p.back_on_market_at > {_SINCE}, false) AS returned) r) back "
     "  WHERE NOT e.blinked "
     "    AND NOT EXISTS (SELECT 1 FROM members w JOIN properties x ON x.id = w.property_id "
     "                    WHERE x.merged_into = e.property_id "
@@ -1133,8 +1134,11 @@ _SLICE_PASS_SQL = (
     "                     AND (w.left_at IS NULL OR w.left_at > now() - %(blink)s::interval) "
     "                    WHERE c.property_id = e.property_id) "
     # An entry is ONE alert, named by its cause: a return to the market is Back on the market, told
-    # when the watchdog tells that kind, and never a New match too.
-    "    AND CASE WHEN back.returned THEN %(tells_return)s "
+    # when the watchdog tells that kind, and never a New match too. A watchdog that does not tell it
+    # is still told a return whose price changed, as the New match that price change is; the return
+    # itself (the revived ad, the re-list's new ad or portal) is no reason of its own.
+    "    AND CASE WHEN back.told THEN true "
+    "             WHEN back.returned THEN coalesce(sig.reason = 'price', false) "
     "             ELSE sig.reason IS NOT NULL OR %(always_told)s END "
     f"  {ON_EVENT_CONFLICT} RETURNING 1"
     "), "

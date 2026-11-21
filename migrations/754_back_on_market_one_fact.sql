@@ -140,18 +140,19 @@ comment on column public.collections.notify_kinds is
   'that order. A change restamps monitoring_enabled_at.';
 
 do $kinds$
+declare
+  w record;
 begin
-  create temporary table watchdog_starts_754 on commit drop as
-    select id, active_since from public.notification_subscriptions
-     where not 'reactivated' = any (notify_kinds);
-  update public.notification_subscriptions s
-     set notify_kinds = array(
-           select k from unnest(array['new', 'price_drop', 'price_rise', 'inactive', 'reactivated', 'new_source']) k
-            where k = any (s.notify_kinds || array['reactivated']))
-    from watchdog_starts_754 w where w.id = s.id;
-  update public.notification_subscriptions s
-     set active_since = w.active_since
-    from watchdog_starts_754 w where w.id = s.id;
+  for w in select id, active_since from public.notification_subscriptions
+            where not 'reactivated' = any (notify_kinds)
+  loop
+    update public.notification_subscriptions s
+       set notify_kinds = array(
+             select k from unnest(array['new', 'price_drop', 'price_rise', 'inactive', 'reactivated', 'new_source']) k
+              where k = any (s.notify_kinds || array['reactivated']))
+     where s.id = w.id;
+    update public.notification_subscriptions s set active_since = w.active_since where s.id = w.id;
+  end loop;
 end
 $kinds$;
 
