@@ -1,27 +1,30 @@
--- 736_location_w5b_scorecard_drop_sample.sql -- W5b: the scorecard loses its radius reading.
+-- 764_location_w5b_scorecard_drop_sample.sql -- W5b: the scorecard loses its radius reading.
 --
 -- WHY. Location data quality programme, wave W5b (ticket #2338, ruling Q8 (a); docs/design/location-quality/w5b-pin-door.md).
 -- The operator retired the radius on 2026-11-01 (W6 becomes deletion only), so the pin sample that fed it (pin_error_m,
 -- radius_cover) has no reader. And since resolver v5.11 a pin names doors, so that sample's truth (address grain) would
--- count a door against the pin that named it. First numbered 717; renumbered above W6-c1's 733, which restated the view.
+-- count a door against the pin that named it. Supersedes 736, never applied and left unused: 749 restated the view after
+-- it, so this file restates 749's text, the view's latest definition.
 --
--- WHAT. create or replace of the one view, migration 733's text (698's plus the `position` metric) but for:
+-- WHAT. create or replace of the one view, migration 749's text (733's plus the publication stamp) but for:
 --   (i)   the `sample` cohort is gone: the smp and pin CTEs and the pin_error_m and radius_cover branches. The door
 --         scorecard is the grain, KÚ and outside cells, which stand;
 --   (ii)  determinism, W5's deferral: the containment probe orders by code behind an OFFSET 0 fence, the same text as
 --         resolve_db.CONTAINING_OBEC_SQL (pinned by tests/location_data/test_location_quality_view_contract.py).
 -- The output columns stay, as create or replace requires; q90 and q95 now read NULL on every row.
 --
--- GRANTS. service_role only, as 698 and 733. PostGIS functions are unqualified (production keeps PostGIS in
+-- GRANTS. service_role only, as 698, 733 and 749. PostGIS functions are unqualified (production keeps PostGIS in
 -- `extensions`, CI replays it in `public`).
 --
--- ADDITIVE: a view text, no row written; it reads 733's location_position_mv, so 733 is applied first. APPLY ORDER:
--- immediately before the PR merges; between apply and deploy the old gauge reads no sample row, so the Watch-only
--- accuracy cells read Not measured for minutes.
+-- ADDITIVE: a view text, no row written; it reads 733's location_position_mv. APPLY ORDER: immediately before the PR
+-- merges, through apply_migration.yml; between apply and deploy the old gauge reads no sample row, so the Watch-only
+-- accuracy cells read Not measured for minutes. Idempotent.
 -- VERIFY: select cohort, metric, count(*) from location_quality_by_source group by 1, 2;  -- no sample cohort
 --         select has_table_privilege('authenticated', 'public.location_quality_by_source', 'select');  -- false
+-- ROLLBACK: forward only (rule 1).
 
 set lock_timeout = '5s';
+set statement_timeout = '120s';
 
 create or replace view public.location_quality_by_source
 with (security_invoker = true) as
@@ -51,7 +54,7 @@ cohort_rows as (
     from properties p
     join listings l on l.id = p.location_listing_ref_id
    where p.status = 'active' and p.is_active
-     and coalesce(p.settled_at, p.first_seen_at + interval '6 hours') <= now()),
+     and p.settled_at IS NOT NULL),
 -- One row per cohort member with its answer row, cut by the shared step flags (location_steps, verbatim).
 b as materialized (
   select c.cohort, c.id, c.source,
@@ -212,8 +215,21 @@ select 'queue'::text, null::text, 'backlog_s',
  group by 4;
 
 comment on view public.location_quality_by_source is
-  'W1 (migration 698), W6-c (733: the position metric), W5b (736: no pin sample, the containment probe ordered by code): the ONE definition of every location quality number, long shape, cohorts listing/served/queue. Read by the location_town_coverage gauge; service_role only; the SPA reads its stored cells.';
+  'W1 (migration 698), W6-c (733: the position metric), 749 (the served cohort reads the publication stamp), W5b (764: no pin sample, the containment probe ordered by code): the ONE definition of every location quality number, long shape, cohorts listing/served/queue. Read by the location_town_coverage gauge; service_role only; the SPA reads its stored cells.';
 
--- Default privileges hand authenticated SELECT on a new relation (migration 299): take it back.
 revoke all on public.location_quality_by_source from public, anon, authenticated;
 grant select on public.location_quality_by_source to service_role;
+
+do $post$
+begin
+  if pg_get_viewdef('public.location_quality_by_source'::regclass) like '%first_seen_at +%' then
+    raise exception '764: location_quality_by_source reads the clock for publication again (749 lost)';
+  end if;
+  if pg_get_viewdef('public.location_quality_by_source'::regclass) like '%''sample''::text%' then
+    raise exception '764: location_quality_by_source still emits the sample cohort';
+  end if;
+end
+$post$;
+
+reset statement_timeout;
+reset lock_timeout;

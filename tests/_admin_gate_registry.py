@@ -227,9 +227,9 @@ UNGATED: dict[str, Ungated] = {
         "matview", "acl", ("733_location_w6c_position_audit.sql",), _OPS_MATVIEW),
     "location_quality_by_source": Ungated(
         "view", "acl", ("733_location_w6c_position_audit.sql", "749_publication_stamp_scorecard.sql",
-                        "736_location_w5b_scorecard_drop_sample.sql"),
+                        "764_location_w5b_scorecard_drop_sample.sql"),
         "The location scorecard (698, restated by 733 with the position metric, by 749 with the publication stamp "
-        "and by 736 without the pin sample), read by the location gauge as "
+        "and by 764 without the pin sample), read by the location gauge as "
         "service_role; security invoker, every privilege revoked from public, anon and authenticated. The browser "
         "reads the gauge's stored cells and, for the list, the admin-gated location_position_audit_public."),
     "location_jobs": Ungated(

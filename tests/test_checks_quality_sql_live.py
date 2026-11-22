@@ -20,7 +20,7 @@ whole check, in a transaction that always rolls back. The rules pinned:
 - field matrix: the active ads of enabled scraper portals only: fill, booleans and the spellings off the canon;
 - data quality: the floor, divergence and estate-sum shares and the stock's measure gap come off the view, land skipped;
   the ship-time red (realitymix komerční pronájem, 472 of 4,140, LB 10.5 %) is Problem; links are counts per portal;
-- location: the scorecard view (migrations 698, 733, 736) over active ads first written more than NEW_AD_H hours ago, exactly where
+- location: the scorecard view (migrations 698, 733, 749, 764) over active ads first written more than NEW_AD_H hours ago, exactly where
   publishing's visible day ends: a town-less ad (no row, or a Czech or undetermined row with no town) holding
   town-bearing evidence is unresolved (Problem), one holding none page-withheld (Watch), a foreign one neither; the KÚ
   gap reads rows with a town at the running resolver version and spares only an obec holding a KÚ the boundary load
