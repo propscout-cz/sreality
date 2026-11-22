@@ -476,6 +476,14 @@ the transport hands in, each call in a transaction of its own under the same bou
 COSTLY tool (`valuo_valuation`) reads its run's narrowed account in a short `GET` transaction, closes it, and runs shape 3 on the
 service connection, as the Valuo routes do: no tenant transaction across a paid call.
 
+**Named exception — `tenant_pool.own_account_id_released` (`PUT /account/cuzk-login`, #2601): the caller's own
+account from a transaction of its own, closed before the handler waits on an outside service.** The dependency
+`require_account_id` holds the request's tenant transaction until the handler returns; this handler then waits
+on ČÚZK for up to 25 s, which would pin a pooled backend and a worker for that long. The helper gives the same
+answer and the same refusals (403 under X-Act-As, 400 with no account) and returns with nothing open. It reads
+one row and writes none, so there is no second transaction to split a route's reads and writes across. A route
+that touches tenant rows takes the dependency, never this.
+
 **Named exception — `POST /estimations/{run_id}/feedback`: a short tenant transaction, then
 admin-only service-role work.** The route does not take `tenant_conn`; it opens
 `tenant_pool.tenant_transaction(claims, act_as=None, method="POST")` in the handler, for three reasons:

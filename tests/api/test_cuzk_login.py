@@ -76,8 +76,22 @@ def client(monkeypatch: pytest.MonkeyPatch, service: _Opener) -> Any:
     api_main.app.dependency_overrides[tenant_pool.tenant_conn] = lambda: ScriptConn([])
     api_main.app.dependency_overrides[deps.verify_jwt] = lambda: {"sub": _SUB}
     monkeypatch.setattr(tenant_pool, "resolve_account_id", lambda c, claims: _ME)
+    monkeypatch.setattr(tenant_pool, "tenant_transaction", _tenant_transaction)
+    _EVENTS.clear()
     yield TestClient(api_main.app)
     api_main.app.dependency_overrides.clear()
+
+
+_EVENTS: list[str] = []
+
+
+@contextlib.contextmanager
+def _tenant_transaction(claims: dict, *, act_as: Any, method: str) -> Any:
+    _EVENTS.append("tenant open")
+    try:
+        yield ScriptConn([])
+    finally:
+        _EVENTS.append("tenant closed")
 
 
 def _writes(opener: _Opener) -> list[tuple[str, Any]]:
@@ -234,3 +248,22 @@ def test_past_the_budget_nothing_is_sent_to_cuzk(client: Any, service: _Opener, 
     assert resp.status_code == 429 and "15 minutes" in resp.json()["detail"]
     assert checks == [] and _writes(service) == []
     assert PASSWORD not in resp.text
+
+
+def test_no_tenant_transaction_is_open_while_the_route_waits_on_cuzk(client: Any, service: _Opener,
+                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wsdp_client, "check_login", lambda u, p: _EVENTS.append("cuzk") or u)
+    assert client.put(URL, json={"username": "firma01", "password": PASSWORD}).status_code == 200
+    assert _EVENTS == ["tenant open", "tenant closed", "cuzk"]
+
+
+def test_a_throttled_save_says_how_long_to_wait_and_names_no_username(client: Any, monkeypatch: pytest.MonkeyPatch,
+                                                                      caplog: pytest.LogCaptureFixture) -> None:
+    def spent(conn: Any, account: Any, username: str) -> int:
+        raise cuzk_login.Throttled("username")
+
+    monkeypatch.setattr(cuzk_login, "admit_check", spent)
+    with caplog.at_level(logging.DEBUG):
+        resp = client.put(URL, json={"username": "firma01", "password": PASSWORD})
+    assert resp.status_code == 429 and resp.headers["Retry-After"] == "900"
+    assert "firma01" not in resp.text and "firma01" not in caplog.text

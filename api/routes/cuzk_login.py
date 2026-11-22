@@ -28,6 +28,7 @@ _REFUSED = ("ČÚZK refused this login. Check the username and password; "
 _NO_ANSWER = "ČÚZK did not answer, so the login could not be checked. Nothing was saved."
 _THROTTLED = ("Too many login checks that ČÚZK did not accept. Nothing was sent to ČÚZK this time; "
               "try again in 15 minutes.")
+_RETRY_AFTER_S = int(cuzk_login.USERNAME_WINDOW.total_seconds())
 _NO_KEY = "Storing a ČÚZK login is not configured on this server."
 _PASSWORD_LENGTH = "The password must be 1 to 128 characters long."
 _USERNAME = "The username must be 1 to 64 characters long, with no spaces."
@@ -59,9 +60,15 @@ def get_cuzk_login(account_id: uuid.UUID = Depends(tenant_pool.require_account_i
 @router.put("")
 def put_cuzk_login(
     body: Any = Body(),
-    account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
+    claims: dict = Depends(deps.verify_jwt),
+    act_as: uuid.UUID | None = Depends(tenant_pool.act_as_header),
 ) -> dict[str, Any]:
-    """Check the login with ČÚZK, then store it encrypted; a refused login stores nothing."""
+    """Check the login with ČÚZK, then store it encrypted; a refused login stores nothing.
+
+    The account is resolved in a transaction of its own (`own_account_id_released`), not by the
+    `require_account_id` dependency: that one holds the request's tenant transaction until the handler
+    returns, and this handler waits on ČÚZK for up to 25 s."""
+    account_id = tenant_pool.own_account_id_released(claims, act_as, "PUT")
     username, password = _login(body)
     try:
         cuzk_login.require_key()
@@ -73,7 +80,8 @@ def put_cuzk_login(
             check_id = cuzk_login.admit_check(conn, account_id, username)
         except cuzk_login.Throttled as exc:
             LOG.warning("CUZK login check throttled by=%s", exc.args[0])
-            raise HTTPException(status_code=429, detail=_THROTTLED) from None
+            raise HTTPException(status_code=429, detail=_THROTTLED,
+                                headers={"Retry-After": str(_RETRY_AFTER_S)}) from None
     try:
         wsdp_client.check_login(username, password)
     except wsdp_client.WsdpError as exc:
