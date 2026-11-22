@@ -16,6 +16,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { FilterState } from '@/components/FilterForm';
 import Skeleton from '@/components/Skeleton';
 import Stat from '@/components/Stat';
+import BuildingCard from '@/components/listing-detail/BuildingCard';
 import Panel from '@/components/Panel';
 import CityIndexStrip from '@/components/CityIndexStrip';
 import RangeStrip from '@/components/estimation/RangeStrip';
@@ -108,6 +109,7 @@ export default function PropertyOverview({
           onRetryAdverts={onRetrySources}
           about={contactAbout(property)}
         />
+        <BuildingCard propertyId={property.property_id} ad={property} />
         <MarketCard property={property} onOpen={() => onOpen('hodnota')} />
         <CityQualityCard obecId={property.obec_id} />
       </div>
