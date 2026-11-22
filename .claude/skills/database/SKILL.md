@@ -163,7 +163,7 @@ Correct flow for any schema change: (1) write the new numbered migration file in
 `migrations/`; (2) for destructive changes, get explicit approval + back up first;
 (3) apply BEFORE merging — via MCP (`apply_migration`), or with no MCP in the session
 `gh workflow run apply_migration.yml --ref <branch> -f file=NNN_x.sql -f dry_run=false -f confirm=APPLY`
-(`psql -f`, statement autocommit: every statement idempotent, plain `SET lock_timeout`; the database's default `statement_timeout` is 2 min, so a longer statement sets its own); verify
+(`psql -f`, statement autocommit: every statement idempotent, plain `SET lock_timeout`; default `statement_timeout`: 2 min); verify
 with a SELECT; (4) commit the migration file in the same change; (5) report what was applied.
 
 **APPLY BEFORE YOU MERGE when the code reads the new schema.** Merging and applying are
