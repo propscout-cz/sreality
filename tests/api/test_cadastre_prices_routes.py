@@ -33,10 +33,17 @@ def _tenant_transaction(claims: dict, *, act_as: Any, method: str) -> Any:
     yield ScriptConn([])
 
 
+repeats: list[bool] = []
+
+
 @pytest.fixture()
 def bought(monkeypatch: pytest.MonkeyPatch) -> list[tuple[uuid.UUID, int]]:
     calls: list[tuple[uuid.UUID, int]] = []
-    monkeypatch.setattr(cadastre_prices, "buy", lambda account, pid, **kw: calls.append((account, pid)))
+    def buy(account: uuid.UUID, pid: int, **kw: Any) -> None:
+        calls.append((account, pid))
+        repeats.append(kw["repeat"])
+
+    monkeypatch.setattr(cadastre_prices, "buy", buy)
     return calls
 
 
@@ -95,6 +102,39 @@ def test_each_refusal_has_its_own_answer(client: Any, monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(cadastre_prices, "buy", fail)
     assert client.post(URL, json={"cost_czk": 50}).status_code == status
+
+
+@pytest.mark.parametrize(("body", "repeat"), [
+    ({"cost_czk": 50}, False), ({"cost_czk": 50, "repeat": True}, True), ({"cost_czk": 50, "repeat": "yes"}, False),
+])
+def test_a_repeat_is_only_the_explicit_true(client: Any, bought: list, body: dict, repeat: bool) -> None:
+    repeats.clear()
+    assert client.post(URL, json=body).status_code == 200
+    assert repeats == [repeat]
+
+
+def test_a_building_already_bought_answers_the_price_and_the_date(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    import datetime
+
+    def already(account: Any, pid: int, **kw: Any) -> None:
+        raise cadastre_prices.AlreadyBought(datetime.datetime(2026, 11, 22, 10, 0, tzinfo=datetime.UTC))
+
+    monkeypatch.setattr(cadastre_prices, "buy", already)
+    resp = client.post(URL, json={"cost_czk": 50})
+    detail = resp.json()["detail"]
+    assert resp.status_code == 409 and detail["reason"] == "already_bought"
+    assert detail["price_czk"] == 50 and detail["bought_at"].startswith("2026-11-22T10:00")
+
+
+def test_a_login_past_its_budget_is_a_429_that_says_nothing_was_charged(client: Any,
+                                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    def spent(account: Any, pid: int, **kw: Any) -> None:
+        raise cuzk_login.Throttled("username", 86_400)
+
+    monkeypatch.setattr(cadastre_prices, "buy", spent)
+    resp = client.post(URL, json={"cost_czk": 50})
+    assert resp.status_code == 429 and resp.headers["Retry-After"] == "86400"
+    assert "nothing was" in resp.json()["detail"]
 
 
 @pytest.mark.parametrize("method", ["get", "post"])

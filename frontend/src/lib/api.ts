@@ -751,9 +751,11 @@ export interface BuildingPrices {
 }
 export const fetchBuildingPrices = (propertyId: number): Promise<BuildingPrices> =>
   request<BuildingPrices>(`/properties/${propertyId}/building/prices`);
-/* One paid ČÚZK output on the caller's own ČÚZK account; `costCzk` is the price the button showed. */
-export const buyBuildingPrices = (propertyId: number, costCzk: number): Promise<BuildingPrices> =>
-  request<BuildingPrices>(`/properties/${propertyId}/building/prices`, { method: 'POST', json: { cost_czk: costCzk } });
+/* One paid ČÚZK output on the caller's own ČÚZK account; `costCzk` is the price the button showed. `repeat` is the
+ * caller's confirmed wish to pay again for a building already bought; without it the server refuses that. */
+export const buyBuildingPrices = (propertyId: number, costCzk: number, repeat = false): Promise<BuildingPrices> =>
+  request<BuildingPrices>(`/properties/${propertyId}/building/prices`,
+    { method: 'POST', json: repeat ? { cost_czk: costCzk, repeat: true } : { cost_czk: costCzk } });
 /* An account's own ČÚZK WSDP login. The password goes up once and never comes back. */
 export interface CuzkLoginState {
   set: boolean;

@@ -48,6 +48,14 @@ class StillPreparing(RuntimeError):
     """ČÚZK has the order and has not finished the report; asking again resumes it."""
 
 
+class AlreadyBought(RuntimeError):
+    """The account already holds this building's prices; a second paid report needs the caller's `repeat`."""
+
+    def __init__(self, finished_at: Any) -> None:
+        super().__init__("already bought")
+        self.finished_at = finished_at
+
+
 @dataclass(frozen=True)
 class Building:
     code: int
@@ -102,6 +110,41 @@ def begin(conn: psycopg.Connection, account_id: uuid.UUID, building: Building) -
             )
             row = cur.fetchone()
     return Purchase(int(row[0]), row[1])
+
+
+def bought_at(conn: psycopg.Connection, account_id: uuid.UUID, building_code: int) -> Any:
+    """When the account's newest finished purchase of the building finished; None when it has none."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "select max(finished_at) from cadastre_price_purchases "
+            "where account_id = %s and building_code = %s and status = 'done'",
+            (account_id, building_code),
+        )
+        return cur.fetchone()[0]
+
+
+class _LoginUse:
+    """One use of the stored login, counted in the login-check ledger like a save's check (#2608): admitted before
+    the first call to ČÚZK, settled by the first answer. A login ČÚZK refuses here is a refused login there, so a
+    purchase is never a way around the budget."""
+
+    def __init__(self, check_id: int, opener: Opener) -> None:
+        self._check_id, self._opener, self._settled = check_id, opener, False
+
+    def _settle(self, outcome: str) -> None:
+        if not self._settled:
+            self._settled = True
+            with self._opener() as conn:
+                cuzk_login.settle_check(conn, self._check_id, outcome)
+
+    def call(self, fn: Callable[..., Any], *args: Any) -> Any:
+        try:
+            result = fn(*args)
+        except wsdp_client.WsdpError as exc:
+            self._settle("refused" if exc.reason == "refused" else "no_answer")
+            raise
+        self._settle("accepted")
+        return result
 
 
 def mark_ordered(conn: psycopg.Connection, account_id: uuid.UUID, purchase_id: int, report_id: int,
@@ -185,23 +228,36 @@ def state(conn: psycopg.Connection, account_id: uuid.UUID, building_code: int) -
     }
 
 
-def buy(account_id: uuid.UUID, property_id: int, *, opener: Opener,
+def buy(account_id: uuid.UUID, property_id: int, *, opener: Opener, repeat: bool = False,
         sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic) -> Building:
-    """Order (or resume) the account's price report for the property's building and store its deeds."""
+    """Order (or resume) the account's price report for the property's building and store its deeds.
+
+    Refused before anything is sent: a building the account already bought without `repeat` (`AlreadyBought`), and
+    a login use past the login-check budgets (`cuzk_login.Throttled`)."""
     with opener() as conn:
         building = building_of(conn, property_id)
         login = cuzk_login.login_of(conn, account_id)
         if login is None:
             raise NoLogin(str(account_id))
+        with conn.cursor() as cur:
+            cur.execute(
+                "select 1 from cadastre_price_purchases "
+                "where account_id = %s and building_code = %s and status in ('pending', 'ordered')",
+                (account_id, building.code),
+            )
+            resuming = cur.fetchone() is not None
+        if not resuming and not repeat and (at := bought_at(conn, account_id, building.code)) is not None:
+            raise AlreadyBought(at)
+        use = _LoginUse(cuzk_login.admit_check(conn, account_id, login[0]), opener)
         purchase = begin(conn, account_id, building)
     report_id = purchase.report_id
     if report_id is None:
         try:
-            units = wsdp_client.find_units(building.iskn_id, *login)
+            units = use.call(wsdp_client.find_units, building.iskn_id, *login)
             if len(units) > wsdp_client.MAX_PRICE_OBJECTS:
                 raise TooManyUnits(len(units))
             object_type, ids = ("JED_S", [u.iskn_id for u in units]) if units else ("STA_S", [building.iskn_id])
-            ordered = wsdp_client.generate_prices(object_type, ids, *login)
+            ordered = use.call(wsdp_client.generate_prices, object_type, ids, *login)
         except (wsdp_client.WsdpError, TooManyUnits) as exc:
             with opener() as conn:
                 fail(conn, account_id, purchase.id, f"{type(exc).__name__}: {exc}")
@@ -210,11 +266,11 @@ def buy(account_id: uuid.UUID, property_id: int, *, opener: Opener,
         with opener() as conn:
             mark_ordered(conn, account_id, purchase.id, report_id, len(ids))
     deadline = clock() + POLL_FOR_S
-    while (report := wsdp_client.report_state(report_id, *login)).state not in _READY:
+    while (report := use.call(wsdp_client.report_state, report_id, *login)).state not in _READY:
         if clock() >= deadline:
             raise StillPreparing(report.state)
         sleep(POLL_EVERY_S)
-    fetched, document = wsdp_client.fetch_report(report_id, *login)  # the first fetch is the charge
+    fetched, document = use.call(wsdp_client.fetch_report, report_id, *login)  # the first fetch is the charge
     deeds = cadastre_price_report.parse(document)
     with opener() as conn:
         finish(conn, account_id, purchase.id, fetched.price_czk, deeds)

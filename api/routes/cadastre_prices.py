@@ -39,6 +39,12 @@ def _price_ack(body: Any) -> None:
             "message": f"This request costs {cadastre_prices.PRICE_CZK} Kč on your ČÚZK account."})
 
 
+def _throttled(retry_after_s: int) -> str:
+    return ("Too many uses of this ČÚZK login were not accepted, so nothing was sent to ČÚZK and nothing was "
+            f"charged. Try again in about {max(1, round(retry_after_s / 60))} minutes; if your ČÚZK password "
+            "changed, enter it again first (account menu, ČÚZK login).")
+
+
 def _state(account_id: uuid.UUID, property_id: int) -> dict[str, Any]:
     with deps.open_background_conn() as conn:
         try:
@@ -70,11 +76,22 @@ def post_building_prices(
     account_id = tenant_pool.own_account_id_released(claims, act_as, "POST")
     _price_ack(body)
     try:
-        cadastre_prices.buy(account_id, property_id, opener=deps.open_background_conn)
+        cadastre_prices.buy(account_id, property_id, opener=deps.open_background_conn,
+                            repeat=body.get("repeat") is True)
     except cadastre_prices.NoProperty:
         raise HTTPException(status_code=404, detail=_NO_PROPERTY) from None
     except cadastre_prices.NoBuilding:
         raise HTTPException(status_code=422, detail=_NO_BUILDING) from None
+    except cadastre_prices.AlreadyBought as exc:
+        raise HTTPException(status_code=409, detail={
+            "reason": "already_bought", "price_czk": cadastre_prices.PRICE_CZK,
+            "bought_at": exc.finished_at.isoformat() if exc.finished_at else None,
+            "message": f"You already hold this building's cadastre prices. A new report costs another "
+                       f"{cadastre_prices.PRICE_CZK} Kč on your ČÚZK account."}) from None
+    except cuzk_login.Throttled as exc:
+        LOG.warning("CADASTRE price request throttled by=%s retry_after_s=%d", exc.by, exc.retry_after_s)
+        raise HTTPException(status_code=429, detail=_throttled(exc.retry_after_s),
+                            headers={"Retry-After": str(exc.retry_after_s)}) from None
     except cadastre_prices.NoLogin:
         raise HTTPException(status_code=409, detail=_NO_LOGIN) from None
     except cuzk_login.Unreadable:

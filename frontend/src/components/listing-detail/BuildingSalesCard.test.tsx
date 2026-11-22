@@ -68,14 +68,28 @@ describe('<BuildingSalesCard>', () => {
     prices.mockResolvedValue(READY);
     mount();
     fireEvent.click(await screen.findByRole('button', { name: 'Načíst ceny z katastru · 50 Kč' }));
-    await waitFor(() => expect(buy).toHaveBeenCalledWith(7, 50));
+    await waitFor(() => expect(buy).toHaveBeenCalledWith(7, 50, false));
     expect(await screen.findByText('565/31')).toBeInTheDocument();
     expect(screen.getByText('+ pozemek')).toBeInTheDocument();
     expect(screen.getByText(/vidí jen\s+váš účet/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Načíst znovu z katastru · 50 Kč' })).toBeInTheDocument();
   });
 
-  it('asks for the ČÚZK login first and offers no button without it', async () => {
+it('pays again for a building already bought only after a second step that names the price', async () => {
+    prices.mockResolvedValue(BOUGHT);
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Načíst znovu z katastru · 50 Kč' }));
+    expect(buy).not.toHaveBeenCalled();
+    expect(screen.getByText(/Ceny z katastru už máte \(načteny 22\/11\/2026\)/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Zrušit' }));
+    expect(screen.queryByRole('group', { name: 'Potvrzení nového načtení' })).toBeNull();
+    expect(buy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Načíst znovu z katastru · 50 Kč' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Zaplatit 50 Kč a načíst znovu' }));
+    await waitFor(() => expect(buy).toHaveBeenCalledWith(7, 50, true));
+  });
+
+    it('asks for the ČÚZK login first and offers no button without it', async () => {
     prices.mockResolvedValue({ ...READY, login_set: false });
     mount();
     expect(await screen.findByText(/po uložení přihlášení k ČÚZK/)).toBeInTheDocument();

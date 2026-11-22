@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import ErrorBanner from '@/components/ErrorBanner';
 import Panel, { PANEL_ACTION, PanelEmpty } from '@/components/Panel';
@@ -10,7 +11,8 @@ import { advertLink } from '@/lib/portals';
 
 /* Prodeje v domě: the registered sales in the building at the property's door. Two sources in one list, each row
  * naming its own: the shared sales we hold, and the cadastre deeds THIS account bought (visible to no other account).
- * The one paid action is the button, which shows its price and buys on the account's own ČÚZK account. Building-level
+ * The one paid action is the button, which shows its price and buys on the account's own ČÚZK account; paying again
+ * for a building already bought takes a second, explicit step that names the earlier purchase. Building-level
  * facts: the card never says which sale, if any, is this property's own flat. With no building and no sale, no card. */
 
 const pricesKey = (propertyId: number) => ['property-building-prices', propertyId] as const;
@@ -23,9 +25,11 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
     staleTime: 10 * 60_000,
   });
   const pricesQ = useQuery({ queryKey: pricesKey(propertyId), queryFn: () => fetchBuildingPrices(propertyId) });
+  const [confirmingRepeat, setConfirmingRepeat] = useState(false);
   const buy = useMutation({
-    mutationFn: (costCzk: number) => buyBuildingPrices(propertyId, costCzk),
+    mutationFn: ({ costCzk, repeat }: { costCzk: number; repeat: boolean }) => buyBuildingPrices(propertyId, costCzk, repeat),
     onSuccess: (state) => queryClient.setQueryData<BuildingPrices>(pricesKey(propertyId), state),
+    onSettled: () => setConfirmingRepeat(false),
   });
 
   const prices = pricesQ.data;
@@ -37,7 +41,8 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
   let accessory = null;
   if (prices?.available && prices.login_set) {
     accessory = (
-      <button type="button" className={PANEL_ACTION} disabled={buy.isPending} onClick={() => buy.mutate(prices.price_czk)}>
+      <button type="button" className={PANEL_ACTION} disabled={buy.isPending || confirmingRepeat}
+        onClick={() => (bought && !inFlight ? setConfirmingRepeat(true) : buy.mutate({ costCzk: prices.price_czk, repeat: false }))}>
         {buy.isPending
           ? 'Načítám z katastru…'
           : inFlight
@@ -56,6 +61,22 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
         <p className="text-[0.78rem] text-[var(--color-ink-2)]">
           Ceny z katastru načtete po uložení přihlášení k ČÚZK (menu účtu → ČÚZK login). Platí se na vašem účtu u ČÚZK.
         </p>
+      ) : null}
+      {confirmingRepeat && bought && prices ? (
+        <div role="group" aria-label="Potvrzení nového načtení"
+          className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-3 py-2 text-[0.78rem] text-[var(--color-ink-2)]">
+          <span className="min-w-0 flex-1">
+            Ceny z katastru už máte{bought.finished_at ? ` (načteny ${fmtDateSlash(bought.finished_at)})` : ''}. Nové načtení
+            stojí dalších {prices.price_czk} Kč na vašem účtu u ČÚZK.
+          </span>
+          <button type="button" className={PANEL_ACTION} disabled={buy.isPending}
+            onClick={() => buy.mutate({ costCzk: prices.price_czk, repeat: true })}>
+            {buy.isPending ? 'Načítám z katastru…' : `Zaplatit ${prices.price_czk} Kč a načíst znovu`}
+          </button>
+          <button type="button" className={PANEL_ACTION} disabled={buy.isPending} onClick={() => setConfirmingRepeat(false)}>
+            Zrušit
+          </button>
+        </div>
       ) : null}
       {buy.isError ? <ErrorBanner flush title="Nenačteno:" message={buy.error.message} /> : null}
       {rows.length === 0 ? (
