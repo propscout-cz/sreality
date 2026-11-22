@@ -11,6 +11,7 @@ import SchemeSwatch from './SchemeSwatch';
 import { SegmentedBar } from './controls';
 
 const AgentLimitDialog = lazyChunk(() => import('./runs/AgentLimitDialog'));
+const CuzkLoginDialog = lazyChunk(() => import('./account/CuzkLoginDialog'));
 
 /* Additive UI only — does not gate anything. Anonymous users see a "Sign in"
  * link; logged-in users see who they are + a sign-out affordance. */
@@ -26,6 +27,7 @@ export default function AccountMenu() {
   /* The API's one gate decides, the answer the nav's Runs link reads: no agents, no limit to set. */
   const { data: runOptions } = useAgentRunOptions({ enabled: user != null });
   const [limitOpen, setLimitOpen] = useState(false);
+  const [cuzkOpen, setCuzkOpen] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -128,6 +130,17 @@ export default function AccountMenu() {
               Agent spending limit
             </button>
           )}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              setCuzkOpen(true);
+            }}
+            className="block w-full px-3 py-1.5 text-left text-[0.8rem] text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)] hover:text-[var(--color-ink)]"
+          >
+            ČÚZK login
+          </button>
           {desktopView && (
             <button
               type="button"
@@ -151,6 +164,11 @@ export default function AccountMenu() {
           </button>
         </div>
       ) : null}
+      {cuzkOpen && (
+        <Suspense fallback={null}>
+          <CuzkLoginDialog onClose={() => setCuzkOpen(false)} />
+        </Suspense>
+      )}
       {limitOpen && (
         <Suspense fallback={null}>
           <AgentLimitDialog onClose={() => setLimitOpen(false)} />
