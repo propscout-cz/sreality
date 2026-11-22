@@ -119,27 +119,41 @@ const LEGENDS_FOLDED_KEY = 'sreality.browse.mapLegendsFolded';
 /* Bottom-left, over the scale: the keys of every layer that is on, so a choropleth
  * reads with the panel closed. It folds to one button (and stays folded in this
  * browser) when the map is too narrow to spare it. `centreMark`: an area card reads
- * the map's centre, so a cross marks it while the keys show. Place it in the map's
- * root, beside the map's container. */
-export function MapLegendDock({ centreMark = false, children }: { centreMark?: boolean; children: ReactNode }) {
+ * the map's centre, so a cross marks it while the keys show. `alert`: a layer that
+ * failed to load, above the keys and never folded away (a remembered fold must not
+ * hide why a layer is empty); with no keys (`children` null) there is no fold button.
+ * Place it in the map's root, beside the map's container. */
+export function MapLegendDock({
+  centreMark = false,
+  alert,
+  children,
+}: {
+  centreMark?: boolean;
+  alert?: ReactNode;
+  children: ReactNode;
+}) {
   const folded = usePersistedFlag(LEGENDS_FOLDED_KEY, false);
+  const hasKeys = children != null;
   return (
     <>
       {centreMark && !folded.value && <CentreMark />}
       <div className="pointer-events-none absolute z-[3] bottom-9 left-2 flex flex-col gap-1.5 items-start max-h-[45%] max-w-[calc(100%-4rem)]">
-        {!folded.value && (
+        {alert && <div className="pointer-events-auto shrink-0 w-[220px]">{alert}</div>}
+        {hasKeys && !folded.value && (
           <div className="pointer-events-auto flex flex-col gap-1.5 items-start min-h-0 overflow-y-auto">
             {children}
           </div>
         )}
-        <button
-          type="button"
-          onClick={folded.toggle}
-          aria-expanded={!folded.value}
-          className="pointer-events-auto shrink-0 inline-flex items-center gap-1 px-2 py-0.5 text-[0.7rem] rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] shadow-[0_2px_6px_rgba(0,0,0,0.04)]"
-        >
-          {folded.value ? 'Ukázat legendu' : 'Skrýt legendu'}
-        </button>
+        {hasKeys && (
+          <button
+            type="button"
+            onClick={folded.toggle}
+            aria-expanded={!folded.value}
+            className="pointer-events-auto shrink-0 inline-flex items-center gap-1 px-2 py-0.5 text-[0.7rem] rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] shadow-[0_2px_6px_rgba(0,0,0,0.04)]"
+          >
+            {folded.value ? 'Ukázat legendu' : 'Skrýt legendu'}
+          </button>
+        )}
       </div>
     </>
   );

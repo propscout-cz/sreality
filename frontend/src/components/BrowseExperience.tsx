@@ -47,6 +47,7 @@ import type { MapySuggestion } from '@/lib/maps';
 import { fetchDatasets, fetchGrowth, fetchGrowthShapes, fetchSeries, priceStatsKeys } from '@/lib/priceStats';
 import { buildHoverData, type GrowthMetric } from '@/lib/growthChoropleth';
 import { hasRegistryLayers, useMapOverlayRegistry } from '@/lib/mapOverlays';
+import { readGroupFailure } from '@/lib/readGroup';
 import {
   countedWords,
   isDefault,
@@ -305,6 +306,9 @@ export default function BrowseExperience({
     for (const p of cityPolygonsQuery.data ?? []) m.set(p.city_id, p.geojson);
     return m;
   }, [cityPolygonsQuery.data]);
+  /* The four city reads fail as one layer: any of them failed leaves Města empty
+   * (2026-11-22: the outlines alone failed, the key showed over an empty map). */
+  const cityLoadFailure = readGroupFailure([citiesQuery, cityDefsQuery, cityValuesQuery, cityPolygonsQuery]);
 
   /* The reference-overlay registry (metro, flood zones, kraje, the rent map,
    * …): tiny, and the same cache entry the listing-detail and comparables maps
@@ -736,6 +740,7 @@ export default function BrowseExperience({
                     cityIndexValues={cityOverlay.cityIndexValues}
                     cityIndexValuesAll={cityOverlay.cityIndexValuesAll}
                     cityIndexDefinitions={cityDefsQuery.data ?? []}
+                    cityLoadFailure={cityLoadFailure}
                     onColorByIndexChange={(name) => view.setOverlay({ colorByIndexName: name })}
                     overlayRegistry={overlayRegistryQuery.data}
                     overlayLayers={overlay.layers}
