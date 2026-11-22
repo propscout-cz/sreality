@@ -32,11 +32,14 @@ _ENVELOPE = (
 
 
 class WsdpError(Exception):
-    """`reason` is refused | timeout | unreachable | status | unreadable | misconfigured."""
+    """`reason` is refused | timeout | unreachable | status | unreadable | misconfigured | service.
 
-    def __init__(self, reason: str, status: int | None = None) -> None:
+    `authenticated`: the service accepted the login and then answered with an error of its own (`service`: a
+    `zprava` at level CHYBA) or with something we cannot read. Not a refused login, whatever else it is."""
+
+    def __init__(self, reason: str, status: int | None = None, *, authenticated: bool = False) -> None:
         super().__init__(f"wsdp {reason} status={status}")
-        self.reason, self.status = reason, status
+        self.reason, self.status, self.authenticated = reason, status, authenticated
 
 
 def base_url() -> str:
@@ -108,7 +111,7 @@ def _result_ok(root: ET.Element) -> None:
     """The service's own verdict: a `zprava` at level CHYBA is a refusal with HTTP 200."""
     for el in root.iter():
         if _local(el) == "zprava" and el.get("uroven") == "CHYBA":
-            raise WsdpError("status", int(el.get("kod") or 0))
+            raise WsdpError("service", int(el.get("kod") or 0), authenticated=True)
 
 
 def _child_text(el: ET.Element, name: str) -> str:
@@ -139,7 +142,7 @@ def _report(root: ET.Element) -> tuple[Report, ET.Element]:
     _result_ok(root)
     el = next((e for e in root.iter() if _local(e) == "report"), None)
     if el is None or not _child_text(el, "id").isdigit():
-        raise WsdpError("unreadable")
+        raise WsdpError("unreadable", authenticated=True)
     price = _child_text(el, "cena")
     return Report(int(_child_text(el, "id")), _child_text(el, "stav"), int(price) if price.isdigit() else None), el
 
@@ -177,5 +180,8 @@ def fetch_report(report_id: int, username: str, password: str) -> tuple[Report, 
     report, el = _report(root)
     body = _child_text(el, "souborSestavy")
     if not body:
-        raise WsdpError("unreadable")
-    return report, base64.b64decode(body)
+        raise WsdpError("unreadable", authenticated=True)
+    try:
+        return report, base64.b64decode(body, validate=True)
+    except ValueError:
+        raise WsdpError("unreadable", authenticated=True) from None

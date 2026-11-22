@@ -11,11 +11,13 @@ import { advertLink } from '@/lib/portals';
 
 /* Prodeje v domě: the registered sales in the building at the property's door. Two sources in one list, each row
  * naming its own: the shared sales we hold, and the cadastre deeds THIS account bought (visible to no other account).
- * The one paid action is the button, which shows its price and buys on the account's own ČÚZK account; paying again
- * for a building already bought takes a second, explicit step that names the earlier purchase. Building-level
- * facts: the card never says which sale, if any, is this property's own flat. With no building and no sale, no card. */
+ * The one paid action buys on the account's own ČÚZK account, and never on one click: the button opens a step that
+ * names the price (and, for a building already bought, the earlier purchase) before anything is sent. A purchase in
+ * flight is finished, not bought again. Building-level facts: the card never says which sale, if any, is this
+ * property's own flat. With no building and no sale, no card. */
 
 const pricesKey = (propertyId: number) => ['property-building-prices', propertyId] as const;
+const NOTE = 'text-[0.78rem] text-[var(--color-ink-2)]';
 
 export default function BuildingSalesCard({ propertyId }: { propertyId: number }) {
   const queryClient = useQueryClient();
@@ -25,62 +27,102 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
     staleTime: 10 * 60_000,
   });
   const pricesQ = useQuery({ queryKey: pricesKey(propertyId), queryFn: () => fetchBuildingPrices(propertyId) });
-  const [confirmingRepeat, setConfirmingRepeat] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const buy = useMutation({
     mutationFn: ({ costCzk, repeat }: { costCzk: number; repeat: boolean }) => buyBuildingPrices(propertyId, costCzk, repeat),
     onSuccess: (state) => queryClient.setQueryData<BuildingPrices>(pricesKey(propertyId), state),
-    onSettled: () => setConfirmingRepeat(false),
+    /* A refusal can change what the card may offer (a login ČÚZK refused, a purchase that ended). */
+    onError: () => void queryClient.invalidateQueries({ queryKey: pricesKey(propertyId) }),
+    onSettled: () => setConfirming(false),
   });
 
   const prices = pricesQ.data;
   const rows = saleRows(salesQ.data?.sales ?? [], prices?.deeds ?? []);
   if (rows.length === 0 && !prices?.available) return null;
 
-  const bought = prices?.purchase?.status === 'done' ? prices.purchase : null;
-  const inFlight = prices?.purchase != null && prices.purchase.status !== 'done';
+  const status = prices?.purchase?.status ?? null;
+  const bought = status === 'done' ? prices!.purchase : null;
+  const inFlight = status === 'pending' || status === 'ordered';
+  const unread = status === 'paid_unread';
+  const canAsk = !!prices?.available && prices.login_set && !prices.login_refused;
+  const price = prices?.price_czk ?? 0;
+
   let accessory = null;
-  if (prices?.available && prices.login_set) {
+  if (canAsk) {
+    const label = buy.isPending
+      ? 'Načítám z katastru…'
+      : unread
+        ? 'Zkusit přečíst znovu (zdarma)'
+        : inFlight
+          ? `Dokončit načtení z katastru · ${price} Kč`
+          : `${bought ? 'Načíst znovu' : 'Načíst ceny'} z katastru · ${price} Kč`;
+    /* Finishing a purchase already confirmed, and re-reading a file already paid for, need no second step. */
+    const direct = inFlight || unread;
     accessory = (
-      <button type="button" className={PANEL_ACTION} disabled={buy.isPending || confirmingRepeat}
-        onClick={() => (bought && !inFlight ? setConfirmingRepeat(true) : buy.mutate({ costCzk: prices.price_czk, repeat: false }))}>
-        {buy.isPending
-          ? 'Načítám z katastru…'
-          : inFlight
-            ? 'Dokončit načtení z katastru'
-            : `${bought ? 'Načíst znovu' : 'Načíst ceny'} z katastru · ${prices.price_czk} Kč`}
+      <button type="button" className={PANEL_ACTION} disabled={buy.isPending || confirming}
+        onClick={() => (direct ? buy.mutate({ costCzk: price, repeat: false }) : setConfirming(true))}>
+        {label}
       </button>
     );
   }
   const note = bought?.finished_at
     ? `ceny z katastru načteny ${fmtDateSlash(bought.finished_at)}`
     : 'registrované prodeje ve stejné budově';
+  const boughtNothing = !!bought && !rows.some((r) => r.source === 'katastr');
 
   return (
     <Panel title="Prodeje v domě" count={rows.length} note={note} accessory={accessory}>
       {prices?.available && !prices.login_set ? (
-        <p className="text-[0.78rem] text-[var(--color-ink-2)]">
+        <p className={NOTE}>
           Ceny z katastru načtete po uložení přihlášení k ČÚZK (menu účtu → ČÚZK login). Platí se na vašem účtu u ČÚZK.
         </p>
       ) : null}
-      {confirmingRepeat && bought && prices ? (
-        <div role="group" aria-label="Potvrzení nového načtení"
+      {prices?.available && prices.login_set && prices.login_refused ? (
+        <p role="status" className={NOTE}>
+          ČÚZK vaše uložené přihlášení odmítl, proto se na něj nic dalšího neodesílá. Uložte ho znovu (menu účtu → ČÚZK
+          login); váš účet u ČÚZK zablokován není.
+        </p>
+      ) : null}
+      {inFlight && !buy.isPending ? (
+        <p role="status" className={NOTE}>
+          Načtení z katastru je rozpracované: ČÚZK zprávu připravuje. Dokončením se nic neobjedná podruhé, je to stále
+          táž objednávka za {price} Kč.
+        </p>
+      ) : null}
+      {unread ? (
+        <p role="status" className={NOTE}>
+          Zprávu z katastru jste zaplatili, ale nepodařilo se ji přečíst. Je uložená a přečteme ji bez nového nákupu;
+          budovu znovu nekupujte.
+        </p>
+      ) : null}
+      {boughtNothing ? (
+        <p role="status" className={NOTE}>
+          Katastr k této budově neeviduje žádnou cenu (načteno {fmtDateSlash(bought!.finished_at ?? bought!.requested_at)}).
+        </p>
+      ) : null}
+      {confirming && canAsk ? (
+        <div role="group" aria-label="Potvrzení placeného načtení"
           className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-3 py-2 text-[0.78rem] text-[var(--color-ink-2)]">
           <span className="min-w-0 flex-1">
-            Ceny z katastru už máte{bought.finished_at ? ` (načteny ${fmtDateSlash(bought.finished_at)})` : ''}. Nové načtení
-            stojí dalších {prices.price_czk} Kč na vašem účtu u ČÚZK.
+            {bought
+              ? `Ceny z katastru už máte${bought.finished_at ? ` (načteny ${fmtDateSlash(bought.finished_at)})` : ''}. Nové načtení stojí dalších ${price} Kč na vašem účtu u ČÚZK.`
+              : `Načtení cen z katastru stojí ${price} Kč na vašem účtu u ČÚZK.`}
+            {' '}Platí se i tehdy, když katastr k budově žádnou cenu neeviduje.
           </span>
           <button type="button" className={PANEL_ACTION} disabled={buy.isPending}
-            onClick={() => buy.mutate({ costCzk: prices.price_czk, repeat: true })}>
-            {buy.isPending ? 'Načítám z katastru…' : `Zaplatit ${prices.price_czk} Kč a načíst znovu`}
+            onClick={() => buy.mutate({ costCzk: price, repeat: !!bought })}>
+            {buy.isPending ? 'Načítám z katastru…' : `Zaplatit ${price} Kč a načíst`}
           </button>
-          <button type="button" className={PANEL_ACTION} disabled={buy.isPending} onClick={() => setConfirmingRepeat(false)}>
+          <button type="button" className={PANEL_ACTION} disabled={buy.isPending} onClick={() => setConfirming(false)}>
             Zrušit
           </button>
         </div>
       ) : null}
       {buy.isError ? <ErrorBanner flush title="Nenačteno:" message={buy.error.message} /> : null}
       {rows.length === 0 ? (
-        <PanelEmpty>Žádný prodej v tomto domě zatím neevidujeme. Z katastru zatím nenačteno.</PanelEmpty>
+        <PanelEmpty>
+          Žádný prodej v tomto domě zatím neevidujeme.{bought || unread ? '' : ' Z katastru zatím nenačteno.'}
+        </PanelEmpty>
       ) : (
         /* A table that scrolls keeps its own box (system.md § Section cards). */
         <div className="overflow-x-auto rounded-[var(--radius-md)] border border-[var(--color-rule)]">

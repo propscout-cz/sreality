@@ -5,14 +5,27 @@
 -- account. Operator ruling 2026-11-22: a bought price is visible ONLY to the account that bought it, so
 -- neither table is shared and neither joins `sold_transactions`.
 --
---   cadastre_price_purchases  one row per request, written BEFORE the report is ordered. It is the
---                             spending ledger and the resume point: `report_id` is stored the moment
---                             ČÚZK accepts the order, so an interrupted request picks the same report up
---                             instead of ordering (and paying for) a second one.
+--   cadastre_price_purchases  one row per request, written BEFORE anything is sent to ČÚZK. It is the
+--                             spending ledger and the purchase's state:
+--                               pending     claimed by ONE request, which alone may order (`claimed_at` is
+--                                           its claim; another request may take a claim only once it is stale)
+--                               ordered     ČÚZK accepted the order, `report_id` is known; `fetch_sent_at` is
+--                                           set before the fetch that charges, so a lost answer is known
+--                               done        fetched, charged (`cost_czk`), its deeds stored
+--                               failed      ended with nothing charged (before the order, or a report ČÚZK no
+--                                           longer serves that was never fetched)
+--                               paid_unread fetched, so charged or possibly charged, but its deeds are not
+--                                           stored; `raw_report` keeps the file so nothing paid for is lost
+--                             `raw_report` is the report file encrypted with the API's key (it names the
+--                             requester's WSDP login); it is cleared the moment the deeds are stored.
 --   cadastre_deeds            what a finished purchase returned: one row per deed. A deed has ONE price
 --                             for everything it transfers, so its properties ride in `properties`
---                             ([{kind, iskn_id, label}]) and no row is per unit. No area, no owner: the
---                             report states neither.
+--                             ([{kind, iskn_id, label}]) and no row is per unit. Kept: proceeding number,
+--                             deed kind, price, currency, three dates, the properties. NOT kept, because the
+--                             report states none: names, birth numbers, addresses of persons, shares, areas.
+--                             Kept until the account is deleted; the buyer paid for them.
+--   account_cuzk_logins.refused_at  set when ČÚZK refuses the stored login during a purchase: no further
+--                             purchase is sent on it until the login is saved again (which clears it).
 --
 -- Service-role only, like `account_cuzk_logins`: RLS on, no policy, no browser grant; the API names the
 -- caller's own account in every statement. An account's deletion takes its rows.
@@ -29,14 +42,19 @@ create table if not exists public.cadastre_price_purchases (
   iskn_building_id bigint      not null,
   object_count     integer,
   status           text        not null default 'pending'
-                   check (status in ('pending', 'ordered', 'done', 'failed')),
+                   check (status in ('pending', 'ordered', 'done', 'failed', 'paid_unread')),
+  claimed_at       timestamptz not null default now(),
   report_id        bigint,
+  fetch_sent_at    timestamptz,
   cost_czk         integer,
+  raw_report       bytea,
   error            text,
   requested_at     timestamptz not null default now(),
   finished_at      timestamptz,
   constraint cadastre_price_purchases_ordered_has_report
-    check (status not in ('ordered', 'done') or report_id is not null)
+    check (status not in ('ordered', 'done', 'paid_unread') or report_id is not null),
+  constraint cadastre_price_purchases_raw_only_unread
+    check (raw_report is null or status in ('ordered', 'paid_unread'))
 );
 
 -- One request in flight per account and building: the second click resumes, it never orders twice.
@@ -60,6 +78,8 @@ create table if not exists public.cadastre_deeds (
 );
 
 create index if not exists cadastre_deeds_purchase_idx on public.cadastre_deeds (purchase_id);
+
+alter table public.account_cuzk_logins add column if not exists refused_at timestamptz;
 
 alter table public.cadastre_price_purchases enable row level security;
 alter table public.cadastre_deeds enable row level security;

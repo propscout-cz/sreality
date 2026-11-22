@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 from typing import Any
 
@@ -66,19 +65,31 @@ def test_a_finished_report_states_its_price(sent):
     assert w.report_state(222936340011, "u", "p") == w.Report(222936340011, "zpracován", 50)
 
 
-def test_a_fetched_report_is_its_decoded_file(sent):
+def test_a_fetched_report_is_its_decoded_file_and_reads_as_deeds(sent):
+    """The answer as the trial service gave it (recorded 2026-11-22), not one built by this test."""
+    from api import cadastre_price_report
+
+    sent["answer"] = (FIX / "cenyNem_bldg311151306_3fetch.resp.xml").read_bytes()
+    report, body = w.fetch_report(222937329011, "u", "p")
+    assert (report.id, report.state, report.price_czk) == (222937329011, "zaúčtován", 50)
+    deeds = cadastre_price_report.parse(body)
+    assert deeds and all(d.proceeding and d.properties for d in deeds)
+
+
+def test_a_report_file_that_is_not_base64_is_an_error_after_the_login_was_accepted(sent):
     poll = (FIX / "cenyNem_bldg311151306_2poll_222936340011.resp.xml").read_text(encoding="utf-8")
-    file = base64.b64encode(b"<CenoveUdajeDleNemovitosti/>").decode()
-    sent["answer"] = poll.replace("</ns0:report>", f"<ns0:souborSestavy>{file}</ns0:souborSestavy></ns0:report>")
-    report, body = w.fetch_report(222936340011, "u", "p")
-    assert report.price_czk == 50 and body == b"<CenoveUdajeDleNemovitosti/>"
+    sent["answer"] = poll.replace("</ns0:report>", "<ns0:souborSestavy>%%%</ns0:souborSestavy></ns0:report>")
+    with pytest.raises(w.WsdpError) as unreadable:
+        w.fetch_report(222936340011, "u", "p")
+    assert unreadable.value.reason == "unreadable" and unreadable.value.authenticated
 
 
 def test_a_refusal_inside_a_200_answer_is_an_error(sent):
     sent["answer"] = ERROR
     with pytest.raises(w.WsdpError) as refused:
         w.generate_prices("STA_S", [1], "u", "p")
-    assert (refused.value.reason, refused.value.status) == ("status", 505)
+    assert (refused.value.reason, refused.value.status) == ("service", 505)
+    assert refused.value.authenticated, "ČÚZK accepted the login before it refused the request"
 
 
 def test_only_units_or_buildings_can_be_priced(sent):

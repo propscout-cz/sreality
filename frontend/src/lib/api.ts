@@ -744,8 +744,12 @@ export interface BuildingPrices {
   /* false: the property's door names no building the cadastre knows, so nothing can be asked. */
   available: boolean;
   login_set: boolean;
+  /* ČÚZK refused the stored login during a purchase: nothing is sent on it until it is saved again. */
+  login_refused: boolean;
   price_czk: number;
-  purchase: { status: 'pending' | 'ordered' | 'done'; cost_czk: number | null; object_count: number | null;
+  /* The newest request that did not end uncharged. pending/ordered: in flight; paid_unread: paid for, its file
+   * kept but not yet read (asking again re-reads it, free). */
+  purchase: { status: 'pending' | 'ordered' | 'done' | 'paid_unread'; cost_czk: number | null; object_count: number | null;
               requested_at: string; finished_at: string | null } | null;
   deeds: CadastreDeed[];
 }
@@ -761,6 +765,7 @@ export interface CuzkLoginState {
   set: boolean;
   username: string | null;
   checked_at: string | null;
+  refused?: boolean;
 }
 export const fetchCuzkLogin = (): Promise<CuzkLoginState> => request<CuzkLoginState>('/account/cuzk-login');
 export const saveCuzkLogin = (login: { username: string; password: string }): Promise<CuzkLoginState> =>

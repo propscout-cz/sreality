@@ -46,8 +46,8 @@ def _is(verb: str) -> Any:
 @pytest.fixture()
 def service(monkeypatch: pytest.MonkeyPatch) -> _Opener:
     opener = _Opener(ScriptConn([
-        (_is("select"), [("firma01", _WHEN)]),
-        (_is("insert"), [("firma01", _WHEN)]),
+        (_is("select"), [("firma01", _WHEN, None)]),
+        (_is("insert"), [("firma01", _WHEN, None)]),
     ]))
     monkeypatch.setattr(deps, "open_background_conn", opener)
     return opener
@@ -101,7 +101,7 @@ def _writes(opener: _Opener) -> list[tuple[str, Any]]:
 def test_the_state_names_the_username_and_never_the_password(client: Any, service: _Opener) -> None:
     resp = client.get(URL)
     assert resp.status_code == 200
-    assert resp.json() == {"set": True, "username": "firma01", "checked_at": _WHEN.isoformat()}
+    assert resp.json() == {"set": True, "username": "firma01", "checked_at": _WHEN.isoformat(), "refused": False}
     assert service.conn.executed[0][1] == (_ME,)
 
 
@@ -173,7 +173,7 @@ def test_a_login_is_never_acted_for(client: Any, service: _Opener, checks: list,
 
 def test_the_store_round_trips_and_a_changed_key_is_unreadable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(cuzk_login.KEY_ENV, _KEY)
-    conn = ScriptConn([(_is("insert"), [("firma01", _WHEN)])])
+    conn = ScriptConn([(_is("insert"), [("firma01", _WHEN, None)])])
     cuzk_login.save(conn, _ME, "firma01", PASSWORD, _WHEN)
     token = conn.executed[0][1][2]
     reader = ScriptConn([(_is("select"), [("firma01", token)])])
@@ -290,3 +290,12 @@ def test_a_misconfigured_address_sends_nothing_and_spends_nothing(client: Any, l
     monkeypatch.setenv(wsdp_client.BASE_ENV, "http://example.com/")
     assert client.put(URL, json={"username": "firma01", "password": PASSWORD}).status_code == 502
     assert ledger == {"admitted": [], "settled": []} and checks == []
+
+
+def test_a_login_cuzk_refused_in_use_reads_refused_until_it_is_saved_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(cuzk_login.KEY_ENV, _KEY)
+    held = ScriptConn([(_is("select"), [("firma01", _WHEN, _WHEN)])])
+    assert cuzk_login.state(held, _ME)["refused"] is True
+    saved = ScriptConn([(_is("insert"), [("firma01", _WHEN, None)])])
+    assert cuzk_login.save(saved, _ME, "firma01", PASSWORD, _WHEN)["refused"] is False
+    assert "refused_at = null" in saved.executed[0][0]

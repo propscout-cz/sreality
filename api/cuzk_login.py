@@ -24,13 +24,16 @@ KEY_ENV = "CUZK_LOGIN_KEY"
 # also forgets after USERNAME_WINDOW; that is the one place this is a judgement and not ČÚZK's rule: an attacker
 # who knows a username can make ČÚZK's counter reach three across two windows unless its owner logged in between.
 # A check in flight, and one ČÚZK did not answer, count as unaccepted: we cannot know that ČÚZK did not count them.
+# A cadastre price purchase (`api/cadastre_prices.py`) takes ONE row for its whole run of calls (up to ~35: two to
+# order, a poll every two seconds for a minute, one fetch): all carry the same login, so its first answer settles
+# the row, and a refusal later in the run re-settles it as refused and ends the purchase.
 USERNAME_WINDOW = datetime.timedelta(hours=24)
 USERNAME_BUDGET = 2
 # One account over any usernames, per hour: unaccepted ones, so it cannot walk a list; and all of them whatever
 # the outcome, so a valid login cannot be looped against ČÚZK from our address.
 ACCOUNT_WINDOW = datetime.timedelta(hours=1)
 ACCOUNT_UNACCEPTED_BUDGET = 5
-ACCOUNT_TOTAL_BUDGET = 10
+ACCOUNT_TOTAL_BUDGET = 10  # so also at most ten purchase requests an hour, resumes included
 LEDGER_KEEPS = datetime.timedelta(days=2)
 _LOCK_ACCOUNT, _LOCK_USERNAME = 2601, 2600  # advisory-lock namespaces, always taken in this order
 
@@ -67,14 +70,34 @@ def require_key() -> None:
 
 def _state(row: tuple[Any, ...] | None) -> dict[str, Any]:
     if row is None:
-        return {"set": False, "username": None, "checked_at": None}
-    return {"set": True, "username": row[0], "checked_at": row[1].isoformat()}
+        return {"set": False, "username": None, "checked_at": None, "refused": False}
+    return {"set": True, "username": row[0], "checked_at": row[1].isoformat(), "refused": row[2] is not None}
 
 
 def state(conn: psycopg.Connection, account_id: uuid.UUID) -> dict[str, Any]:
     with conn.cursor() as cur:
-        cur.execute("select username, checked_at from account_cuzk_logins where account_id = %s", (account_id,))
+        cur.execute("select username, checked_at, refused_at from account_cuzk_logins where account_id = %s",
+                    (account_id,))
         return _state(cur.fetchone())
+
+
+def mark_refused(conn: psycopg.Connection, account_id: uuid.UUID) -> None:
+    """ČÚZK refused the stored login in use: nothing more is sent on it until it is saved again."""
+    with conn.cursor() as cur:
+        cur.execute("update account_cuzk_logins set refused_at = now() where account_id = %s and refused_at is null",
+                    (account_id,))
+
+
+def seal(data: bytes) -> bytes:
+    """Encrypt a document that names the account's ČÚZK login, with the key the passwords use."""
+    return _box().encrypt(data)
+
+
+def unseal(token: bytes) -> bytes:
+    try:
+        return _box().decrypt(bytes(token))
+    except InvalidToken:
+        raise Unreadable("sealed document") from None
 
 
 def save(conn: psycopg.Connection, account_id: uuid.UUID, username: str, password: str,
@@ -87,8 +110,8 @@ def save(conn: psycopg.Connection, account_id: uuid.UUID, username: str, passwor
             values (%s, %s, %s, %s)
             on conflict (account_id) do update set
                    username = excluded.username, password_enc = excluded.password_enc,
-                   checked_at = excluded.checked_at, updated_at = now()
-            returning username, checked_at
+                   checked_at = excluded.checked_at, updated_at = now(), refused_at = null
+            returning username, checked_at, refused_at
             """,
             (account_id, username, token, checked_at),
         )
