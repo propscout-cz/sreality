@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-import { PLACES_UNAVAILABLE, type PlaceRow } from '@/lib/places';
+import type { PlaceRow } from '@/lib/places';
 import type { PickResult } from '@/lib/locationQuality';
 
 const fetchPlaces = vi.hoisted(() => vi.fn());
@@ -88,7 +88,7 @@ describe('<AddressPicker>', () => {
     const invalidated = renderPicker();
     await pick(DOOR);
     const status = await within(panel()).findByRole('status');
-    await waitFor(() => expect(status).toHaveTextContent('Adresní místoLipová 12, Betov · Alfov'));
+    await waitFor(() => expect(status).toHaveTextContent('AdresaLipová 12, Betov · Alfov'));
 
     fireEvent.click(screen.getByRole('button', { name: 'Uložit pro všechny inzeráty (2)' }));
     await waitFor(() => expect(screen.queryByRole('group', { name: PENCIL })).toBeNull());
@@ -106,7 +106,7 @@ describe('<AddressPicker>', () => {
   });
 
   it('says own search is unavailable and keeps the box', async () => {
-    fetchPlaces.mockRejectedValue(new Error(PLACES_UNAVAILABLE));
+    fetchPlaces.mockRejectedValue(new Error('HTTP 503'));
     renderPicker();
     fireEvent.click(screen.getByRole('button', { name: PENCIL }));
     const box = await screen.findByRole('textbox', { name: 'Adresa, ulice nebo obec' });

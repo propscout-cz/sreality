@@ -274,14 +274,16 @@ describe('<FilterSidebar> broker', () => {
 });
 
 describe('<FilterSidebar> location pick', () => {
-  it('keeps a place pick and a sidebar change made after it', async () => {
+  it('keeps a place pick and a sidebar change made after it, and hands the picked row to the map', async () => {
     vi.mocked(api.listCollections).mockImplementation(never);
     vi.mocked(api.listTags).mockImplementation(never);
     let latest: ListingFilters = DEFAULT_FILTERS;
+    const onLocationPick = vi.fn();
     function Host() {
       const [filters, setFilters] = useState<ListingFilters>(DEFAULT_FILTERS);
       return (
         <FilterSidebar placeCircle={PLACE}
+          onLocationPick={onLocationPick}
           onReset={() => {}}
           filters={filters}
           onChange={(next) => {
@@ -298,11 +300,11 @@ describe('<FilterSidebar> location pick', () => {
     );
     const user = userEvent.setup();
 
-    fetchPlaces.mockResolvedValue([{
-      level: 'ulice', id: 666742, name: 'Na Rybníčkách', context: 'Pardubice', point: { lat: 50.03, lng: 15.77 },
-    }]);
+    const row = { level: 'ulice', id: 666742, name: 'Na Rybníčkách', context: 'Pardubice', point: { lat: 50.03, lng: 15.77 } };
+    fetchPlaces.mockResolvedValue([row]);
     await user.type(screen.getByRole('textbox', { name: 'Location' }), 'Na Ryb');
     await user.click(within(await screen.findByRole('listbox')).getByRole('button'));
+    expect(onLocationPick).toHaveBeenCalledWith(row);
 
     await user.click(screen.getByRole('button', { name: '2+kk' }));
     await waitFor(() => expect(latest.dispositions).toEqual(['2+kk']));

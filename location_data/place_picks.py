@@ -1,6 +1,6 @@
 """Place picks (spec #2441 Part 1, ruling Q10): what a place box's pick named while the box was on Mapy, kept as own
-place search's holdout. Nothing records one since the switch-over (#2453), whose deploy empties the table; Stage B
-(#2455) drops it. `picks_between` is the one reader, shared by the DB-lane test and the gate's eval (#2452). Own place
+place search's holdout. Nothing records one since the switch-over (#2453); after its deploy one DELETE empties the
+table, on the operator's OK, and Stage B (#2455) drops it. `picks_between` is the one reader, shared by the DB-lane test and the gate's eval (#2452). Own place
 search never reads the picks.
 """
 

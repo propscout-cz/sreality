@@ -8,7 +8,7 @@ const row = (level: PlaceRow['level'], point: PlaceRow['point']): PlaceRow => ({
 });
 
 describe('flyToPlace', () => {
-  it('flies to a town at 11 and a street at 15, one step wider than the old 16', () => {
+  it('flies to a town at 11 and a street at 15', () => {
     expect(flyToPlace(row('obec', { lat: 49.19, lng: 16.61 }))).toEqual({ lat: 49.19, lng: 16.61, zoom: 11 });
     expect(flyToPlace(row('ulice', { lat: 49.2, lng: 16.6 }))).toEqual({ lat: 49.2, lng: 16.6, zoom: 15 });
   });

@@ -4,48 +4,40 @@
  * whose `places` are its quarters' chips; a door (`adresni_misto`) carries its street's
  * chip in `street`, null for a door with no street. */
 
-import { apiPost, ApiError } from './api';
-import { ZOOM_BY_LEVEL, type ZoomLevel } from './zoomByLevel';
+import { apiPost } from './api';
+import { DISTRICT_LEVEL_LABEL, type LocationLevel } from './districtCodes';
+import { ZOOM_BY_LEVEL } from './zoomByLevel';
 
-export type PlaceLevel = ZoomLevel;
+export type PlaceLevel = LocationLevel | 'momc' | 'adresni_misto';
 
+/* A quarter of a shortcut or a door's street: a chip as the route spells it. */
 export interface PlaceChipRow {
-  level: string;
+  level: LocationLevel;
   id: number;
   name: string;
   context: string | null;
 }
 
-export interface PlaceRow extends PlaceChipRow {
+export interface PlaceRow {
   level: PlaceLevel;
+  id: number;
+  name: string;
+  context: string | null;
   point: { lat: number; lng: number } | null;
   places?: ReadonlyArray<PlaceChipRow>;
   street?: PlaceChipRow | null;
 }
 
-export const PLACES_UNAVAILABLE = 'place_search_unavailable';
-
 /* The route's own bound (api/schemas.PlaceSuggestIn). */
 const SUGGEST_LIMIT = 10;
 
-export const fetchPlaces = async (query: string, signal?: AbortSignal): Promise<PlaceRow[]> => {
-  try {
-    const res = await apiPost<{ items: PlaceRow[] }>('/places/suggest', { query, limit: SUGGEST_LIMIT }, signal);
-    return res.items ?? [];
-  } catch (err) {
-    if (err instanceof ApiError && err.status === 503) throw new Error(PLACES_UNAVAILABLE);
-    throw err;
-  }
-};
+export const fetchPlaces = async (query: string, signal?: AbortSignal): Promise<PlaceRow[]> =>
+  (await apiPost<{ items: PlaceRow[] }>('/places/suggest', { query, limit: SUGGEST_LIMIT }, signal)).items ?? [];
 
 /* Each row's level, as the list labels it (ruling 2026-11-22: "Městská část"). */
 export const PLACE_LEVEL_LABEL: Record<PlaceLevel, string> = {
-  kraj: 'Kraj',
-  okres: 'Okres',
-  obec: 'Obec',
+  ...DISTRICT_LEVEL_LABEL,
   momc: 'Městská část',
-  cast_obce: 'Část obce',
-  ulice: 'Ulice',
   adresni_misto: 'Adresa',
 };
 

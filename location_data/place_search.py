@@ -100,8 +100,9 @@ _ROW_CONTEXT_JOINS = """
   LEFT JOIN place_facts f ON f.level = r.level AND f.code = r.code"""
 _SPELLED_PREFIXES = " OR ".join(f"s.name_norm LIKE %(street_spelled_{n})s" for n in range(1, _SPELLED_SLOTS + 1))
 
-# A unit is read AT the index's version (a load closes a re-parented unit before it publishes); a street, which has no index, by the version's membership (location_data/ruian_boundaries.py). A NULL
-# prefix or fuzzy key switches its arm off. A městská část is a candidate only with pairs at that version, gated in both
+# A unit is read AT the index's version (a load closes a re-parented unit before it publishes); a street, which has no
+# index, by the version's membership (location_data/ruian_boundaries.py). A NULL prefix or fuzzy key switches its arm
+# off. A městská část is a candidate only with pairs at that version, gated in both
 # unit arms so one without never counts toward `near` and switches fuzzy off; `unit_id` carries its row to the pairs.
 # A street is exact under every spelling the resolver's abbreviation folds make equal (its own index condition), and
 # starts under each, so "nám." reaches Praha's náměstí as exactly as Třebíč's "nám." (#2548). `_SPELLED_SLOTS` prefix

@@ -37,7 +37,7 @@ export const isLocationLevel = (level: unknown): level is LocationLevel =>
   (DISTRICT_LEVEL_ORDER as ReadonlyArray<unknown>).includes(level);
 
 /* THE chip guard, for every chip that arrives from outside — a URL, a stored
- * preset, a resolve answer: one of the five levels and a positive integer code.
+ * preset, a place search row: one of the five levels and a positive integer code.
  * Anything else names no unit to filter on and is never a chip. */
 export const isDistrictChip = (x: unknown): x is DistrictChip => {
   if (x == null || typeof x !== 'object') return false;
@@ -133,7 +133,7 @@ export const matchesDistricts = (
 
 /* Czech level names for the chip badge — a chip shows WHAT it selected, not
  * just a string, so okres "Jihlava" reads differently from obec "Jihlava". */
-const DISTRICT_LEVEL_LABEL: Record<LocationLevel, string> = {
+export const DISTRICT_LEVEL_LABEL: Record<LocationLevel, string> = {
   kraj: 'Kraj',
   okres: 'Okres',
   obec: 'Obec',

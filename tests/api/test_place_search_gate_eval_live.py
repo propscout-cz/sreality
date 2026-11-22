@@ -1,8 +1,8 @@
 """The gate's eval (#2452; spec #2441 Part 4, Q2 c), EXECUTED against the replayed schema (CI's migrations lane,
 `TEST_DATABASE_URL`; locally `scripts/local_pg.sh test`): picks written as the Mapy binder stored them before the
-switch-over (#2453), over a mini mirror seeded in the transaction, read back by the eval through Part 1's reader, own search asked through the eval's HTTP boundary (the
-real route on the test connection, or canned rows). Any other URL fails the test. Every test rolls back. Goes at Stage
-B (#2455) with the eval."""
+switch-over (#2453), over a mini mirror seeded in the transaction, read back by the eval through Part 1's reader, own
+search asked through the eval's HTTP boundary (the real route on the test connection, or canned rows). Any other URL
+fails the test. Every test rolls back. Goes at Stage B (#2455) with the eval."""
 
 from __future__ import annotations
 
@@ -78,8 +78,9 @@ def _door(conn: psycopg.Connection, kod: int, obec: int, obec_code: int, momc: i
 
 
 def _mirror(conn: psycopg.Connection) -> None:
-    """Brno in its okres and kraj, Praha in its kraj: drawn and named in the index (own search finds them by name); the městské části Praha 6 and Brno-střed each stand in one quarter by one door,
-    with no quarter pair yet (a test writes the pairs it needs)."""
+    """Brno in its okres and kraj, Praha in its kraj: drawn and named in the index (own search finds them by name); the
+    městské části Praha 6 and Brno-střed each stand in one quarter by one door, with no quarter pair yet (a test writes
+    the pairs it needs)."""
     conn.execute("UPDATE registry_versions SET is_current = false WHERE is_current")
     version = conn.execute(
         "INSERT INTO registry_versions (label, kind, source_date, artifact_urls, proj_version, proj_pipeline,"

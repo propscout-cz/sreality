@@ -22,7 +22,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
-import { fetchPlaces, PLACE_LEVEL_LABEL, PLACES_UNAVAILABLE, type PlaceChipRow, type PlaceRow } from '@/lib/places';
+import { fetchPlaces, PLACE_LEVEL_LABEL, type PlaceChipRow, type PlaceRow } from '@/lib/places';
 import type { DistrictChip } from '@/lib/filters';
 import { districtChipBadge, districtChipKey, isDistrictChip } from '@/lib/districtCodes';
 
@@ -41,19 +41,24 @@ const PICK_NOTICE = {
 const sameChip = (a: DistrictChip, b: DistrictChip): boolean =>
   districtChipKey(a) === districtChipKey(b);
 
-const chipOf = ({ name, context, level, id }: PlaceChipRow) => ({ name, context, level, id });
+const chipOf = ({ name, context, level, id }: PlaceChipRow | PlaceRow) => ({ name, context, level, id });
 
-/* The chips a row makes, or why it makes none: a městská část its quarters, an address
- * its street, any other row itself. */
+/* The units a row filters: a městská část its quarters, an address its street, any other row itself. */
+const unitsOf = (row: PlaceRow): ReadonlyArray<PlaceChipRow | PlaceRow> => {
+  if (row.level === 'momc') return row.places ?? [];
+  if (row.level === 'adresni_misto') return row.street ? [row.street] : [];
+  return [row];
+};
+
+/* The chips a row makes, or why it makes none. */
 const chipsOf = (row: PlaceRow): DistrictChip[] | string => {
-  const units = row.level === 'momc' ? (row.places ?? []) : row.level === 'adresni_misto'
-    ? (row.street ? [row.street] : []) : [row];
+  const units = unitsOf(row);
   const chips = units.map(chipOf).filter(isDistrictChip);
   return chips.length === units.length && chips.length > 0 ? chips : PICK_NOTICE.refused(row.name);
 };
 
 /* Own search's read behind a place box: the typed query, debounced, and its rows.
- * `unavailable` is the route's 503; the next keystroke asks again. */
+ * `unavailable`: the last read failed, for any reason; the next keystroke asks again. */
 export function usePlaceSuggest() {
   const [query, setQuery] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -78,7 +83,7 @@ export function usePlaceSuggest() {
     matches: suggestQ.data ?? [],
     isLoading: suggestQ.isFetching && debounced.length >= MIN_QUERY_LEN,
     tooShort: debounced.length > 0 && debounced.length < MIN_QUERY_LEN,
-    unavailable: suggestQ.error instanceof Error && suggestQ.error.message === PLACES_UNAVAILABLE,
+    unavailable: suggestQ.isError,
   };
 }
 
@@ -172,7 +177,7 @@ export function LocationTypeahead({
           placeholder={
             selected.length === 0 ? 'Type a city, district, or street…' : 'Add another…'
           }
-          className="w-full px-3 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)] disabled:opacity-60"
+          className="w-full px-3 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]"
         />
         {open && !unavailable && (
           <SuggestPanel

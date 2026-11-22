@@ -13,7 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LocationTypeahead } from './LocationTypeahead';
 import type { DistrictChip } from '@/lib/filters';
-import { PLACES_UNAVAILABLE, type PlaceRow } from '@/lib/places';
+import type { PlaceRow } from '@/lib/places';
 
 const fetchPlaces = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/places', async (importActual) => ({
@@ -190,7 +190,7 @@ describe('<LocationTypeahead> chips', () => {
 describe('<LocationTypeahead> when own search is unavailable', () => {
   it('says so, keeps the chips and the box, and asks nothing else', async () => {
     const user = renderHost([BRNO_CHIP]);
-    fetchPlaces.mockRejectedValue(new Error(PLACES_UNAVAILABLE));
+    fetchPlaces.mockRejectedValue(new Error('HTTP 503'));
     await user.type(input(), 'Br');
     expect(await screen.findByText(/Place search is unavailable right now/)).toBeInTheDocument();
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
@@ -199,9 +199,16 @@ describe('<LocationTypeahead> when own search is unavailable', () => {
     expect(fetchPlaces).toHaveBeenCalledWith('Br', expect.anything());
   });
 
+  it('says so for a failure that is no 503 too, as a lost connection', async () => {
+    const user = renderHost();
+    fetchPlaces.mockRejectedValue(new TypeError('Failed to fetch'));
+    await user.type(input(), 'Br');
+    expect(await screen.findByText(/Place search is unavailable right now/)).toBeInTheDocument();
+  });
+
   it('answers again on the next keystroke once the route is back', async () => {
     const user = renderHost();
-    fetchPlaces.mockRejectedValueOnce(new Error(PLACES_UNAVAILABLE));
+    fetchPlaces.mockRejectedValueOnce(new Error('HTTP 503'));
     await user.type(input(), 'Br');
     await screen.findByText(/Place search is unavailable right now/);
     fetchPlaces.mockResolvedValue([BRNO_ROW]);

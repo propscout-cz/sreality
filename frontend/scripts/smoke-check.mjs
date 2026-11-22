@@ -40,8 +40,6 @@
 //   where u.email = :'email'
 //   on conflict (id) do nothing;
 //
-// 3. (Retired by #2453: the automation marker in app metadata kept the Mapy binder from
-//    recording a smoke run's place pick; nothing records a pick now, so nothing reads it.)
 
 import { chromium } from 'playwright';
 import { execFileSync } from 'node:child_process';

@@ -15,17 +15,16 @@ import { PencilIcon } from '@/components/icons';
 import { SuggestPanel, usePlaceSuggest } from '@/components/filter-controls/LocationTypeahead';
 import { propertyLocationKeys } from '@/components/phone/propertyLocation';
 import { submitLocationPick, type LocationPick, type PickResult } from '@/lib/locationQuality';
-import type { PlaceRow } from '@/lib/places';
+import { PLACE_LEVEL_LABEL, type PlaceRow } from '@/lib/places';
 import { propertyKeys } from '@/lib/mergedAdverts';
 
 const NAME = 'Opravit adresu (RÚIAN)';
-const BADGE: Record<string, string> = { adresni_misto: 'Adresní místo', ulice: 'Ulice', obec: 'Obec' };
+const SAVED_LEVELS: ReadonlyArray<string> = ['adresni_misto', 'ulice', 'obec'] satisfies ReadonlyArray<LocationPick['level']>;
+const isSaved = (level: string): level is LocationPick['level'] => SAVED_LEVELS.includes(level);
 
 /* The pick a row saves, or what to say instead. */
-function bound(row: PlaceRow): LocationPick | string {
-  if (!(row.level in BADGE)) return 'Vyberte adresu, ulici nebo obec';
-  return { level: row.level as LocationPick['level'], code: row.id };
-}
+const savedPick = ({ level, id }: PlaceRow): LocationPick | string =>
+  isSaved(level) ? { level, code: id } : 'Vyberte adresu, ulici nebo obec';
 
 /* What a save leaves to say; null = done, the popover closes. */
 function outcome({ resolved, held, location }: PickResult): string | null {
@@ -89,7 +88,7 @@ function Picker({ propertyId, label, adCount, onDone }: Props & { onDone: () => 
     setRow(picked);
   };
 
-  const pick = row === undefined ? null : bound(row);
+  const pick = row === undefined ? null : savedPick(row);
   const quiet = 'px-2.5 py-1.5 text-[0.8rem] text-[var(--color-ink-3)] hover:text-[var(--color-ink)] disabled:opacity-50';
   const primary =
     'px-3 py-1.5 text-[0.8rem] rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] disabled:opacity-40 transition-colors';
@@ -108,7 +107,7 @@ function Picker({ propertyId, label, adCount, onDone }: Props & { onDone: () => 
             }}
             onFocus={() => setListOpen(true)}
             placeholder="Ulice a číslo, nebo obec…"
-            className="w-full px-3 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)] disabled:opacity-60"
+            className="w-full px-3 py-2 text-sm rounded-[var(--radius-sm)] bg-[var(--color-inset)] border border-[var(--color-rule)] text-[var(--color-ink)] placeholder:text-[var(--color-ink-4)]"
           />
         </Field>
         {listOpen && !suggest.unavailable && (
@@ -126,7 +125,7 @@ function Picker({ propertyId, label, adCount, onDone }: Props & { onDone: () => 
             : pick == null || typeof pick === 'string' ? pick : (
             <>
               <span className="mr-2 text-[0.6rem] tracking-[0.08em] uppercase text-[var(--color-ink-3)]">
-                {BADGE[pick.level]}
+                {PLACE_LEVEL_LABEL[pick.level]}
               </span>
               {[row?.name, row?.context].filter(Boolean).join(' · ')}
             </>
