@@ -83,6 +83,11 @@ def put_cuzk_login(
     except cuzk_login.NotConfigured:
         LOG.warning("CUZK login save refused: %s is not set or not a key", cuzk_login.KEY_ENV)
         raise HTTPException(status_code=503, detail=_NO_KEY) from None
+    try:
+        wsdp_client.base_url()  # a misconfigured address sends nothing, so it must spend nothing
+    except wsdp_client.WsdpError:
+        LOG.error("CUZK login check not attempted: %s is not a ČÚZK address", wsdp_client.BASE_ENV)
+        raise HTTPException(status_code=502, detail=_NO_ANSWER) from None
     with deps.open_background_conn() as conn:
         try:
             check_id = cuzk_login.admit_check(conn, account_id, username)

@@ -283,3 +283,10 @@ def test_the_released_account_helper_has_one_caller() -> None:
                     isinstance(n, ast.Attribute) and n.attr == "own_account_id_released" for n in ast.walk(fn)):
                 callers.add(f"{path.relative_to(root.parent).as_posix()}::{fn.name}")
     assert callers == {"api/routes/cuzk_login.py::put_cuzk_login"}
+
+
+def test_a_misconfigured_address_sends_nothing_and_spends_nothing(client: Any, ledger: dict, checks: list,
+                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(wsdp_client.BASE_ENV, "http://example.com/")
+    assert client.put(URL, json={"username": "firma01", "password": PASSWORD}).status_code == 502
+    assert ledger == {"admitted": [], "settled": []} and checks == []

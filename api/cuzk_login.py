@@ -113,36 +113,57 @@ def login_of(conn: psycopg.Connection, account_id: uuid.UUID) -> tuple[str, str]
         raise Unreadable(str(account_id)) from None
 
 
-def budget_key(username: str) -> str:
-    """The ledger's name for a username: a keyed hash of its folded form (NFKC, casefold, format characters
-    dropped), so 'firma01', 'FIRMA01' and a zero-width variant are ONE budget, and the stored value cannot be
-    reversed without the server's key. The typed username itself is what is sent to ČÚZK, unchanged."""
+def _keyed(purpose: bytes, text: str) -> str:
     raw = os.environ.get(KEY_ENV, "").strip()
     if not raw:
         raise NotConfigured(KEY_ENV)
+    secret = hashlib.sha256(purpose + raw.encode()).digest()
+    return hmac.new(secret, text.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def budget_key(username: str) -> str:
+    """What the budget COUNTS by: a keyed hash of the username's folded form (NFKC, casefold, format characters
+    dropped), so 'firma01', 'FIRMA01' and a zero-width variant are ONE budget, and the stored value cannot be
+    reversed without the server's key. The typed username itself is what is sent to ČÚZK, unchanged."""
     folded = "".join(ch for ch in unicodedata.normalize("NFKC", username).casefold()
                      if unicodedata.category(ch) != "Cf")
-    secret = hashlib.sha256(b"cuzk-login-check:" + raw.encode()).digest()
-    return hmac.new(secret, folded.encode("utf-8"), hashlib.sha256).hexdigest()
+    return _keyed(b"cuzk-login-check:", folded)
 
 
+def exact_key(username: str) -> str:
+    """What an accepted check RESETS by: a keyed hash of the username exactly as typed. Counting folds, resetting
+    does not: whether ČÚZK holds 'novak' and 'Novak' as one account is unverified, and this is safe either way."""
+    return _keyed(b"cuzk-login-check-exact:", username)
+
+
+# An unaccepted check r stays in its username's run unless an accepted check L on the SAME exact name was
+# ADMITTED after r had SETTLED: only then do we know ČÚZK handled r before L's correct login reset its counter.
+# A check still in flight is never reset. (Ids are the order we admitted in, not the order ČÚZK handled.)
 _SPENT_SQL = """
 with username_run as (
-  select checked_at from account_cuzk_login_checks
-   where username_key = %(key)s and outcome <> 'accepted'
-     and checked_at > now() - %(uw)s::interval
-     and id > coalesce((select max(id) from account_cuzk_login_checks
-                         where username_key = %(key)s and outcome = 'accepted'), 0)
+  select coalesce(r.settled_at, r.admitted_at) as at
+    from account_cuzk_login_checks r
+   where r.username_key = %(key)s and r.outcome <> 'accepted'
+     and coalesce(r.settled_at, r.admitted_at) > now() - %(uw)s::interval
+     and not exists (select 1 from account_cuzk_login_checks l
+                      where l.username_exact_key = r.username_exact_key and l.outcome = 'accepted'
+                        and r.settled_at < l.admitted_at)
 ), account_hour as (
-  select checked_at, outcome from account_cuzk_login_checks
-   where account_id = %(account)s and checked_at > now() - %(aw)s::interval
+  select admitted_at as at, outcome from account_cuzk_login_checks
+   where account_id = %(account)s and admitted_at > now() - %(aw)s::interval
 )
 select (select count(*) from username_run),
-       (select extract(epoch from min(checked_at) + %(uw)s::interval - now()) from username_run),
+       (select extract(epoch from min(at) + %(uw)s::interval - now()) from username_run),
        (select count(*) from account_hour where outcome <> 'accepted'),
+       (select extract(epoch from min(at) + %(aw)s::interval - now()) from account_hour where outcome <> 'accepted'),
        (select count(*) from account_hour),
-       (select extract(epoch from min(checked_at) + %(aw)s::interval - now()) from account_hour)
+       (select extract(epoch from min(at) + %(aw)s::interval - now()) from account_hour)
 """
+
+
+def _wait(seconds: float | None, *, to_the_hour: bool = False) -> int:
+    wait = max(60, int(seconds or 0) + 1)
+    return -(-wait // 3600) * 3600 if to_the_hour else wait
 
 
 def admit_check(conn: psycopg.Connection, account_id: uuid.UUID, username: str) -> int:
@@ -151,26 +172,30 @@ def admit_check(conn: psycopg.Connection, account_id: uuid.UUID, username: str) 
     One transaction under two transaction-scoped advisory locks, the account's and then the username's, always in
     that order: concurrent requests of one account, or on one username, are counted one after another, and the
     row is committed before anything is sent."""
-    key = budget_key(username)
+    key, exact = budget_key(username), exact_key(username)
     with conn.transaction(), conn.cursor() as cur:
         cur.execute("select pg_advisory_xact_lock(hashtextextended(%s, %s))", (str(account_id), _LOCK_ACCOUNT))
         cur.execute("select pg_advisory_xact_lock(hashtextextended(%s, %s))", (key, _LOCK_USERNAME))
-        cur.execute("delete from account_cuzk_login_checks where checked_at < now() - %s::interval", (LEDGER_KEEPS,))
+        cur.execute("delete from account_cuzk_login_checks where admitted_at < now() - %s::interval", (LEDGER_KEEPS,))
         cur.execute(_SPENT_SQL, {"key": key, "account": account_id, "uw": USERNAME_WINDOW, "aw": ACCOUNT_WINDOW})
-        on_username, username_wait, unaccepted, total, account_wait = cur.fetchone()
+        on_username, username_wait, unaccepted, unaccepted_wait, total, total_wait = cur.fetchone()
         if on_username >= USERNAME_BUDGET:
-            raise Throttled("username", max(60, int(username_wait or 0) + 1))
-        if unaccepted >= ACCOUNT_UNACCEPTED_BUDGET or total >= ACCOUNT_TOTAL_BUDGET:
-            raise Throttled("account", max(60, int(account_wait or 0) + 1))
+            # Rounded up to the hour: the exact second would tell a caller when someone else tried this username.
+            raise Throttled("username", _wait(username_wait, to_the_hour=True))
+        if unaccepted >= ACCOUNT_UNACCEPTED_BUDGET:
+            raise Throttled("account", _wait(unaccepted_wait))
+        if total >= ACCOUNT_TOTAL_BUDGET:
+            raise Throttled("account", _wait(total_wait))
         cur.execute(
-            "insert into account_cuzk_login_checks (account_id, username_key) values (%s, %s) returning id",
-            (account_id, key),
+            "insert into account_cuzk_login_checks (account_id, username_key, username_exact_key) "
+            "values (%s, %s, %s) returning id",
+            (account_id, key, exact),
         )
         return int(cur.fetchone()[0])
 
 
 def settle_check(conn: psycopg.Connection, check_id: int, outcome: str) -> None:
-    """The check's outcome, stamped NOW: the windows run from ČÚZK's answer, not from when we started asking."""
+    """The check's outcome and when ČÚZK answered; the time we admitted it stays."""
     with conn.cursor() as cur:
-        cur.execute("update account_cuzk_login_checks set outcome = %s, checked_at = now() where id = %s",
+        cur.execute("update account_cuzk_login_checks set outcome = %s, settled_at = now() where id = %s",
                     (outcome, check_id))
