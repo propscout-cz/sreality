@@ -19,6 +19,12 @@ class _Resp:
     def __init__(self, body: bytes | str, status: int = 200) -> None:
         self.status_code, self.content = status, body if isinstance(body, bytes) else body.encode()
 
+    def iter_content(self, size: int) -> Any:
+        yield self.content
+
+    def close(self) -> None:
+        pass
+
 
 @pytest.fixture()
 def sent(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
@@ -96,3 +102,54 @@ def test_only_units_or_buildings_can_be_priced(sent):
     with pytest.raises(ValueError):
         w.generate_prices("PAR_S", [1], "u", "p")
     assert "url" not in sent
+
+
+def test_an_answer_without_the_services_own_message_proves_nothing_about_the_login(sent):
+    """A proxy's page or a stub that parses as XML is not ČÚZK accepting the login (second review, s8)."""
+    sent["answer"] = "<html><body>maintenance</body></html>"
+    for call in (lambda: w.find_units(1, "u", "p"), lambda: w.report_state(1, "u", "p"),
+                 lambda: w.generate_prices("STA_S", [1], "u", "p"), lambda: w.fetch_report(1, "u", "p")):
+        with pytest.raises(w.WsdpError) as unreadable:
+            call()
+        assert unreadable.value.reason == "unreadable" and not unreadable.value.authenticated
+
+
+def test_a_report_that_is_gone_is_error_304_and_nothing_else_is(sent):
+    sent["answer"] = ERROR.replace('kod="505"', f'kod="{w.REPORT_GONE}"')
+    with pytest.raises(w.WsdpError) as gone:
+        w.report_state(1, "u", "p")
+    assert (gone.value.reason, gone.value.status) == ("service", 304) and gone.value.authenticated
+
+
+def test_a_call_ends_for_the_caller_at_the_wall_clock_bound_whatever_the_socket_does(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """requests bounds each socket read, never their sum (and a body under 64 KiB is one `iter_content` chunk, so a
+    loop over chunks checks nothing). The login lease relies on one call having a real end."""
+    import threading
+    import time
+
+    never = threading.Event()
+
+    def trickle(url: str, **kw: Any) -> Any:
+        never.wait(30)  # a body that keeps arriving, each read inside its own timeout
+        raise AssertionError("abandoned")
+
+    monkeypatch.setattr(w.requests, "post", trickle)
+    monkeypatch.setattr(w, "CALL_MAX_S", 0.2)
+    began = time.monotonic()
+    with pytest.raises(w.WsdpError) as slow:
+        w.report_state(1, "u", "p")
+    never.set()
+    assert slow.value.reason == "timeout" and time.monotonic() - began < 5
+
+
+def test_what_the_request_thread_raises_reaches_the_caller(monkeypatch: pytest.MonkeyPatch) -> None:
+    import requests as real
+
+    def refuse(url: str, **kw: Any) -> Any:
+        raise real.ConnectionError("no route")
+
+    monkeypatch.setattr(w.requests, "post", refuse)
+    with pytest.raises(w.WsdpError) as down:
+        w.report_state(1, "u", "p")
+    assert down.value.reason == "unreachable"

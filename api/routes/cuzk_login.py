@@ -23,6 +23,9 @@ from api import dependencies as deps
 
 LOG = logging.getLogger(__name__)
 
+_BUSY = ("A cadastre request is running on this login right now. Wait for it to finish (two minutes at most) and "
+         "try again; nothing was sent to ČÚZK and nothing was changed.")
+
 router = APIRouter(prefix="/account/cuzk-login", tags=["account"])
 
 _REFUSED = ("ČÚZK refused this login. Check the username and password; "
@@ -88,32 +91,51 @@ def put_cuzk_login(
     except wsdp_client.WsdpError:
         LOG.error("CUZK login check not attempted: %s is not a ČÚZK address", wsdp_client.BASE_ENV)
         raise HTTPException(status_code=502, detail=_NO_ANSWER) from None
+    # One request per account talks to ČÚZK on its login at a time: a save waits its turn behind a running
+    # cadastre request, and holds the same lease while it checks, so none starts beside it.
+    token = uuid.uuid4()
     with deps.open_background_conn() as conn:
         try:
-            check_id = cuzk_login.admit_check(conn, account_id, username)
-        except cuzk_login.Throttled as exc:
-            LOG.warning("CUZK login check throttled by=%s retry_after_s=%d", exc.by, exc.retry_after_s)
-            raise HTTPException(status_code=429, detail=_throttled(exc.retry_after_s),
-                                headers={"Retry-After": str(exc.retry_after_s)}) from None
+            leased = cuzk_login.take_lease(conn, account_id, token) is not None
+        except cuzk_login.LeaseHeld:
+            raise HTTPException(status_code=409, detail=_BUSY) from None
     try:
-        wsdp_client.check_login(username, password)
-    except wsdp_client.WsdpError as exc:
-        LOG.warning("CUZK login check failed reason=%s status=%s", exc.reason, exc.status)
-        refused = exc.reason == "refused"
         with deps.open_background_conn() as conn:
-            cuzk_login.settle_check(conn, check_id, "refused" if refused else "no_answer")
-        if refused:
-            raise HTTPException(status_code=422, detail=_REFUSED) from None
-        raise HTTPException(status_code=502, detail=_NO_ANSWER) from None
-    with deps.open_background_conn() as conn:
-        cuzk_login.settle_check(conn, check_id, "accepted")
-        return cuzk_login.save(conn, account_id, username, password,
-                               datetime.datetime.now(datetime.UTC))
+            try:
+                check_id = cuzk_login.admit_check(conn, account_id, username)
+            except cuzk_login.Throttled as exc:
+                LOG.warning("CUZK login check throttled by=%s retry_after_s=%d", exc.by, exc.retry_after_s)
+                raise HTTPException(status_code=429, detail=_throttled(exc.retry_after_s),
+                                    headers={"Retry-After": str(exc.retry_after_s)}) from None
+        try:
+            wsdp_client.check_login(username, password)
+        except wsdp_client.WsdpError as exc:
+            LOG.warning("CUZK login check failed reason=%s status=%s", exc.reason, exc.status)
+            refused = exc.reason == "refused"
+            with deps.open_background_conn() as conn:
+                cuzk_login.settle_check(conn, check_id, "refused" if refused else "no_answer")
+            if refused:
+                raise HTTPException(status_code=422, detail=_REFUSED) from None
+            raise HTTPException(status_code=502, detail=_NO_ANSWER) from None
+        with deps.open_background_conn() as conn:
+            cuzk_login.settle_check(conn, check_id, "accepted")
+            return cuzk_login.save(conn, account_id, username, password,
+                                   datetime.datetime.now(datetime.UTC))
+    finally:
+        if leased:
+            try:
+                with deps.open_background_conn() as conn:
+                    cuzk_login.release(conn, account_id, token)
+            except Exception:
+                LOG.exception("CUZK login lease not released")
 
 
 @router.delete("", status_code=204, response_class=Response)
 def delete_cuzk_login(account_id: uuid.UUID = Depends(tenant_pool.require_account_id)) -> Response:
-    """Forget the caller's stored login; with none stored it is still 204."""
+    """Forget the caller's stored login; with none stored it is still 204. 409 while a request is using it."""
     with deps.open_background_conn() as conn:
-        cuzk_login.remove(conn, account_id)
+        try:
+            cuzk_login.remove(conn, account_id)
+        except cuzk_login.LeaseHeld:
+            raise HTTPException(status_code=409, detail=_BUSY) from None
     return Response(status_code=204)

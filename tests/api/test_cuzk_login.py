@@ -63,6 +63,29 @@ def ledger(monkeypatch: pytest.MonkeyPatch) -> dict[str, list]:
     return seen
 
 
+@pytest.fixture(autouse=True)
+def lease(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """The login lease, scripted: free unless a test says `held`. Its semantics run on the real schema in
+    tests/test_cadastre_prices_live.py."""
+    seen: dict[str, Any] = {"held": False, "taken": 0, "released": 0}
+
+    def take(conn: Any, account: Any, token: Any) -> Any:
+        if seen["held"]:
+            raise cuzk_login.LeaseHeld(str(account))
+        seen["taken"] += 1
+        return ("firma01", "x", _WHEN, None)
+
+    def remove(conn: Any, account: Any) -> None:
+        if seen["held"]:
+            raise cuzk_login.LeaseHeld(str(account))
+        conn.cursor().execute("delete from account_cuzk_logins where account_id = %s", (account,))
+
+    monkeypatch.setattr(cuzk_login, "take_lease", take)
+    monkeypatch.setattr(cuzk_login, "release", lambda c, a, t: seen.__setitem__("released", seen["released"] + 1))
+    monkeypatch.setattr(cuzk_login, "remove", remove)
+    return seen
+
+
 @pytest.fixture()
 def checks(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
     seen: list[tuple[str, str]] = []
@@ -187,6 +210,12 @@ class _Resp:
     def __init__(self, status: int, body: str) -> None:
         self.status_code, self.content = status, body.encode()
 
+    def iter_content(self, size: int) -> Any:
+        yield self.content
+
+    def close(self) -> None:
+        pass
+
 
 def test_the_client_reads_an_accepted_and_a_refused_login(monkeypatch: pytest.MonkeyPatch) -> None:
     sent: dict[str, Any] = {}
@@ -299,3 +328,33 @@ def test_a_login_cuzk_refused_in_use_reads_refused_until_it_is_saved_again(monke
     saved = ScriptConn([(_is("insert"), [("firma01", _WHEN, None)])])
     assert cuzk_login.save(saved, _ME, "firma01", PASSWORD, _WHEN)["refused"] is False
     assert "refused_at = null" in saved.executed[0][0]
+
+
+@pytest.mark.parametrize("method", ["put", "delete"])
+def test_the_login_is_not_saved_or_removed_beside_a_request_that_is_using_it(client: Any, service: _Opener,
+                                                                            checks: list, ledger: dict, lease: dict,
+                                                                            method: str) -> None:
+    """The lease lives on the login's row: a save would send a check beside a purchase run, and a removal would
+    drop the lease under it."""
+    lease["held"] = True
+    kwargs = {"json": {"username": "firma01", "password": PASSWORD}} if method == "put" else {}
+    resp = getattr(client, method)(URL, **kwargs)
+    assert resp.status_code == 409 and "nothing was sent" in resp.json()["detail"]
+    assert checks == [] and ledger == {"admitted": [], "settled": []} and _writes(service) == []
+
+
+@pytest.mark.parametrize("outcome", ["accepted", "refused", "throttled"])
+def test_a_save_gives_the_lease_back_however_it_ends(client: Any, monkeypatch: pytest.MonkeyPatch, lease: dict,
+                                                     outcome: str) -> None:
+    if outcome == "refused":
+        def refuse(u: str, p: str) -> str:
+            raise wsdp_client.WsdpError("refused", 500)
+        monkeypatch.setattr(wsdp_client, "check_login", refuse)
+    else:
+        monkeypatch.setattr(wsdp_client, "check_login", lambda u, p: u)
+    if outcome == "throttled":
+        def spent(conn: Any, account: Any, username: str) -> int:
+            raise cuzk_login.Throttled("username", 3600)
+        monkeypatch.setattr(cuzk_login, "admit_check", spent)
+    client.put(URL, json={"username": "firma01", "password": PASSWORD})
+    assert (lease["taken"], lease["released"]) == (1, 1)

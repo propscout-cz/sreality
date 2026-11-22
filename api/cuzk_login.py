@@ -10,10 +10,13 @@ import hmac
 import os
 import unicodedata
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 import psycopg
 from cryptography.fernet import Fernet, InvalidToken
+
+from api import wsdp_client
 
 KEY_ENV = "CUZK_LOGIN_KEY"
 
@@ -24,9 +27,13 @@ KEY_ENV = "CUZK_LOGIN_KEY"
 # also forgets after USERNAME_WINDOW; that is the one place this is a judgement and not ČÚZK's rule: an attacker
 # who knows a username can make ČÚZK's counter reach three across two windows unless its owner logged in between.
 # A check in flight, and one ČÚZK did not answer, count as unaccepted: we cannot know that ČÚZK did not count them.
-# A cadastre price purchase (`api/cadastre_prices.py`) takes ONE row for its whole run of calls (up to ~35: two to
-# order, a poll every two seconds for a minute, one fetch): all carry the same login, so its first answer settles
-# the row, and a refusal later in the run re-settles it as refused and ends the purchase.
+# A cadastre price purchase (`api/cadastre_prices.py`) takes ONE row for its whole run of calls (about twenty: two
+# to order, a poll every two seconds for half a minute, one fetch): all carry the same login, so its first answer
+# settles the row, and every later call settles it again by its own answer; a refusal ends the run. That is safe only
+# because ONE request per account uses the login at a time (the login lease, `lease` below), each call is sent
+# only after `renew` says the login is still the one read and not refused, and `call_begins` puts the row back
+# in flight for the call (so it counts as unaccepted until answered) unless anyone else's check on the username
+# is in doubt.
 USERNAME_WINDOW = datetime.timedelta(hours=24)
 USERNAME_BUDGET = 2
 # One account over any usernames, per hour: unaccepted ones, so it cannot walk a list; and all of them whatever
@@ -81,11 +88,130 @@ def state(conn: psycopg.Connection, account_id: uuid.UUID) -> dict[str, Any]:
         return _state(cur.fetchone())
 
 
-def mark_refused(conn: psycopg.Connection, account_id: uuid.UUID) -> None:
-    """ČÚZK refused the stored login in use: nothing more is sent on it until it is saved again."""
+class LeaseHeld(RuntimeError):
+    """Another request of this account is using the stored login right now."""
+
+
+# The login lease: ONE request per account talks to ČÚZK on the stored login at a time, a purchase run or a save
+# or removal of the login itself. Its holder renews it before every call; it may be taken from a holder only when
+# not renewed for LEASE_S, which no single call can outlast (`wsdp_client.CALL_MAX_S`, a wall-clock bound).
+LEASE_S = 120
+assert LEASE_S > 2 * wsdp_client.CALL_MAX_S, "a live holder's lease must outlast its longest call, with room"
+
+
+@dataclass(frozen=True)
+class Leased:
+    username: str
+    password: str
+    stamp: datetime.datetime  # the stored login's `updated_at`: which login this run read
+    refused: bool
+
+
+def take_lease(conn: psycopg.Connection, account_id: uuid.UUID, token: uuid.UUID) -> tuple[Any, ...] | None:
+    """Take the account's login lease, in one statement: the stored row (username, password_enc, updated_at,
+    refused_at), or None when no login is stored. `LeaseHeld` when another request holds it and renewed it within
+    LEASE_S. The taker must `release` it."""
     with conn.cursor() as cur:
-        cur.execute("update account_cuzk_logins set refused_at = now() where account_id = %s and refused_at is null",
-                    (account_id,))
+        cur.execute(
+            """
+            update account_cuzk_logins set run_token = %s, run_beat_at = now()
+             where account_id = %s
+               and (run_token is null or run_beat_at < now() - make_interval(secs => %s))
+            returning username, password_enc, updated_at, refused_at
+            """,
+            (token, account_id, LEASE_S),
+        )
+        row = cur.fetchone()
+        if row is None:
+            cur.execute("select 1 from account_cuzk_logins where account_id = %s", (account_id,))
+            if cur.fetchone() is not None:
+                raise LeaseHeld(str(account_id))
+    return row
+
+
+def lease(conn: psycopg.Connection, account_id: uuid.UUID, token: uuid.UUID) -> Leased | None:
+    """`take_lease`, with the login it guards decrypted. A login that cannot be read gives the lease back."""
+    row = take_lease(conn, account_id, token)
+    if row is None:
+        return None
+    try:
+        password = _box().decrypt(row[1].encode("ascii")).decode("utf-8")
+    except BaseException as exc:
+        release(conn, account_id, token)
+        if isinstance(exc, InvalidToken):
+            raise Unreadable(str(account_id)) from None
+        raise
+    return Leased(row[0], password, row[2], row[3] is not None)
+
+
+def renew(conn: psycopg.Connection, account_id: uuid.UUID, token: uuid.UUID, held: Leased) -> bool:
+    """Renew the lease before a call to ČÚZK. False: do not send. The lease is no longer this run's, or the stored
+    login was refused, re-saved or removed since this run read it."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "update account_cuzk_logins set run_beat_at = now() where account_id = %s and run_token = %s "
+            "returning refused_at is null and updated_at = %s",
+            (account_id, token, held.stamp),
+        )
+        row = cur.fetchone()
+    return row is not None and bool(row[0])
+
+
+def release(conn: psycopg.Connection, account_id: uuid.UUID, token: uuid.UUID) -> None:
+    with conn.cursor() as cur:
+        cur.execute("update account_cuzk_logins set run_token = null, run_beat_at = null "
+                    "where account_id = %s and run_token = %s", (account_id, token))
+
+
+def run_live(conn: psycopg.Connection, account_id: uuid.UUID) -> bool:
+    """Whether a request of this account holds the lease right now (a read for the card; it decides nothing)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "select 1 from account_cuzk_logins where account_id = %s and run_token is not null "
+            "and run_beat_at >= now() - make_interval(secs => %s)",
+            (account_id, LEASE_S),
+        )
+        return cur.fetchone() is not None
+
+
+def mark_refused(conn: psycopg.Connection, account_id: uuid.UUID, held: Leased) -> None:
+    """ČÚZK refused the login this run read: nothing more is sent on it until it is saved again. A login saved
+    since (another `updated_at`) is not the one that was refused, and is left alone."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "update account_cuzk_logins set refused_at = now() "
+            "where account_id = %s and updated_at = %s and refused_at is null",
+            (account_id, held.stamp),
+        )
+
+
+def call_begins(conn: psycopg.Connection, check_id: int) -> bool:
+    """Before each call of a run: put its ledger row in flight, so the call counts as unaccepted until ČÚZK
+    answers it (as a check in flight does), and say whether it may be sent. False when, with this call, the
+    username would have more than USERNAME_BUDGET unaccepted checks not reset by a later accepted one: it could be
+    ČÚZK's third consecutive refusal. The same count as `_SPENT_SQL`'s username arm, taken under the same lock."""
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute("select username_key from account_cuzk_login_checks where id = %s", (check_id,))
+        row = cur.fetchone()
+        if row is None:
+            return False
+        cur.execute("select pg_advisory_xact_lock(hashtextextended(%s, %s))", (row[0], _LOCK_USERNAME))
+        cur.execute(
+            """
+            select count(*) from account_cuzk_login_checks r
+             where r.username_key = %(key)s and r.id <> %(mine)s and r.outcome <> 'accepted'
+               and coalesce(r.answered_at, r.admitted_at) > now() - %(uw)s::interval
+               and not exists (select 1 from account_cuzk_login_checks l
+                                where l.username_exact_key = r.username_exact_key and l.outcome = 'accepted'
+                                  and r.answered_at < l.admitted_at)
+            """,
+            {"key": row[0], "mine": check_id, "uw": USERNAME_WINDOW},
+        )
+        if cur.fetchone()[0] >= USERNAME_BUDGET:
+            return False
+        cur.execute("update account_cuzk_login_checks set outcome = 'pending', answered_at = null where id = %s",
+                    (check_id,))
+    return True
 
 
 def seal(data: bytes) -> bytes:
@@ -119,8 +245,18 @@ def save(conn: psycopg.Connection, account_id: uuid.UUID, username: str, passwor
 
 
 def remove(conn: psycopg.Connection, account_id: uuid.UUID) -> None:
+    """Forget the stored login. `LeaseHeld` while a request of the account is using it: the lease lives on this
+    row, so removing it under a live run would let a second run start beside the first."""
     with conn.cursor() as cur:
-        cur.execute("delete from account_cuzk_logins where account_id = %s", (account_id,))
+        cur.execute(
+            "delete from account_cuzk_logins where account_id = %s "
+            "and (run_token is null or run_beat_at < now() - make_interval(secs => %s))",
+            (account_id, LEASE_S),
+        )
+        if cur.rowcount == 0:
+            cur.execute("select 1 from account_cuzk_logins where account_id = %s", (account_id,))
+            if cur.fetchone() is not None:
+                raise LeaseHeld(str(account_id))
 
 
 def login_of(conn: psycopg.Connection, account_id: uuid.UUID) -> tuple[str, str] | None:

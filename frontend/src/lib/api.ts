@@ -747,19 +747,32 @@ export interface BuildingPrices {
   /* ČÚZK refused the stored login during a purchase: nothing is sent on it until it is saved again. */
   login_refused: boolean;
   price_czk: number;
-  /* The newest request that did not end uncharged. pending/ordered: in flight; paid_unread: paid for, its file
-   * kept but not yet read (asking again re-reads it, free). */
-  purchase: { status: 'pending' | 'ordered' | 'done' | 'paid_unread'; cost_czk: number | null; object_count: number | null;
+  /* A purchase run of this account is live right now (any building): every request meanwhile changes nothing. */
+  running: boolean;
+  /* The newest purchase that did not end uncharged. pending/ordered: in flight, continued by its id.
+   * fetch_sent: the charging fetch was sent, so it may have been charged. paid_unread: paid (or possibly paid) and
+   * its deeds not stored; continuing reads the kept file (file_kept) or fetches the report again, both free. */
+  purchase: { id: number; status: 'pending' | 'ordered' | 'done' | 'paid_unread'; cost_czk: number | null;
+              object_count: number | null; fetch_sent: boolean; file_kept: boolean;
               requested_at: string; finished_at: string | null } | null;
   deeds: CadastreDeed[];
 }
 export const fetchBuildingPrices = (propertyId: number): Promise<BuildingPrices> =>
   request<BuildingPrices>(`/properties/${propertyId}/building/prices`);
-/* One paid ČÚZK output on the caller's own ČÚZK account; `costCzk` is the price the button showed. `repeat` is the
- * caller's confirmed wish to pay again for a building already bought; without it the server refuses that. */
-export const buyBuildingPrices = (propertyId: number, costCzk: number, repeat = false): Promise<BuildingPrices> =>
-  request<BuildingPrices>(`/properties/${propertyId}/building/prices`,
-    { method: 'POST', json: repeat ? { cost_czk: costCzk, repeat: true } : { cost_czk: costCzk } });
+/* One request on the caller's own ČÚZK account; `costCzk` is the price the card showed. Plain: a new purchase.
+ * `repeat`: a new one of a building already paid for (the server refuses that otherwise). `resume`: continue that
+ * one purchase, which can never start another. */
+export const buyBuildingPrices = (
+  propertyId: number, costCzk: number, how: { repeat?: boolean; resume?: number } = {},
+): Promise<BuildingPrices> =>
+  request<BuildingPrices>(`/properties/${propertyId}/building/prices`, {
+    method: 'POST',
+    json: { cost_czk: costCzk, ...(how.resume != null ? { resume: how.resume } : how.repeat ? { repeat: true } : {}) },
+  });
+/* Give a purchase in flight up. Sends nothing to ČÚZK and costs nothing; one whose fetch had been sent then reads
+ * as possibly paid. */
+export const cancelBuildingPurchase = (propertyId: number, purchaseId: number): Promise<BuildingPrices> =>
+  request<BuildingPrices>(`/properties/${propertyId}/building/prices`, { method: 'POST', json: { cancel: purchaseId } });
 /* An account's own ČÚZK WSDP login. The password goes up once and never comes back. */
 export interface CuzkLoginState {
   set: boolean;

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import base64
 import os
+import queue
+import threading
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 from xml.etree import ElementTree as ET
@@ -18,7 +20,10 @@ PRODUCTION_BASE = "https://katastr.cuzk.gov.cz/ws/wsdp/3.1/"
 # The override exists for ČÚZK's free test service. A login is only ever sent to one of ČÚZK's own two hosts, over https.
 BASE_ENV = "CUZK_WSDP_BASE"
 HOSTS = frozenset({"katastr.cuzk.gov.cz", "wsdptrial.cuzk.gov.cz"})
-TIMEOUT = (5, 20)
+TIMEOUT = (5, 10)  # connect; one socket read. requests bounds each read, never their sum, nor a DNS lookup
+# The longest one call can last, by the wall clock: the request runs on its own thread and the caller stops
+# waiting here, whatever the socket is doing. The purchase lease (api/cuzk_login.py) relies on this being a real bound.
+CALL_MAX_S = 40
 
 _ENVELOPE = (
     '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" '
@@ -50,31 +55,52 @@ def base_url() -> str:
     return base
 
 
+def _send(url: str, data: bytes, headers: dict[str, str], out: queue.SimpleQueue) -> None:
+    try:
+        # Never a redirect: it would re-send the password to whatever host the answer names.
+        resp = requests.post(url, data=data, headers=headers, timeout=TIMEOUT, allow_redirects=False)
+        out.put((resp.status_code, resp.content))
+    except requests.Timeout:
+        out.put(WsdpError("timeout"))
+    except requests.RequestException:
+        out.put(WsdpError("unreachable"))
+    except BaseException as exc:  # noqa: BLE001 - the waiting caller must be told, whatever it was
+        out.put(exc)
+
+
+def _post(url: str, data: bytes, headers: dict[str, str]) -> tuple[int, bytes]:
+    """One POST, ended for the caller at CALL_MAX_S by the wall clock. A request the service is still answering
+    then is abandoned to its own socket timeouts; what it did there (a fetch may have been served) is unknown to
+    us, which is exactly what `timeout` means to the caller."""
+    out: queue.SimpleQueue = queue.SimpleQueue()
+    threading.Thread(target=_send, args=(url, data, headers, out), daemon=True, name="wsdp-call").start()
+    try:
+        answer = out.get(timeout=CALL_MAX_S)
+    except queue.Empty:
+        raise WsdpError("timeout") from None
+    if isinstance(answer, BaseException):
+        raise answer
+    return answer
+
+
 def _call(service: str, operation: str, body: str, username: str, password: str) -> ET.Element:
     envelope = _ENVELOPE.format(service=service, username=escape(username), password=escape(password), body=body)
     headers = {
         "Content-Type": "text/xml; charset=utf-8",
         "SOAPAction": f'"urn:cz:gov:cuzk:iskn:services:wsdp:{service}:{operation}"',
     }
+    status, content = _post(base_url() + service, envelope.encode("utf-8"), headers)
+    if 300 <= status < 400:
+        raise WsdpError("status", status)
     try:
-        # Never a redirect: it would re-send the password to whatever host the answer names.
-        resp = requests.post(base_url() + service, data=envelope.encode("utf-8"), headers=headers, timeout=TIMEOUT,
-                             allow_redirects=False)
-    except requests.Timeout:
-        raise WsdpError("timeout") from None
-    except requests.RequestException:
-        raise WsdpError("unreachable") from None
-    if 300 <= resp.status_code < 400:
-        raise WsdpError("status", resp.status_code)
-    try:
-        root = ET.fromstring(resp.content)
+        root = ET.fromstring(content)
     except ET.ParseError:
-        raise WsdpError("unreadable", resp.status_code) from None
+        raise WsdpError("unreadable", status) from None
     fault = next((el for el in root.iter() if el.tag.endswith("}faultcode") or el.tag == "faultcode"), None)
     if fault is not None and "FailedAuthentication" in (fault.text or ""):
-        raise WsdpError("refused", resp.status_code)
-    if fault is not None or resp.status_code >= 400:
-        raise WsdpError("status", resp.status_code)
+        raise WsdpError("refused", status)
+    if fault is not None or status >= 400:
+        raise WsdpError("status", status)
     return root
 
 
@@ -107,11 +133,19 @@ def _local(el: ET.Element) -> str:
     return el.tag.rsplit("}", 1)[-1]
 
 
+REPORT_GONE = 304  # "sestava neexistuje, nebo je již smazaná" (WSDP 3.1 description, § 3.9.2)
+
+
 def _result_ok(root: ET.Element) -> None:
-    """The service's own verdict: a `zprava` at level CHYBA is a refusal with HTTP 200."""
-    for el in root.iter():
-        if _local(el) == "zprava" and el.get("uroven") == "CHYBA":
-            raise WsdpError("service", int(el.get("kod") or 0), authenticated=True)
+    """The service's own verdict. Every WSDP answer carries a `zprava`; one at level CHYBA is a refusal with HTTP
+    200. An answer with none is not the service's (a proxy's page, a stub), so it proves nothing about the login."""
+    messages = [el for el in root.iter() if _local(el) == "zprava"]
+    if not messages:
+        raise WsdpError("unreadable")
+    for el in messages:
+        if el.get("uroven") == "CHYBA":
+            code = el.get("kod") or ""
+            raise WsdpError("service", int(code) if code.isdigit() else 0, authenticated=True)
 
 
 def _child_text(el: ET.Element, name: str) -> str:

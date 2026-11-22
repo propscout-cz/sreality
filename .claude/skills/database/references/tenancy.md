@@ -542,8 +542,11 @@ callers are pinned in `tests/api/test_cuzk_login.py`). Then `deps.open_backgroun
 account; the password column is encrypted by the API. A save's check against ČÚZK is budgeted first
 (`cuzk_login.admit_check`, ledger `account_cuzk_login_checks`, migration 762; the three budgets and ČÚZK's lock rule
 they answer are stated at the top of `api/cuzk_login.py`): past one, a 429 and nothing is sent. A cadastre price purchase
-(`api/cadastre_prices.py`, migration 763) is admitted through the same budgets before its first call: one ledger row
-per purchase request, settled by ČÚZK's first answer.
+(`api/cadastre_prices.py`, migration 763; `GET`/`POST /properties/{id}/building/prices`, both in `_NEVER_ACTS`) spends
+money on the account's ČÚZK login, so ONE run per account uses that login at a time: the purchase lease on the login's
+own row (`cuzk_login.lease`/`renew`/`release`), renewed before every call. Its states, who may move each and on what
+guard head the module; its rows (`cadastre_price_purchases`, `cadastre_deeds`) are the buyer's alone, every statement
+naming the account. One ledger row per run, admitted before its first call.
 
 **Fourth instance — the run routes (`api/routes/agent_runs.py`, #2071).** `require_account_id` on the router (all in
 `_NEVER_ACTS`), so a start lands on the user's oldest membership, with no picker. Reads take `TenantConn` and name no account
