@@ -106,6 +106,9 @@ ADMIN_ONLY_RELATIONS: tuple[str, ...] = (
     "account_cuzk_logins",
     # The ledger and budget of ČÚZK login checks (migration 762).
     "account_cuzk_login_checks",
+    # Cadastre prices an account bought, and the ledger of its requests (migration 763): the buyer's alone.
+    "cadastre_price_purchases",
+    "cadastre_deeds",
     # The scheduled-jobs lease and its run history (migration 675): holders, host names and log tails.
     "scheduled_jobs",
     "job_runs",

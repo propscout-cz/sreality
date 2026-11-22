@@ -49,7 +49,7 @@ def test_the_packed_unit_number_unpacks(packed, label):
 
 def test_ordering_a_report_names_every_unit_once_and_reads_its_id(sent):
     sent["answer"] = (FIX / "cenyNem_bldg311151306_1gen.resp.xml").read_bytes()
-    report = w.generate_unit_prices([1, 2, 3], "u", "p")
+    report = w.generate_prices("JED_S", [1, 2, 3], "u", "p")
     assert report == w.Report(222936340011, "čeká", None)
     assert sent["data"].count("<typ:seznamObjektu>") == 3 and "<typ:seznamObjektuTyp>JED_S<" in sent["data"]
 
@@ -57,7 +57,7 @@ def test_ordering_a_report_names_every_unit_once_and_reads_its_id(sent):
 @pytest.mark.parametrize("count", [0, 201])
 def test_a_report_takes_one_to_two_hundred_units(sent, count):
     with pytest.raises(ValueError):
-        w.generate_unit_prices(list(range(count)), "u", "p")
+        w.generate_prices("JED_S", list(range(count)), "u", "p")
     assert "url" not in sent, "nothing is sent"
 
 
@@ -77,5 +77,11 @@ def test_a_fetched_report_is_its_decoded_file(sent):
 def test_a_refusal_inside_a_200_answer_is_an_error(sent):
     sent["answer"] = ERROR
     with pytest.raises(w.WsdpError) as refused:
-        w.generate_unit_prices([1], "u", "p")
+        w.generate_prices("STA_S", [1], "u", "p")
     assert (refused.value.reason, refused.value.status) == ("status", 505)
+
+
+def test_only_units_or_buildings_can_be_priced(sent):
+    with pytest.raises(ValueError):
+        w.generate_prices("PAR_S", [1], "u", "p")
+    assert "url" not in sent

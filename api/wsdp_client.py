@@ -144,15 +144,18 @@ def _report(root: ET.Element) -> tuple[Report, ET.Element]:
     return Report(int(_child_text(el, "id")), _child_text(el, "stav"), int(price) if price.isdigit() else None), el
 
 
-def generate_unit_prices(unit_iskn_ids: list[int], username: str, password: str) -> Report:
-    """Ask for the price report over these units: one paid output for up to 200 of them. Never call twice for
-    one purchase: each call is a new report."""
-    if not 0 < len(unit_iskn_ids) <= MAX_PRICE_OBJECTS:
-        raise ValueError(f"1 to {MAX_PRICE_OBJECTS} units per report")
-    objects = "".join(f"<typ:seznamObjektu>{int(i)}</typ:seznamObjektu>" for i in unit_iskn_ids)
+PRICE_OBJECT_TYPES = ("JED_S", "STA_S")  # units; buildings (a house has no units)
+
+
+def generate_prices(object_type: str, iskn_ids: list[int], username: str, password: str) -> Report:
+    """Order the price report over these properties of ONE type: one paid output for up to 200 of them. Never
+    call twice for one purchase: each call is a new report."""
+    if object_type not in PRICE_OBJECT_TYPES or not 0 < len(iskn_ids) <= MAX_PRICE_OBJECTS:
+        raise ValueError(f"1 to {MAX_PRICE_OBJECTS} properties of one of {PRICE_OBJECT_TYPES}")
+    objects = "".join(f"<typ:seznamObjektu>{int(i)}</typ:seznamObjektu>" for i in iskn_ids)
     root = _call("sestavy", "GenerujCenoveUdajeDleNemovitosti",
-                 "<typ:GenerujCenoveUdajeDleNemovitostiRequest><typ:seznamObjektuTyp>JED_S</typ:seznamObjektuTyp>"
-                 f"{objects}<typ:format>xml</typ:format><typ:verze>1.0</typ:verze>"
+                 f"<typ:GenerujCenoveUdajeDleNemovitostiRequest><typ:seznamObjektuTyp>{object_type}"
+                 f"</typ:seznamObjektuTyp>{objects}<typ:format>xml</typ:format><typ:verze>1.0</typ:verze>"
                  "</typ:GenerujCenoveUdajeDleNemovitostiRequest>",
                  username, password)
     return _report(root)[0]
