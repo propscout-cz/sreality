@@ -64,8 +64,7 @@ def test_reads_a_building_with_its_own_attributes(tmp_path):
         iskn_building_id=896183101, identifying_parcel_id=2099603101, cast_obce_kod=400017, momc_kod=500054,
         house_numbers=(727, 728), completed_on=datetime.date(1945, 12, 31), construction_code=7, floors=8,
         dwelling_count=75, built_up_area_m2=2270, floor_area_m2=None, enclosed_volume_m3=None, lift_code=1,
-        water_code=3, sewer_code=1, gas_code=2, heating_code=4, protection_codes=(16, 18),
-        krovak_y=-742355.27, krovak_x=-1042665.01)
+        water_code=3, sewer_code=1, gas_code=2, heating_code=4, protection_codes=(16, 18))
 
 
 def test_an_entrance_record_never_overrides_the_building(tmp_path):
@@ -75,7 +74,7 @@ def test_an_entrance_record_never_overrides_the_building(tmp_path):
 
 def test_a_bare_building_reads_as_gaps(tmp_path):
     bare = list(ruian_vfr.iter_obec_state(_zip(tmp_path)))[1]
-    assert (bare.code, bare.floors, bare.house_numbers, bare.krovak_y) == (5, None, (), None)
+    assert (bare.code, bare.floors, bare.house_numbers, bare.completed_on) == (5, None, (), None)
 
 
 def test_links_only_address_points_that_name_a_building(tmp_path):

@@ -44,8 +44,6 @@ class BuildingRow:
     gas_code: int | None
     heating_code: int | None
     protection_codes: tuple[int, ...]
-    krovak_y: float | None
-    krovak_x: float | None
 
 
 @dataclass(frozen=True)
@@ -79,16 +77,6 @@ def _nested_code(el: ET.Element | None) -> int | None:
     return _int(c.get("Kod", c.get("Id")))
 
 
-def _point(el: ET.Element | None) -> tuple[float | None, float | None]:
-    if el is None:
-        return None, None
-    for node in el.iter():
-        if _local(node.tag) == "pos" and node.text:
-            y, x = node.text.split()
-            return float(y), float(x)
-    return None, None
-
-
 def _building(el: ET.Element) -> BuildingRow:
     c = _children(el)
     code, plati_od = _int(c.get("Kod")), _date(c.get("PlatiOd"))
@@ -96,8 +84,6 @@ def _building(el: ET.Element) -> BuildingRow:
         raise VfrSchemaError("StavebniObjekt without Kod or PlatiOd")
     numbers = c.get("CislaDomovni")
     protections = c.get("ZpusobyOchrany")
-    geometry = c.get("Geometrie")
-    y, x = _point(_children(geometry).get("DefinicniBod") if geometry is not None else None)
     return BuildingRow(
         code=code,
         plati_od=plati_od,
@@ -123,8 +109,6 @@ def _building(el: ET.Element) -> BuildingRow:
         protection_codes=tuple(sorted({
             k for k in (_int(_children(p).get("Kod")) for p in protections) if k is not None
         })) if protections is not None else (),
-        krovak_y=y,
-        krovak_x=x,
     )
 
 

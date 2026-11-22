@@ -15,8 +15,6 @@ _DB_URL = os.environ.get("TEST_DATABASE_URL")
 
 pytestmark = pytest.mark.skipif(not _DB_URL, reason="TEST_DATABASE_URL not set")
 
-pytest.importorskip("pyproj")
-
 from location_data import ruian_buildings as rb  # noqa: E402
 from location_data import ruian_vfr  # noqa: E402
 
@@ -28,8 +26,7 @@ BUILDING = ruian_vfr.BuildingRow(
     identifying_parcel_id=2099603101, cast_obce_kod=CAST, momc_kod=None, house_numbers=(727, 728),
     completed_on=datetime.date(1945, 12, 31), construction_code=7, floors=8, dwelling_count=75,
     built_up_area_m2=2270, floor_area_m2=None, enclosed_volume_m3=None, lift_code=1, water_code=1,
-    sewer_code=1, gas_code=1, heating_code=2, protection_codes=(16, 18),
-    krovak_y=-742355.27, krovak_x=-1042665.01)
+    sewer_code=1, gas_code=1, heating_code=2, protection_codes=(16, 18))
 
 
 @pytest.fixture
@@ -69,7 +66,7 @@ def _current(conn, code: int) -> list[tuple]:
     with conn.cursor() as cur:
         cur.execute(
             "select valid_from, floors, typ_so, house_numbers, protection_codes, cast_obce_unit_id, "
-            "ST_Y(definition_point), valid_to from ruian_building_objects "
+            "definition_point, valid_to from ruian_building_objects "
             "where code = %s order by valid_from", (code,))
         return cur.fetchall()
 
@@ -90,7 +87,7 @@ def _load(conn, world, rows, obec_kod=OBEC, sha="a"):
 def test_a_building_lands_with_what_the_register_states(conn, world):
     assert _load(conn, world, [BUILDING, ruian_vfr.AddressLink(ADM, BUILDING.code)]) == (1, 1)
     assert _current(conn, BUILDING.code) == [
-        (BUILDING.plati_od, 8, "č.p.", [727, 728], [16, 18], world[1][CAST], pytest.approx(50.085, abs=0.05), None)]
+        (BUILDING.plati_od, 8, "č.p.", [727, 728], [16, 18], world[1][CAST], None, None)]
     assert (_link(conn, ADM), _link(conn, OTHER_ADM)) == (BUILDING.code, None)
 
 

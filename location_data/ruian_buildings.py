@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import logging
 import sys
 import tempfile
@@ -18,11 +19,13 @@ from pathlib import Path
 import psycopg
 import requests
 
-from location_data import krovak, loader_db, ruian_csv, ruian_vfr
+from location_data import loader_db, ruian_vfr
+from scraper import contact
 
 LOG = logging.getLogger("location_data.ruian_buildings")
 
 _PAUSE_S = 0.2
+_TIMEOUT = (30, 600)
 _TYP_SO = {1: "č.p.", 2: "č.ev."}
 
 _STAGE_BUILDINGS = """
@@ -31,8 +34,7 @@ create temp table stage_buildings (
   identifying_parcel_id bigint, cast_obce_kod bigint, house_numbers integer[], completed_on date,
   construction_code smallint, floors smallint, dwelling_count integer, built_up_area_m2 integer,
   floor_area_m2 integer, enclosed_volume_m3 integer, lift_code smallint, water_code smallint,
-  sewer_code smallint, gas_code smallint, heating_code smallint, protection_codes smallint[],
-  lon double precision, lat double precision
+  sewer_code smallint, gas_code smallint, heating_code smallint, protection_codes smallint[]
 ) on commit drop
 """
 _STAGE_LINKS = "create temp table stage_links (kod_adm bigint primary key, building_code bigint) on commit drop"
@@ -76,16 +78,6 @@ def pending_obce(conn: psycopg.Connection, version: Version) -> list[tuple[int, 
         return [(int(i), int(c)) for i, c in cur.fetchall()]
 
 
-def _point(row: ruian_vfr.BuildingRow) -> tuple[float | None, float | None]:
-    if row.krovak_y is None or row.krovak_x is None:
-        return None, None
-    try:
-        point = krovak.krovak_positive_to_wgs84(krovak.KrovakPositive.from_epsg5514(row.krovak_y, row.krovak_x))
-    except krovak.KrovakSignError:
-        return None, None
-    return point.lon, point.lat
-
-
 def write_obec(conn: psycopg.Connection, version: Version, obec_unit_id: int, obec_kod: int,
                rows: list[ruian_vfr.BuildingRow | ruian_vfr.AddressLink], sha256: str) -> tuple[int, int]:
     """One obec, one transaction: its buildings, its address links, its receipt."""
@@ -98,13 +90,12 @@ def write_obec(conn: psycopg.Connection, version: Version, obec_unit_id: int, ob
         cur.execute(_STAGE_LINKS)
         with cur.copy("copy stage_buildings from stdin") as copy:
             for b in buildings:
-                lon, lat = _point(b)
                 copy.write_row((
                     b.code, b.plati_od, _TYP_SO.get(b.typ_so), b.usage_code, b.iskn_building_id,
                     b.identifying_parcel_id, b.cast_obce_kod, list(b.house_numbers) or None, b.completed_on,
                     b.construction_code, b.floors, b.dwelling_count, b.built_up_area_m2, b.floor_area_m2,
                     b.enclosed_volume_m3, b.lift_code, b.water_code, b.sewer_code, b.gas_code, b.heating_code,
-                    list(b.protection_codes) or None, lon, lat,
+                    list(b.protection_codes) or None,
                 ))
         with cur.copy("copy stage_links from stdin") as copy:
             for link in links:
@@ -127,18 +118,15 @@ def write_obec(conn: psycopg.Connection, version: Version, obec_unit_id: int, ob
         cur.execute(
             f"""
             insert into ruian_building_objects
-                   (code, obec_unit_id, cast_obce_unit_id, definition_point, valid_from, valid_to,
+                   (code, obec_unit_id, cast_obce_unit_id, valid_from, valid_to,
                     first_version_id, last_version_id, {facts})
-            select s.code, %(obec)s, c.id,
-                   case when s.lon is not null then ST_SetSRID(ST_MakePoint(s.lon, s.lat), 4326) end,
-                   s.valid_from, null, %(v)s, %(v)s, {", ".join(f"s.{f}" for f in _FACTS)}
+            select s.code, %(obec)s, c.id, s.valid_from, null, %(v)s, %(v)s, {", ".join(f"s.{f}" for f in _FACTS)}
               from stage_buildings s
          left join ruian_admin_units c
                 on c.level = 'cast_obce' and c.code = s.cast_obce_kod and c.valid_to is null
             on conflict (code, valid_from) do update set
                    valid_to = null, last_version_id = excluded.last_version_id,
                    obec_unit_id = excluded.obec_unit_id, cast_obce_unit_id = excluded.cast_obce_unit_id,
-                   definition_point = excluded.definition_point,
                    {", ".join(f"{f} = excluded.{f}" for f in _FACTS)}
             """,
             {"v": version.id, "obec": obec_unit_id},
@@ -164,16 +152,28 @@ def write_obec(conn: psycopg.Connection, version: Version, obec_unit_id: int, ob
     return len(buildings), len(links)
 
 
+def download(sess: requests.Session, url: str, dest: Path) -> str:
+    """Stream one file to disk; its sha256. (Not `ruian_csv.download`: that module needs pyproj, the runner has none.)"""
+    digest = hashlib.sha256()
+    with sess.get(url, timeout=_TIMEOUT, stream=True) as resp:
+        resp.raise_for_status()
+        with dest.open("wb") as fh:
+            for chunk in resp.iter_content(1 << 20):
+                digest.update(chunk)
+                fh.write(chunk)
+    return digest.hexdigest()
+
+
 def load_obec(conn: psycopg.Connection, sess: requests.Session, version: Version, obec_unit_id: int,
               obec_kod: int, work_dir: Path) -> tuple[int, int]:
     stamp = version.source_date.strftime("%Y%m%d")
     path = work_dir / f"{stamp}_OB_{obec_kod}_UZSZ.xml.zip"
-    artifact = ruian_csv.download(sess, path.name, ruian_vfr.OBEC_STATE_URL.format(vintage=stamp, obec=obec_kod), path)
     try:
+        sha256 = download(sess, ruian_vfr.OBEC_STATE_URL.format(vintage=stamp, obec=obec_kod), path)
         rows = list(ruian_vfr.iter_obec_state(path))
     finally:
         path.unlink(missing_ok=True)
-    return write_obec(conn, version, obec_unit_id, obec_kod, rows, artifact.sha256)
+    return write_obec(conn, version, obec_unit_id, obec_kod, rows, sha256)
 
 
 def run(*, max_seconds: int | None, only: list[int] | None, work_dir: Path) -> int:
@@ -183,7 +183,8 @@ def run(*, max_seconds: int | None, only: list[int] | None, work_dir: Path) -> i
         version = current_version(conn)
         todo = [(i, c) for i, c in pending_obce(conn, version) if only is None or c in only]
         LOG.info("BUILDINGS start version=%d vintage=%s pending=%d", version.id, version.source_date, len(todo))
-        sess = ruian_csv.session()
+        sess = requests.Session()
+        sess.headers["User-Agent"] = contact.USER_AGENT
         done = buildings = links = 0
         for obec_unit_id, obec_kod in todo:
             if max_seconds is not None and time.monotonic() - started > max_seconds:
