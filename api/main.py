@@ -82,6 +82,7 @@ from api.routes.location_corrections import router as location_corrections_route
 from api.routes.new_dedup import router as new_dedup_router
 from api.routes.new_dedup_candidates import router as new_dedup_candidates_router
 from api.routes.notifications import router as notifications_router
+from api.routes.cuzk_login import router as cuzk_login_router
 from api.routes.push import router as push_router
 from api.routes.waitlist import admin_router as waitlist_admin_router
 from api.routes.waitlist import router as waitlist_router
@@ -264,6 +265,10 @@ app.include_router(notifications_router)
 # open) — the key for any signed-in caller; the three writes are the caller's own account (never acted
 # for) on the service role, opened in the handler after that gate (api/routes/push.py).
 app.include_router(push_router)
+# /account/cuzk-login (an account's own ČÚZK WSDP login: its state, a checked save, a removal) — the
+# caller's own account (never acted for) on the service role, opened in the handler; no route returns
+# the password (api/routes/cuzk_login.py).
+app.include_router(cuzk_login_router)
 # /properties/merge|{id}/split|{id}/origins (merge MECHANICS: collapse an
 # operator-chosen set, split one property's adverts, where each came from)
 # — mutating operator actions, admin-gated (require_admin). Mounted before the
