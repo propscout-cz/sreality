@@ -132,7 +132,7 @@ with `tabular-nums` on EVERY number.
   component draws every page tab strip: Browse and its Explore windows, the property page (`PropertyTabs` keeps its
   tab list, address and panels), a collection's members, NEW DEDUP Labeling's statuses.
   - The 1px `--color-rule` rule belongs to the strip and runs its container's whole content column. A trailing slot
-    (Browse's Split | Cards and Small | Large) sits at the strip's right end above the rule; on a row too narrow for
+    (Browse's Map | Cards and Small | Large) sits at the strip's right end above the rule; on a row too narrow for
     both it wraps to a line ABOVE the tabs, never below them, so the tabs never leave the rule.
   - The first label sits on the title's edge: tab buttons have no horizontal padding, tabs are `gap-6` apart.
   - Open = `ink` plus a 2px copper line exactly as wide as the label and its count, laid ON the rule (covering it);
