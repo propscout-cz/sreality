@@ -1,10 +1,13 @@
-"""ČÚZK WSDP (the cadastre's SOAP web service): HTTP only. One call so far, the free status call
-that proves a login. Never retried: three refused logins block the account for 15 minutes. An error
-names its kind only, so neither the envelope nor the password can reach a log."""
+"""ČÚZK WSDP (the cadastre's SOAP web service): HTTP only. The free status call that proves a login, the free
+search of a building's units, and a report's three steps (generate, poll, fetch). Nothing here is retried: three
+refused logins block the account for 15 minutes, and a repeated generate is a second purchase. An error names its
+kind only, so neither the envelope nor the password can reach a log."""
 
 from __future__ import annotations
 
+import base64
 import os
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
@@ -79,3 +82,97 @@ def check_login(username: str, password: str) -> str:
     if not name:
         raise WsdpError("unreadable")
     return name
+
+
+MAX_PRICE_OBJECTS = 200  # the decree's cap per output; a 201st id is refused by the service (error 505)
+
+
+@dataclass(frozen=True)
+class Unit:
+    iskn_id: int
+    label: str  # "<č.p.>/<unit number>", built from the service's packed number
+
+
+@dataclass(frozen=True)
+class Report:
+    id: int
+    state: str  # čeká | vytváří se | zpracován | zaúčtován | …
+    price_czk: int | None  # known once the report is made; charged at its first fetch
+
+
+def _local(el: ET.Element) -> str:
+    return el.tag.rsplit("}", 1)[-1]
+
+
+def _result_ok(root: ET.Element) -> None:
+    """The service's own verdict: a `zprava` at level CHYBA is a refusal with HTTP 200."""
+    for el in root.iter():
+        if _local(el) == "zprava" and el.get("uroven") == "CHYBA":
+            raise WsdpError("status", int(el.get("kod") or 0))
+
+
+def _child_text(el: ET.Element, name: str) -> str:
+    return next(((c.text or "").strip() for c in el if _local(c) == name), "")
+
+
+def unit_label(packed: str) -> str:
+    """The service packs a unit as <č.p.><unit number padded to four digits>: 1330019 is 133/19."""
+    return f"{int(packed[:-4])}/{int(packed[-4:])}" if packed.isdigit() and len(packed) > 4 else packed
+
+
+def find_units(building_iskn_id: int, username: str, password: str) -> list[Unit]:
+    """The units of one building (free): their cadastre ids and labels."""
+    root = _call("vyhledat", "NajdiJednotku",
+                 f"<typ:NajdiJednotkuRequest><typ:stavbaId>{int(building_iskn_id)}</typ:stavbaId>"
+                 "</typ:NajdiJednotkuRequest>", username, password)
+    _result_ok(root)
+    units = []
+    for el in root.iter():
+        if _local(el) == "Jednotka":
+            iskn_id = _child_text(el, "idJednotky")
+            if iskn_id.isdigit():
+                units.append(Unit(int(iskn_id), unit_label(_child_text(el, "cislo"))))
+    return units
+
+
+def _report(root: ET.Element) -> tuple[Report, ET.Element]:
+    _result_ok(root)
+    el = next((e for e in root.iter() if _local(e) == "report"), None)
+    if el is None or not _child_text(el, "id").isdigit():
+        raise WsdpError("unreadable")
+    price = _child_text(el, "cena")
+    return Report(int(_child_text(el, "id")), _child_text(el, "stav"), int(price) if price.isdigit() else None), el
+
+
+def generate_unit_prices(unit_iskn_ids: list[int], username: str, password: str) -> Report:
+    """Ask for the price report over these units: one paid output for up to 200 of them. Never call twice for
+    one purchase: each call is a new report."""
+    if not 0 < len(unit_iskn_ids) <= MAX_PRICE_OBJECTS:
+        raise ValueError(f"1 to {MAX_PRICE_OBJECTS} units per report")
+    objects = "".join(f"<typ:seznamObjektu>{int(i)}</typ:seznamObjektu>" for i in unit_iskn_ids)
+    root = _call("sestavy", "GenerujCenoveUdajeDleNemovitosti",
+                 "<typ:GenerujCenoveUdajeDleNemovitostiRequest><typ:seznamObjektuTyp>JED_S</typ:seznamObjektuTyp>"
+                 f"{objects}<typ:format>xml</typ:format><typ:verze>1.0</typ:verze>"
+                 "</typ:GenerujCenoveUdajeDleNemovitostiRequest>",
+                 username, password)
+    return _report(root)[0]
+
+
+def report_state(report_id: int, username: str, password: str) -> Report:
+    """Where a report stands (free)."""
+    root = _call("sestavy", "SeznamSestav",
+                 f"<typ:SeznamSestavRequest><typ:idSestavy>{int(report_id)}</typ:idSestavy></typ:SeznamSestavRequest>",
+                 username, password)
+    return _report(root)[0]
+
+
+def fetch_report(report_id: int, username: str, password: str) -> tuple[Report, bytes]:
+    """The report's file. Its FIRST fetch is the charge; fetching it again is free."""
+    root = _call("sestavy", "VratSestavu",
+                 f"<typ:VratSestavuRequest><typ:idSestavy>{int(report_id)}</typ:idSestavy></typ:VratSestavuRequest>",
+                 username, password)
+    report, el = _report(root)
+    body = _child_text(el, "souborSestavy")
+    if not body:
+        raise WsdpError("unreadable")
+    return report, base64.b64decode(body)
