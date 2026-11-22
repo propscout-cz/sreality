@@ -40,10 +40,14 @@ ACCOUNT_WINDOW = datetime.timedelta(hours=1)
 ACCOUNT_UNACCEPTED_BUDGET = 5
 ACCOUNT_TOTAL_BUDGET = 10  # so also at most ten purchase requests an hour, resumes included
 LEDGER_KEEPS = datetime.timedelta(days=2)
-# A check still in flight this long after it was admitted is a dead request's (no call lasts a third of it): from
-# then on an accepted check resets it like one that got no answer. Without this a killed request's row could never
-# be reset, and one more timeout would throttle the username for a day.
+# When an accepted check may reset an unaccepted one. A REFUSED check was answered by ČÚZK, so its `answered_at`
+# is when ČÚZK handled it, and an accepted check admitted after that resets it. A check that got NO ANSWER, or is
+# still in flight (a killed request's row stays so for ever), has no such moment: the time we gave up is ours, not
+# ČÚZK's, and the request may reach ČÚZK after it. Those are resettable only by an accepted check admitted this
+# long after they were admitted: three times the longest a call can last, by which time ČÚZK has handled whatever
+# reached it.
 STRANDED_AFTER = datetime.timedelta(seconds=120)
+assert STRANDED_AFTER.total_seconds() >= 3 * wsdp_client.CALL_MAX_S
 _LOCK_ACCOUNT, _LOCK_USERNAME = 2601, 2600  # advisory-lock namespaces, always taken in this order
 
 
@@ -285,7 +289,8 @@ with username_run as (
      and coalesce(r.answered_at, r.admitted_at) > now() - %(uw)s::interval
      and not exists (select 1 from account_cuzk_login_checks l
                       where l.username_exact_key = r.username_exact_key and l.outcome = 'accepted'
-                        and coalesce(r.answered_at, r.admitted_at + %(tail)s::interval) < l.admitted_at)
+                        and (case when r.outcome = 'refused' then r.answered_at
+                                  else r.admitted_at + %(tail)s::interval end) < l.admitted_at)
 ), account_hour as (
   select admitted_at as at, outcome, in_run from account_cuzk_login_checks
    where account_id = %(account)s and admitted_at > now() - %(aw)s::interval

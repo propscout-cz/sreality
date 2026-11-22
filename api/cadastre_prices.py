@@ -17,8 +17,8 @@ call to ČÚZK and sends the call only if the lease is still its own, the login 
 refused, not re-saved), and the call is admitted by the login-check budgets. A lease may be taken over only when
 it has not been renewed for `cuzk_login.LEASE_S`, three times what any single call can last by the wall clock
 (`wsdp_client.CALL_MAX_S`), so a live holder is never displaced. After a fetch whose answer was lost the lease is
-NOT given back: it goes stale, and for FETCH_COOL_S nobody sends that fetch again, because the first may still be
-being served.
+NOT given back: it goes stale, and for FETCH_COOL_S nobody sends that fetch again, because ČÚZK may still be
+serving the first.
 
 THE PURCHASE'S STATES (`cadastre_price_purchases.status`), every write there is, and its guard. "fenced" = the
 UPDATE itself requires the account, the expected status, this run's lease token and a fresh renewal (`_move`).
@@ -205,10 +205,13 @@ def building_of(conn: psycopg.Connection, property_id: int) -> Building:
     return Building(int(row[0]), int(row[1]))
 
 
-# A fetch that was sent is not sent again for this long, whoever asks: the first may still be being served (its
-# caller gave up at CALL_MAX_S, the request itself lives on), and ČÚZK's "only at the first opening" speaks of a
-# repeat after the charge, not of two first openings at once.
+# A fetch that was sent is not sent again for this long, whoever asks. On our side nothing is in flight past
+# CALL_MAX_S (the caller ends the request and shuts its socket), so this is the time we allow ČÚZK to finish a
+# fetch it has already received: its "only at the first opening" speaks of a repeat after the charge, not of two
+# first openings at once. The premise, stated: ČÚZK finishes handling a request within FETCH_COOL_S - CALL_MAX_S
+# (140 s) of receiving it. It is a judgement, not ČÚZK's rule.
 FETCH_COOL_S = 180
+assert FETCH_COOL_S >= 3 * wsdp_client.CALL_MAX_S
 # A fenced move also needs the lease renewed this recently, so a holder stalled between its renewal and its write
 # (a slow database connection) cannot write on a lease it is about to lose.
 BEAT_FRESH_S = 60

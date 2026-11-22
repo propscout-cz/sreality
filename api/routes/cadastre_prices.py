@@ -36,7 +36,9 @@ _LOGIN_REFUSED = (f"ČÚZK vaše uložené přihlášení odmítl. Další pokus
                   f"ČÚZK nezablokoval. Uložte ho znovu {_WHERE}. Tento pokus nic nezaúčtoval.")
 _REFUSED_NOW = (f"ČÚZK vaše uložené přihlášení právě odmítl. Tento pokus nic nezaúčtoval. Uložte přihlášení znovu "
                 f"{_WHERE} a pak pokračujte.")
-_NO_ANSWER = "ČÚZK neodpověděl nebo odpověděl chybou. Tento pokus nic nezaúčtoval; zkuste to za chvíli znovu."
+_NO_ANSWER = ("ČÚZK neodpověděl nebo odpověděl chybou. Tento pokus nic nezaúčtoval. Než to zkusíte znovu, počkejte "
+              "několik minut: druhý neúspěšný pokus krátce po prvním pozastaví v naší aplikaci vaše přihlášení k ČÚZK "
+              "až na den (váš účet u ČÚZK tím zablokován není).")
 _TOO_MANY = "Tato budova má více než 200 jednotek, což jeden výstup zatím nepokryje. Nic nebylo objednáno."
 _GONE_UNCHARGED = ("ČÚZK objednanou sestavu už nenabízí. Nebyla vyzvednuta, takže nebylo nic zaúčtováno. Ceny můžete "
                    "načíst znovu.")

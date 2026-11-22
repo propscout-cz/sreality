@@ -683,6 +683,36 @@ def test_a_dead_requests_check_does_not_throttle_the_username_for_a_day(conn, mo
     assert a and b, "two fresh checks are admitted again"
 
 
+def test_a_call_that_got_no_answer_is_not_reset_by_an_accepted_one_moments_later(conn, monkeypatch):
+    """The fourth review's major. The moment we gave up is ours, not ČÚZK's: a wrong-password save that hangs
+    before it is sent can reach ČÚZK AFTER a correct login was accepted. So an accepted check resets a no-answer
+    only once it is admitted well after that call was."""
+    me = _account(conn)
+    hung = cuzk_login.admit_check(conn, me, "firma")
+    cuzk_login.settle_check(conn, hung, "no_answer")
+    cuzk_login.settle_check(conn, cuzk_login.admit_check(conn, me, "firma"), "accepted")  # one second later
+    cuzk_login.settle_check(conn, cuzk_login.admit_check(conn, me, "firma"), "refused")
+    with pytest.raises(cuzk_login.Throttled):
+        cuzk_login.admit_check(conn, me, "firma")  # the no-answer still counts: this would be the third
+
+    other = _account(conn)
+    old = cuzk_login.admit_check(conn, other, "jina")
+    cuzk_login.settle_check(conn, old, "no_answer")
+    conn.execute("update account_cuzk_login_checks set admitted_at = admitted_at - interval '10 minutes', "
+                 "answered_at = answered_at - interval '10 minutes' where id = %s", (old,))
+    cuzk_login.settle_check(conn, cuzk_login.admit_check(conn, other, "jina"), "accepted")
+    cuzk_login.settle_check(conn, cuzk_login.admit_check(conn, other, "jina"), "refused")
+    assert cuzk_login.admit_check(conn, other, "jina"), "minutes later the accepted check did reset it"
+
+
+def test_a_refused_check_is_reset_by_an_accepted_one_admitted_after_cuzk_answered_it(conn, monkeypatch):
+    me = _account(conn)
+    cuzk_login.settle_check(conn, cuzk_login.admit_check(conn, me, "firma"), "refused")
+    cuzk_login.settle_check(conn, cuzk_login.admit_check(conn, me, "firma"), "accepted")
+    cuzk_login.settle_check(conn, cuzk_login.admit_check(conn, me, "firma"), "refused")
+    assert cuzk_login.admit_check(conn, me, "firma"), "ČÚZK answered the first: its own counter was reset too"
+
+
 def test_an_accepted_answer_is_never_wiped_by_the_runs_later_calls(conn, monkeypatch):
     """The third review's M3: two ordinary timeouts with an accepted answer between them are one unaccepted
     check, not two."""
@@ -690,8 +720,9 @@ def test_an_accepted_answer_is_never_wiped_by_the_runs_later_calls(conn, monkeyp
     cuzk.raises["poll"] = [TIMEOUT]
     with pytest.raises(wsdp_client.WsdpError):
         _buy(cuzk, me)
-    conn.execute("update account_cuzk_login_checks set admitted_at = admitted_at - interval '1 minute', "
-                 "answered_at = answered_at - interval '1 minute' where account_id = %s", (me,))
+    # Minutes pass: a call that got no answer is resettable only once ČÚZK must have handled it.
+    conn.execute("update account_cuzk_login_checks set admitted_at = admitted_at - interval '10 minutes', "
+                 "answered_at = answered_at - interval '10 minutes' where account_id = %s", (me,))
     cuzk.ready_after = 1  # the resume's first poll is answered (accepted), its fetch then times out
     with pytest.raises(prices.InProgress):
         _buy(cuzk, me, resume=_id(conn, me))

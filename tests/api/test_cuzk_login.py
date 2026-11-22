@@ -206,17 +206,6 @@ def test_the_store_round_trips_and_a_changed_key_is_unreadable(monkeypatch: pyte
         cuzk_login.login_of(ScriptConn([(_is("select"), [("firma01", token)])]), _ME)
 
 
-class _Resp:
-    def __init__(self, status: int, body: str) -> None:
-        self.status_code, self.content = status, body.encode()
-
-    def iter_content(self, size: int) -> Any:
-        yield self.content
-
-    def close(self) -> None:
-        pass
-
-
 def test_the_client_reads_an_accepted_and_a_refused_login(monkeypatch: pytest.MonkeyPatch) -> None:
     sent: dict[str, Any] = {}
     ok = ('<S:Envelope xmlns:S="http://schemas.xmlsoap.org/soap/envelope/"><S:Body><a:StavWSResponse xmlns:a="u" '
@@ -225,16 +214,15 @@ def test_the_client_reads_an_accepted_and_a_refused_login(monkeypatch: pytest.Mo
     bad = ('<e:Envelope xmlns:e="http://schemas.xmlsoap.org/soap/envelope/"><e:Body><e:Fault><faultcode>'
            "wsse:FailedAuthentication</faultcode></e:Fault></e:Body></e:Envelope>")
 
-    def post(url: str, **kw: Any) -> _Resp:
-        sent.update(url=url, **kw)
-        return _Resp(200, ok) if b"good" in kw["data"] else _Resp(500, bad)
+    def transport(url: str, data: bytes, headers: dict, given: Any) -> tuple[int, bytes]:
+        sent.update(url=url, data=data)
+        return (200, ok.encode()) if b"good" in data else (500, bad.encode())
 
     monkeypatch.delenv(wsdp_client.BASE_ENV, raising=False)
-    monkeypatch.setattr(wsdp_client.requests, "post", post)
+    monkeypatch.setattr(wsdp_client, "_transport", transport)
     assert wsdp_client.check_login("firma01", "good<&>") == "firma01"
     assert sent["url"] == "https://katastr.cuzk.gov.cz/ws/wsdp/3.1/vyhledat"
-    assert b"good&lt;&amp;&gt;" in sent["data"] and sent["timeout"] == wsdp_client.TIMEOUT
-    assert sent["allow_redirects"] is False
+    assert b"good&lt;&amp;&gt;" in sent["data"]
     with pytest.raises(wsdp_client.WsdpError) as refused:
         wsdp_client.check_login("firma01", PASSWORD)
     assert refused.value.reason == "refused" and PASSWORD not in str(refused.value)
@@ -242,7 +230,7 @@ def test_the_client_reads_an_accepted_and_a_refused_login(monkeypatch: pytest.Mo
 
 def test_a_redirect_is_no_answer_and_is_never_followed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(wsdp_client.BASE_ENV, raising=False)
-    monkeypatch.setattr(wsdp_client.requests, "post", lambda url, **kw: _Resp(307, ""))
+    monkeypatch.setattr(wsdp_client, "_transport", lambda url, data, headers, given: (307, b""))
     with pytest.raises(wsdp_client.WsdpError) as moved:
         wsdp_client.check_login("firma01", PASSWORD)
     assert (moved.value.reason, moved.value.status) == ("status", 307)
@@ -255,7 +243,7 @@ def test_a_redirect_is_no_answer_and_is_never_followed(monkeypatch: pytest.Monke
 def test_a_login_is_sent_only_to_cuzk_over_https(monkeypatch: pytest.MonkeyPatch, base: str) -> None:
     sent: list[str] = []
     monkeypatch.setenv(wsdp_client.BASE_ENV, base)
-    monkeypatch.setattr(wsdp_client.requests, "post", lambda url, **kw: sent.append(url))
+    monkeypatch.setattr(wsdp_client, "_transport", lambda url, data, headers, given: sent.append(url))
     with pytest.raises(wsdp_client.WsdpError) as refused:
         wsdp_client.check_login("firma01", PASSWORD)
     assert refused.value.reason == "misconfigured" and sent == []

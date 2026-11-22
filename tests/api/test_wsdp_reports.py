@@ -15,27 +15,17 @@ ERROR = ('<S:Envelope xmlns:S="http://schemas.xmlsoap.org/soap/envelope/"><S:Bod
          "</c:zprava></a:vysledek></a:X></S:Body></S:Envelope>")
 
 
-class _Resp:
-    def __init__(self, body: bytes | str, status: int = 200) -> None:
-        self.status_code, self.content = status, body if isinstance(body, bytes) else body.encode()
-
-    def iter_content(self, size: int) -> Any:
-        yield self.content
-
-    def close(self) -> None:
-        pass
-
-
 @pytest.fixture()
 def sent(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     box: dict[str, Any] = {"answer": b""}
 
-    def post(url: str, **kw: Any) -> _Resp:
-        box.update(url=url, data=kw["data"].decode(), headers=kw["headers"])
-        return _Resp(box["answer"])
+    def transport(url: str, data: bytes, headers: dict, given: Any) -> tuple[int, bytes]:
+        box.update(url=url, data=data.decode(), headers=headers)
+        answer = box["answer"]
+        return 200, answer if isinstance(answer, bytes) else answer.encode()
 
     monkeypatch.delenv(w.BASE_ENV, raising=False)
-    monkeypatch.setattr(w.requests, "post", post)
+    monkeypatch.setattr(w, "_transport", transport)
     return box
 
 
@@ -121,35 +111,69 @@ def test_a_report_that_is_gone_is_error_304_and_nothing_else_is(sent):
     assert (gone.value.reason, gone.value.status) == ("service", 304) and gone.value.authenticated
 
 
-def test_a_call_ends_for_the_caller_at_the_wall_clock_bound_whatever_the_socket_does(
-        monkeypatch: pytest.MonkeyPatch) -> None:
-    """requests bounds each socket read, never their sum (and a body under 64 KiB is one `iter_content` chunk, so a
-    loop over chunks checks nothing). The login lease relies on one call having a real end."""
+def test_a_call_ends_at_the_wall_clock_bound_and_the_request_is_ended_with_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fourth review's point 2: at the bound the caller stops waiting AND the request loses its socket, so
+    nothing of ours is in flight afterwards. Each socket step has its own timeout, never their sum."""
     import threading
     import time
 
-    never = threading.Event()
+    shut, released = threading.Event(), threading.Event()
 
-    def trickle(url: str, **kw: Any) -> Any:
-        never.wait(30)  # a body that keeps arriving, each read inside its own timeout
-        raise AssertionError("abandoned")
+    class _Sock:
+        def shutdown(self, how: int) -> None:
+            shut.set()
 
-    monkeypatch.setattr(w.requests, "post", trickle)
+    class _Conn:
+        sock = _Sock()
+
+    def trickle(url: str, data: bytes, headers: dict, given: Any) -> Any:
+        assert given.may_send(_Conn())  # connected and sent; the answer then never ends
+        shut.wait(30)
+        released.set()
+        raise w.WsdpError("timeout")
+
+    monkeypatch.setattr(w, "_transport", trickle)
     monkeypatch.setattr(w, "CALL_MAX_S", 0.2)
     began = time.monotonic()
     with pytest.raises(w.WsdpError) as slow:
         w.report_state(1, "u", "p")
-    never.set()
     assert slow.value.reason == "timeout" and time.monotonic() - began < 5
+    assert shut.is_set() and released.wait(5), "the abandoned request's socket was shut, and it ended"
+
+
+def test_a_request_the_caller_gave_up_on_before_it_was_sent_is_never_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fourth review's major, at its source: a request stuck before its send (a DNS lookup has no bound) must
+    not leave after the caller has stamped it as unanswered."""
+    import threading
+
+    connected, sent = threading.Event(), []
+
+    def stuck_in_dns(url: str, data: bytes, headers: dict, given: Any) -> Any:
+        connected.wait(30)  # the lookup returns only after the caller gave up
+        if given.may_send(object()):
+            sent.append(url)
+        raise w.WsdpError("timeout")
+
+    monkeypatch.setattr(w, "_transport", stuck_in_dns)
+    monkeypatch.setattr(w, "CALL_MAX_S", 0.2)
+    with pytest.raises(w.WsdpError):
+        w.report_state(1, "u", "p")
+    connected.set()
+    import time
+    time.sleep(0.3)
+    assert sent == []
 
 
 def test_what_the_request_thread_raises_reaches_the_caller(monkeypatch: pytest.MonkeyPatch) -> None:
-    import requests as real
+    def refuse(url: str, data: bytes, headers: dict, given: Any) -> Any:
+        raise w.WsdpError("unreachable")
 
-    def refuse(url: str, **kw: Any) -> Any:
-        raise real.ConnectionError("no route")
-
-    monkeypatch.setattr(w.requests, "post", refuse)
+    monkeypatch.setattr(w, "_transport", refuse)
     with pytest.raises(w.WsdpError) as down:
         w.report_state(1, "u", "p")
     assert down.value.reason == "unreachable"
+
+
+def test_the_login_check_keeps_the_read_timeout_main_has(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ČÚZK that answers in 12 s must not fail a save that succeeds on main."""
+    assert w.TIMEOUT == (5, 20) and w.CALL_MAX_S > sum(w.TIMEOUT)

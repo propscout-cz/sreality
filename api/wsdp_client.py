@@ -6,23 +6,27 @@ kind only, so neither the envelope nor the password can reach a log."""
 from __future__ import annotations
 
 import base64
+import http.client
 import os
 import queue
+import socket
+import ssl
 import threading
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
-import requests
 
 PRODUCTION_BASE = "https://katastr.cuzk.gov.cz/ws/wsdp/3.1/"
 # The override exists for ČÚZK's free test service. A login is only ever sent to one of ČÚZK's own two hosts, over https.
 BASE_ENV = "CUZK_WSDP_BASE"
 HOSTS = frozenset({"katastr.cuzk.gov.cz", "wsdptrial.cuzk.gov.cz"})
-TIMEOUT = (5, 10)  # connect; one socket read. requests bounds each read, never their sum, nor a DNS lookup
-# The longest one call can last, by the wall clock: the request runs on its own thread and the caller stops
-# waiting here, whatever the socket is doing. The purchase lease (api/cuzk_login.py) relies on this being a real bound.
+TIMEOUT = (5, 20)  # connect; one socket read. Each step is bounded, never their sum, nor the DNS lookup before them
+# The longest one call can last, by the wall clock. The request runs on its own thread; at this bound the caller
+# stops waiting AND ends the request: nothing is sent if it had not been yet, and its socket is shut if it had, so
+# nothing of ours is still in flight afterwards. What the service does with a request it already received is its
+# own. The login lease (api/cuzk_login.py) relies on this being a real bound.
 CALL_MAX_S = 40
 
 _ENVELOPE = (
@@ -55,28 +59,77 @@ def base_url() -> str:
     return base
 
 
-def _send(url: str, data: bytes, headers: dict[str, str], out: queue.SimpleQueue) -> None:
+class _Given:
+    """One request's link to the caller waiting for it: the caller gives up through it, once."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._up = False
+        self._conn: http.client.HTTPSConnection | None = None
+
+    def may_send(self, conn: http.client.HTTPSConnection) -> bool:
+        """Called once connected, before anything is sent. False: the caller has given up, send nothing."""
+        with self._lock:
+            if self._up:
+                return False
+            self._conn = conn
+            return True
+
+    @property
+    def up(self) -> bool:
+        return self._up
+
+    def give_up(self) -> None:
+        """The caller stops waiting: a request not yet sent never will be; one in flight loses its socket now."""
+        with self._lock:
+            self._up, conn = True, self._conn
+        if conn is not None and conn.sock is not None:
+            try:
+                conn.sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+
+def _transport(url: str, data: bytes, headers: dict[str, str], given: _Given) -> tuple[int, bytes]:
+    """One HTTPS POST (certificate verified, no redirect followed: a redirect would re-send the password to
+    whatever host the answer names, and http.client follows none)."""
+    parts = urlsplit(url)
+    conn = http.client.HTTPSConnection(parts.hostname or "", parts.port or 443, timeout=TIMEOUT[0],
+                                       context=ssl.create_default_context())
     try:
-        # Never a redirect: it would re-send the password to whatever host the answer names.
-        resp = requests.post(url, data=data, headers=headers, timeout=TIMEOUT, allow_redirects=False)
-        out.put((resp.status_code, resp.content))
-    except requests.Timeout:
-        out.put(WsdpError("timeout"))
-    except requests.RequestException:
-        out.put(WsdpError("unreachable"))
+        conn.connect()
+        if not given.may_send(conn):
+            raise WsdpError("timeout")
+        conn.sock.settimeout(TIMEOUT[1])
+        conn.request("POST", parts.path, body=data, headers=headers)
+        resp = conn.getresponse()
+        return resp.status, resp.read()
+    except TimeoutError:
+        raise WsdpError("timeout") from None
+    except (OSError, http.client.HTTPException):
+        raise WsdpError("timeout" if given.up else "unreachable") from None
+    finally:
+        conn.close()
+
+
+def _send(url: str, data: bytes, headers: dict[str, str], given: _Given, out: queue.SimpleQueue) -> None:
+    try:
+        out.put(_transport(url, data, headers, given))
     except BaseException as exc:  # noqa: BLE001 - the waiting caller must be told, whatever it was
         out.put(exc)
 
 
 def _post(url: str, data: bytes, headers: dict[str, str]) -> tuple[int, bytes]:
-    """One POST, ended for the caller at CALL_MAX_S by the wall clock. A request the service is still answering
-    then is abandoned to its own socket timeouts; what it did there (a fetch may have been served) is unknown to
-    us, which is exactly what `timeout` means to the caller."""
+    """One POST, ended at CALL_MAX_S by the wall clock: the caller stops waiting and the request is ended with it
+    (`_Given.give_up`). Whether the service had received it by then is unknown to us, which is exactly what
+    `timeout` means to the caller."""
     out: queue.SimpleQueue = queue.SimpleQueue()
-    threading.Thread(target=_send, args=(url, data, headers, out), daemon=True, name="wsdp-call").start()
+    given = _Given()
+    threading.Thread(target=_send, args=(url, data, headers, given, out), daemon=True, name="wsdp-call").start()
     try:
         answer = out.get(timeout=CALL_MAX_S)
     except queue.Empty:
+        given.give_up()
         raise WsdpError("timeout") from None
     if isinstance(answer, BaseException):
         raise answer
