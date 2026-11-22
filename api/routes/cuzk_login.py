@@ -81,7 +81,7 @@ def put_cuzk_login(
 
     The account is resolved in a transaction of its own (`own_account_id_released`), not by the
     `require_account_id` dependency: that one holds the request's tenant transaction until the handler
-    returns, and this handler waits on ČÚZK for up to 25 s."""
+    returns, and this handler waits on ČÚZK for up to 40 s (`wsdp_client.CALL_MAX_S`)."""
     account_id = tenant_pool.own_account_id_released(claims, act_as, "PUT")
     username, password = _login(body)
     try:

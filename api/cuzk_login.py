@@ -279,8 +279,10 @@ def exact_key(username: str) -> str:
 
 
 # An unaccepted check r stays in its username's run unless an accepted check L on the SAME exact name was
-# ADMITTED after r had SETTLED: only then do we know ČÚZK handled r before L's correct login reset its counter.
-# A check still in flight is never reset. (Ids are the order we admitted in, not the order ČÚZK handled.)
+# ADMITTED after ČÚZK must have handled r: only then do we know L's correct login reset ČÚZK's counter after r.
+# For a REFUSED r that moment is its `answered_at` (ČÚZK's own answer). For one that got no answer or is still in
+# flight it is `admitted_at + STRANDED_AFTER` (see there): our give-up time is not ČÚZK's. (Ids are the order we
+# admitted in, not the order ČÚZK handled.)
 _SPENT_SQL = """
 with username_run as (
   select coalesce(r.answered_at, r.admitted_at) as at

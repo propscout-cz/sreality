@@ -23,6 +23,7 @@ on:
       - "scraper/__init__.py"
       - "scraper/clip_tagger.py"
       - "scraper/cpus.py"
+      - "api/wsdp_client.py"
       - ".github/workflows/runner_image.yml"
 
 jobs:
@@ -88,6 +89,12 @@ jobs:
         run: |
           docker run --rm api-head python -c 'import importlib.util as u; found = [m for m in ("torch", "transformers") if u.find_spec(m)]; assert not found, found'
           docker run --rm api-head sh -c 'test ! -e /root/.cache/huggingface'
+
+      # The ČÚZK client carries a password over stdlib HTTPS and verifies the server against certifi's bundle. A
+      # green suite does not prove the image has it: assert it in the finished image, with no network.
+      - name: The API image verifies ČÚZK's certificate, against certifi's bundle
+        run: |
+          docker run --rm --network none api-head python -c 'import os, ssl, certifi; from api import wsdp_client as w; c = w.tls_context(); assert c.verify_mode == ssl.CERT_REQUIRED and c.check_hostname, (c.verify_mode, c.check_hostname); assert os.path.isfile(certifi.where()), certifi.where(); n = len(c.get_ca_certs()); assert n > 50, n; print("WSDP TLS verifies against", n, "authorities from", certifi.where())'
 
       # Information, not a verdict: a legitimate API dependency or data file must not fail it.
       - name: Sizes and the package diff, base against this pull request

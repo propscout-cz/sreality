@@ -119,12 +119,11 @@ def test_a_call_ends_at_the_wall_clock_bound_and_the_request_is_ended_with_it(mo
 
     shut, released = threading.Event(), threading.Event()
 
-    class _Sock:
-        def shutdown(self, how: int) -> None:
-            shut.set()
-
     class _Conn:
-        sock = _Sock()
+        sock = object()
+
+    # The real shutdown, on a real TLS socket, is run in tests/api/test_wsdp_transport.py.
+    monkeypatch.setattr(w, "_shutdown", lambda sock: shut.set() if sock is _Conn.sock else None)
 
     def trickle(url: str, data: bytes, headers: dict, given: Any) -> Any:
         assert given.may_send(_Conn())  # connected and sent; the answer then never ends
@@ -177,3 +176,18 @@ def test_what_the_request_thread_raises_reaches_the_caller(monkeypatch: pytest.M
 def test_the_login_check_keeps_the_read_timeout_main_has(monkeypatch: pytest.MonkeyPatch) -> None:
     """A ČÚZK that answers in 12 s must not fail a save that succeeds on main."""
     assert w.TIMEOUT == (5, 20) and w.CALL_MAX_S > sum(w.TIMEOUT)
+
+
+def test_the_server_is_verified_against_the_bundle_requests_used() -> None:
+    """The fifth pass: a hand-written HTTPS layer must not depend on which CA store an image carries."""
+    import ssl
+
+    import certifi
+
+    context = w.tls_context()
+    assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname is True
+    assert context.minimum_version >= ssl.TLSVersion.TLSv1_2
+    loaded = context.get_ca_certs()
+    assert len(loaded) > 50, "certifi's bundle is loaded, not an empty store"
+    from pathlib import Path
+    assert Path(certifi.where()).is_file()

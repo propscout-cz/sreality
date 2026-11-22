@@ -13,9 +13,14 @@ import socket
 import ssl
 import threading
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlsplit
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
+
+import certifi
+
+from scraper import contact
 
 
 PRODUCTION_BASE = "https://katastr.cuzk.gov.cz/ws/wsdp/3.1/"
@@ -24,9 +29,10 @@ BASE_ENV = "CUZK_WSDP_BASE"
 HOSTS = frozenset({"katastr.cuzk.gov.cz", "wsdptrial.cuzk.gov.cz"})
 TIMEOUT = (5, 20)  # connect; one socket read. Each step is bounded, never their sum, nor the DNS lookup before them
 # The longest one call can last, by the wall clock. The request runs on its own thread; at this bound the caller
-# stops waiting AND ends the request: nothing is sent if it had not been yet, and its socket is shut if it had, so
-# nothing of ours is still in flight afterwards. What the service does with a request it already received is its
-# own. The login lease (api/cuzk_login.py) relies on this being a real bound.
+# stops waiting AND ends the request: nothing is sent if it had not been yet, and its socket is shut if it had.
+# Bytes the kernel had already queued may still be delivered, and what the service does with a request it received
+# is its own: after the bound a request must be treated as possibly received, which is how the login ledger and
+# the fetch cool-down treat it. The login lease (api/cuzk_login.py) relies on the bound itself being real.
 CALL_MAX_S = 40
 
 _ENVELOPE = (
@@ -83,11 +89,30 @@ class _Given:
         """The caller stops waiting: a request not yet sent never will be; one in flight loses its socket now."""
         with self._lock:
             self._up, conn = True, self._conn
-        if conn is not None and conn.sock is not None:
-            try:
-                conn.sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
+        if conn is not None:
+            _shutdown(conn.sock)  # read once: the request's own close() can set it to None at any moment
+
+
+def _shutdown(sock: Any) -> None:
+    """End a socket another thread is using. The BASE class's shutdown, never the TLS socket's own: SSLSocket.shutdown
+    drops its SSL object first, and SSLSocket.send falls back to a RAW write once that object is gone, so a send
+    racing this call could put the request, password included, on the wire unencrypted. Left with its SSL object,
+    a late send fails inside the TLS layer instead. (As scraper/egress.py `_shutdown`.)"""
+    if sock is None:
+        return
+    try:
+        socket.socket.shutdown(sock, socket.SHUT_RDWR)
+    except (OSError, TypeError, ValueError):
+        pass
+
+
+def tls_context() -> ssl.SSLContext:
+    """Certificate and hostname verified against certifi's bundle: the same authorities `requests` trusted for
+    this call before it moved to http.client, so which servers are believed does not depend on what CA store an
+    image happens to carry. CI runs this inside the built API image (runner_image.yml)."""
+    context = ssl.create_default_context(cafile=certifi.where())
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return context
 
 
 def _transport(url: str, data: bytes, headers: dict[str, str], given: _Given) -> tuple[int, bytes]:
@@ -95,7 +120,7 @@ def _transport(url: str, data: bytes, headers: dict[str, str], given: _Given) ->
     whatever host the answer names, and http.client follows none)."""
     parts = urlsplit(url)
     conn = http.client.HTTPSConnection(parts.hostname or "", parts.port or 443, timeout=TIMEOUT[0],
-                                       context=ssl.create_default_context())
+                                       context=tls_context())
     try:
         conn.connect()
         if not given.may_send(conn):
@@ -141,6 +166,7 @@ def _call(service: str, operation: str, body: str, username: str, password: str)
     headers = {
         "Content-Type": "text/xml; charset=utf-8",
         "SOAPAction": f'"urn:cz:gov:cuzk:iskn:services:wsdp:{service}:{operation}"',
+        "User-Agent": contact.USER_AGENT,
     }
     status, content = _post(base_url() + service, envelope.encode("utf-8"), headers)
     if 300 <= status < 400:
