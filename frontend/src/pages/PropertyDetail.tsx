@@ -85,6 +85,7 @@ export { FreshnessBlock };
 const CurationBlock = lazyChunk(
   () => import('@/components/listing-detail/CurationBlock'),
 );
+const BuildingSalesCard = lazyChunk(() => import('@/components/listing-detail/BuildingSalesCard'));
 const SoldCompsBlock = lazyChunk(
   () => import('@/components/listing-detail/SoldCompsBlock'),
 );
@@ -442,6 +443,9 @@ export default function PropertyDetail() {
                   listingIds={advertIds}
                   adUrls={sources.map((s) => s.source_url)}
                 />
+              </Suspense>
+              <Suspense fallback={null}>
+                <BuildingSalesCard propertyId={propertyId} />
               </Suspense>
               <Suspense fallback={<Skeleton height={160} />}>
                 {/* Keyed on the property: the block's radius and category seed

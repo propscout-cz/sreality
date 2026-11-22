@@ -21,7 +21,7 @@ ROW = {
     "source": "reas", "source_record_id": "108473925010_unit_22906291-105-37", "sold_at": datetime.date(2025, 3, 14),
     "price_czk": 6450000, "asking_last_czk": 6790000, "category_main": "byt", "disposition": "3+kk",
     "area_m2": Decimal("62.0"), "unit_label": "105/37", "source_url": "https://example.test/x",
-    "price_per_m2": Decimal("104032.26"), "price_per_m2_basis": "sale_czk_m2",
+    "price_per_m2": Decimal("104032.26"), "price_per_m2_basis": "sale_capital_czk_m2",
 }
 
 
@@ -67,7 +67,7 @@ def client():
 def test_a_sale_carries_its_unit_its_date_and_the_measured_per_m2(client, conn):
     sale, = client.get("/properties/7/building/sales", headers=AUTH).json()["sales"]
     assert (sale["unit_label"], sale["sold_at"], sale["price_czk"]) == ("105/37", "2025-03-14", 6450000)
-    assert (sale["area_m2"], sale["price_per_m2"], sale["price_per_m2_basis"]) == (62.0, 104032.26, "sale_czk_m2")
+    assert (sale["area_m2"], sale["price_per_m2"], sale["price_per_m2_basis"]) == (62.0, 104032.26, "sale_capital_czk_m2")
 
 
 def test_the_read_joins_the_doors_building_to_the_sales_own(client, conn):
