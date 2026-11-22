@@ -53,6 +53,16 @@ def service(monkeypatch: pytest.MonkeyPatch) -> _Opener:
     return opener
 
 
+@pytest.fixture(autouse=True)
+def ledger(monkeypatch: pytest.MonkeyPatch) -> dict[str, list]:
+    """The check budget, scripted: every check is admitted; what was admitted and settled is recorded.
+    Its own semantics run on the real schema in tests/test_cuzk_login_checks_live.py."""
+    seen: dict[str, list] = {"admitted": [], "settled": []}
+    monkeypatch.setattr(cuzk_login, "admit_check", lambda c, a, u: seen["admitted"].append((a, u)) or 7)
+    monkeypatch.setattr(cuzk_login, "settle_check", lambda c, i, o: seen["settled"].append((i, o)))
+    return seen
+
+
 @pytest.fixture()
 def checks(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
     seen: list[tuple[str, str]] = []
@@ -66,8 +76,22 @@ def client(monkeypatch: pytest.MonkeyPatch, service: _Opener) -> Any:
     api_main.app.dependency_overrides[tenant_pool.tenant_conn] = lambda: ScriptConn([])
     api_main.app.dependency_overrides[deps.verify_jwt] = lambda: {"sub": _SUB}
     monkeypatch.setattr(tenant_pool, "resolve_account_id", lambda c, claims: _ME)
+    monkeypatch.setattr(tenant_pool, "tenant_transaction", _tenant_transaction)
+    _EVENTS.clear()
     yield TestClient(api_main.app)
     api_main.app.dependency_overrides.clear()
+
+
+_EVENTS: list[str] = []
+
+
+@contextlib.contextmanager
+def _tenant_transaction(claims: dict, *, act_as: Any, method: str) -> Any:
+    _EVENTS.append("tenant open")
+    try:
+        yield ScriptConn([])
+    finally:
+        _EVENTS.append("tenant closed")
 
 
 def _writes(opener: _Opener) -> list[tuple[str, Any]]:
@@ -81,10 +105,12 @@ def test_the_state_names_the_username_and_never_the_password(client: Any, servic
     assert service.conn.executed[0][1] == (_ME,)
 
 
-def test_a_save_checks_the_login_then_stores_it_encrypted(client: Any, service: _Opener, checks: list) -> None:
+def test_a_save_checks_the_login_then_stores_it_encrypted(client: Any, service: _Opener, checks: list,
+                                                          ledger: dict) -> None:
     resp = client.put(URL, json={"username": "firma01", "password": PASSWORD})
     assert resp.status_code == 200 and resp.json()["set"] is True
     assert checks == [("firma01", PASSWORD)]
+    assert ledger == {"admitted": [(_ME, "firma01")], "settled": [(7, "accepted")]}
     (sql, params), = _writes(service)
     assert params[0] == _ME and params[1] == "firma01"
     assert PASSWORD not in str(params) and PASSWORD not in resp.text
@@ -92,7 +118,8 @@ def test_a_save_checks_the_login_then_stores_it_encrypted(client: Any, service: 
 
 
 @pytest.mark.parametrize(("reason", "status"), [("refused", 422), ("timeout", 502), ("status", 502)])
-def test_a_login_that_is_not_accepted_stores_nothing(client: Any, service: _Opener, reason: str, status: int,
+def test_a_login_that_is_not_accepted_stores_nothing(client: Any, service: _Opener, ledger: dict, reason: str,
+                                                     status: int,
                                                      monkeypatch: pytest.MonkeyPatch,
                                                      caplog: pytest.LogCaptureFixture) -> None:
     def refuse(u: str, p: str) -> str:
@@ -102,7 +129,8 @@ def test_a_login_that_is_not_accepted_stores_nothing(client: Any, service: _Open
     with caplog.at_level(logging.DEBUG):
         resp = client.put(URL, json={"username": "firma01", "password": PASSWORD})
     assert resp.status_code == status
-    assert service.opened == 0
+    assert _writes(service) == []
+    assert ledger["settled"] == [(7, "refused" if reason == "refused" else "no_answer")]
     assert PASSWORD not in resp.text and PASSWORD not in caplog.text
 
 
@@ -207,3 +235,58 @@ def test_a_login_is_sent_only_to_cuzk_over_https(monkeypatch: pytest.MonkeyPatch
 def test_the_test_service_is_an_allowed_base(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(wsdp_client.BASE_ENV, "https://wsdptrial.cuzk.gov.cz/trial/ws/wsdp/3.1/")
     assert wsdp_client.base_url().startswith("https://wsdptrial.cuzk.gov.cz/")
+
+
+@pytest.mark.parametrize("by", ["username", "account"])
+def test_past_the_budget_nothing_is_sent_to_cuzk(client: Any, service: _Opener, checks: list, by: str,
+                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    def spent(conn: Any, account: Any, username: str) -> int:
+        raise cuzk_login.Throttled(by, 900)
+
+    monkeypatch.setattr(cuzk_login, "admit_check", spent)
+    resp = client.put(URL, json={"username": "firma01", "password": PASSWORD})
+    assert resp.status_code == 429 and "15 minutes" in resp.json()["detail"]
+    assert checks == [] and _writes(service) == []
+    assert PASSWORD not in resp.text
+
+
+def test_no_tenant_transaction_is_open_while_the_route_waits_on_cuzk(client: Any, service: _Opener,
+                                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(wsdp_client, "check_login", lambda u, p: _EVENTS.append("cuzk") or u)
+    assert client.put(URL, json={"username": "firma01", "password": PASSWORD}).status_code == 200
+    assert _EVENTS == ["tenant open", "tenant closed", "cuzk"]
+
+
+def test_a_throttled_save_says_how_long_to_wait_and_names_no_username(client: Any, monkeypatch: pytest.MonkeyPatch,
+                                                                      caplog: pytest.LogCaptureFixture) -> None:
+    def spent(conn: Any, account: Any, username: str) -> int:
+        raise cuzk_login.Throttled("username", 86_000)
+
+    monkeypatch.setattr(cuzk_login, "admit_check", spent)
+    with caplog.at_level(logging.DEBUG):
+        resp = client.put(URL, json={"username": "firma01", "password": PASSWORD})
+    assert resp.status_code == 429 and resp.headers["Retry-After"] == "86000"
+    assert "24 hours" in resp.json()["detail"] and "not locked" in resp.json()["detail"]
+    assert "firma01" not in resp.text and "firma01" not in caplog.text
+
+
+def test_the_released_account_helper_has_one_caller() -> None:
+    """`own_account_id_released` takes a route out of both route censuses, so who calls it is pinned here."""
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "api"
+    callers = set()
+    for path in root.rglob("*.py"):
+        for fn in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(fn, ast.FunctionDef) and any(
+                    isinstance(n, ast.Attribute) and n.attr == "own_account_id_released" for n in ast.walk(fn)):
+                callers.add(f"{path.relative_to(root.parent).as_posix()}::{fn.name}")
+    assert callers == {"api/routes/cuzk_login.py::put_cuzk_login"}
+
+
+def test_a_misconfigured_address_sends_nothing_and_spends_nothing(client: Any, ledger: dict, checks: list,
+                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(wsdp_client.BASE_ENV, "http://example.com/")
+    assert client.put(URL, json={"username": "firma01", "password": PASSWORD}).status_code == 502
+    assert ledger == {"admitted": [], "settled": []} and checks == []

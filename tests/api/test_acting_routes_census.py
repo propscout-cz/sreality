@@ -88,8 +88,9 @@ _NEVER_ACTS: frozenset[str] = frozenset({
     # An account's own spending limit: sharing a board never hands it over (#2319).
     "PUT /runs/limit",
     # An account's own ČÚZK login: sharing a board never hands over the account that pays (#2597).
+    # (PUT resolves the same account in a transaction of its own, closed before it waits on ČÚZK:
+    # `own_account_id_released`; its 403 under the header is pinned in tests/api/test_cuzk_login.py.)
     "GET /account/cuzk-login",
-    "PUT /account/cuzk-login",
     "DELETE /account/cuzk-login",
 })
 

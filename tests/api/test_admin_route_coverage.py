@@ -420,7 +420,6 @@ def test_estimation_child_routes_ride_the_tenant_connection() -> None:
     ("POST", "/push/opened"),
     # An account's own ČÚZK login (migration 759): the same shape.
     ("GET", "/account/cuzk-login"),
-    ("PUT", "/account/cuzk-login"),
     ("DELETE", "/account/cuzk-login"),
 ])
 def test_the_share_routes_open_the_service_role_only_after_their_gate(key: tuple[str, str]) -> None:

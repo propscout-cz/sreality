@@ -28,6 +28,7 @@ TREES: Mapping[str, int] = {"api": 90, "toolkit": 55, "scraper": 80, "scripts": 
 
 CALLERS = frozenset({
     "api/tenant_pool.py::tenant_conn",
+    "api/tenant_pool.py::own_account_id_released",
     "api/main.py::post_estimation_feedback",
     "api/capabilities/registry.py::_connection",
 })
