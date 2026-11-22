@@ -59,7 +59,8 @@ EPOCH = datetime(2000, 1, 1, tzinfo=UTC)
 FIRST_DAY = date(2026, 11, 9)
 # Q2 c: a window fills at its 200th scorable question.
 WINDOW_SIZE = 200
-# The levels a pick's record names (api/maps.py PickedUnit): own search answers each as a row of that level and code.
+# The levels a pick's record names (the Mapy binder's, before #2453): own search answers each as a row of that level
+# and code.
 LEVELS = frozenset({"kraj", "okres", "obec", "momc", "cast_obce", "ulice"})
 DOOR = "adresni_misto"
 Z = 1.959964

@@ -40,17 +40,8 @@
 //   where u.email = :'email'
 //   on conflict (id) do nothing;
 //
-// 3. The automation marker, on BOTH smoke accounts (admin and non-admin), beside their admin
-//    flag in app metadata: `/maps/resolve` records no place pick for a caller carrying it
-//    (ruling Q10, api/dependencies.is_automation), so a smoke run may pick a place. An operator
-//    step; a session picks it up on its next token refresh. :'nonadmin' is
-//    $SMOKE_TEST_NONADMIN_EMAIL; the SELECT confirms it with 2.
-//
-//   update auth.users
-//   set raw_app_meta_data = coalesce(raw_app_meta_data, '{}'::jsonb) || '{"automation": true}'::jsonb
-//   where email in (:'email', :'nonadmin');
-//   select count(*) from auth.users
-//   where email in (:'email', :'nonadmin') and raw_app_meta_data->>'automation' = 'true';
+// 3. (Retired by #2453: the automation marker in app metadata kept the Mapy binder from
+//    recording a smoke run's place pick; nothing records a pick now, so nothing reads it.)
 
 import { chromium } from 'playwright';
 import { execFileSync } from 'node:child_process';

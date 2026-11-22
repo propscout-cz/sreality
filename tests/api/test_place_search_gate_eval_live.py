@@ -1,6 +1,6 @@
 """The gate's eval (#2452; spec #2441 Part 4, Q2 c), EXECUTED against the replayed schema (CI's migrations lane,
-`TEST_DATABASE_URL`; locally `scripts/local_pg.sh test`): picks written by `/maps/resolve` over a mini mirror seeded in
-the transaction, read back by the eval through Part 1's reader, own search asked through the eval's HTTP boundary (the
+`TEST_DATABASE_URL`; locally `scripts/local_pg.sh test`): picks written as the Mapy binder stored them before the
+switch-over (#2453), over a mini mirror seeded in the transaction, read back by the eval through Part 1's reader, own search asked through the eval's HTTP boundary (the
 real route on the test connection, or canned rows). Any other URL fails the test. Every test rolls back. Goes at Stage
 B (#2455) with the eval."""
 
@@ -32,10 +32,11 @@ BRNO, PRAHA, PRAHA_6, VOKOVICE, LOMNICE = 582786, 554782, 500178, 490067, 581917
 BRNO_STRED, STARE_BRNO = 551082, 411744
 BRNO_BOX = (16.50, 49.10, 16.70, 49.30)
 PRAHA_BOX = (14.20, 49.90, 14.70, 50.20)
-TOWN_BRNO = {"lat": 49.2, "lng": 16.6, "type": "regional.municipality", "name": "Brno"}
-MOMC_PRAHA_6 = {"lat": 50.1, "lng": 14.4, "type": "regional.municipality", "name": "Praha 6"}
-PART_BARRANDOV = {"lat": 50.03, "lng": 14.4, "type": "regional.municipality_part", "name": "Barrandov"}
-MOMC_BRNO_STRED = {"lat": 49.19, "lng": 16.6, "type": "regional.municipality_part", "name": "Brno-střed"}
+# What the Mapy binder recorded for each pick, before the switch-over (#2453): a level and its code, None when refused.
+TOWN_BRNO = ("obec", BRNO)
+MOMC_PRAHA_6 = ("momc", PRAHA_6)
+PART_BARRANDOV = ("cast_obce", None)
+MOMC_BRNO_STRED = ("momc", BRNO_STRED)
 
 AUTH = "https://auth.test/auth/v1/token?grant_type=password"
 API = "http://testserver"
@@ -68,7 +69,7 @@ def _unit(conn: psycopg.Connection, level: str, code: int, name: str, parent: in
 
 def _door(conn: psycopg.Connection, kod: int, obec: int, obec_code: int, momc: int, part: int, part_code: int,
           point: tuple[float, float], version: int) -> None:
-    """A door standing in `part` of `momc`: what makes resolve bind a městská část."""
+    """A door standing in `part` of `momc`."""
     conn.execute(
         "INSERT INTO ruian_address_points (kod_adm, obec_unit_id, obec_kod, cast_obce_unit_id, cast_obce_kod,"
         " momc_unit_id, typ_so, cislo_domovni, psc, geom, plati_od, first_version_id, last_version_id)"
@@ -77,8 +78,7 @@ def _door(conn: psycopg.Connection, kod: int, obec: int, obec_code: int, momc: i
 
 
 def _mirror(conn: psycopg.Connection) -> None:
-    """Brno in its okres and kraj, Praha in its kraj: drawn (resolve places a point in them) and named in the index
-    (own search finds them by name); the městské části Praha 6 and Brno-střed each stand in one quarter by one door,
+    """Brno in its okres and kraj, Praha in its kraj: drawn and named in the index (own search finds them by name); the městské části Praha 6 and Brno-střed each stand in one quarter by one door,
     with no quarter pair yet (a test writes the pairs it needs)."""
     conn.execute("UPDATE registry_versions SET is_current = false WHERE is_current")
     version = conn.execute(
@@ -115,8 +115,7 @@ def _pair(conn: psycopg.Connection, momc: int, part: int) -> None:
 
 
 def _not_live_lomnice(conn: psycopg.Connection) -> None:
-    """Lomnice, drawn last at an older version: resolve cannot record a unit the current version no longer draws, so
-    its one pick is written as it once was."""
+    """Lomnice, drawn last at an older version: a pick recorded while the version drew it."""
     older = conn.execute(
         "INSERT INTO registry_versions (label, kind, source_date, artifact_urls, proj_version, proj_pipeline,"
         " is_current) VALUES ('test:gate-eval-older', 'baseline', '2026-10-01', '{}', 'p', 'q', false) RETURNING id",
@@ -127,7 +126,7 @@ def _not_live_lomnice(conn: psycopg.Connection) -> None:
 
 @pytest.fixture()
 def client(conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    """The real routes on the test connection, resolve's pick written on it too, a verified caller."""
+    """The real routes on the test connection, a verified caller."""
     @contextlib.contextmanager
     def background() -> Iterator[psycopg.Connection]:
         yield conn
@@ -150,9 +149,10 @@ def credentials(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(name, value)
 
 
-def _resolve(client: TestClient, body: dict[str, Any], text: str, rank: int) -> None:
-    res = client.post("/maps/resolve", json={**body, "pick": {"text": text, "rank": rank}})
-    assert res.status_code == 200, res.text
+def _pick(conn: psycopg.Connection, place: tuple[str, int | None], text: str, rank: int) -> None:
+    """A pick as the binder stored it: at now(), a text holding a digit kept as NULL."""
+    conn.execute("INSERT INTO place_picks (text, rank, level, code) VALUES (%s, %s, %s::ruian_level, %s)",
+                 (None if any(ch.isdigit() for ch in text) else text, rank, *place))
 
 
 class _Answer:
@@ -326,8 +326,8 @@ def _run(conn: psycopg.Connection, capsys: pytest.CaptureFixture[str], http: Any
 def test_a_repeated_question_counts_once_and_keeps_its_best_mapy_rank(
     conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    _resolve(client, TOWN_BRNO, "Brno", 2)
-    _resolve(client, TOWN_BRNO, "Brno", 1)
+    _pick(conn, TOWN_BRNO, "Brno", 2)
+    _pick(conn, TOWN_BRNO, "Brno", 1)
     code, out = _run(conn, capsys, _Route(client), "--no-latency", size=1)
     assert "questions N = 1" in out
     assert "after strikes · top-1: 1 of 1 (needs 1) · Wilson 20.7–100.0 %" in out
@@ -342,9 +342,9 @@ def test_a_repeated_question_counts_once_and_keeps_its_best_mapy_rank(
 def test_null_text_refused_and_not_live_rows_are_counted_and_left_out(
     conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    _resolve(client, TOWN_BRNO, "Brno", 1)
-    _resolve(client, MOMC_PRAHA_6, "Praha 6", 1)
-    _resolve(client, PART_BARRANDOV, "Barrandov", 3)
+    _pick(conn, TOWN_BRNO, "Brno", 1)
+    _pick(conn, MOMC_PRAHA_6, "Praha 6", 1)
+    _pick(conn, PART_BARRANDOV, "Barrandov", 3)
     _not_live_lomnice(conn)
     code, out = _run(conn, capsys, _Route(client), "--no-latency", size=1)
     assert "rows 4 · refused 1 · NULL text 1 · not live 1" in out
@@ -359,10 +359,10 @@ def test_a_question_asked_in_an_earlier_window_is_left_out_and_n_0_gives_no_verd
     conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Ruling 2026-11-08: every window scores own search on questions it was never scored against."""
-    # Resolve writes now(); the earlier pick is written as it was two days ago.
+    # `_pick` writes now(); the earlier pick is written as it was two days ago.
     conn.execute("INSERT INTO place_picks (created_at, text, rank, level, code)"
                  " VALUES (now() - interval '2 days', 'Brno', 1, 'obec', %s)", (BRNO,))
-    _resolve(client, TOWN_BRNO, "Brno", 1)
+    _pick(conn, TOWN_BRNO, "Brno", 1)
     code, out = _run(conn, capsys, _Route(client), "--no-latency", size=1)
     assert "asked in an earlier window: 1" in out
     assert "questions N = 0" in out
@@ -389,7 +389,7 @@ def test_at_n_200_the_gate_needs_194_top5_and_180_top1_hits(
     top5: int, top1: int, lines: list[str], exit_code: int,
 ) -> None:
     for text in TEXTS_200:
-        _resolve(client, TOWN_BRNO, text, 1)
+        _pick(conn, TOWN_BRNO, text, 1)
     at = {text: 1 if n < top1 else 3 if n < top5 else 6 for n, text in enumerate(TEXTS_200)}
     code, out = _run(conn, capsys, _Canned(at), "--no-latency")
     assert "questions N = 200" in out
@@ -398,11 +398,11 @@ def test_at_n_200_the_gate_needs_194_top5_and_180_top1_hits(
     assert code == exit_code
 
 
-def _three_picks(client: TestClient, tmp_path: Path, strikes: str) -> tuple[_Canned, str]:
+def _three_picks(conn: psycopg.Connection, tmp_path: Path, strikes: str) -> tuple[_Canned, str]:
     """Questions #1 to #3 (one second, one level and code: numbered by text), Mapy ranks 1, 4 and 7; own search answers
     #1 and #2 first and #3 sixth. Returns the route and the strikes file."""
     for text, rank in (("Brno a", 1), ("Brno b", 4), ("Brno c", 7)):
-        _resolve(client, TOWN_BRNO, text, rank)
+        _pick(conn, TOWN_BRNO, text, rank)
     path = tmp_path / "strikes.txt"
     path.write_text(strikes)
     return _Canned({"Brno a": 1, "Brno b": 1, "Brno c": 6}), str(path)
@@ -411,7 +411,7 @@ def _three_picks(client: TestClient, tmp_path: Path, strikes: str) -> tuple[_Can
 @REQUIRED_DB
 def test_a_strike_lowers_n_and_is_counted(conn: psycopg.Connection, client: TestClient,
                                           capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
-    route, strikes = _three_picks(client, tmp_path, "# the operator's look: #3 names its okres\n3\n")
+    route, strikes = _three_picks(conn, tmp_path, "# the operator's look: #3 names its okres\n3\n")
     code, out = _run(conn, capsys, route, "--no-latency", "--strikes", strikes, size=3)
     assert "struck 1" in out
     assert "N = 3 before strikes, 2 after" in out
@@ -427,7 +427,7 @@ def test_a_strike_lowers_n_and_is_counted(conn: psycopg.Connection, client: Test
 @REQUIRED_DB
 def test_a_strike_on_no_question_stops_the_run(conn: psycopg.Connection, client: TestClient,
                                                capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
-    route, strikes = _three_picks(client, tmp_path, "4\n")
+    route, strikes = _three_picks(conn, tmp_path, "4\n")
     code, out = _run(conn, capsys, route, "--no-latency", "--strikes", strikes, size=3)
     assert out[-1] == "strike 4 is not a question number"
     assert code == 2
@@ -439,7 +439,7 @@ def test_a_strike_on_a_question_now_answered_top_1_is_dropped_and_said(
 ) -> None:
     """An answer can change between the look and the figures (own search's tie order refreshes hourly): the question
     counts as the hit it now is, and the replay already sent is not thrown away."""
-    route, strikes = _three_picks(client, tmp_path, "1\n")
+    route, strikes = _three_picks(conn, tmp_path, "1\n")
     code, out = _run(conn, capsys, route, "--no-latency", "--strikes", strikes, size=3)
     assert "strike 1 now answers top-1: strike dropped" in out
     assert "struck 0" in out
@@ -452,12 +452,12 @@ def test_a_strike_on_a_question_now_answered_top_1_is_dropped_and_said(
 @REQUIRED_DB
 def test_a_shortcut_question_is_scored_as_its_mestska_cast(conn: psycopg.Connection, client: TestClient,
                                                            capsys: pytest.CaptureFixture[str]) -> None:
-    """Resolve answers a městská část's quarters and records the městská část; own search's shortcut row is the
+    """The binder answered a městská část's quarters and recorded the městská část; own search's shortcut row is the
     městská část itself: first for its own name, second after the town for the town's name."""
     _pair(conn, PRAHA_6, VOKOVICE)
     _pair(conn, BRNO_STRED, STARE_BRNO)
-    _resolve(client, MOMC_BRNO_STRED, "Brno-střed", 1)
-    _resolve(client, MOMC_PRAHA_6, "Praha", 2)
+    _pick(conn, MOMC_BRNO_STRED, "Brno-střed", 1)
+    _pick(conn, MOMC_PRAHA_6, "Praha", 2)
     code, out = _run(conn, capsys, _Route(client), "--no-latency", size=2)
     assert out[0].endswith(" · momc pairs 2")
     assert "after strikes · top-5: 2 of 2 (needs 2) · Wilson 34.2–100.0 %" in out
@@ -472,8 +472,8 @@ def test_a_shortcut_question_with_no_quarter_pair_stops_the_run_before_any_quest
     """With no pair at the current version own search answers no shortcut, so the question would score a miss that
     says nothing about own search (the #2450 note on #2452)."""
     _pair(conn, BRNO_STRED, STARE_BRNO)
-    _resolve(client, MOMC_BRNO_STRED, "Brno-střed", 1)
-    _resolve(client, MOMC_PRAHA_6, "Praha", 2)
+    _pick(conn, MOMC_BRNO_STRED, "Brno-střed", 1)
+    _pick(conn, MOMC_PRAHA_6, "Praha", 2)
     code, out = _run(conn, capsys, _Route(client), "--no-latency", size=2)
     assert out[-1].startswith("momc questions with no quarter pair at the current version: 1 (pairs there: 1);"
                               " first confirm with a SELECT that no registry_versions row is newer than version ")
@@ -484,7 +484,7 @@ def test_a_shortcut_question_with_no_quarter_pair_stops_the_run_before_any_quest
 @REQUIRED_DB
 def test_a_window_short_of_its_size_gives_no_verdict(conn: psycopg.Connection, client: TestClient,
                                                      capsys: pytest.CaptureFixture[str]) -> None:
-    _resolve(client, TOWN_BRNO, "Brno", 1)
+    _pick(conn, TOWN_BRNO, "Brno", 1)
     code, out = _run(conn, capsys, _Route(client), "--no-latency")
     assert out[-1] == f"the window is not full: 1 of 200 questions by {_today(conn)}; score it once question 200 lands"
     assert code == 2
@@ -495,7 +495,7 @@ def test_a_window_scored_past_the_day_its_last_question_landed_is_refused(
     conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The days after it belong to the next window, whose questions a score would spend (ruling 2026-11-08)."""
-    _resolve(client, TOWN_BRNO, "Brno", 1)
+    _pick(conn, TOWN_BRNO, "Brno", 1)
     today = _today(conn)
     code, out = _run(conn, capsys, _Route(client), "--no-latency",
                      "--window-last", (today + timedelta(days=1)).isoformat(), size=1)
@@ -545,7 +545,7 @@ def test_a_route_error_that_persists_is_a_miss_and_is_counted(
 ) -> None:
     """One retry rides out a blip; a question whose answer never comes is a miss own search earned."""
     for text in ("Brno a", "Brno b", "Brno c"):
-        _resolve(client, TOWN_BRNO, text, 1)
+        _pick(conn, TOWN_BRNO, text, 1)
     route = _Flaky({"Brno a": 1, "Brno b": 1, "Brno c": 1}, fails={"Brno b": 1, "Brno c": 2})
     code, out = _run(conn, capsys, route, "--no-latency", size=3)
     assert "route errors 1" in out
@@ -557,8 +557,8 @@ def test_a_route_error_that_persists_is_a_miss_and_is_counted(
 def test_a_pick_at_a_level_no_question_is_scored_at_stops_the_run(
     conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Resolve records no door today (the address picker sends no pick); one would otherwise score a silent miss."""
-    _resolve(client, TOWN_BRNO, "Brno", 1)
+    """The binder recorded no door (the address picker sent no pick); one would otherwise score a silent miss."""
+    _pick(conn, TOWN_BRNO, "Brno", 1)
     conn.execute("INSERT INTO place_picks (text, rank, level, code) VALUES ('Nad Bořislavkou', 1, 'adresni_misto',"
                  " 21000001)")
     code, out = _run(conn, capsys, _Route(client), "--no-latency", size=1)
@@ -588,7 +588,7 @@ def test_the_latency_run_reads_both_medians_from_the_host_log(
     latency: str, exit_code: int,
 ) -> None:
     """Own: the four prefixes the replay of "Brno a" sends ("Brno " trims to a repeat), as the host logged them."""
-    _resolve(client, TOWN_BRNO, "Brno a", 1)
+    _pick(conn, TOWN_BRNO, "Brno a", 1)
     clock = _clock(conn)
     railway = _host(clock)
     route = _Logged(_Canned({"Brno a": 1}, others=2), railway, clock, durations)
@@ -606,7 +606,7 @@ def test_a_mapy_span_cut_short_by_mapy_from_leaves_latency_incomplete(
     conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Mapy's median is over 7 days of traffic after its cache went: 2½ days of it decide nothing."""
-    _resolve(client, TOWN_BRNO, "Brno a", 1)
+    _pick(conn, TOWN_BRNO, "Brno a", 1)
     clock = _clock(conn)
     railway = _host(clock)
     route = _Logged(_Canned({"Brno a": 1}, others=2), railway, clock, [200] * 4)
@@ -626,8 +626,8 @@ def test_the_replay_types_one_text_at_a_time_spaced_out(
     conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The place box's keystrokes, 0.2 s apart, and 30 s between texts, so the name index is not held warm."""
-    _resolve(client, TOWN_BRNO, "Brno a", 1)
-    _resolve(client, TOWN_BRNO, "Lom", 1)
+    _pick(conn, TOWN_BRNO, "Brno a", 1)
+    _pick(conn, TOWN_BRNO, "Lom", 1)
     clock = _clock(conn)
     railway = _host(clock)
     route = _Logged(_Canned({"Brno a": 1, "Lom": 1}, others=2), railway, clock, [200] * 6)
@@ -646,7 +646,7 @@ def test_mapys_side_reads_every_deployment_that_can_have_served_in_its_7_days(
     """The list gives no removal time. Y came up 39 minutes before the 7 days began; X was created 8 minutes before
     them and replaced a second later by W, which came up a minute into them, so Y served that minute; V came up
     inside them. Z, replaced by Y long before, is not read."""
-    _resolve(client, TOWN_BRNO, "Brno a", 1)
+    _pick(conn, TOWN_BRNO, "Brno a", 1)
     clock = _clock(conn)
     begin = clock.at - timedelta(days=7)
     railway = _Railway([
@@ -673,7 +673,7 @@ def test_a_log_range_that_fills_a_page_is_read_in_parts(
     conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A page holds 5000 rows, the newest; the client abort is the oldest of 5001 and would fall off it."""
-    _resolve(client, TOWN_BRNO, "Brno a", 1)
+    _pick(conn, TOWN_BRNO, "Brno a", 1)
     clock = _clock(conn)
     begin = clock.at - timedelta(days=7)
     railway = _Railway([("dep-1", clock.at - timedelta(days=30), clock.at - timedelta(days=30))])
@@ -704,7 +704,7 @@ def test_own_side_waits_up_to_5_minutes_for_the_log_to_hold_every_request(
     lines: list[str], waited: timedelta, exit_code: int,
 ) -> None:
     """`waited`: the time on the eval's clock after the host logged the replay's last request, "Brno a"."""
-    _resolve(client, TOWN_BRNO, "Brno a", 1)
+    _pick(conn, TOWN_BRNO, "Brno a", 1)
     clock = _clock(conn)
     railway = _host(clock, lag)
     route = _Logged(_Canned({"Brno a": 1}, others=2), railway, clock, [200] * 4)
@@ -720,8 +720,8 @@ def test_a_deployment_created_during_the_replay_is_read_and_named(
     conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A merge 10 s into the replay: the second text's requests reach the new deployment, cold."""
-    _resolve(client, TOWN_BRNO, "Brno a", 1)
-    _resolve(client, TOWN_BRNO, "Lom", 1)
+    _pick(conn, TOWN_BRNO, "Brno a", 1)
+    _pick(conn, TOWN_BRNO, "Lom", 1)
     clock = _clock(conn)
     railway = _host(clock)
     railway.deployments.append(("dep-2", clock.at + timedelta(seconds=10), clock.at + timedelta(seconds=20)))
@@ -770,7 +770,7 @@ def test_no_scored_question_meets_a_lapsed_token(
     """The token is renewed before it lapses; a 401 all the same signs in afresh once, and the retried request
     counts among those sent, since the host logs both."""
     for text in picks:
-        _resolve(client, TOWN_BRNO, text, 1)
+        _pick(conn, TOWN_BRNO, text, 1)
     clock = _clock(conn)
     railway = _host(clock)
     route = _Logged(_Tokens({text: 1 for text in picks}, clock, revoked=revoked), railway, clock, [200] * 6)
@@ -786,7 +786,7 @@ def test_no_scored_question_meets_a_lapsed_token(
 def test_a_token_refused_after_a_fresh_sign_in_stops_the_run(
     conn: psycopg.Connection, client: TestClient, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    _resolve(client, TOWN_BRNO, "Brno a", 1)
+    _pick(conn, TOWN_BRNO, "Brno a", 1)
     clock = _clock(conn)
     code, out = _run(conn, capsys, _Tokens({"Brno a": 1}, clock, revoked=99), "--no-latency",
                      clock=clock, size=1)
@@ -827,7 +827,7 @@ def test_dictated_address_questions_are_scored_by_their_kod_adm(
     doors: dict[str, tuple[int, int]], lines: list[str], exit_code: int,
 ) -> None:
     """Asked after the replay under their own agent, so the own latency read holds the replay's requests only."""
-    _resolve(client, TOWN_BRNO, "Brno a", 1)
+    _pick(conn, TOWN_BRNO, "Brno a", 1)
     path = tmp_path / "addresses.tsv"
     path.write_text("# kód ADM<TAB>the house as dictated\n"
                     + "".join(f"{kod}\t{text}\n" for text, (kod, _) in doors.items()), encoding="utf-8")
@@ -848,9 +848,9 @@ def test_the_looks_run_ends_by_naming_its_report_and_how_to_delete_it(
 ) -> None:
     """Refused, not-live and NULL-text rows and a dictated address all reach the report; what it shows is the
     operator's look (no page test, spec #2441 Part 4 (c))."""
-    _resolve(client, TOWN_BRNO, "Brno", 1)
-    _resolve(client, MOMC_PRAHA_6, "Praha 6", 1)
-    _resolve(client, PART_BARRANDOV, "Barrandov", 3)
+    _pick(conn, TOWN_BRNO, "Brno", 1)
+    _pick(conn, MOMC_PRAHA_6, "Praha 6", 1)
+    _pick(conn, PART_BARRANDOV, "Barrandov", 3)
     _not_live_lomnice(conn)
     addresses = tmp_path / "addresses.tsv"
     addresses.write_text("21000001\tNad Bořislavkou 487\n", encoding="utf-8")

@@ -145,6 +145,6 @@ export const districtChipBadge = (chip: DistrictChip): string =>
   DISTRICT_LEVEL_LABEL[chip.level];
 
 /* Chip identity IS its (level, code) — two picks of the same unit are the same
- * chip however Mapy spelled them. Used for dedupe, remove and the React key. */
+ * chip, whichever row added them. Used for dedupe, remove and the React key. */
 export const districtChipKey = (chip: DistrictChip): string =>
   `${chip.level}:${chip.id}`;

@@ -4,7 +4,7 @@
 
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -13,11 +13,9 @@ import { FilterSidebar, FilterSidebarRail, IncludeNoPriceToggle } from './Filter
 import * as api from '@/lib/api';
 import * as brokers from '@/lib/brokers';
 import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
-import type { LocationResolution } from '@/lib/maps';
 
 const never = vi.hoisted(() => () => new Promise<never>(() => {}));
-const fetchSuggest = vi.hoisted(() => vi.fn());
-const resolveSuggestion = vi.hoisted(() => vi.fn());
+const fetchPlaces = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   listCollections: vi.fn(),
@@ -28,10 +26,9 @@ vi.mock('@/lib/brokers', async (importActual) => ({
   searchBrokersByName: vi.fn(),
   fetchBrokerDossier: vi.fn(),
 }));
-vi.mock('@/lib/maps', async (importActual) => ({
-  ...(await importActual<typeof import('@/lib/maps')>()),
-  fetchSuggest,
-  resolveSuggestion,
+vi.mock('@/lib/places', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/places')>()),
+  fetchPlaces,
 }));
 vi.mock('@/lib/queries', async (importActual) => ({
   ...(await importActual<typeof import('@/lib/queries')>()),
@@ -277,7 +274,7 @@ describe('<FilterSidebar> broker', () => {
 });
 
 describe('<FilterSidebar> location pick', () => {
-  it('keeps a sidebar change made while the pick was resolving', async () => {
+  it('keeps a place pick and a sidebar change made after it', async () => {
     vi.mocked(api.listCollections).mockImplementation(never);
     vi.mocked(api.listTags).mockImplementation(never);
     let latest: ListingFilters = DEFAULT_FILTERS;
@@ -301,23 +298,14 @@ describe('<FilterSidebar> location pick', () => {
     );
     const user = userEvent.setup();
 
-    let settle!: (r: LocationResolution) => void;
-    resolveSuggestion.mockReturnValue(new Promise<LocationResolution>((r) => { settle = r; }));
-    fetchSuggest.mockResolvedValue([{
-      name: 'Na Rybníčkách', label: 'Ulice', type: 'regional.street',
-      position: { lon: 15.77, lat: 50.03 },
+    fetchPlaces.mockResolvedValue([{
+      level: 'ulice', id: 666742, name: 'Na Rybníčkách', context: 'Pardubice', point: { lat: 50.03, lng: 15.77 },
     }]);
     await user.type(screen.getByRole('textbox', { name: 'Location' }), 'Na Ryb');
     await user.click(within(await screen.findByRole('listbox')).getByRole('button'));
 
-    /* While the pick resolves, narrow the cohort to 2+kk. */
     await user.click(screen.getByRole('button', { name: '2+kk' }));
     await waitFor(() => expect(latest.dispositions).toEqual(['2+kk']));
-
-    await act(async () =>
-      settle({ level: 'ulice', id: 666742, name: 'Na Rybníčkách', context: 'Pardubice' }),
-    );
-    expect(latest.dispositions).toEqual(['2+kk']);
     expect(latest.districts).toEqual([
       { name: 'Na Rybníčkách', context: 'Pardubice', level: 'ulice', id: 666742 },
     ]);

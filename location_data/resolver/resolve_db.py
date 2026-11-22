@@ -384,14 +384,13 @@ SELECT DISTINCT obec_kod FROM ruian_address_points
 _PT = "ST_SetSRID(ST_MakePoint(p.lon, p.lat), 4326)"
 _POINTS = "unnest(%s::int[], %s::double precision[], %s::double precision[]) AS p(idx, lat, lon)"
 
-# THE ONE CONTAINING-OBEC STATEMENT. `api/maps.py` runs this same text for a Mapy pick and
-# for an estimation subject that has no stored location, so a chip, a listing and an
-# estimation can never disagree about which town a point is in.
+# THE ONE CONTAINING-OBEC STATEMENT, so a listing and an estimation can never disagree
+# about which town a point is in.
 #
 # `purpose = 'pip'` is what lets `ruian_aug_pip_gist (geom) WHERE purpose = 'pip'` serve it:
 # the subdivided pieces are small, so ST_Covers never detoasts a raw obec polygon (194 ms and
 # 1,225 buffers when an IN-list forced exactly that). Measured: 0.24 ms/point. The
-# authoritative fallback branch it used to carry (and the copy in `api/maps.py`) is gone: it
+# authoritative fallback branch it used to carry is gone: it
 # was reachable only for a version loaded with `--allow-missing-pip`, and pip = authoritative
 # for every unit of every loaded version (checked 2026-09-26).
 CONTAINING_OBEC_SQL = f"""

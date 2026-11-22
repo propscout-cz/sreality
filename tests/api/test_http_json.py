@@ -1,19 +1,18 @@
 """api/http_json.py: the API's one outbound JSON call names host and status in its errors, never the
-URL's query — the path by which Mapy's `apikey` used to reach the log. Hermetic: a fake transport."""
+URL's query — the path by which a key sent as a query parameter would reach the log. Hermetic: a fake transport."""
 
 from __future__ import annotations
 
-import logging
 import traceback
 from typing import Any
 
 import pytest
 import requests
 
-from api import http_json, maps
+from api import http_json
 
-SECRET = "mapy-secret-key"
-LEAKY_URL = f"https://api.mapy.cz/v1/suggest?query=Praha&apikey={SECRET}"
+SECRET = "vendor-secret-key"
+LEAKY_URL = f"https://api.vendor.test/v1/suggest?query=Praha&apikey={SECRET}"
 
 
 class _Resp:
@@ -37,7 +36,7 @@ def _answer(monkeypatch, answer: Any) -> None:
 
 def _fail(**kw: Any) -> http_json.HttpJsonError:
     with pytest.raises(http_json.HttpJsonError) as err:
-        http_json.fetch_json("GET", "https://api.mapy.cz/v1/suggest", timeout=10,
+        http_json.fetch_json("GET", "https://api.vendor.test/v1/suggest", timeout=10,
                              params={"apikey": SECRET}, **kw)
     return err.value
 
@@ -51,7 +50,7 @@ def _fail(**kw: Any) -> http_json.HttpJsonError:
 def test_a_failure_names_host_and_status_only(monkeypatch, answer, reason, status):
     _answer(monkeypatch, answer)
     exc = _fail()
-    assert (exc.host, exc.reason, exc.status) == ("api.mapy.cz", reason, status)
+    assert (exc.host, exc.reason, exc.status) == ("api.vendor.test", reason, status)
     assert SECRET not in str(exc) and "apikey" not in str(exc)
     # requests' own, URL-bearing error is never chained onto it
     assert exc.__cause__ is None and (exc.__context__ is None or exc.__suppress_context__)
@@ -67,12 +66,3 @@ def test_a_good_answer_is_its_json(monkeypatch):
     _answer(monkeypatch, _Resp(200, {"items": []}))
     assert http_json.fetch_json("GET", "https://example.test/x", timeout=1) == {"items": []}
 
-
-def test_the_mapy_suggest_proxy_logs_no_key_when_both_keys_fail(monkeypatch, caplog):
-    monkeypatch.setenv("MAPY_CZ_API_KEY", SECRET)
-    monkeypatch.setenv("MAPY2_CZ_API_KEY", SECRET + "-backup")
-    _answer(monkeypatch, requests.HTTPError(f"403 Client Error: Forbidden for url: {LEAKY_URL}"))
-    with caplog.at_level(logging.WARNING, logger=maps.LOG.name), pytest.raises(Exception) as err:
-        maps.suggest("Praha")
-    assert getattr(err.value, "status_code", None) == 503
-    assert SECRET not in caplog.text and caplog.text

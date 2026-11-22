@@ -342,32 +342,26 @@ def test_a_mid_load_reader_finds_the_old_town_until_its_children_reopen(conn):
         RT_SCOPE_PARENT_OBEC_SQL, {"codes": [PART]})] == [(PART, PRAHA)]
 
 
-def test_a_part_pick_resolves_while_a_load_has_its_unit_closed(conn):
-    """The place filter asks the current version's index, which names the row the load closed
-    hours before it publishes. Read at that version the part still answers; the code is stable."""
-    from api.maps import _PART_LOOKUP_SQL
+def test_own_search_answers_a_cast_while_a_load_has_its_unit_closed(conn):
+    """The place box asks the current version's index, which names the row a load closed hours before it publishes.
+    Read at that version the část still answers, by its stable code (the binder's part lookup, ported by #2453)."""
+    from location_data import place_search
 
     v1 = _version(conn, 1, V1_DATE)
     stage = _stage_sources(conn, v1)
     _old_shape_units(conn, stage)
     ruian_load.upsert_units(conn, stage, v1, V1_DATE)
-    part_id, name = conn.execute(
-        "SELECT id, name FROM ruian_admin_units WHERE level = 'cast_obce' AND code = %s", (PART,),
-    ).fetchone()
-    obec_id = conn.execute(
-        "SELECT id FROM ruian_admin_units WHERE level = 'obec' AND code = %s", (PRAHA,),
-    ).fetchone()[0]
-    conn.execute(
-        "INSERT INTO ruian_name_index (entity_kind, entity_id, registry_version_id, name, "
-        "name_norm, name_kind, parent_obec_unit_id) VALUES ('cast_obce', %s, %s, %s, 'part', "
-        "'official', %s)", (part_id, v1, name, obec_id))
-    args = {"version": v1, "name_norm": "part", "obec_unit_id": obec_id}
-    assert [tuple(r) for r in conn.execute(_PART_LOOKUP_SQL, args)] == [(PART, name)]
+    name_index.rebuild(conn, v1)
+    ruian_load.publish(conn, v1)
 
+    def parts() -> list[tuple[str, int, str, str | None]]:
+        return [(p.level, p.id, p.name, p.context) for p in place_search.suggest(conn, "Vokovice", limit=10)]
+
+    assert parts() == [("cast_obce", PART, "Vokovice", "Praha")]
     v2 = _version(conn, 2, V2_DATE)
-    conn.execute("UPDATE ruian_admin_units SET valid_to = %s, last_version_id = %s WHERE id = %s",
-                 (V2_DATE, v2, part_id))
-    assert [tuple(r) for r in conn.execute(_PART_LOOKUP_SQL, args)] == [(PART, name)]
+    conn.execute("UPDATE ruian_admin_units SET valid_to = %s, last_version_id = %s "
+                 "WHERE level = 'cast_obce' AND code = %s", (V2_DATE, v2, PART))
+    assert parts() == [("cast_obce", PART, "Vokovice", "Praha")]
 
 
 def test_the_migration_retires_by_scd2_and_deletes_only_the_unread_relations(conn):
@@ -434,55 +428,6 @@ def _door_of_another_part(conn: Any, kod_adm: int, part_unit: int, momc_unit: in
         "WHERE table_name = 'ruian_address_points' AND is_generated = 'NEVER'").fetchone()
     conn.execute(f"INSERT INTO ruian_address_points ({cols}) SELECT {cols} FROM door_clone")
     conn.execute("DROP TABLE door_clone")
-
-
-def test_a_mestska_cast_finds_its_parts_on_doors_at_either_version_of_its_units(conn):
-    """A load re-points doors in place: its městská část holds the closed row on one door, the open
-    one on the next, and a část may do the same. The set is joined on the stable code."""
-    from api.maps import _momc_part_codes
-
-    m = _load_w7_over_old_shape(conn)
-    (old_momc, *_), (new_momc, *_) = _unit(conn, "momc", MOMC)
-    (old_part, *_), _ = _unit(conn, "cast_obce", PART)
-    other_part = conn.execute(
-        "INSERT INTO ruian_admin_units (level, code, name, name_norm, path, valid_from, "
-        "first_version_id, last_version_id) VALUES ('cast_obce', 9910068, 'Dejvice', 'dejvice', "
-        "'x9910068'::ltree, %s, %s, %s) RETURNING id", (V2_DATE, m.v2, m.v2),
-    ).fetchone()[0]
-
-    assert _momc_part_codes(conn, momc_code=MOMC, obec_code=PRAHA) == [(PART, "Vokovice")]
-
-    conn.execute("UPDATE ruian_address_points SET momc_unit_id = %s, cast_obce_unit_id = %s "
-                 "WHERE kod_adm = %s", (old_momc, old_part, DOOR))
-    assert _momc_part_codes(conn, momc_code=MOMC, obec_code=PRAHA) == [(PART, "Vokovice")]
-
-    _door_of_another_part(conn, DOOR + 100, other_part, new_momc)
-    assert _momc_part_codes(conn, momc_code=MOMC, obec_code=PRAHA) == [
-        (9910068, "Dejvice"), (PART, "Vokovice")]
-    assert _momc_part_codes(conn, momc_code=MOMC + 1, obec_code=PRAHA) == []
-
-
-def test_a_retired_door_gives_a_mestska_cast_no_part(conn):
-    from api.maps import _momc_part_codes
-
-    _load_w7_over_old_shape(conn)
-    conn.execute("UPDATE ruian_address_points SET valid_to = %s WHERE kod_adm = %s", (V2_DATE, DOOR))
-    assert _momc_part_codes(conn, momc_code=MOMC, obec_code=PRAHA) == []
-
-
-def test_a_mestska_cast_pick_reads_the_name_index_and_answers_its_parts(conn):
-    """The `/maps/resolve` seam below the point, on a real schema."""
-    from api.maps import _bind_momc
-
-    m = _load_w7_over_old_shape(conn)
-    _, (new_momc, *_) = _unit(conn, "momc", MOMC)
-    _, (new_praha, *_) = _unit(conn, "obec", PRAHA)
-    conn.execute("INSERT INTO ruian_name_index (entity_kind, entity_id, registry_version_id, name, "
-                 "name_norm, name_kind, parent_obec_unit_id) VALUES ('momc', %s, %s, 'Praha 6', "
-                 "'praha 6', 'official', %s)", (new_momc, m.v2, new_praha))
-    momc = _bind_momc(conn, level="obec", version=m.v2, name="Praha 6", obec_unit_id=new_praha, obec_code=PRAHA)
-    assert momc is not None and momc.name == "Praha 6" and momc.parts == [(PART, "Vokovice")]
-    assert _bind_momc(conn, level="obec", version=m.v2, name="Praha 7", obec_unit_id=new_praha, obec_code=PRAHA) is None
 
 
 def _pairs(conn: Any) -> list[tuple]:
