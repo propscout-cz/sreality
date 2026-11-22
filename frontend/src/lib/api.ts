@@ -704,6 +704,24 @@ export interface RegisterBuilding {
 }
 export const fetchPropertyBuilding = (propertyId: number): Promise<{ building: RegisterBuilding | null }> =>
   request<{ building: RegisterBuilding | null }>(`/properties/${propertyId}/building`);
+/* A registered sale in a property's building (GET /properties/{id}/building/sales), newest first. */
+export interface BuildingSale {
+  source: string;
+  source_record_id: string;
+  sold_at: string;
+  price_czk: number;
+  asking_last_czk: number | null;
+  category_main: string;
+  disposition: string | null;
+  area_m2: number | null;
+  /* The cadastre's own form, "<č.p.>/<unit number>"; null for a whole building. */
+  unit_label: string | null;
+  source_url: string | null;
+  price_per_m2: number | null;
+  price_per_m2_basis: string | null;
+}
+export const fetchPropertyBuildingSales = (propertyId: number): Promise<{ sales: BuildingSale[] }> =>
+  request<{ sales: BuildingSale[] }>(`/properties/${propertyId}/building/sales`);
 /* An account's own ČÚZK WSDP login. The password goes up once and never comes back. */
 export interface CuzkLoginState {
   set: boolean;
