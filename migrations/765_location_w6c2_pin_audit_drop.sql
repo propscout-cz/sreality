@@ -18,7 +18,8 @@
 --   gh workflow run backup_before_drop.yml -f label=w6c2-pin-audit-765 -f targets="location_pin_audit_mv:listing_id,property_id,sreality_id,source,source_id_native,source_url,category_main,category_type,disposition,area_m2,price_czk,is_active,first_seen_at,last_seen_at,display_label,country_status,granularity,match_confidence,resolver_version,resolved_at,has_row,has_claims,claims_now,sibling_has_pin,quality,state,refreshed_at"
 -- Not at minute :25, when the old refresh runs. Until the apply, migration_drift warns
 -- "Drop not applied" for this file. Every statement is idempotent: a re-run is a no-op.
--- VERIFY:
+-- VERIFY, and APPLY, as postgres, the job's owner (cron.job, 2026-11-22): pg_cron shows a role only its own jobs,
+-- so under another role the guard skips the unschedule and the post-check passes anyway.
 --   select to_regclass('public.location_pin_audit_mv');                                   -- null
 --   select count(*) from cron.job where jobname = 'refresh-location-pin-audit';          -- 0
 --   select count(*) from public.derived_artifacts where name = 'location_pin_audit_mv';  -- 0

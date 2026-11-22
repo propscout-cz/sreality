@@ -67,7 +67,7 @@ def test_the_revert_rebuilds_the_live_relation_its_refresh_and_its_row() -> None
     assert "revoke all on public.location_pin_audit_mv from anon, authenticated;" in _code(REVERT)
     assert "grant select on public.location_pin_audit_mv to authenticated;" in _code(REVERT)
     assert f"'refresh-location-pin-audit', '25 * * * *', $${CRON_COMMAND}$$" in _code(REVERT)
-    assert CRON_COMMAND in " ".join((MIGRATIONS / "719_location_audit_waterfall_drop.sql").read_text().split())
+    assert CRON_COMMAND in " ".join((MIGRATIONS / "719_location_audit_waterfall_drop.sql").read_text(encoding="utf-8").split())
     assert ("values ('location_pin_audit_mv', 'refresh_matview', 'pg_cron', '25 * * * *', interval '02:10:00', true)"
             in _code(REVERT))
     assert not list(MIGRATIONS.glob("765_revert*.sql")), "a revert beside 765 would be replayed by CI"
@@ -80,8 +80,8 @@ def test_no_surface_reads_the_relation_or_routes_the_page() -> None:
         assert not (src / gone).exists(), gone
     for path in [*src.rglob("*.ts"), *src.rglob("*.tsx")]:
         text = path.read_text(encoding="utf-8")
-        for name in ("location_pin_audit_mv", "pin-audit", "PinAudit", "pinAudit", "AUDIT POLOH"):
-            assert name not in text, f"{path.relative_to(REPO)} still names {name}"
+        for name in ("location_pin_audit_mv", "pin-audit", "PinAudit", "pinAudit", "AUDIT POLOH", "pin audit"):
+            assert name not in text.replace("Pin audit", "pin audit"), f"{path.relative_to(REPO)} still names {name}"
     for tree in ("api", "scraper", "toolkit", "scripts", "location_data", "autodedup"):
         for path in (REPO / tree).rglob("*.py"):
             assert "location_pin_audit_mv" not in path.read_text(encoding="utf-8"), path.relative_to(REPO)

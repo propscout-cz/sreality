@@ -5940,7 +5940,7 @@ that view appends since 636) and path C candidate generation
 (`toolkit/dedup_candidates_sql`); `toolkit/comparables._shared_filter_where` needs no clause because
 its `ll.geom IS NOT NULL` is the same rule minus the foreign arm. **DETAIL STAYS REACHABLE**:
 `listings_public`, `properties_public` and `pipeline_board_public` are read by id, so a direct link,
-the extension, the audit page's own links and an operator's pipeline card (rule 22 operator state)
+the extension and an operator's pipeline card (rule 22 operator state)
 all keep working on an unresolved listing. Measured at the ruling: 44,702 of 711,600 Browse rows,
 2,953 of them still-live ads. The `location_town_coverage` gauge reports the count per portal as the
 `hidden` fact of its `{portal}/town` cell — a workload number that never moves a status. The rows themselves are the
@@ -6143,14 +6143,14 @@ English for every key, so a better sentence costs no migration and a step cannot
 page only.
 A candidate run stamps those keys into `candidate_generations.stats.waterfall` with the losses and
 shares already computed by the lane. The rail is `tests/test_location_steps_vocabulary.py`.
-`quality` buckets the set on active/delisted × `has_claims` — and since W15 `listings.is_active` is
-the page's ONLY live/delisted notion; the SPA page `/new-dedup/pin-audit` filters on those four axes
+`quality` bucketed the set on active/delisted × `has_claims` — and since W15 `listings.is_active` was
+the page's ONLY live/delisted notion; the SPA page `/new-dedup/pin-audit` filtered on those four axes
 plus the sibling flag; W1 deleted its overview matrix, state totals and split (read from
-`location_pin_audit_summary()`), so the one number on it is the exact count of the filtered list. The cohort is ONE arm — `listings` LEFT JOINed
+`location_pin_audit_summary()`), so the one number on it was the exact count of the filtered list. The cohort was ONE arm — `listings` LEFT JOINed
 to `listing_location`, `WHERE NOT <the consumer rule>` — instead of 514's union of two candidate
-sets, and the cohort CTE is MATERIALIZED so the evidence and snapshot laterals run once per cohort
-row (~80 k) and not once per listing. Refreshed hourly by pg_cron through `refresh_matview` (since
-719; `refresh-location-pin-audit`, guarded so the replay container skips it) with the budget armed **in
+sets, and the cohort CTE was MATERIALIZED so the evidence and snapshot laterals ran once per cohort
+row (~80 k) and not once per listing. It was refreshed hourly by pg_cron through `refresh_matview` (from
+719 until 765; `refresh-location-pin-audit`, guarded so the replay container skips it) with the budget armed **in
 the cron command** — migration 371's rule, or the refresh would silently die at the 120 s database
 default. Rule 25's deletion parity did not apply: it was an operator-requested review surface with
 a stated end. While it was live it led the TOP-LEVEL nav as `!AUDIT POLOH` (admin-only, first entry,
