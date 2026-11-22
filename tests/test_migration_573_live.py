@@ -138,7 +138,7 @@ def _python_declines(row: tuple[Any, ...]) -> bool:
             return value == 20 and source_value("idnes", "floor", {"podlaží": podlazi}) is None
         return floor_from_portal("ground0", str(value)) is None
     if column == "total_floors":
-        return total_floors_from_portal(value) is None
+        return total_floors_from_portal(value, floor=None) is None
     arm = "prose" if source == "bazos" else "fallback" if basis == "unknown" else "usable"
     return derive_headline_area(category_main=category, disposition=disposition,
                                 category_type=_deal(row), **{arm: value}) == (None, None)
