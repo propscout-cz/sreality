@@ -37,6 +37,8 @@ import HoverChart from '@/components/HoverChart';
 import { SegmentedBar, type SegmentOption } from '@/components/controls';
 import MapOverlayControls, { MapOverlayLegends, TONE_ROW } from '@/components/MapOverlayControls';
 import { MapLegendCard, MapLegendDock, OverlayChip, OverlayPanel } from '@/components/OverlayChip';
+import ErrorBanner from '@/components/ErrorBanner';
+import type { ReadGroupFailure } from '@/lib/readGroup';
 import {
   LayersIcon, MinusIcon, PlusIcon, RailButton, RailFlyout, RailGroup, ShowAllIcon, SlidersIcon, useRailPanel,
 } from '@/components/MapRail';
@@ -319,6 +321,10 @@ interface Props {
    * detail when a pin is clicked. */
   cityIndexValuesAll?: Map<string, number>;
   cityIndexDefinitions?: CityIndexDefinition[];
+  /* Set while a read the city layer needs (the towns, their outlines, the
+   * indexes or their values) has failed: the layer would stay empty with no
+   * word of why, so the map says so with a retry instead of the city key. */
+  cityLoadFailure?: ReadGroupFailure | null;
   onToggleShowCities?: (next: boolean) => void;
   onColorByIndexChange?: (indexName: string | null) => void;
   /* What the pin labels show — the total price or the per-m² measure. The
@@ -398,6 +404,7 @@ export default function ListingMap({
   cityIndexValues,
   cityIndexValuesAll,
   cityIndexDefinitions,
+  cityLoadFailure = null,
   onToggleShowCities,
   onColorByIndexChange,
   overlayRegistry,
@@ -1422,7 +1429,9 @@ export default function ListingMap({
     (cities && cities.length > 0 && showCities ? 1 : 0) +
     (showGrowth ? 1 : 0) +
     layerGroupsOn(overlayLayers, overlayRegistry);
-  const cityKey = cities && cities.length > 0 && showCities ? colorByIndex ?? null : null;
+  const cityFailure = showCities ? cityLoadFailure : null;
+  const cityKey = !cityFailure && cities && cities.length > 0 && showCities ? colorByIndex ?? null : null;
+  const keysOn = showGrowth || cityKey != null || overlaySectionsOn > 0;
   /* Browse's own two layers, rows of the Vrstvy list. */
   const browseRows = (
     <>
@@ -1610,16 +1619,23 @@ export default function ListingMap({
       </div>
       {/* Bottom-left, over the scale: the key to every layer that is on (and the
           point an area card reads, while one is on the map). */}
-      {(showGrowth || cityKey || overlaySectionsOn > 0) && (
-        <MapLegendDock centreMark={overlayPlaces.size > 0}>
-          {showGrowth && <GrowthLegend metric={growthMetric} rowCount={growthRows?.length ?? 0} />}
-          {cityKey && <CityIndexLegend index={cityKey} />}
-          <MapOverlayLegends
-            registry={overlayRegistry}
-            selection={overlayLayers}
-            places={overlayPlaces}
-            onChange={onOverlayLayersChange}
-          />
+      {(keysOn || cityFailure) && (
+        <MapLegendDock
+          centreMark={overlayPlaces.size > 0}
+          alert={cityFailure && <CityLoadAlert failure={cityFailure} />}
+        >
+          {keysOn ? (
+            <>
+              {showGrowth && <GrowthLegend metric={growthMetric} rowCount={growthRows?.length ?? 0} />}
+              {cityKey && <CityIndexLegend index={cityKey} />}
+              <MapOverlayLegends
+                registry={overlayRegistry}
+                selection={overlayLayers}
+                places={overlayPlaces}
+                onChange={onOverlayLayersChange}
+              />
+            </>
+          ) : null}
         </MapLegendDock>
       )}
     </div>
@@ -1797,6 +1813,20 @@ function CityMapControls({
         </OverlayPanel>
       )}
     </div>
+  );
+}
+
+/* The city layer could not be read, so it draws nothing: said on the map, where the
+ * outlines are missing, in place of their key. The retry re-reads only what failed and
+ * gives way to a "trying again" line while it runs. */
+export function CityLoadAlert({ failure }: { failure: ReadGroupFailure }) {
+  return (
+    <ErrorBanner
+      flush
+      title={null}
+      message={failure.retrying ? 'Města se načítají znovu…' : 'Města se nepodařilo načíst.'}
+      onRetry={failure.retrying ? undefined : failure.retry}
+    />
   );
 }
 

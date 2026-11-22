@@ -352,6 +352,10 @@ relief and contours, raster images from ČÚZK's own servers rather than geometr
 in `lib/basemap` beside the aerial photo, not in this registry. The legends left the panel: `MapOverlayLegends` (plus the growth and city-index keys)
 draws a card per layer group that is on in the map's bottom-left corner (`MapLegendDock`), so a
 choropleth reads with the panel closed; the stack folds to one button, remembered per browser.
+A layer that failed to load says so there instead of its key (the dock's `alert`, never folded away):
+since 2026-11-22 Města does, when any of its four reads failed (`lib/readGroup`), with "Zkusit znovu"
+re-reading only the failed ones. Each read is cached for the page's life, so before this one failure
+left the key over an empty map until a reload.
 
 **Every map's one list (2026-11-20, operator: layers on the property map, web and phone).**
 `MapOverlayControls` IS the list, on every map: Podklad (`SegmentedBar` "Mapa" / "Letecká": ČÚZK's aerial
