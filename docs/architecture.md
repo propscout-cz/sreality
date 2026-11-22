@@ -1185,8 +1185,10 @@ rules. Identify which one a task belongs to before you start.
   served properties of any deal type, then the town's latest population, then code. ONE ranking for every place box;
   counts rank rows and are never returned. **Town first** (#2497, ruling 2026-11-13, narrowed by #2548's ruling
   2026-11-17): a town ranks right above its own okres and kraj, on every tier (68 of 77 okresy share a town's name, and
-  an okres's served count takes in its town's): a kraj or okres row whose tier holds an obec under it (`path <@`) takes
-  that obec's sort keys and follows it, the nearer region first. Every other row keeps the order above, so Praha's
+  an okres's served count takes in its town's): a kraj or okres row whose tier holds an obec under it (`path <@`) with
+  one in twenty of the region's served properties takes that obec's sort keys and follows it, the nearer region first
+  (#2612, ruling 2026-11-22 "only a real share": on production a town named like its okres holds 7.58 % or more, a
+  village named like its region 1.47 % or less, so "Moravskoslezský" answers the kraj before Moravskoslezský Kočov). Every other row keeps the order above, so Praha's
   Karlín, served, answers before the village Karlín; on equal served properties a row lying under an obec of its tier
   (its own část or městská část, `path <@`) follows that town. Both ORDER BYs carry it, the one that feeds the LIMIT and the final
   one; each row carries its level. "Praha 6" keeps its městská část first, as the town Praha is no exact match for it.
