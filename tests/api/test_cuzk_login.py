@@ -118,9 +118,11 @@ def test_without_a_key_nothing_is_sent_to_cuzk(client: Any, service: _Opener, ch
     {"username": "firma01", "password": ""}, {"username": "firma01"},
     {"username": "firma01", "password": PASSWORD * 9}, {"username": "firma01", "password": 5},
     {"username": "firma01", "password": PASSWORD, "extra": 1},
+    {"password": PASSWORD}, {"user": "firma01", "password": PASSWORD}, {"username": 7, "password": PASSWORD},
+    [PASSWORD], PASSWORD,
 ])
 def test_a_malformed_body_is_refused_without_echoing_the_password(client: Any, service: _Opener, checks: list,
-                                                                  body: dict) -> None:
+                                                                  body: Any) -> None:
     resp = client.put(URL, json=body)
     assert resp.status_code == 422
     assert checks == [] and service.opened == 0
@@ -175,6 +177,33 @@ def test_the_client_reads_an_accepted_and_a_refused_login(monkeypatch: pytest.Mo
     assert wsdp_client.check_login("firma01", "good<&>") == "firma01"
     assert sent["url"] == "https://katastr.cuzk.gov.cz/ws/wsdp/3.1/vyhledat"
     assert b"good&lt;&amp;&gt;" in sent["data"] and sent["timeout"] == wsdp_client.TIMEOUT
+    assert sent["allow_redirects"] is False
     with pytest.raises(wsdp_client.WsdpError) as refused:
         wsdp_client.check_login("firma01", PASSWORD)
     assert refused.value.reason == "refused" and PASSWORD not in str(refused.value)
+
+
+def test_a_redirect_is_no_answer_and_is_never_followed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(wsdp_client.BASE_ENV, raising=False)
+    monkeypatch.setattr(wsdp_client.requests, "post", lambda url, **kw: _Resp(307, ""))
+    with pytest.raises(wsdp_client.WsdpError) as moved:
+        wsdp_client.check_login("firma01", PASSWORD)
+    assert (moved.value.reason, moved.value.status) == ("status", 307)
+
+
+@pytest.mark.parametrize("base", [
+    "http://katastr.cuzk.gov.cz/ws/wsdp/3.1/", "https://example.com/ws/wsdp/3.1/",
+    "https://katastr.cuzk.gov.cz.example.com/", "https://katastr.cuzk.gov.cz/ws/wsdp/3.1",
+])
+def test_a_login_is_sent_only_to_cuzk_over_https(monkeypatch: pytest.MonkeyPatch, base: str) -> None:
+    sent: list[str] = []
+    monkeypatch.setenv(wsdp_client.BASE_ENV, base)
+    monkeypatch.setattr(wsdp_client.requests, "post", lambda url, **kw: sent.append(url))
+    with pytest.raises(wsdp_client.WsdpError) as refused:
+        wsdp_client.check_login("firma01", PASSWORD)
+    assert refused.value.reason == "misconfigured" and sent == []
+
+
+def test_the_test_service_is_an_allowed_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(wsdp_client.BASE_ENV, "https://wsdptrial.cuzk.gov.cz/trial/ws/wsdp/3.1/")
+    assert wsdp_client.base_url().startswith("https://wsdptrial.cuzk.gov.cz/")

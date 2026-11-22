@@ -5,13 +5,16 @@ names its kind only, so neither the envelope nor the password can reach a log.""
 from __future__ import annotations
 
 import os
+from urllib.parse import urlsplit
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
 
 import requests
 
 PRODUCTION_BASE = "https://katastr.cuzk.gov.cz/ws/wsdp/3.1/"
+# The override exists for ČÚZK's free test service. A login is only ever sent to one of ČÚZK's own two hosts, over https.
 BASE_ENV = "CUZK_WSDP_BASE"
+HOSTS = frozenset({"katastr.cuzk.gov.cz", "wsdptrial.cuzk.gov.cz"})
 TIMEOUT = (5, 20)
 
 _ENVELOPE = (
@@ -26,7 +29,7 @@ _ENVELOPE = (
 
 
 class WsdpError(Exception):
-    """`reason` is refused | timeout | unreachable | status | unreadable."""
+    """`reason` is refused | timeout | unreachable | status | unreadable | misconfigured."""
 
     def __init__(self, reason: str, status: int | None = None) -> None:
         super().__init__(f"wsdp {reason} status={status}")
@@ -34,7 +37,11 @@ class WsdpError(Exception):
 
 
 def base_url() -> str:
-    return os.environ.get(BASE_ENV) or PRODUCTION_BASE
+    base = os.environ.get(BASE_ENV) or PRODUCTION_BASE
+    parts = urlsplit(base)
+    if parts.scheme != "https" or parts.hostname not in HOSTS or not base.endswith("/"):
+        raise WsdpError("misconfigured")
+    return base
 
 
 def _call(service: str, operation: str, body: str, username: str, password: str) -> ET.Element:
@@ -44,11 +51,15 @@ def _call(service: str, operation: str, body: str, username: str, password: str)
         "SOAPAction": f'"urn:cz:gov:cuzk:iskn:services:wsdp:{service}:{operation}"',
     }
     try:
-        resp = requests.post(base_url() + service, data=envelope.encode("utf-8"), headers=headers, timeout=TIMEOUT)
+        # Never a redirect: it would re-send the password to whatever host the answer names.
+        resp = requests.post(base_url() + service, data=envelope.encode("utf-8"), headers=headers, timeout=TIMEOUT,
+                             allow_redirects=False)
     except requests.Timeout:
         raise WsdpError("timeout") from None
     except requests.RequestException:
         raise WsdpError("unreachable") from None
+    if 300 <= resp.status_code < 400:
+        raise WsdpError("status", resp.status_code)
     try:
         root = ET.fromstring(resp.content)
     except ET.ParseError:
