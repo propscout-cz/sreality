@@ -192,15 +192,25 @@ def floor_from_portal(convention: FloorConvention | None, value: Any) -> int | N
     return _bounded(number - 1 if convention == "ground1" and number >= 1 else number)
 
 
-def total_floors_from_portal(value: int | None) -> int | None:
-    """A stated building PODLAŽÍ count, or None outside the storey band.
+def total_floors_from_portal(value: int | None, *, floor: int | None) -> int | None:
+    """A stated building PODLAŽÍ count, or None outside the storey band or contradicted by
+    the same advert's own storey.
 
     The one band every structured parser and the text lane read a count through, the
     twin of the text miner's `1 <= n <= _FLOOR_MAX`: a count of 0 is mmreality's "not
-    stated", and 113 / 731,463,379 are a typo and an id (bezrealitky)."""
+    stated", and 113 / 731,463,379 are a typo and an id (bezrealitky).
+
+    `floor` is the advert's canonical storey (ground = 0), so the top one is `value - 1`.
+    A portal pair that breaks this ("3. podlaží z 1") is the seller's typing, mostly the
+    flat's own storeys entered as the building's (three quarters of them state 1 or 2):
+    the count is the member we cannot trust, so it is absence, and the portal's own value
+    stays in the stored page. Mined prose yields the other way (`is_plausible_floor`
+    drops the storey, which there is the risky read), and passes floor=None here."""
     if value is None or isinstance(value, bool):
         return None
-    return value if 1 <= value <= _FLOOR_MAX else None
+    if not 1 <= value <= _FLOOR_MAX:
+        return None
+    return None if floor is not None and floor >= value else value
 
 
 # --- Free-text miner ---------------------------------------------------------

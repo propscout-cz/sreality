@@ -195,8 +195,9 @@ def test_parse_detail_full_mapping():
     assert listing.energy_rating == "G"
     # obj.floor 5 -> ground=0 storey 4 (W8).
     assert listing.floor == 4
-    # overgroundFloors alone: the basement storey is not a storey a flat's floor counts against.
-    assert listing.total_floors == 4
+    # overgroundFloors is 4, which the advert's own storey (the 5th) contradicts: the count
+    # is the member we cannot trust, so it is absence.
+    assert listing.total_floors is None
     assert listing.has_lift is False
     assert listing.cellar is True
     assert listing.parking_lots == 1
