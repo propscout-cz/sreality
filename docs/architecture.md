@@ -6186,8 +6186,11 @@ location programme's work, not this one's.
   current one `valid_to is null`; `valid_from` is the register's own PlatiOd, so a changed building gets a new row
   and its old one is closed. `ruian_address_points.stavebni_objekt_code` is the door's building. Code lists and
   their "not known" flags: `ruian_code_labels`. Both service-role only.
-- **Load.** `python -m location_data.ruian_buildings` (`--obec <code>`, `--max-seconds`), run by hand until its
-  scheduled job is registered (#2604, after the first load is measured). A hand run needs a SESSION-mode database
+- **Load.** `python -m location_data.ruian_buildings` (`--obec <code>`, `--max-seconds`). The job runner runs it
+  daily at 13:00 UTC (`scraper/jobs.py` `ruian_buildings`, #2604) until no obec is pending, then as a no-op until
+  the next vintage; it starts obce only 13:00-17:00 UTC (`--window-utc`: a run restarted by a deploy keeps those
+  hours, not a fresh budget), waits out the :45 Browse rebuild (`--quiet-minutes`), and does nothing while a newer
+  registry version is merging. Stop it with the operator's runner pause. A hand run needs a SESSION-mode database
   URL in its environment, `SUPABASE_DB_SESSION_URL` or `LOCATION_DB_DIRECT_URL` (`loader_db.open_loader_connection`
   refuses the transaction pooler): the operator puts it in the local `.env`, never in a chat or a ticket. A run on
   named obce logs every statement's rows and seconds. It reads

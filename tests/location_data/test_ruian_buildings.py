@@ -106,6 +106,7 @@ def _run(monkeypatch: pytest.MonkeyPatch, outcomes: dict[int, Any], tmp_path: An
     monkeypatch.setattr(rb.loader_db, "open_loader_connection", open_conn)
     monkeypatch.setattr(rb, "current_version", lambda c: rb.Version(4, __import__("datetime").date(2026, 10, 31)))
     monkeypatch.setattr(rb, "pending_obce", lambda c, v: [(code, code) for code in outcomes])
+    monkeypatch.setattr(rb, "registry_load_in_flight", lambda c, v: None)
     monkeypatch.setattr(rb, "load_obec", load)
     monkeypatch.setattr(rb, "record_failure", lambda c, v, code, err: seen["failed"].append((code, err, c)))
     assert rb.run(max_seconds=None, only=None, work_dir=tmp_path) == 0
@@ -136,3 +137,89 @@ def test_a_vintage_that_is_not_published_stops_the_run_with_one_message(monkeypa
         seen = _run(monkeypatch, outcomes, tmp_path)
     assert len(seen["loaded"]) == rb._MISSING_STOP
     assert "is not published" in caplog.text
+
+
+def _at(hour: int, minute: int, second: int = 0) -> Any:
+    import datetime
+
+    return datetime.datetime(2026, 11, 23, hour, minute, second, tzinfo=datetime.UTC)
+
+
+def test_the_window_is_a_time_of_day_not_a_budget() -> None:
+    clock = rb.Clock(window=(13 * 60, 17 * 60))
+    assert [clock.open(_at(*t)) for t in ((12, 59), (13, 0), (16, 59), (17, 0), (2, 30))] == [
+        False, True, True, False, False]
+    assert rb.Clock().open(_at(3, 0)), "a hand run has no window"
+
+
+def test_the_quiet_minutes_are_waited_out_to_their_end() -> None:
+    clock = rb.Clock(quiet=(43, 50))
+    assert clock.quiet_for(_at(14, 42, 59)) == 0
+    assert clock.quiet_for(_at(14, 43)) == 7 * 60
+    assert clock.quiet_for(_at(14, 49, 30)) == 30
+    assert clock.quiet_for(_at(14, 50)) == 0
+
+
+def test_a_run_outside_its_hours_opens_no_connection(monkeypatch, tmp_path) -> None:
+    def no_connection() -> Any:
+        raise AssertionError("a run outside its hours must not reach the database")
+
+    monkeypatch.setattr(rb.loader_db, "open_loader_connection", no_connection)
+    assert rb.run(max_seconds=None, only=None, work_dir=tmp_path, clock=rb.Clock(window=(13 * 60, 17 * 60)),
+                  now=lambda: _at(17, 5)) == 0
+
+
+def test_a_run_restarted_late_stops_at_the_end_of_its_hours_and_waits_out_the_quiet_minutes(monkeypatch,
+                                                                                           tmp_path) -> None:
+    """Three obce, each start taking the next clock reading: 16:40 runs, 16:44 is waited out, then 17:00 ends it."""
+    times = iter([_at(16, 40),               # the run's own gate
+                  _at(16, 40), _at(16, 40),  # obec 1: not quiet, inside the hours
+                  _at(16, 44), _at(16, 50),  # obec 2: quiet for 6 min, then inside the hours
+                  _at(16, 58), _at(17, 0),   # obec 3: not quiet, but the hours are over
+                  _at(17, 0)])               # the stop's log line
+    slept: list[float] = []
+    loaded: list[int] = []
+
+    class _C:
+        closed = broken = False
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(rb.loader_db, "open_loader_connection", _C)
+    monkeypatch.setattr(rb, "current_version", lambda c: rb.Version(4, _at(0, 0).date()))
+    monkeypatch.setattr(rb, "registry_load_in_flight", lambda c, v: None)
+    monkeypatch.setattr(rb, "pending_obce", lambda c, v: [(1, 1), (2, 2), (3, 3)])
+    monkeypatch.setattr(rb, "load_obec", lambda c, s, v, unit, code, w, **kw: loaded.append(code) or (1, 1))
+    monkeypatch.setattr(rb.time, "sleep", lambda s: None)
+    assert rb.run(max_seconds=None, only=None, work_dir=tmp_path, now=lambda: next(times), sleep=slept.append,
+                  clock=rb.Clock(window=(13 * 60, 17 * 60), quiet=(43, 50))) == 0
+    assert loaded == [1, 2] and slept == [6 * 60]
+
+
+def test_a_registry_version_still_merging_holds_a_full_run_but_not_a_named_obec(monkeypatch, tmp_path) -> None:
+    loaded: list[int] = []
+
+    class _C:
+        closed = broken = False
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(rb.loader_db, "open_loader_connection", _C)
+    monkeypatch.setattr(rb, "current_version", lambda c: rb.Version(4, _at(0, 0).date()))
+    monkeypatch.setattr(rb, "registry_load_in_flight", lambda c, v: 5)
+    monkeypatch.setattr(rb, "pending_obce", lambda c, v: [(1, 1)])
+    monkeypatch.setattr(rb, "load_obec", lambda c, s, v, unit, code, w, **kw: loaded.append(code) or (1, 1))
+    monkeypatch.setattr(rb.time, "sleep", lambda s: None)
+    assert rb.run(max_seconds=None, only=None, work_dir=tmp_path) == 0
+    assert loaded == []
+    assert rb.run(max_seconds=None, only=[1], work_dir=tmp_path) == 0
+    assert loaded == [1], "a hand run on a named obec is the operator's own call"
+
+
+@pytest.mark.parametrize("argv", [["--window-utc", "17:00-13:00"], ["--window-utc", "13-17"],
+                                  ["--quiet-minutes", "50-43"], ["--quiet-minutes", "43-61"]])
+def test_a_malformed_clock_argument_is_refused_at_the_command_line(argv: list[str]) -> None:
+    with pytest.raises(SystemExit):
+        rb.main(argv)
