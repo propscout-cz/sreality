@@ -8,7 +8,7 @@ vi.mock('./api', async (orig) => ({
 }));
 
 import { apiPost } from './api';
-import { resolveSuggestion, typeBadge, type MapySuggestion } from './maps';
+import { placePick, resolveSuggestion, typeBadge, type MapySuggestion } from './maps';
 
 const ADDRESS: MapySuggestion = {
   name: 'Na Rybníčkách 12',
@@ -51,6 +51,27 @@ describe('resolveSuggestion', () => {
     expect(vi.mocked(apiPost).mock.calls[0][1]).toMatchObject({ address_point: true });
     await resolveSuggestion(ADDRESS);
     expect(vi.mocked(apiPost).mock.calls[1][1]).not.toHaveProperty('address_point');
+  });
+
+  it('carries the place typeahead\'s pick as `pick`, and nothing when there is none (ruling Q10)', async () => {
+    vi.mocked(apiPost).mockResolvedValue({ level: 'obec', id: 582786, name: 'Brno', context: null });
+    await resolveSuggestion(ADDRESS, { pick: { text: 'Brno', rank: 2 } });
+    expect(vi.mocked(apiPost).mock.calls[0][1]).toMatchObject({ pick: { text: 'Brno', rank: 2 } });
+    await resolveSuggestion(ADDRESS, { addressPoint: true });
+    expect(vi.mocked(apiPost).mock.calls[1][1]).not.toHaveProperty('pick');
+  });
+
+  it('makes no pick the server would refuse, so the resolve itself never 422s on one', () => {
+    expect(placePick('Brno', 2)).toEqual({ text: 'Brno', rank: 2 });
+    expect(placePick('B'.repeat(200), 10)).toEqual({ text: 'B'.repeat(200), rank: 10 });
+    expect(placePick('B'.repeat(201), 2)).toBeUndefined();
+    expect(placePick('Brno', 11)).toBeUndefined();
+    expect(placePick('', 1)).toBeUndefined();
+  });
+
+  it('counts a pick text in characters, as the server does, not in UTF-16 units', () => {
+    expect(placePick('🏠'.repeat(200), 1)).toEqual({ text: '🏠'.repeat(200), rank: 1 });
+    expect(placePick('🏠'.repeat(201), 1)).toBeUndefined();
   });
 
   /* The request is strict — no null coordinates — so such a pick fails like a

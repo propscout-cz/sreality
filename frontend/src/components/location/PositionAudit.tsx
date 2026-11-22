@@ -2,7 +2,7 @@
  *
  * The grid and the strip draw the location gauge's STORED position facts (one number per kind and grain, ruling Q7);
  * every non-zero number is a button that opens the list of those ads as the reading counts them, the cell living in
- * the URL. The no-answer entry opens the hourly snapshot's ads with no location answer in every status. Both lists
+ * the URL. The no-answer entry opens the snapshot's ads with no location answer in every status. Both lists
  * read the admin-gated `location_position_audit_public`. Ledger figures (mono tabular), borders only; copper marks the
  * chosen cell and nothing else. Ruling Q3 reads off the grain heads: each carries the map's own precision words. */
 
@@ -20,7 +20,7 @@ import { fmtArea, fmtCzk, fmtDateSlash, fmtTime24 } from '@/lib/format';
 import type { KeysetCursor } from '@/lib/keyset';
 import { propertyPath } from '@/lib/listingUrl';
 import { LOCATION_SOURCES } from '@/lib/locationQuality';
-import { portalShort } from '@/lib/portals';
+import { advertLink, portalShort } from '@/lib/portals';
 import {
   ALL_KINDS,
   KIND_LABEL,
@@ -257,7 +257,7 @@ export function NoAnswerEntry({ open, onOpen }: { open: boolean; onOpen: () => v
   });
   const n = count.data ?? null;
   return (
-    <Panel title="No location answer · every status" count={n == null ? null : fmtNumber(n)} note="every portal · the hourly snapshot">
+    <Panel title="No location answer · every status" count={n == null ? null : fmtNumber(n)} note="every portal · a snapshot taken 4× a day">
       {count.error ? <ErrorBanner message={count.error.message} /> : null}
       {n === 0 ? (
         <p className={MUTED}>Every ad has a location answer.</p>
@@ -355,8 +355,8 @@ export function PositionList({
         </button>
       }
       lede={cell
-        ? 'The ads this cell counts, read now by the reading’s own rule: active ads first written more than 24 h ago, each at the hourly snapshot’s kind unless re-resolved since (then not yet classified), by the grain of its live answer.'
-        : 'Every ad in any status the consumer rule refuses (no point and not determined abroad), as the hourly snapshot holds it, with its town evidence, a sibling ad with a point and a queued re-resolve.'}
+        ? 'The ads this cell counts, read now by the reading’s own rule: active ads first written more than 24 h ago, each at the snapshot’s kind unless re-resolved since (then not yet classified), by the grain of its live answer.'
+        : 'Every ad in any status the consumer rule refuses (no point and not determined abroad), as the snapshot holds it, with its town evidence, a sibling ad with a point and a queued re-resolve.'}
     >
       {list.error ? <ErrorBanner message={list.error.message} /> : null}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[0.78rem] text-[var(--color-ink-3)]">
@@ -446,6 +446,7 @@ export function PositionList({
               const name = [categoryMainLabel(r.category_main), r.disposition, r.area_m2 != null ? fmtArea(r.area_m2) : null]
                 .filter(Boolean)
                 .join(' · ');
+              const link = advertLink(r);
               return (
                 <tr key={r.listing_id} className={`${ROW} align-top`} data-testid={`position-row-${r.listing_id}`}>
                   <td className="py-1.5 pr-3">
@@ -457,9 +458,9 @@ export function PositionList({
                       <span className="text-[var(--color-ink)]">{name}</span>
                     )}
                     <span className="block text-[var(--color-ink-3)]">{r.display_label ?? '—'}</span>
-                    {r.source_url ? (
+                    {link ? (
                       <a
-                        href={r.source_url}
+                        href={link}
                         target="_blank"
                         rel="noreferrer"
                         className="text-[0.72rem] text-[var(--color-ink-3)] underline decoration-dotted underline-offset-2"

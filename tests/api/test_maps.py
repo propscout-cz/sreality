@@ -24,7 +24,7 @@ from location_data.resolver.resolve_db import (
 # Mirrors Mapy.cz's actual /v1/suggest shape: `label` is the result-class
 # tag ("Ulice ", "Část obce "), NOT the human-readable place name. The
 # specific name lives in `name`; the address with city/region context lives
-# in `location`. See scraper/geocoding.py:13–38 for the schema notes.
+# in `location`.
 _MOCK_SUGGEST = {
     "items": [
         {
@@ -57,10 +57,8 @@ def client(monkeypatch):
     api_main.app.dependency_overrides[deps.get_db_conn] = lambda: object()
     api_main.app.dependency_overrides[deps.get_sreality_client] = lambda: object()
     monkeypatch.setenv("MAPY_CZ_API_KEY", "test-key")
-    maps.clear_suggest_cache()
     yield TestClient(api_main.app)
     api_main.app.dependency_overrides.clear()
-    maps.clear_suggest_cache()
 
 
 def _mock_http(monkeypatch, payload: dict[str, Any], counter: list[int] | None = None):
@@ -110,7 +108,8 @@ def test_suggest_503_when_mapy_unreachable(client, monkeypatch):
     assert res.status_code == 503
 
 
-def test_suggest_caches_within_ttl(client, monkeypatch):
+def test_suggest_keeps_no_mapy_answer_so_an_identical_query_asks_mapy_again(client, monkeypatch):
+    """Mapy's terms forbid storing or caching an API result (ruling 2026-11-13: the 300 s cache goes early)."""
     counter: list[int] = []
     _mock_http(monkeypatch, _MOCK_SUGGEST, counter=counter)
 
@@ -118,15 +117,6 @@ def test_suggest_caches_within_ttl(client, monkeypatch):
     res2 = client.get("/maps/suggest", params={"query": "Vinohrady"})
     assert res1.status_code == 200
     assert res2.status_code == 200
-    assert len(counter) == 1, "second identical query should be served from cache"
-
-
-def test_suggest_distinct_queries_not_cached_together(client, monkeypatch):
-    counter: list[int] = []
-    _mock_http(monkeypatch, _MOCK_SUGGEST, counter=counter)
-
-    client.get("/maps/suggest", params={"query": "Vinohrady"})
-    client.get("/maps/suggest", params={"query": "Smichov"})
     assert len(counter) == 2
 
 
@@ -185,13 +175,16 @@ def _mock_http_sequence(monkeypatch, outcomes: list[Any]) -> dict[str, Any]:
 
 
 @pytest.mark.parametrize("bad_status", [401, 403, 429])
-def test_suggest_fails_over_to_backup_key(client, monkeypatch, bad_status):
+def test_suggest_fails_over_to_backup_key(client, monkeypatch, caplog, bad_status):
     monkeypatch.setenv("MAPY2_CZ_API_KEY", "backup-key")
     state = _mock_http_sequence(monkeypatch, [_http_error(bad_status), _MOCK_SUGGEST])
-    res = client.get("/maps/suggest", params={"query": "Vinohrady"})
+    with caplog.at_level("WARNING", logger="api.maps"):
+        res = client.get("/maps/suggest", params={"query": "Vinohrady"})
     assert res.status_code == 200
     assert len(res.json()["items"]) == 2
     assert state["keys"] == ["test-key", "backup-key"]
+    assert [r.getMessage() for r in caplog.records if r.name == "api.maps"] == [
+        f"Mapy suggest key 1/2 rejected (status={bad_status}); failing over to backup"]
 
 
 def test_suggest_no_failover_on_server_error(client, monkeypatch):
@@ -211,13 +204,25 @@ def test_suggest_both_keys_rejected_returns_503(client, monkeypatch):
     assert state["keys"] == ["test-key", "backup-key"]
 
 
-def test_suggest_uses_backup_when_primary_unset(client, monkeypatch):
-    monkeypatch.delenv("MAPY_CZ_API_KEY", raising=False)
+@pytest.mark.parametrize("primary", [None, "  "])
+def test_suggest_uses_backup_when_primary_unset(client, monkeypatch, primary):
+    if primary is None:
+        monkeypatch.delenv("MAPY_CZ_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("MAPY_CZ_API_KEY", primary)
     monkeypatch.setenv("MAPY2_CZ_API_KEY", "backup-key")
     state = _mock_http_sequence(monkeypatch, [_MOCK_SUGGEST])
     res = client.get("/maps/suggest", params={"query": "Vinohrady"})
     assert res.status_code == 200
     assert state["keys"] == ["backup-key"]
+
+
+def test_a_backup_that_repeats_the_primary_is_no_second_key(client, monkeypatch):
+    monkeypatch.setenv("MAPY2_CZ_API_KEY", "test-key")
+    state = _mock_http_sequence(monkeypatch, [_http_error(401), _MOCK_SUGGEST])
+    res = client.get("/maps/suggest", params={"query": "Vinohrady"})
+    assert res.status_code == 503
+    assert state["keys"] == ["test-key"]
 
 
 # ---------------- /maps/resolve ----------------
@@ -947,7 +952,7 @@ def _doors(obec: int, street: _Row | None, cp: int, co: int | None, *rows: tuple
 
 
 def _label(kod: int, text: str) -> _Expect:
-    return _Expect(maps._DOOR_LABEL_SQL, (kod,), (text,))
+    return _Expect(maps.DOOR_LABEL_SQL, (kod,), (text,))
 
 
 def _address(number: str, street: str | None, at: tuple[float, float], town: str = "Praha"
@@ -971,6 +976,19 @@ def test_an_address_pick_binds_its_one_door_on_its_bound_street(client):
     ])
     assert body == {"level": "adresni_misto", "id": 21717001,
                     "name": "Týnská ulička 610/7, Praha", "context": None}
+
+
+def test_a_refused_address_logs_its_level_and_reason_never_what_was_typed(client, caplog):
+    """No log line carries the pick's name (#2444): a house number typed into a place box reaches no log."""
+    pick = _address("610/7", "Týnská ulička", _TYNSKA_DOOR)
+    with caplog.at_level("INFO", logger="api.maps"):
+        body = _resolve(client, pick, [
+            *_MIRROR_PRESENT, _chain(pick, _PRAHA), _streets_of(TYNSKA, TYNSKA_ULICKA),
+            _point_of(TYNSKA_ULICKA), _doors(554782, TYNSKA_ULICKA, 610, 7),
+        ])
+    assert body == {"level": "adresni_misto", **_NO_CODE, "context": None}
+    assert [r.getMessage() for r in caplog.records if r.name == "api.maps"] == [
+        "maps.resolve: adresni_misto pick has 0 doors within 300 m of the pick (obec 554782, street 472786) — no code"]
 
 
 def test_an_orientation_letter_picks_its_own_door(client):
@@ -1013,16 +1031,21 @@ def test_anything_but_one_door_near_the_pick_binds_nothing(client, doors):
         _point_of(TYNSKA_ULICKA), _doors(554782, TYNSKA_ULICKA, 610, 7, *doors),
     ])
     assert body == {"level": "adresni_misto", **_NO_CODE, "context": None}
-    assert maps._DOOR_LABEL_SQL not in executed
+    assert maps.DOOR_LABEL_SQL not in executed
 
 
-def test_a_street_entry_that_does_not_bind_never_reads_the_doors(client):
-    """Never widened to the whole obec: an unbound street is no door."""
+def test_a_street_entry_that_does_not_bind_never_reads_the_doors(client, caplog):
+    """Never widened to the whole obec: an unbound street is no door. Its line names the ADDRESS pick's level, the
+    street being the step that failed inside it, and none of the typed words (#2444)."""
     pick = _address("12", "Nová", _TYNSKA_DOOR)
-    body, executed = _resolve_logged(client, pick, [
-        *_MIRROR_PRESENT, _chain(pick, _PRAHA), _streets_of(TYNSKA, TYNSKA_ULICKA),
-    ])
+    with caplog.at_level("INFO", logger="api.maps"):
+        body, executed = _resolve_logged(client, pick, [
+            *_MIRROR_PRESENT, _chain(pick, _PRAHA), _streets_of(TYNSKA, TYNSKA_ULICKA),
+        ])
     assert body["id"] is None and _ADDRESS_POINTS_BY_NUMBER_SQL not in executed
+    [line] = [r.getMessage() for r in caplog.records if r.name == "api.maps"]
+    assert line.startswith("maps.resolve: adresni_misto pick: its street in obec 554782 not bound (")
+    assert "Nová" not in line and "12" not in line.replace("554782", "")
 
 
 def test_an_address_without_a_number_reads_nothing_past_its_town(client):
@@ -1123,40 +1146,3 @@ def test_the_level_map_speaks_the_five_chip_levels():
 
     assert set(maps._TYPE_LEVEL.values()) == set(LEVEL_ORDER)
     assert "poi" not in maps._TYPE_LEVEL
-
-
-# ---------------- containing_obec_kod (the MF hand-off for a typed point) ----------------
-
-
-def _pip_at(lat: float, lng: float, rows: list[tuple]) -> list[_Expect]:
-    return [
-        _Expect(maps._CURRENT_VERSION_SQL, None, (_VERSION,)),
-        _Expect(maps._CONTAINING_CHAIN_SQL, ([0], [lat], [lng], _VERSION), rows),
-    ]
-
-
-def test_containing_obec_kod_answers_the_pipped_obec_or_none():
-    assert maps.containing_obec_kod(
-        _FakeConn(_pip_at(49.4, 15.59, _JIHLAVA)), lat=49.4, lng=15.59,
-    ) == 586846
-    assert maps.containing_obec_kod(
-        _FakeConn(_pip_at(41.4, 2.17, [])), lat=41.4, lng=2.17,
-    ) is None
-    no_version = [_Expect(maps._CURRENT_VERSION_SQL, None, None)]
-    assert maps.containing_obec_kod(_FakeConn(no_version), lat=49.4, lng=15.59) is None
-    assert maps.containing_obec_kod(_FakeConn([]), lat=None, lng=15.59) is None
-
-
-def test_containing_obec_kod_raises_a_query_error_instead_of_reading_it_as_no_obec():
-    """A "no obec" answer becomes mf_reference()'s location_unknown -- a confident note a
-    run would freeze. A failed query must reach the caller's own guard instead."""
-    class _Broken(_FakeCursor):
-        def execute(self, sql: str, params: Any = None) -> None:
-            raise RuntimeError("statement timeout")
-
-    class _BrokenConn(_FakeConn):
-        def cursor(self) -> _FakeCursor:
-            return _Broken([], [])
-
-    with pytest.raises(RuntimeError):
-        maps.containing_obec_kod(_BrokenConn([]), lat=49.4, lng=15.59)

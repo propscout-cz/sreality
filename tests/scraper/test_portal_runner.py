@@ -1052,6 +1052,67 @@ def test_detail_drain_hands_back_what_the_ledger_refused_and_stops(
     assert line in caplog.messages
 
 
+def test_the_worker_deploy_stop_hands_back_a_drain_chunk_in_flight(monkeypatch, caplog):
+    """#2438: a deploy's SIGTERM, as the worker's event loop delivers it, reaches a drain pass parked in its limiter
+    mid-chunk. It hands back the claims it has not started, first, then flushes what it fetched and returns, instead
+    of fetching on until SIGKILL and stranding the chunk for the claim expiry."""
+    import asyncio
+    import threading
+
+    from scraper import realtime_worker as rw
+
+    cap = _patch_queue(monkeypatch, [
+        [("1", None, None, None), ("2", None, None, None), ("3", None, None, None)],
+        [("4", None, None, None)],
+    ])
+    events: list[str] = []
+    monkeypatch.setattr(portal_runner.db, "release_claims", lambda _c, _src, ids: (
+        events.append("release:" + ",".join(sorted(ids))) or len(ids)))
+
+    class _Paced(_FakePortal):
+        def make_client(self, limiter):
+            self.limiter = limiter
+            return object()
+
+        def fetch_detail(self, client, native_id, ref):
+            try:
+                self.limiter.acquire()  # every portal client paces here before its request
+            except stop.StopRequested as exc:  # and every fetch_detail turns a raise into an error item
+                return DrainItem(native_id=native_id, kind="error", error=str(exc))
+            return super().fetch_detail(client, native_id, ref)
+
+        def write_details(self, conn, items):
+            events.append("write:" + ",".join(sorted(it.native_id for it in items)))
+            return super().write_details(conn, items)
+
+    p = _Paced()
+    # One fetch every 5 s on one thread: the second claim's fetch waits in the limiter when the stop arrives.
+    monkeypatch.setattr(rw, "_load_config", lambda s: SimpleNamespace(
+        limits=SimpleNamespace(detail_workers=1, detail_rate=0.2)))
+    monkeypatch.setattr(rw, "_build_portal", lambda s, c: p)
+    monkeypatch.setattr(rw, "_read_drain_slice", lambda: 200)
+    monkeypatch.setattr(rw, "_read_drain_disabled_sources", lambda: set())
+    monkeypatch.setattr(rw, "_claimable_by_source", lambda: {"sreality": 4})
+    monkeypatch.setattr(rw, "_AUTODEDUP_STOPPING", threading.Event())
+    stop.arm()  # as the worker's boot does, before it takes its signals
+
+    async def deploy() -> tuple[dict[str, Any], float]:
+        stop_event, state = asyncio.Event(), rw._new_state()
+        asyncio.get_running_loop().call_later(0.2, rw._on_stop_signal, stop_event)
+        started = time.monotonic()
+        await rw._drain_pass(stop_event, state)
+        return state["lanes"]["drain"]["last"], time.monotonic() - started
+
+    with caplog.at_level("INFO", logger="scraper.portal_runner"):
+        last, took = asyncio.run(deploy())
+    assert took < 3.0, "the stop ends the limiter's 5 s wait at once"
+    assert events == ["release:2,3", "write:1"]
+    assert len(cap["claim_n"]) == 1 and cap["complete"] == [["1"]]
+    assert cap["fail"] == [] and p.calls["failure"] == []  # a handed-back claim spends no attempt
+    assert (last["new"], last["deadline_stopped"], last["budget_refused"], last["errors"]) == (1, 1, 0, 0)
+    assert "DRAIN stop signal mid-chunk; 2 claims handed back source=fake" in caplog.messages
+
+
 @pytest.mark.parametrize("max_claims,lease_n", [(3, 3), (200, 20), (None, 20)])
 def test_detail_drain_hands_its_bound_and_a_lease_sized_to_its_work_to_the_limiter(
     monkeypatch, max_claims, lease_n,

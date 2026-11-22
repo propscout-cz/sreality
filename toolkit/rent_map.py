@@ -19,7 +19,6 @@ reads only the ingested cells and the stored obec/KÚ codes, never geometry.
 
 from __future__ import annotations
 
-import hashlib
 import io
 import logging
 import re
@@ -85,10 +84,6 @@ class ParsedRentMap:
     values: list[RentValue]
     adjustments: list[RentAdjustment]
     source_date: date | None
-
-
-def sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
 
 
 def source_date_from_filename(name: str) -> date | None:

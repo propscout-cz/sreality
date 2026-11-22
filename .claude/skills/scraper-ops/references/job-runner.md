@@ -3,8 +3,8 @@
 The Railway job runner (`scraper/job_runner.py`, `scraper/job_process.py`; SQL in `scraper/job_lease.py`) runs every
 `scraper/jobs.py` entry whose host is `job-runner` (`jobs.runner_jobs()`), each as its own subprocess. Design and
 rulings: `docs/design/actions-exit/PROGRAM.md` § 4.2. Since #2025's move PR it runs `stale_images`, `rent_map` and
-`map_overlays`, and since #2032 `clip`, whose workflows those PRs deleted; each later move PR (#2027–#2031,
-#2033) flips more entries' host. On
+`map_overlays`, since #2032 `clip`, and since #2027 the daily `property_sweep` (03:00 UTC) and `broker_sweep`
+(06:00 UTC), whose workflows those PRs deleted; each later move PR (#2028–#2031, #2033) flips more entries' host. On
 Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and 8 GB
 (`.railway/railway.ts` `jobRunner`; settings, drain and image: `docs/architecture.md` § Railway service
 configuration). Its Health cells and the "Jobs: run now" form are #2026's (below).
@@ -82,13 +82,18 @@ The runner's own stop decides before the exit code.
 | exit 75 | `ok` | now + 60 s |
 | deploy stop, fence | `interrupted` | now (DB-heavy too) |
 | any other exit, an unsent SIGKILL (likely the OOM killer) | `failed` | backoff: 60 s doubling, capped at the cadence and the next slot |
-| lease lapsed (runner crash, a database outage past the fence; a refused renewal, since the reaper closes the run first) | `lost` | now, then backoff on a second loss in a row |
+| lease lapsed (runner crash, a database outage past the fence; a refused renewal, since the reaper closes the run first) | `lost` | now, then backoff on a second loss in a row; a pure request: unchanged (one exception, below) |
 
-A DB-heavy job's backoff, retry and lost waits go to its own hour (the next day at most). A pure request run's
-release never moves `due_at` (its exit 75 pulls it to 60 s at most), and the row's `due=now` log line does not apply to
-it; a request that also took a due slot advances it. **A `lost` request does move it** (#2317, the reaper cannot tell):
-a `lost` `map_overlays` request schedules a live run at the next 22:00Z, so read `due_at` after every `map_overlays`
-request and never start one between 20:00 and 22:00Z.
+A DB-heavy job's backoff, retry and lost waits go to its own hour (the next day at most), and **no DB-heavy job starts
+while another one's run is open** (#2027; `job_lease`'s `due`/`claim` with `PgLedger.heavy`, main's whole registry, so
+`once` too; a transaction advisory lock makes two replicas' heavy claims take turns). A run off its hours (an
+interrupted one, a recovery after hours down, a request) waits instead, and past 10 min its cell reads Watch `due N ago
+and not started`. A pure request run never
+moves `due_at` (its exit 75 pulls it to 60 s at most), and the row's `due=now` log line does not apply to it; a request
+that also took a due slot advances it. Its loss keeps `due_at` too, but `job_runs` keeps no due slot, so the reaper
+reads one from the run: a request run whose row's `due_at` is still after its `started_at` (the claim's own now())
+took none (#2317), so a slot that came due while it ran stays due. One exception: a request on a paused row that was
+already due counts at its loss as having taken its slot, so its loss moves `due_at` on, never earlier.
 
 ## Reading `job_runs`
 
@@ -164,13 +169,15 @@ of a sibling on its resource seen since its clock started. The worst condition w
   older image booted and retired it): read Railway's job-runner deployments and the `BOOT … jobs=N` line. Missing at
   one read only: Watch (in a deploy overlap the one worker heartbeat row can be the predecessor's). A live row the code
   does not declare: Watch. Inside the grace: ok `waiting for the runner's deploy`.
-- **For the move PRs (#2027, #2028, #2029): the ⅔ line.** A job whose own budget sits above ⅔ of its `timeout_s`
-  reads Watch on every healthy run that uses it: location_intake runs `--max-seconds 2400` against T 3300 (⅔ = 2200)
-  and property_sweep `--max-seconds 6000` against 7800 (⅔ = 5200). Each move PR sets `timeout_s` ≥ 1.5× the job's own
-  budget, lowers the budget, or asks the operator. A walk stopped at its own timeout records `timeout`, a Problem: W4
-  keeps `walk_timeout_s` above each walk's p95. W2's three jobs are clear (stale_images runs 2-9 s of 1200;
-  rent_map and map_overlays carry no self-budget), and so is W5's clip (`--max-seconds 1500` against 3300: a full
-  run, with its last chunk and its exit, ends by about 1600 s, under the 2200 s line).
+- **For the move PRs (#2028, #2029): the ⅔ line.** A job whose own budget sits above ⅔ of its `timeout_s`
+  reads Watch on every healthy run that uses it: location_intake runs `--max-seconds 2400` against T 3300 (⅔ = 2200).
+  `tests/scraper/test_job_registry.py`'s argv census refuses a runner job's `--max-seconds` past ⅔ of its `timeout_s`, so
+  a move PR sets `timeout_s` ≥ 1.5× the job's own budget, lowers the budget, or asks the operator. A walk stopped at
+  its own timeout records `timeout`, a Problem: W4 keeps `walk_timeout_s` above each walk's p95. W2's three jobs are
+  clear (stale_images runs 2-9 s of 1200; rent_map and map_overlays carry no self-budget), W5's clip (`--max-seconds
+  1500` against 3300) and W3's sweeps: property_sweep's 6000 s budget against 9000 (its worst run, budget + one
+  in-flight batch + finalize, is 130 min; only a budget stop's tail crosses 6000 s), broker_sweep's against 4500
+  (its full runs since Broker Unify W3, 2026-10-01: 2982 s at most, under the 3000 s line; one failed at 3497 s).
 - One job's cell off: `pause <job> --until <t> --note <why>`. The whole arm, forward only: a migration replacing
   `health_job_cells(interval)` with `select '[]'::jsonb`.
 
@@ -225,8 +232,9 @@ up to about 10 s. One drill at a time, with no other request run open.
   15:59Z: create the deployment 20 s before the slot, for a SIGTERM at slot + 17 s. It closed `interrupted` (exit 143) 4.9 s
   after the SIGTERM, and a new replica re-claimed it 4.1 s later (limit 60 s).
 - **E. Self-fence:** six writes, each one guarded on the ticket. Pause the row 14 days, so a moved `due_at` cannot start a
-  live run. File a dry run and check its args. Fence at run age 10-45 s. Read the reap, then restore `due_at` (the reaper
-  overwrites an earlier restore). File nothing until `RUN kill … why=fence` (50 s, limit about 62 s): a missing heartbeat
-  entry does not prove the child dead. File one clean dry run, then lift the pause only if `due_at` reads right. Expect
+  live run. File a dry run and check its args. Fence at run age 10-45 s. Read the reap: `due_at` reads unchanged, or later
+  if the row was already due (a pure request's loss keeps it since #2317; before it, the reaper moved it and the drill
+  restored it). File nothing until `RUN kill … why=fence` (50 s, limit about 62 s): a missing heartbeat entry does not
+  prove the child dead. File one clean dry run, then lift the pause only if `due_at` reads right. Expect
   `LEASE lost`, never `LEASE race lost`. The gate's overlap query cannot see a second holder here, because the reaper sets
   `ended_at` before the child dies: compare started_at with the kill line.

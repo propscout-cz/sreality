@@ -538,8 +538,6 @@ def test_every_count_cell_reads_the_count_that_colours_it() -> None:
     assert "withheld" not in town["facts"], "measured once, in its own cell"
     assert cells["ceskereality/outside"]["facts"]["disputed"] == {
         "pin_outside_obec": 157, "pin_off_street": 141, "country_conflict": 6, "pin_outside_cz": 4}
-    assert cells["served/outside"]["facts"]["by_portal"] == {"bazos": 10_545, "ceskereality": 113}
-    assert cells["served/town_withheld"]["facts"]["by_portal"] == {"ceskereality": 20}
     assert cells["sreality/ku"]["message"] == (
         f"1 Czech ads at address grain have no cadastral area (KÚ) at {RESOLVER_VERSION}: the "
         "registry's KÚ geometry is missing at its version")
@@ -603,7 +601,6 @@ def test_served_street_is_the_fleet_share_against_its_own_floor() -> None:
     stock = _stock(*[_portal(p, cohort="served", ads=10_000, street_share=0.40) for p in _LIVE])
     cell = _cells(_location(stock)[0])["served/street"]
     assert (cell["status"], cell["value"], cell["facts"]["floor"]) == ("fail", 40.0, 0.44)
-    assert cell["facts"]["by_portal"]["bazos"] == 0.4
 
 
 @pytest.mark.parametrize("previous, status", [
@@ -858,7 +855,7 @@ def test_the_gauges_are_registered_as_worker_gauges_with_their_metadata() -> Non
     assert rows["location_town_coverage"] == (qc.check_location_town_coverage, "gauge",
                                               "realtime-worker", 21_600, "cells")
     assert rows["text_extraction"] == (qc.check_text_extraction, "gauge", "realtime-worker",
-                                       3_600, "cells")
+                                       21_600, "cells")
 
 
 def test_the_module_never_imports_the_harness_the_worker_or_the_ladder() -> None:

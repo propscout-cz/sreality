@@ -6,9 +6,8 @@ Three concerns:
      The per-run gone/alive caches prevent repeat freshness calls.
   2. `_suspicious_stop` only fires when the window is full AND the
      transient ratio exceeds the threshold.
-  3. `pending_image_downloads` SQL respects the new
-     `unavailable_reason IS NULL` exclusion and the active_only
-     ordering knob.
+  3. `pending_image_downloads` SQL claims only unstored rows with no
+     terminal `unavailable_reason` under the attempt limit, active ads first.
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ import pytest
 import requests
 
 from scraper import db as scraper_db
+from scraper import listing_write
 from scraper import main as scraper_main
 
 
@@ -188,6 +188,32 @@ def test_classify_404_alive_is_source_unavailable(monkeypatch):
     assert alive == {42}
 
 
+def test_classify_404_a_freshness_check_the_stop_cut_is_no_verdict(monkeypatch):
+    """#2438: the realtime worker's SIGTERM sets `scraper.stop`, so the images lane's freshness check of a 404 is cut
+    before its request. That says nothing about the listing: no check row, no alive verdict cached for the run, no
+    parked image; the row is tried again by the next pass."""
+    from scraper import freshness, stop
+    from scraper.sreality_client import SrealityClient
+
+    stop.arm()
+    stop.EVENT.set()
+    logged: list[Any] = []
+    monkeypatch.setattr(freshness.listing_write, "latest_snapshot", lambda *_a: None)
+    monkeypatch.setattr(freshness, "_insert_log", lambda *a, **kw: logged.append(a))
+    client = SrealityClient(category_main=1, category_type=2)
+    monkeypatch.setattr(client._session, "get", lambda *_a, **_kw: pytest.fail("a stopped check makes no request"))
+    gone: set[int] = set()
+    alive: set[int] = set()
+
+    kind = scraper_main._classify_image_failure(
+        conn=None, client=client, sreality_id=42,
+        error=_http_error(404),
+        gone_listings=gone, alive_listings=alive,
+    )
+    assert kind == "transient"
+    assert gone == alive == set() and logged == []
+
+
 def test_classify_404_alive_cached_is_source_unavailable(monkeypatch):
     """A listing already cached alive: a 404 image is source_unavailable
     (dead URL), but a non-404 error stays transient."""
@@ -334,14 +360,25 @@ def _pending_row(image_id: int) -> tuple[Any, ...]:
     return (image_id, image_id * 10, 0, f"https://cdn/{image_id}.jpg", "byty", "prodej", None)
 
 
-def test_pending_image_downloads_excludes_unavailable_and_given_up():
+def test_pending_image_downloads_excludes_stored_terminal_and_given_up_rows():
+    # A given-up download is the terminal 'download_given_up' (mark_image_attempt); the
+    # attempt limit stays for rows given up before migration 742 labelled them, so the
+    # code and 742 land in either order without a given-up photo being fetched again.
     conn = _ScriptedConn()
     scraper_db.pending_image_downloads(conn, limit=500)
     sql, params = conn.cursor_obj.executed[0]
     assert "storage_path IS NULL" in sql
     assert "unavailable_reason IS NULL" in sql
     assert "download_attempts < %s" in sql
-    assert params == (5, 500)
+    assert params == (scraper_db.IMAGE_GIVE_UP_ATTEMPTS, 500)
+
+
+def test_a_detail_refetch_rearms_an_unstored_photo_whatever_its_terminal_reason():
+    # 'download_given_up' is terminal only until the ad is refetched: the payload write
+    # (and db.record_images, its heal twin) zeroes the attempts and clears the reason.
+    sql = " ".join(listing_write._IMAGES_SQL.split())
+    assert ("download_attempts = 0, last_error = NULL, unavailable_reason = NULL "
+            "WHERE images.storage_path IS NULL") in sql
 
 
 def test_pending_image_downloads_reads_active_newest_first_without_a_sort_key():

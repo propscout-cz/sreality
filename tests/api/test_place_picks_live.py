@@ -1,0 +1,229 @@
+"""Place picks (spec #2441 Part 1, ruling Q10), EXECUTED against the replayed schema (CI's migrations lane,
+`TEST_DATABASE_URL`; locally `scripts/local_pg.sh test`): `/maps/resolve` with a pick over a mini mirror seeded in
+the transaction, the background connection pointed at the test one, every record read back through the reader. Every
+test rolls back."""
+
+from __future__ import annotations
+
+import contextlib
+import uuid
+from collections.abc import Iterator
+from typing import Any
+
+import psycopg
+import pytest
+
+pytest.importorskip("fastapi")
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from api import dependencies as deps  # noqa: E402
+from api import main as api_main  # noqa: E402
+from location_data import place_picks  # noqa: E402
+from location_data.name_index import normalize_name  # noqa: E402
+from tests._live_property import REQUIRED_DB, _mirror_unit, db_url  # noqa: E402
+from tests.api._jwt import mint  # noqa: E402
+
+pytestmark = REQUIRED_DB
+
+BRNO, PRAHA, PRAHA_6, VOKOVICE = 582786, 554782, 500178, 490067
+BRNO_BOX = (16.50, 49.10, 16.70, 49.30)
+PRAHA_BOX = (14.20, 49.90, 14.70, 50.20)
+TOWN_BRNO = {"lat": 49.2, "lng": 16.6, "type": "regional.municipality", "name": "Brno"}
+TOWN_PRAHA = {"lat": 50.1, "lng": 14.4, "type": "regional.municipality", "name": "Praha"}
+MOMC_PRAHA_6 = {"lat": 50.1, "lng": 14.4, "type": "regional.municipality", "name": "Praha 6"}
+PART_BARRANDOV = {"lat": 50.03, "lng": 14.4, "type": "regional.municipality_part", "name": "Barrandov"}
+
+
+@pytest.fixture()
+def conn() -> Iterator[psycopg.Connection]:
+    connection = psycopg.connect(db_url(), autocommit=True, options="-c statement_timeout=20000")
+    with connection, connection.transaction(force_rollback=True):
+        _mirror(connection)
+        yield connection
+
+
+def _unit(conn: psycopg.Connection, level: str, code: int, name: str, parent: int, version: int) -> int:
+    """A unit RÚIAN draws no polygon for (a městská část, a část obce), named in the index inside its obec."""
+    unit = conn.execute(
+        "INSERT INTO ruian_admin_units (level, code, name, name_norm, parent_id, path, valid_from, first_version_id,"
+        " last_version_id) VALUES (%s::ruian_level, %s, %s, %s, %s, %s::ltree, '2020-01-01', %s, %s) RETURNING id",
+        (level, code, name, normalize_name(name), parent, f"x{code}", version, version)).fetchone()[0]
+    conn.execute(
+        "INSERT INTO ruian_name_index (entity_kind, entity_id, registry_version_id, name, name_norm, name_kind,"
+        " parent_obec_unit_id) VALUES (%s::ruian_level, %s, %s, %s, %s, 'official', %s)",
+        (level, unit, version, name, normalize_name(name), parent))
+    return int(unit)
+
+
+def _mirror(conn: psycopg.Connection) -> None:
+    """Brno in its okres and kraj; Praha in its kraj, with the městská část Praha 6 standing in Vokovice by one door."""
+    conn.execute("UPDATE registry_versions SET is_current = false WHERE is_current")
+    version = conn.execute(
+        "INSERT INTO registry_versions (label, kind, source_date, artifact_urls, proj_version, proj_pipeline,"
+        " is_current) VALUES ('test:place-picks', 'baseline', '2026-11-01', '{}', 'p', 'q', true) RETURNING id",
+        ).fetchone()[0]
+    with conn.cursor() as cur:
+        kraj = _mirror_unit(cur, "kraj", 116, "Jihomoravský kraj", BRNO_BOX, version=version)
+        okres = _mirror_unit(cur, "okres", 3702, "Brno-město", BRNO_BOX, parent=kraj, version=version)
+        _mirror_unit(cur, "obec", BRNO, "Brno", BRNO_BOX, parent=okres, version=version)
+        kraj = _mirror_unit(cur, "kraj", 19, "Hlavní město Praha", PRAHA_BOX, version=version)
+        praha = _mirror_unit(cur, "obec", PRAHA, "Praha", PRAHA_BOX, parent=kraj, version=version)
+    momc = _unit(conn, "momc", PRAHA_6, "Praha 6", praha, version)
+    part = _unit(conn, "cast_obce", VOKOVICE, "Vokovice", praha, version)
+    conn.execute(
+        "INSERT INTO ruian_address_points (kod_adm, obec_unit_id, obec_kod, cast_obce_unit_id, cast_obce_kod,"
+        " momc_unit_id, typ_so, cislo_domovni, psc, geom, plati_od, first_version_id, last_version_id)"
+        " VALUES (21000001, %s, %s, %s, %s, %s, 'č.p.', 487, '16000', ST_SetSRID(ST_MakePoint(14.348, 50.101), 4326),"
+        " '2020-01-01', %s, %s)", (praha, PRAHA, part, VOKOVICE, momc, version, version))
+
+
+@pytest.fixture()
+def client(conn: psycopg.Connection, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """The real route on the test connection, its background write on that connection too, a verified caller."""
+    @contextlib.contextmanager
+    def background() -> Iterator[psycopg.Connection]:
+        yield conn
+
+    monkeypatch.delenv("API_AUTH_OPTIONAL", raising=False)
+    monkeypatch.setattr(deps, "open_background_conn", background)
+    api_main.app.dependency_overrides[deps.get_db_conn] = lambda: conn
+    try:
+        yield TestClient(api_main.app, headers={"Authorization": f"Bearer {mint({'sub': str(uuid.uuid4())})}"})
+    finally:
+        api_main.app.dependency_overrides.pop(deps.get_db_conn, None)
+
+
+def _picks(conn: psycopg.Connection) -> list[place_picks.StoredPick]:
+    start, end = conn.execute("SELECT now() - interval '1 minute', now() + interval '1 minute'").fetchone()
+    return place_picks.picks_between(conn, start, end)
+
+
+def _stored(conn: psycopg.Connection) -> list[tuple[str | None, int, str, int | None]]:
+    return [(p.text, p.rank, p.level, p.code) for p in _picks(conn)]
+
+
+def _resolve(client: TestClient, body: dict[str, Any], text: str, rank: int) -> dict[str, Any]:
+    res = client.post("/maps/resolve", json={**body, "pick": {"text": text, "rank": rank}})
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def test_a_town_pick_is_recorded_with_its_text_rank_level_and_code(conn: psycopg.Connection,
+                                                                   client: TestClient) -> None:
+    answer = _resolve(client, TOWN_BRNO, "Brno", 2)
+    assert answer == {"level": "obec", "id": BRNO, "name": "Brno", "context": None}
+    (pick,) = _picks(conn)
+    assert (pick.text, pick.rank, pick.level, pick.code) == ("Brno", 2, "obec", BRNO)
+
+
+def test_a_mestska_cast_is_recorded_as_itself_while_the_answer_stays_its_parts(conn: psycopg.Connection,
+                                                                             client: TestClient) -> None:
+    answer = _resolve(client, MOMC_PRAHA_6, "Praha 6", 1)
+    assert answer == {"level": "cast_obce", "id": None, "name": "Praha 6", "context": "Praha",
+                      "parts": [{"id": VOKOVICE, "name": "Vokovice"}]}
+    assert _stored(conn) == [(None, 1, "momc", PRAHA_6)]
+
+
+def test_a_full_width_digit_keeps_no_text(conn: psycopg.Connection, client: TestClient) -> None:
+    _resolve(client, TOWN_PRAHA, "Praha ２", 1)
+    assert _stored(conn) == [(None, 1, "obec", PRAHA)]
+
+
+def test_a_refused_pick_keeps_its_text_and_typed_level_with_no_code(conn: psycopg.Connection,
+                                                                     client: TestClient) -> None:
+    answer = _resolve(client, PART_BARRANDOV, "Barrandov", 3)
+    assert answer == {"level": "cast_obce", "id": None, "name": None, "context": "Praha"}
+    assert _stored(conn) == [("Barrandov", 3, "cast_obce", None)]
+
+
+@pytest.mark.parametrize("body", [
+    {"lat": 49.8, "lng": 15.3, "type": "regional.country", "name": "Česko"},
+    {"lat": 49.2, "lng": 16.6, "type": "poi", "name": "Brno"},
+    # The address picker never sends a pick; one sent anyway records nothing, for its door or any other row.
+    {"lat": 50.101, "lng": 14.348, "type": "regional.address", "name": "Nad Bořislavkou 487", "address_point": True,
+     "regional_structure": [{"name": "487", "type": "regional.address"}]},
+    {**TOWN_BRNO, "address_point": True},
+], ids=["country", "unknown type", "address picker's door", "address picker's town"])
+def test_a_pick_with_no_place_to_record_stores_nothing(conn: psycopg.Connection, client: TestClient,
+                                                       body: dict[str, Any]) -> None:
+    _resolve(client, body, "Brno", 1)
+    assert _stored(conn) == []
+
+
+def test_a_resolve_without_a_current_registry_stores_nothing(conn: psycopg.Connection, client: TestClient) -> None:
+    conn.execute("UPDATE registry_versions SET is_current = false WHERE is_current")
+    assert _resolve(client, TOWN_BRNO, "Brno", 1) == {"level": "obec", "id": None, "name": None, "context": None}
+    assert _stored(conn) == []
+
+
+def test_a_failed_resolve_stores_nothing(conn: psycopg.Connection, client: TestClient,
+                                         monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*_: Any, **__: Any) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(api_main.maps, "resolve", boom)
+    failing = TestClient(api_main.app, headers=client.headers, raise_server_exceptions=False)
+    res = failing.post("/maps/resolve", json={**TOWN_BRNO, "pick": {"text": "Brno", "rank": 1}})
+    assert res.status_code == 500
+    assert _stored(conn) == []
+
+
+def test_an_unverified_caller_stores_nothing(conn: psycopg.Connection, client: TestClient,
+                                             monkeypatch: pytest.MonkeyPatch) -> None:
+    """The local-dev opt-out answers with no claims, so an agent's or a local server's picks never reach the holdout."""
+    monkeypatch.setenv("API_AUTH_OPTIONAL", "1")
+    res = TestClient(api_main.app).post("/maps/resolve", json={**TOWN_BRNO, "pick": {"text": "Brno", "rank": 1}})
+    assert res.status_code == 200
+    assert _stored(conn) == []
+
+
+@pytest.mark.parametrize("pick", [
+    {"text": "Brno", "rank": 2, "row": "Brno"},
+    {"text": "Brno", "rank": 11},
+    {"text": "B" * 201, "rank": 2},
+], ids=["unknown field", "rank 11", "201 characters"])
+def test_a_malformed_pick_is_a_422_and_stores_nothing(conn: psycopg.Connection, client: TestClient,
+                                                      pick: dict[str, Any]) -> None:
+    assert client.post("/maps/resolve", json={**TOWN_BRNO, "pick": pick}).status_code == 422
+    assert _stored(conn) == []
+
+
+@pytest.mark.parametrize("role", ["anon", "authenticated"])
+def test_no_browser_role_reaches_the_table(conn: psycopg.Connection, role: str) -> None:
+    assert conn.execute("SELECT has_table_privilege(%s, 'public.place_picks', 'SELECT, INSERT, UPDATE, DELETE')",
+                        (role,)).fetchone() == (False,)
+
+
+def test_rls_is_on(conn: psycopg.Connection) -> None:
+    assert conn.execute("SELECT relrowsecurity FROM pg_class WHERE oid = 'public.place_picks'::regclass"
+                        ).fetchone() == (True,)
+
+
+@pytest.mark.parametrize("text", ["Praha 2", "Praha ２"], ids=["ascii digit", "full-width digit"])
+def test_the_table_refuses_a_text_with_a_digit(conn: psycopg.Connection, text: str) -> None:
+    """The CHECK pins the ICU collation, so the full-width digit is refused on a libc-default image too."""
+    with pytest.raises(psycopg.errors.CheckViolation), conn.transaction():
+        conn.execute("INSERT INTO place_picks (text, rank, level, code) VALUES (%s, 1, 'momc', %s)", (text, PRAHA_6))
+
+
+def test_a_failing_write_logs_its_sqlstate_and_no_text_and_the_answer_still_comes(
+    conn: psycopg.Connection, client: TestClient, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The refusal's own message quotes the failing row, so only the SQLSTATE is logged."""
+    conn.execute("ALTER TABLE place_picks ADD CONSTRAINT place_picks_refuse_all CHECK (false) NOT VALID")
+    with caplog.at_level("INFO"):
+        answer = _resolve(client, TOWN_BRNO, "Brno", 2)
+    assert answer == {"level": "obec", "id": BRNO, "name": "Brno", "context": None}
+    lines = [r.getMessage() for r in caplog.records if r.name == "location_data.place_picks"]
+    assert lines == ["place_picks: write failed (SQLSTATE 23514)"]
+    assert not any("Brno" in r.getMessage() or r.exc_info for r in caplog.records if r.name.startswith("location"))
+    assert _stored(conn) == []
+
+
+def test_an_automation_account_stores_nothing(conn: psycopg.Connection, client: TestClient) -> None:
+    token = mint({"sub": str(uuid.uuid4()), "app_metadata": {"automation": True}})
+    res = client.post("/maps/resolve", json={**TOWN_BRNO, "pick": {"text": "Brno", "rank": 1}},
+                      headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200
+    assert _stored(conn) == []

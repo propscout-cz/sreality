@@ -292,6 +292,9 @@ NOT_CARRIED: dict[tuple[str, str], str] = {
         "write it (W3)",
     ("dirty_properties", "property_id"):
         "a work queue: a retired id left queued recomputes to nothing",
+    ("watchdog_slice_members", "property_id"):
+        "producer state the slice's next pass rebuilds (migration 735): a retired member leaves, and its survivor "
+        "takes its place silently (api/notifications._SLICE_PASS_SQL)",
     ("tag_candidates", "property_id"): "a draw-time snapshot (migration 450)",
     ("backup_464_tag_candidates", "property_id"):
         "migration 464's frozen copy of tag_candidates: a backup, never read",

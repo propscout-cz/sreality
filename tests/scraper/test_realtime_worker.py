@@ -28,6 +28,16 @@ from psycopg.types.json import Jsonb
 from scraper import job_lease, portal_factory
 from scraper import realtime_worker as rw
 from scraper.portal import default_config
+from scraper.stop import StopRequested
+
+
+@pytest.fixture(autouse=True)
+def _browser_is_available(monkeypatch):
+    """ceskereality is fetched through a headless browser, and the worker skips its lanes
+    when playwright is absent (`_skip_for_browser`). Playwright is an optional extra, so it
+    is absent here and in CI — these tests are about lane SELECTION, so they state the
+    image's side of that assumption explicitly instead of inheriting the dev box's."""
+    monkeypatch.setattr("scraper.browser_fetch.playwright_available", lambda: True)
 
 
 def _probe_agg(**over: Any) -> dict[str, Any]:
@@ -897,7 +907,7 @@ def test_the_health_lane_ticks_on_a_constant_and_sits_before_autodedup() -> None
     assert (rw.HEALTH_TICK_SECONDS, rw.HEALTH_PASS_BUDGET_SECONDS) == (60.0, 500.0)
     from scripts import verify_pipeline
 
-    # Wave 6: the worker budgets (1,030 s) outgrow one pass inside the watcher's 600 s in-flight line,
+    # Wave 6: the worker budgets (1,165 s since #2512) outgrow one pass inside the watcher's 600 s in-flight line,
     # so the pass is capped and run_due defers what no longer fits. Since curation sync (migration
     # 696, docs/design/curation-sync.md § 3.9) the alarms due at once owe WORKER_ALARMS_DUE_AT_ONCE_S,
     # past the pass: all but the last fit at their whole budgets, and the last (parsing) defers one
@@ -1022,7 +1032,7 @@ def producers(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "match_changes_once": {"subscriptions_evaluated": 2, "subscriptions_invalid": 0,
                                "subscriptions_failed": 0, "changes_inserted": 0,
                                "collection_changes_inserted": 0},
-        "match_monitored_collections_once": {"monitored_collections": 2, "events_inserted": 1},
+        "match_lifecycle_once": {"monitored_collections": 2, "events_inserted": 1},
     }}
 
     def fake(name: str) -> Any:
@@ -1064,7 +1074,7 @@ def test_the_lanes_steps_bind_to_the_real_producers() -> None:
     binding them keeps a rename from leaving the lane calling nothing."""
     from api import notifications
 
-    assert list(rw.NOTIFICATIONS_STEPS) == ["watchdog_new", "price", "monitor"]
+    assert list(rw.NOTIFICATIONS_STEPS) == ["watchdog_new", "price", "lifecycle"]
     for name in rw.NOTIFICATIONS_STEPS.values():
         inspect.signature(getattr(notifications, name)).bind(None)
 
@@ -1083,7 +1093,7 @@ def test_a_notifications_pass_runs_each_step_on_its_own_connection(
     lane = state["lanes"]["notifications"]
     assert (lane["passes"], lane["started_at"], lane["failing_since"]) == (1, None, None)
     assert lane["portal_errors"] == {}
-    assert set(lane["last"]) == {"watchdog_new", "price", "monitor"}
+    assert set(lane["last"]) == {"watchdog_new", "price", "lifecycle"}
     assert lane["last"]["watchdog_new"]["matches_inserted"] == 2
     Jsonb(rw._lane_snapshot(state["lanes"]))
 
@@ -1107,7 +1117,7 @@ def test_a_failing_step_is_its_own_cell_and_the_other_steps_still_write(
     assert set(errors) == {"watchdog_new", "price"}
     assert errors["price"]["last_error"] == "RuntimeError: statement timeout"
     assert errors["watchdog_new"]["last_error"] == "1 of 2 watchdogs failed"
-    assert set(lane["last"]) == {"watchdog_new", "monitor"}
+    assert set(lane["last"]) == {"watchdog_new", "lifecycle"}
 
     now = datetime.fromisoformat(errors["price"]["failing_since"])
     cells = platform._portal_cells("notifications", lane, {}, 900.0, now)
@@ -2178,14 +2188,16 @@ def _patch_refetch(
     return captured
 
 
-def test_location_refetch_lane_ticks_hourly_on_a_constant(
+def test_location_refetch_lane_ticks_every_six_hours_on_a_constant(
         monkeypatch: pytest.MonkeyPatch) -> None:
     # W2: one constant tick, no flag, no interval knob, no first delay — the predicate (a page
-    # at least MIN_AGE old) bounds the traffic, and an hourly tick is what lets liveness judge
-    # the lane (Watch after 3 h, not 3 days).
+    # at least MIN_AGE old) bounds the traffic. #2506: the tick is that predicate's own 6 h, a
+    # code constant (no Railway variable), so liveness reads the lane late after 18 h. The
+    # equality is pinned because the worker and realtime-scrapers.md derive the ~12 h re-read of a
+    # still-townless ad from it: change one value and that statement must change too.
     src = inspect.getsource(rw._amain)
     assert '("location_refetch"' in src
-    assert rw.LOCATION_REFETCH_TICK_SECONDS == 3600.0
+    assert rw.LOCATION_REFETCH_TICK_SECONDS == 21600.0 == float(rw.LOCATION_REFETCH_MIN_AGE_DEFAULT)
     assert "LOCATION_REFETCH_TICK_SECONDS" in src
     for gone in ("LOCATION_REFETCH_ENABLED_ENV", "LOCATION_REFETCH_INTERVAL_ENV",
                  "LOCATION_REFETCH_INTERVAL_DEFAULT", "LOCATION_REFETCH_FIRST_DELAY_SECONDS",
@@ -2397,6 +2409,23 @@ def test_a_ledger_refusal_ends_the_sold_comps_tick_at_once(
 
     assert captured["fetched"] == [1, 2]
     assert (out["cells"], out["records"], out["failed"], out["budget_refused"]) == (1, 5, 0, 1)
+    assert captured["conn_obj"].closed is True
+
+
+def test_a_deploy_stop_ends_the_sold_comps_tick_at_the_cell_in_hand(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    # #2438: the worker's SIGTERM sets `scraper.stop`, and every later cell's first request would raise it again:
+    # a `failed` ledger row apiece for cells nothing was wrong with. The cell in hand wrote nothing; it is walked again.
+    captured = _patch_sold_comps(monkeypatch, [1, 2, 3], results=[
+        {"obec_kod": 1, "status": "ok", "records": 5, "new": 5, "pages": 1,
+         "source_total": 625, "dropped": 0, "error": None},
+        StopRequested("a stop signal arrived"),
+    ])
+
+    out = rw._sold_comps_sync()
+
+    assert captured["fetched"] == [1, 2]
+    assert (out["cells"], out["records"], out["failed"], out["budget_refused"]) == (1, 5, 0, 0)
     assert captured["conn_obj"].closed is True
 
 
@@ -3151,3 +3180,36 @@ def test_the_autodedup_pass_hands_the_lane_a_fresh_connection_factory(monkeypatc
     assert seen["fresh"] is not seen["conn"]
     assert len(opened) == 2 and opened[1] == {
         "attempts": 1, "connect_timeout": rw.AUTODEDUP_RESCUE_CONNECT_TIMEOUT_SECONDS}
+
+
+def test_a_browser_fetched_portal_is_skipped_while_playwright_is_absent(monkeypatch):
+    """The code and the image's `browser` extra deploy separately. In that window every
+    ceskereality claim could only raise, and each raise burns one of a queue row's five
+    attempts — 50k rows written off within hours. So the lane is skipped instead, exactly
+    as an unset proxy skips a PROXY_REQUIRED portal."""
+    monkeypatch.setenv("SCRAPER_PROXY_URL", "http://proxy.example:1080")
+    monkeypatch.setattr("scraper.browser_fetch.playwright_available", lambda: False)
+    rw._BROWSER_WARNED.discard("ceskereality")
+    assert rw._skip_for_browser("ceskereality") is True
+    # Every other portal is untouched: they do not set USE_BROWSER.
+    for source in ("sreality", "idnes", "bazos", "mmreality"):
+        assert rw._skip_for_browser(source) is False
+
+
+def test_the_browser_portal_runs_once_playwright_is_there(monkeypatch):
+    monkeypatch.setattr("scraper.browser_fetch.playwright_available", lambda: True)
+    assert rw._skip_for_browser("ceskereality") is False
+
+
+def test_the_drain_skips_the_browser_portal_when_playwright_is_absent(monkeypatch):
+    """The guard reaches the real lane, not just the predicate."""
+    monkeypatch.setenv("SCRAPER_PROXY_URL", "http://proxy.example:1080")
+    monkeypatch.setattr("scraper.browser_fetch.playwright_available", lambda: False)
+    monkeypatch.setattr(rw, "_read_drain_slice", lambda: 200)
+    monkeypatch.setattr(rw, "_read_drain_disabled_sources", lambda: set())
+    monkeypatch.setattr(rw, "_claimable_by_source", lambda: {"ceskereality": 7, "idnes": 5})
+    ran: list[tuple[str, int]] = []
+    monkeypatch.setattr(rw, "_run_drain_sync",
+                        lambda source, max_claims: (ran.append((source, max_claims)), _drain_agg())[1])
+    asyncio.run(rw._drain_pass(asyncio.Event(), rw._new_state()))
+    assert ran == [("idnes", 5)], "ceskereality must not burn attempts without a browser"

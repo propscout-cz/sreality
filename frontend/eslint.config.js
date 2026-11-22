@@ -229,4 +229,59 @@ export default [
     ],
     rules: { 'no-restricted-syntax': 'off' },
   },
+  {
+    // MapLibre must stay off the first visit (scripts/bundle-budget.mjs): a
+    // static import of maplibre-gl, lib/basemap or lib/usePointMap pulls it into the importer's
+    // chunk. Only the map modules (exempted below) import them; everything
+    // else reaches a map through lazyChunk(() => import(...)), which this rule
+    // does not see. Type imports are erased at build and stay legal. ONE
+    // block, as above: a later block re-declaring the rule would replace these
+    // patterns.
+    files: ['src/**/*.{ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              regex: '^maplibre-gl(/.*)?$',
+              allowTypeImports: true,
+              message:
+                'Reach the map through lazyChunk(() => import(...)); only map modules import maplibre-gl or lib/basemap.',
+            },
+            {
+              regex: '(^|/)basemap$',
+              allowTypeImports: true,
+              message:
+                'Reach the map through lazyChunk(() => import(...)); only map modules import maplibre-gl or lib/basemap.',
+            },
+            {
+              regex: '(^|/)usePointMap$',
+              allowTypeImports: true,
+              message:
+                'Reach the map through lazyChunk(() => import(...)); only map modules import lib/usePointMap (it imports maplibre-gl).',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // The map modules, each behind a lazyChunk boundary (DatasetMap inside the
+    // lazily loaded Datasets page). It cannot see a non-map module importing
+    // one of these statically; review and the bundle budget catch that.
+    files: [
+      'src/lib/basemap.ts',
+      'src/lib/basemap.test.ts',
+      'src/lib/usePointMap.ts',
+      'src/components/DatasetMap.tsx',
+      'src/components/ListingMap.tsx',
+      'src/components/estimation/ComparablesMap.tsx',
+      'src/components/listing-detail/DetailMap.tsx',
+      'src/components/listing-detail/PropertyMapDialog.tsx',
+      'src/components/filter-controls/MapAreaControl.tsx',
+      'src/components/phone/PhoneMap.tsx',
+    ],
+    rules: { 'no-restricted-imports': 'off' },
+  },
 ];

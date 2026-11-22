@@ -217,6 +217,19 @@ def require_account_id(
     return account_id
 
 
+def own_account_id_released(claims: dict, act_as: uuid.UUID | None, method: str) -> uuid.UUID:
+    """`require_account_id`'s answer for a handler that then WAITS ON AN OUTSIDE SERVICE: resolved in a
+    transaction of its own, closed before this returns, so no tenant transaction (and no pooled backend) is held
+    across the wait. Not a dependency: a route that reads or writes tenant rows takes `require_account_id`."""
+    if act_as is not None:
+        raise HTTPException(status_code=403, detail="this route does not act for another account")
+    with tenant_transaction(claims, act_as=None, method=method) as conn:
+        account_id = resolve_account_id(conn, claims)
+    if account_id is None:
+        raise HTTPException(status_code=400, detail="no account for caller")
+    return account_id
+
+
 _ACTING_ACCOUNT_SQL = "SELECT DISTINCT a.account_id FROM acting_account_ids() a"
 
 

@@ -120,8 +120,8 @@ Heal via `reparse.yml` (`--source <portal> --fields area_m2,estate_area,usable_a
 The sreality pipeline is **split by cadence (Phase 2)**: `index_walk.yml` ("Scraping: Sreality
 index walk", cron `*/15`) feeds the worker's drain lane — since W0 (#2010) the ONLY drain of the
 walk-only portals (sreality, bazos, idnes, ceskereality, realitymix, web), and since W1 (#2021) of
-the four combined scrapers too (bezrealitky, maxima, mmreality, remax: their workflows pass `--index-only`). The combined `scrape.yml` fallback (`scraper.main`'s `_run_full`) was deleted in C2-2
-(2026-10); an ad-hoc combined run of any portal is `python -m scraper.<portal>_main` with neither
+the four combined scrapers too (bezrealitky, maxima, mmreality, remax: their workflows pass `--index-only`). The combined `scrape.yml` fallback was deleted in C2-2
+(2026-10); an ad-hoc combined run is `python -m scraper.<portal>_main` with neither
 phase flag (walk, then drain), locally. The bazos crawl is **cadence-split**
 like sreality (bazos walks 22 nationwide scopes (migration 488), ~1500 index pages — a combined run starves the
 drain): `bazos_index_walk.yml` ("Scraping: Bazos index walk", cron `0 */6`, full walk +
@@ -132,13 +132,14 @@ in front of it.
 The bezrealitky scrape is
 `scrape_bezrealitky.yml` ("Scraping: Bezrealitky scraper (pilot)", every 6h + dispatch). The maxima scrape is
 `scrape_maxima.yml` ("Scraping: Maxima Reality scraper (pilot)", every 6h + dispatch). These four combined
-scrapers (bezrealitky, maxima, mmreality, remax) only WALK since Actions exit W1 (#2021): each workflow passes
+scrapers (bezrealitky, maxima, mmreality, remax) only WALK since Actions exit W1 (#2021): each passes
 `--index-only` and the worker's drain lane drains them, as it already did nearly every row. The mmreality scrape is
 `scrape_mmreality.yml` ("Scraping: M&M Reality scraper (pilot)", cron `50 */6` + dispatch —
 every request via the residential `SCRAPER_PROXY_URL` (CF 403s datacenter IPs; `USE_PROXY` +
 `PROXY_REQUIRED=True` so the worker skips it when unset — idnes is proxied too but sets
-`PROXY_REQUIRED=False`, being throttled rather than blocked; ceskereality is the one portal with
-`CLIENT_HINTS=True`, sending sec-ch-ua hints derived from the UA);
+`PROXY_REQUIRED=False`, throttled not blocked; ceskereality sets `CLIENT_HINTS=True`, is **the
+one fetched by a HEADLESS BROWSER** (JS wall: `browser` extra + chromium, #2529; exit IP retires
+/250 pages + 2×403));
 bounded by `--max-pages`/`--max-seconds`). The remax scrape is `scrape_remax.yml` ("Scraping: RE/MAX
 scraper (pilot)", every 6h + dispatch; a `--max-seconds` walk budget). The idnes scrape is
 **cadence-split** like sreality (iDNES is large — 4,235 index pages, ~110k listings):
@@ -148,7 +149,7 @@ scraper (pilot)", every 6h + dispatch; a `--max-seconds` walk budget). The idnes
 **Parked flags, the walk cycle and the retired gate: `references/coverage-and-delisting.md`.**
 The properties track runs the worker's maintenance lane (**dirty-set incremental, every 30 s** — attaches new stragglers as
 singletons + recomputes only changed properties; rule #20) and
-`recompute_property_stats.yml` (the **daily full-sweep reconcile** at 04:15 — recomputes every
+the runner's `property_sweep` (the **daily full-sweep reconcile** at 03:00 — recomputes every
 property + clears the dirty queue under a `--max-seconds` budget; a budget stop clears only the range it
 swept and saves `app_settings.property_sweep_cursor`, where the next run resumes the cycle (if <36h old);
 a resumed run that stops again exits RED; only a whole cycle stamps the `property_sweep` artifact, judged by `jobs`). The visual-signal producers run alongside:
@@ -177,7 +178,7 @@ these producers' OWN predicates, so they recompute on their own; it deletes no l
 **No drain geocodes, and no place columns.** W4-c dropped every location column from `listings`
 and `properties`, so a parser's coordinate/locality/street reading is evidence for the resolver,
 not a write; a listing's place is `listing_location` (join on `listing_id`).
-`scraper/geocoding.py` survives for `/maps/*` and the curated-city seed only.
+The Mapy geocoder is deleted (#2454); nothing in `scraper/` calls Mapy.
 
 One monitoring workflow watches the rest: the canary, `verify_pipeline.yml` ("Monitoring: health canary (hourly)"; GitHub
 delivers ~5 runs a day). Step 1, the poller `scripts/record_workflow_failures.py`, records PRODUCTION runs only (event
@@ -232,14 +233,14 @@ from the slow "download each ad" write:
   no per-listing loop.
 - **The detail drain (the worker's drain lane; by hand `--drain-only`).** Claims a bounded slice of the queue
   (`realtime_drain_slice` per source a pass; by hand `--max-detail`), fetches details on a rate-limited pool, and writes
-  each ~100-item flush through **`listing_write.write_listings`** on all nine portals (set-based, ONE transaction:
+  each ~100-item flush through **`listing_write.write_listings`** on every portal (set-based, ONE transaction:
   upsert, images/videos, failure clear, snapshot-on-change, dirty marks). sreality uses the **session pooler**
   (`connect_session()`, prepared statements), the crawlers `connect()`. New listings land `property_id` NULL and become
-  **singletons** via `recompute_property_stats`'s bounded straggler-attach (the write carries no matching at all;
-  grouping is out-of-band and operator-ordered, rule #15). A gone fetch records its verdict + dequeues it (flips only
+  **singletons** via `recompute_property_stats`'s straggler-attach (no matching in the write, rule #15). A gone fetch records its verdict + dequeues it (flips only
   under rule #3's hysteresis); a transient error bumps the queue row's `attempts` (given up after 5) and stays queued. A hand run records `run_type='detail'`,
-  `index_pages=0`; the worker writes no `scrape_runs` row (its passes are in the heartbeat). The queue persists across runs, so a bounded run never loses work; a SIGKILLed
-  claim is recovered by the next run's `reclaim_stale_claims`.
+  `index_pages=0`; the worker writes no `scrape_runs` row (its passes are in the heartbeat). The queue persists across runs, so a bounded run never loses work; a stop (the
+  worker's SIGTERM too, #2438) hands back unfetched claims, flushes the rest; a SIGKILLed claim waits ~30 min for
+  `reclaim_stale_claims`.
 
 **Delisting is presence-verified (rule #3, 2026-09-07); the gate is STRUCTURAL (2026-09-08).** A
 walk that REACHED THE PORTAL'S END (`portal.walk_reached_end`: every unit walked, each page loop out
@@ -315,8 +316,8 @@ Per-lane notes:
 - The sreality count-probe lane and its `index_walk.yml` dispatch were deleted in W0 (#2015): the worker triggers no
   GitHub workflow. Its `sreality_count_probe_state` table (mig 270) stays until a backed-up drop.
 - **Property-maintenance lane**, every 30 s (PR #716) — `run_incremental_pass` against `dirty_properties`
-  (rule #20), the only incremental runtime since W0 (#2010); serialized with the daily sweep by the `property_maintenance` `job_lease` row: **never a session advisory lock on a pooled connection** — the first cut stranded. Each drain
-  slice = ONE `properties_changed` txn (recompute, broker book (mig 692: property × canonical broker, every broker number's one source), Browse patch), as merge/detach run inline; then `_settle_fresh` stamps `settled_at` (rule 16, mig 668) on properties under 6 h old the pipeline is done with — the stamp commits alone, then `sync_browse_list` patches their Browse rows, best-effort (`settled` in the log + heartbeat; its error warns, never fails the pass).
+  (rule #20), the only incremental runtime since W0 (#2010); serialized with the daily sweep by the `property_maintenance` `job_lease` row: **never a session advisory lock on a pooled connection** — the first cut stranded. `_enqueue_published` queues Browse's missing; each drain
+  slice = ONE `properties_changed` txn (recompute, broker book (mig 692: property × canonical broker, every broker number's one source), Browse patch), as merge/detach run inline; then `_settle_fresh` stamps `settled_at` (rule 16: publication; never while the engine has an in-scope ad unread) — committed alone, then `sync_browse_list` patches Browse, best-effort (`settled` in log + heartbeat; its error warns, never fails the pass).
 - **Broker-maintenance lane** (Broker Unify W3) — same cadence; `scripts.resolve_brokers.
   run_incremental_pass` (its only runtime since W0, #2010; the daily full sweep stays): drain until empty,
   recompute affected brokers' names, contacts, firm and memberships (one merged statement, no counts: every broker
@@ -352,7 +353,7 @@ Per-lane notes:
   Projects the portal contracts from the image once at lane start (warn, never fail); no `R2_*` =
   warn once, JSON only. Heartbeat `details.location_intake_fast.last` = `{listings,
   written, enqueued, bodies_mined, bodies_complete, seconds, cursor, bodies_cursor}`.
-- **Location-refetch lane** (W8) — hourly (a constant tick) queue the active ads rule 25 calls town-less
+- **Location-refetch lane** (W8) — 6-hourly (constant tick) queue the active ads rule 25 calls town-less
   (`location_steps.town_missing_sql()`, the town-coverage check's fragment, verbatim in `db.py`)
   whose newest stored page/payload is older than `LOCATION_REFETCH_MIN_AGE_S` (6 h) into
   `listing_detail_queue` at VERIFY, ≤`LOCATION_REFETCH_CAP_PER_SOURCE` (500)/portal/tick,
@@ -379,10 +380,11 @@ Per-lane notes:
   Needs `OPENAI_API_KEY`; a pass the provider stopped (`last.fatal`: credit, quota, key) is a FAILED pass (`failed_passes`, `failing_since`, `last_error`, same interval; `aborted` with no `fatal` = its own $/time ceiling, not a failure); rails = the `text_extraction` gauge (new ads' flow, the backlog's ETA), the `jobs` check's `lane/text_extract` cell and, for a provider stop, the `llm` credit cell. Sizing, cache key, write gate: `llm-pipelines`.
 - **Notifications lane** (notifications push W2a, `docs/design/notifications-push/PROGRAM.md` § 3.3) — the three producers of
   `api/notifications` on ONE clock: CONSTANT 300 s, no flag/setting/env var (the brake is a deploy). Steps `watchdog_new` (`match_once`:
-  a live watchdog's published matches first seen in the last 24 h and visible since after its `active_since` (create, switch-on,
-  filter edit; the publication rule, rule 16); no cursor), `price` (`match_changes_once`: one canonical-ad step fragment, 7 days, watchdogs + monitored collections) and
-  `monitor` (inactive after 24 h gone, reactivated, new_source), each on its own connection, committing per statement (one watchdog's
-  INSERT, one detector; `SET LOCAL statement_timeout` 120 s; the notification-events lock SHARED first, so a merge waits one statement
+  a watchdog telling New match diffs its slice, telling each entry's reason; a start
+  (create, switch-on, filter/kinds edit) takes it silently; rule 16), `price` (`match_changes_once`: canonical-ad steps, 7 days) and
+  `lifecycle` (inactive after 24 h gone, reactivated, new_source); one detector per kind (mig 735),
+  each on its own connection, committing per statement (one watchdog's
+  INSERT or slice pass, one detector; `SET LOCAL statement_timeout` 120 s; the notification-events lock SHARED first, so a merge waits one statement
   at most and never deadlocks, architecture § rule 16). Why steps: a step that raises or has a
   failed statement is its own `portal_errors` entry, `lane/notifications/<step>` red alone while the others write; a stored spec the
   matcher refuses is `last.*.subscriptions_invalid`, never red (the write routes 422 it), even when every watchdog is. Their one
@@ -434,7 +436,7 @@ missing), `publishing` (queue age, Browse visibility of new ads and of the stock
 **Quality checks (Health dashboard sprint wave 6, `scripts/checks/quality.py`, on the worker):** the `parsing` alarm (fill and vocabulary against the blessed baseline, new ads' per-m² measures, stock
 medians, location payload shape via `claims_common.PAYLOAD_SHAPE_PREDICATES`, re-snapshot churn) and the gauges `data_quality` (basis floor, area vs usable, no portal link), `location_town_coverage` (active ads only) and `text_extraction` (flow, backlog ETA), each gauge cell with a 30-day `trend` and `worse_7d`.
 **Watchers (migration 620):** pg_cron's `health_liveness()` (job `health-liveness`, every 5 min) writes one `liveness` row
-(host `pg_cron`) whose cells judge what must not judge itself: `worker/<name>` (each heartbeat over 10 min old), `job/<name>` + `job-runner` (each runner job and the fleet: `health_job_cells`, `references/job-runner.md`), `health_lane` (no completed pass, a pass in flight or failing for 10 min), `stale:<key>` (an alarm past its staleness budget) and `unalerted` (a
+(host `pg_cron`) whose cells judge what must not judge itself: `worker/<name>` (each heartbeat over 10 min old), `job/<name>` + `job-runner` (each runner job and the fleet: `health_job_cells`, `references/job-runner.md`), `health_lane` (no completed pass, a pass in flight or failing for 10 min), `stale:<key>` (a check past its staleness budget) and `unalerted` (a
 measured Problem with no incident; the matcher-lease `api` cell went in W2b, mig 655); the ladder tells them, and they replace `worker_liveness` and the 24 h dead-man job.
 The canary's last step, `scripts/health_canary.py`, exits 2 when the DB does not answer and 1 on any `CANARY FAIL`: the
 newest `liveness` row is 30 min old, a failing liveness cell has no incident after 15 min, or an open, unacknowledged alarm-class

@@ -14,6 +14,7 @@ import uuid
 from datetime import timedelta
 from typing import Any, AsyncIterator, Literal
 
+import psycopg
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -69,6 +70,8 @@ from api.routes.filter_presets import router as filter_presets_router
 from api.routes.stats_dashboards import router as stats_dashboards_router
 from api.routes.images import router as images_router
 from api.routes.property_download import router as property_download_router
+from api.routes.property_building import router as property_building_router
+from api.routes.property_building_sales import router as property_building_sales_router
 from api.routes.property_location import router as property_location_router
 from api.routes.property_price_history import router as property_price_history_router
 from api.routes.valuo import router as valuo_router
@@ -81,9 +84,11 @@ from api.routes.location_corrections import router as location_corrections_route
 from api.routes.new_dedup import router as new_dedup_router
 from api.routes.new_dedup_candidates import router as new_dedup_candidates_router
 from api.routes.notifications import router as notifications_router
+from api.routes.cuzk_login import router as cuzk_login_router
 from api.routes.push import router as push_router
 from api.routes.waitlist import admin_router as waitlist_admin_router
 from api.routes.waitlist import router as waitlist_router
+from location_data import place_picks, place_search
 from scraper import image_storage
 from scraper.db import sweep_stuck_scrape_runs
 from toolkit import (
@@ -201,6 +206,8 @@ if _cors_origins:
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Starlette's default, pinned: a typeahead POSTs to one fixed path, so a cached preflight is one per 10 minutes.
+        max_age=600,
     )
 
 
@@ -260,6 +267,10 @@ app.include_router(notifications_router)
 # open) — the key for any signed-in caller; the three writes are the caller's own account (never acted
 # for) on the service role, opened in the handler after that gate (api/routes/push.py).
 app.include_router(push_router)
+# /account/cuzk-login (an account's own ČÚZK WSDP login: its state, a checked save, a removal) — the
+# caller's own account (never acted for) on the service role, opened in the handler; no route returns
+# the password (api/routes/cuzk_login.py).
+app.include_router(cuzk_login_router)
 # /properties/merge|{id}/split|{id}/origins (merge MECHANICS: collapse an
 # operator-chosen set, split one property's adverts, where each came from)
 # — mutating operator actions, admin-gated (require_admin). Mounted before the
@@ -297,10 +308,14 @@ app.include_router(waitlist_admin_router)   # GET /admin/waitlist: the admin Sig
 # canonical ad's photos, zipped server-side (R2 sends no CORS header, so the SPA can't).
 # JWT-gated: it proxies bytes through us, and broker contacts follow the PII policy.
 app.include_router(property_download_router)
-# /properties/{id}/location + /static-map.png — the phone's Poloha: the canonical ad's point,
-# granularity and label, and Mapy's static map of it streamed through us on every view (Mapy's
-# terms forbid storing it; 4 credits a fetch, MAPY_STATIC_MAPS_ENABLED=0 turns it off). JWT-gated.
+# /properties/{id}/location — the phone's Poloha: the location ad's point, granularity, label and note. JWT-gated.
 app.include_router(property_location_router)
+# /properties/{id}/building — what the RÚIAN register states about the property's building, reached through
+# its location ad's address point; null when the door names none. JWT-gated, service role (open register data).
+app.include_router(property_building_router)
+# /properties/{id}/building/sales — the registered sales we hold in the property's building (its door's RÚIAN
+# building code = the sale's own). JWT-gated, service role (shared market data).
+app.include_router(property_building_sales_router)
 # /properties/{id}/price-history — the extension's price chart: every ad of the property and its
 # price snapshots, the SPA property page's two reads. JWT-gated, service role (market data).
 app.include_router(property_price_history_router)
@@ -400,10 +415,13 @@ def get_maps_sreality_price_map(
 @app.post("/maps/resolve")
 def post_maps_resolve(
     body: s.ResolveLocationIn,
+    background_tasks: BackgroundTasks,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    claims: dict | None = Depends(deps.token_claims),
 ) -> dict[str, Any]:
-    return maps.resolve(
+    """A pick's record (ruling Q10) is written after the answer, on its own connection, for a verified caller who is
+    not automation and not the address picker; the answer never waits for it or hears of its failure."""
+    answer, place = maps.resolve(
         conn,
         lat=body.lat,
         lng=body.lng,
@@ -412,6 +430,32 @@ def post_maps_resolve(
         regional_structure=[e.model_dump() for e in body.regional_structure],
         address_point=body.address_point,
     )
+    if (body.pick is not None and not body.address_point and place is not None
+            and claims is not None and not deps.is_automation(claims)):
+        background_tasks.add_task(place_picks.record, deps.open_background_conn, text=body.pick.text,
+                                  rank=body.pick.rank, level=place.level, code=place.code)
+    return answer
+
+
+def _place_search_unavailable() -> HTTPException:
+    return HTTPException(503, detail={"code": "place_search_unavailable",
+                                      "message": "Vyhledávání míst je teď nedostupné."})
+
+
+@app.post("/places/suggest")
+def post_places_suggest(body: s.PlaceSuggestIn, _: None = Depends(deps.require_token)) -> dict[str, Any]:
+    """Own place search (#2449): rows that are already chips, a shortcut that adds its places (#2450), or a door with
+    its street's chip (#2451). Ships with no caller until the switch-over (#2453). The connection opens here, not as a
+    dependency, so a database it cannot reach is the same 503 as a failed read."""
+    try:
+        with deps.open_background_conn() as conn:
+            places = place_search.suggest(conn, body.query, limit=body.limit)
+    except place_search.SearchUnavailable:
+        raise _place_search_unavailable() from None
+    except psycopg.OperationalError as exc:
+        logging.warning("places/suggest: no database connection (%s)", type(exc).__name__)
+        raise _place_search_unavailable() from None
+    return {"items": [p.item() for p in places]}
 
 
 def _build_comparables_inputs(body: s.FindComparablesIn) -> tuple[TargetSpec, ComparableFilters]:
@@ -1053,7 +1097,7 @@ def post_create_collection(
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
     act_as: uuid.UUID | None = Depends(tenant_pool.act_as_header),
 ) -> dict[str, Any]:
-    curation.refuse_monitoring_while_acting(act_as, body.monitoring_enabled)
+    curation.refuse_monitoring_while_acting(act_as, body.monitoring_enabled or body.notify_kinds is not None)
     return curation.create_collection(conn, body, account_id=str(account_id))
 
 
@@ -1079,7 +1123,8 @@ def patch_collection(
     conn: tenant_pool.TenantConn,
     act_as: uuid.UUID | None = Depends(tenant_pool.act_as_header),
 ) -> dict[str, Any]:
-    curation.refuse_monitoring_while_acting(act_as, body.monitoring_enabled is not None)
+    curation.refuse_monitoring_while_acting(
+        act_as, body.monitoring_enabled is not None or body.notify_kinds is not None)
     return curation.update_collection(conn, collection_id, body)
 
 

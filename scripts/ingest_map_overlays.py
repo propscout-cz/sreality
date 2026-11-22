@@ -203,20 +203,25 @@ KRAJE_REVISED_SQL = "select source_date from registry_versions where is_current"
 
 # The MF rent choropleth: migration 132's rent_map_choropleth without its GeoJSON column. One
 # feature per priced obec / KÚ with the latest revision's reference rent per size category,
-# drawn by the register's polygon at the level the MF priced it (the MF's 'ku' is the
+# standard (vkN) and new-build (novN, for the area card), drawn by the register's polygon at the level the MF priced it (the MF's 'ku' is the
 # register's 'katastralni_uzemi'); a category the MF leaves unpriced is absent from props and
 # paints as the scale's null_color.
 RENT_MAP_SQL = """
 select v.ruian_code::text as source_id,
        jsonb_strip_nulls(jsonb_build_object(
            'name', r.name, 'kraj', v.kraj, 'level', v.level,
-           'vk1', v.vk1, 'vk2', v.vk2, 'vk3', v.vk3, 'vk4', v.vk4)) as props,
+           'vk1', v.vk1, 'vk2', v.vk2, 'vk3', v.vk3, 'vk4', v.vk4,
+           'nov1', v.nov1, 'nov2', v.nov2, 'nov3', v.nov3, 'nov4', v.nov4)) as props,
        st_transform(r.geom, 3857) as geom
   from (select ruian_code, level, min(kraj) as kraj,
                max(ref_rent_per_m2) filter (where vk = 1) as vk1,
                max(ref_rent_per_m2) filter (where vk = 2) as vk2,
                max(ref_rent_per_m2) filter (where vk = 3) as vk3,
-               max(ref_rent_per_m2) filter (where vk = 4) as vk4
+               max(ref_rent_per_m2) filter (where vk = 4) as vk4,
+               max(ref_rent_novostavba_per_m2) filter (where vk = 1) as nov1,
+               max(ref_rent_novostavba_per_m2) filter (where vk = 2) as nov2,
+               max(ref_rent_novostavba_per_m2) filter (where vk = 3) as nov3,
+               max(ref_rent_novostavba_per_m2) filter (where vk = 4) as nov4
           from rent_map_values
          where source_revision = (select max(source_revision) from rent_map_revisions)
          group by ruian_code, level) v
@@ -925,11 +930,14 @@ SOURCES: dict[str, Section] = {
                     "opacity": 0.62,
                     "outline": {"color": "rgba(60, 60, 90, 0.25)", "width": 0.4},
                 },
+                # The area card's second column (`alt_prop`, the MF's new-build rent) and its
+                # worked example (`example_m2`: the median floor area of active rent flats of that
+                # size, measured 2026-11-09: 34 / 54 / 75 / 106 m², 38.9k listings).
                 variants=(
-                    {"key": "vk1", "label": "1+kk, 1+1", "prop": "vk1"},
-                    {"key": "vk2", "label": "2+kk, 2+1", "prop": "vk2"},
-                    {"key": "vk3", "label": "3+kk, 3+1", "prop": "vk3"},
-                    {"key": "vk4", "label": "4+kk, 4+1", "prop": "vk4"},
+                    {"key": "vk1", "label": "1+kk, 1+1", "prop": "vk1", "alt_prop": "nov1", "example_m2": 34},
+                    {"key": "vk2", "label": "2+kk, 2+1", "prop": "vk2", "alt_prop": "nov2", "example_m2": 54},
+                    {"key": "vk3", "label": "3+kk, 3+1", "prop": "vk3", "alt_prop": "nov3", "example_m2": 75},
+                    {"key": "vk4", "label": "4+kk, 4+1", "prop": "vk4", "alt_prop": "nov4", "example_m2": 106},
                 ),
             ),
         ),

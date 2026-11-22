@@ -30,6 +30,7 @@ const baseDispatch: WatchdogDispatch = {
   collection_id: null,
   collection_name: null,
   property_id: 999,
+  listing_id: 501,
   change_kind: 'new',
   share_kind: null,
   share_ref: null,
@@ -40,6 +41,7 @@ const baseDispatch: WatchdogDispatch = {
   seen_at: null,
   trigger_price_czk: null,
   prev_price_czk: null,
+  match_reason: null,
   category_main: 'byty',
   category_type: 'prodej',
   price_czk: 8_900_000,
@@ -70,6 +72,7 @@ const share: WatchdogDispatch = {
   share_kind: 'collection',
   share_ref: '42',
   property_id: null,
+  listing_id: null,
   display_label: null,
   price_czk: null,
 };
@@ -82,6 +85,7 @@ const feed: WatchdogDispatchesResponse = {
       id: 'd2',
       // A bazos ad: no sreality id anywhere, and the row still opens its property.
       property_id: 4321,
+      listing_id: 502,
       source: 'bazos',
       display_label: 'Brno-střed',
       seen_at: '2026-05-12T11:00:00+00:00',
@@ -104,9 +108,16 @@ vi.mock('@/lib/api', async (orig) => ({
   markWatchdogDispatchSeen: vi.fn(),
 }));
 
+vi.mock('@/lib/queries', async (orig) => ({
+  ...(await orig<typeof import('@/lib/queries')>()),
+  fetchListingCovers: vi.fn(),
+}));
+
 import { getNotificationUnreadCount, listNotifications, markWatchdogDispatchSeen } from '@/lib/api';
 import { familyTargets } from '@/lib/curationSync';
+import { fetchListingCovers } from '@/lib/queries';
 import { revalidate } from '@/lib/revalidate';
+import { bareImage } from '@/lib/types';
 import { expectNoNestedInteractive } from '@/test/a11y';
 import Notifications from './Notifications';
 
@@ -134,6 +145,8 @@ function renderPage(page: WatchdogDispatchesResponse = feed) {
 beforeEach(() => {
   vi.mocked(listNotifications).mockReset();
   vi.mocked(markWatchdogDispatchSeen).mockReset();
+  vi.mocked(fetchListingCovers).mockReset();
+  vi.mocked(fetchListingCovers).mockResolvedValue(new Map());
 });
 
 describe('<Notifications> row names', () => {
@@ -147,6 +160,83 @@ describe('<Notifications> row names', () => {
     renderPage();
     const read = screen.getByRole('link', { name: /^New match Brno-střed/ });
     expect(read).toHaveAccessibleDescription('');
+  });
+});
+
+describe('<Notifications> New match rows', () => {
+  it('name why the property entered the slice, a price cut with its two prices', () => {
+    const cut: WatchdogDispatch = {
+      ...baseDispatch,
+      id: 'cut',
+      match_reason: 'price',
+      trigger_price_czk: 8_400_000,
+      prev_price_czk: 9_000_000,
+    };
+    renderPage({ ...feed, data: [cut, { ...baseDispatch, id: 'old', display_label: 'Kolín' }], total: 2 });
+    const row = screen.getByRole('link', { name: /^New match Praha 5/ });
+    expect(row).toHaveTextContent('Watchdog · Praha 2+kk · Price cut');
+    expect(row).toHaveTextContent(/9\s000\s000.*→.*8\s400\s000/);
+    /* Told before reasons existed: newly listed, as every New match then was. */
+    expect(screen.getByRole('link', { name: /^New match Kolín/ })).toHaveTextContent('Newly listed');
+  });
+});
+
+/* A row leads with the cover of the ad it fired on (lib/hydration). The photo is a
+   decoration: it never gates the row, never names it, and its box is there before it. */
+describe('<Notifications> row photos', () => {
+  const boxes = () => document.querySelectorAll('li [class*="aspect-[4/3]"]');
+
+  it('lead a listing row with its ad cover, and leave the row\'s name as its own text', async () => {
+    vi.mocked(fetchListingCovers).mockResolvedValue(
+      new Map([[501, bareImage(1, null, 'https://cdn.example/501.jpg')]]),
+    );
+    renderPage();
+    const row = screen.getByRole('link', { name: /^New match Praha 5/ });
+    await waitFor(() => expect(row.querySelector('img')).not.toBeNull());
+    const img = row.querySelector('img')!;
+    expect(img).toHaveAttribute('src', 'https://cdn.example/501.jpg');
+    expect(img).toHaveAttribute('alt', '');
+    expect(img).toHaveAttribute('loading', 'lazy');
+    /* Dot, then the photo, then the kind chip. */
+    expect(row.children[1]).toContainElement(img);
+    expect(row).toHaveAccessibleName(/^New match Praha 5/);
+  });
+
+  it('ask for the covers of the ads the rows fired on; a share has no ad and no box', async () => {
+    renderPage();
+    await waitFor(() => expect(fetchListingCovers).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(fetchListingCovers).mock.calls[0][0]).toEqual([501, 502]);
+    expect(boxes()).toHaveLength(2);
+    expect(screen.getByText(/owner@example\.com shared/).closest('li')!.querySelector('img')).toBeNull();
+  });
+
+  it('keep an empty box for an ad with no cover, and a dashed one for a photo that will not load', async () => {
+    vi.mocked(fetchListingCovers).mockResolvedValue(
+      new Map([[501, bareImage(1, null, 'https://cdn.example/501.jpg')]]),
+    );
+    renderPage();
+    const row = screen.getByRole('link', { name: /^New match Praha 5/ });
+    await waitFor(() => expect(row.querySelector('img')).not.toBeNull());
+
+    expect(screen.getByRole('link', { name: /^New match Brno-střed/ }).querySelector('img')).toBeNull();
+    expect(boxes()).toHaveLength(2);
+
+    fireEvent.error(row.querySelector('img')!);
+    expect(row.querySelector('img')).toBeNull();
+    expect(row.children[1]).toHaveClass('border-dashed');
+  });
+
+  it('read the covers once per loaded page, so the next page never re-reads the last', async () => {
+    const rows = Array.from({ length: 51 }, (_, i) => ({
+      ...baseDispatch,
+      id: `r${i}`,
+      listing_id: 1000 + i,
+      display_label: `Místo ${i}`,
+    }));
+    renderPage({ ...feed, data: rows, total: 51 });
+    await waitFor(() => expect(fetchListingCovers).toHaveBeenCalledTimes(2));
+    const sizes = vi.mocked(fetchListingCovers).mock.calls.map(([ids]) => ids.length);
+    expect(sizes.sort((a, b) => a - b)).toEqual([1, 50]);
   });
 });
 
@@ -181,6 +271,23 @@ describe('<Notifications> listing rows', () => {
     await waitFor(() => expect(markWatchdogDispatchSeen).toHaveBeenCalledTimes(1));
   });
 
+  /* A watchdog's name alone read like the ad's title (operator, 2026-11-03), so the row says
+     what kind of source told it first. */
+  it('name their source by its kind, then its name', () => {
+    const monitored: WatchdogDispatch = {
+      ...baseDispatch, id: 'd3', source_kind: 'collection_monitor', subscription_id: null,
+      subscription_name: null, collection_id: 7, collection_name: 'Vinohrady', property_id: 77,
+      change_kind: 'price_drop', display_label: 'Praha 2',
+    };
+    const gone: WatchdogDispatch = { ...baseDispatch, id: 'd5', subscription_name: null, property_id: 78, display_label: 'Kladno' };
+    renderPage({ ...feed, data: [baseDispatch, monitored, gone], total: 3 });
+    expect(within(screen.getByRole('link', { name: /^New match Praha 5/ })).getByText('Watchdog · Praha 2+kk'))
+      .toBeInTheDocument();
+    expect(within(screen.getByRole('link', { name: /^Price drop Praha 2/ })).getByText('Collection · Vinohrady'))
+      .toBeInTheDocument();
+    expect(within(screen.getByRole('link', { name: /^New match Kladno/ })).getByText('Watchdog')).toBeInTheDocument();
+  });
+
   it('render a row with nothing to open as a button that only marks it read', async () => {
     vi.mocked(markWatchdogDispatchSeen).mockResolvedValue({ ...baseDispatch, property_id: null });
     renderPage({ ...feed, data: [{ ...baseDispatch, property_id: null }], total: 1 });
@@ -191,9 +298,9 @@ describe('<Notifications> listing rows', () => {
 });
 
 describe('<Notifications> source filter', () => {
-  it('offers All, Monitoring, Watchdogs and Shared, and no System option', () => {
+  it('offers All, Collections, Watchdogs and Shared, and no System option', () => {
     renderPage();
-    for (const name of ['Monitoring', 'Watchdogs', 'Shared']) {
+    for (const name of ['Collections', 'Watchdogs', 'Shared']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument();
     }
     expect(screen.queryByRole('button', { name: 'System' })).toBeNull();
@@ -216,7 +323,7 @@ describe('<Notifications> filters are the one joined bar', () => {
   it('draws Source and Read state as joined tracks, the chosen segment filled copper', () => {
     renderPage();
     for (const [name, labels] of [
-      ['Source', ['All', 'Monitoring', 'Watchdogs', 'Shared']],
+      ['Source', ['All', 'Collections', 'Watchdogs', 'Shared']],
       ['Read state', ['All', 'Unread']],
     ] as const) {
       const bar = screen.getByRole('group', { name });

@@ -38,7 +38,7 @@ import { fmtArea, fmtCount, fmtCzk, fmtDateSlash } from '@/lib/format';
 import { LOCATION_SOURCES } from '@/lib/locationQuality';
 import { stepLabel } from '@/lib/locationSteps';
 import { propertyPath } from '@/lib/listingUrl';
-import { portalLabel } from '@/lib/portals';
+import { advertLink, portalLabel } from '@/lib/portals';
 import { useInfiniteList } from '@/lib/useInfiniteList';
 import type { SortSpec } from '@/lib/queries';
 import type { KeysetCursor } from '@/lib/keyset';
@@ -377,6 +377,7 @@ export default function LocationPinAudit() {
                   ]
                     .filter(Boolean)
                     .join(' · ');
+                  const link = advertLink(r);
                   return (
                     <tr
                       key={r.listing_id}
@@ -397,9 +398,9 @@ export default function LocationPinAudit() {
                         <span className="block text-[var(--color-ink-3)]">
                           {dash(r.display_label)}
                         </span>
-                        {r.source_url ? (
+                        {link ? (
                           <a
-                            href={r.source_url}
+                            href={link}
                             target="_blank"
                             rel="noreferrer"
                             className="text-[0.72rem] text-[var(--color-ink-3)] underline decoration-dotted underline-offset-2"

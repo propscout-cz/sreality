@@ -22,7 +22,6 @@ name: "Scraping: M&M Reality scraper (pilot)"
 # row, migration 117), so the runner never flips its listings inactive from index
 # absence (architectural rule #3) — delistings still surface via a gone detail
 # fetch (immediate per-listing flip) + the "active = seen within 7 days" rule.
-# Coordinates come straight from the estate JSON, so no MAPY_CZ_API_KEY is needed.
 #
 # WALK ONLY (--index-only, Actions exit W1, #2021): the realtime worker's drain lane fetches what
 # the walk enqueues, as it already did for nearly every row (2026-10-23..25: all of this

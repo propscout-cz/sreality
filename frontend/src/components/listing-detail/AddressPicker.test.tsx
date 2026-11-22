@@ -101,9 +101,23 @@ describe('<AddressPicker>', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Uložit pro všechny inzeráty (2)' }));
     await waitFor(() => expect(screen.queryByRole('group', { name: PENCIL })).toBeNull());
     expect(submitLocationPick).toHaveBeenCalledWith({ property_id: 7, pick: { level: 'adresni_misto', code: 21000001 } });
-    for (const key of [propertyKeys.row(7), propertyLocationKeys.location(7), propertyLocationKeys.staticMap(7)]) {
+    for (const key of [propertyKeys.row(7), propertyLocationKeys.location(7)]) {
       expect(invalidated).toHaveBeenCalledWith({ queryKey: key });
     }
+  });
+
+  it('sends no pick: row 2 for "Brno" resolves as a door and nothing more (ruling Q10)', async () => {
+    const town = (name: string): MapySuggestion => ({ name, label: 'Obec', type: 'regional.municipality',
+      position: { lon: 16.6, lat: 49.2 } });
+    fetchSuggest.mockResolvedValue([town('Brno-město'), town('Brno')]);
+    resolveSuggestion.mockResolvedValue({ level: 'obec', id: 582786, name: 'Brno', context: null });
+    renderPicker();
+    fireEvent.click(screen.getByRole('button', { name: PENCIL }));
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Adresa, ulice nebo obec' }), {
+      target: { value: 'Brno' },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /^Brno\s*Obec$/ }));
+    expect(resolveSuggestion).toHaveBeenCalledWith(town('Brno'), { addressPoint: true });
   });
 
   it.each([

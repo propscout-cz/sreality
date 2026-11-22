@@ -802,8 +802,6 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
     if sql == S.RT_PHASH_POP_SQL:
         wanted = set(p["hashes"])
         return sorted((h, n) for h, n in db.phash_pop.items() if h in wanted)
-    if sql == S.RT_PHASH_POP_COUNT_SQL:
-        return [(len(db.phash_pop),)]
     if sql == S.RT_PHASH_POP_WRITE_SQL:
         # The `is distinct from` limb is READ from the statement (E964 review F6): an upsert that
         # stopped skipping an unmoved count rewrites it here, as it would in Postgres.
@@ -1031,7 +1029,11 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
                if row["id"] > int(p["after_id"]) and row["listing_id"] is not None
                and (row["scraped_at"] is None or row["scraped_at"] <= cut)
                ][:int(p["window"])]
-        keep = [row for row in win if _in_scope(db, row[1], p)]
+        first: dict[int, int] = {}
+        for row in db.snapshots:
+            if row["listing_id"] is not None:
+                first[row["listing_id"]] = min(first.get(row["listing_id"], row["id"]), row["id"])
+        keep = [row for row in win if row[0] > first[row[1]] and _in_scope(db, row[1], p)]
         return [(max((row[0] for row in win), default=int(p["after_id"])), len(win),
                  [row[1] for row in keep], [row[2] for row in keep],
                  [row[0] for row in keep])]
@@ -1107,6 +1109,14 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         db.scope_scans = [row for row in db.scope_scans
                           if not (row["generation"] == gen and row["block_key"] not in keep)]
         return []
+    if sql == S.RT_SCOPE_UNREAD_SQL:
+        cut = db.now - timedelta(seconds=int(p["lag"]))
+        return sorted((block, listing_id, row["resolved_at"],
+                       row["resolved_at"] is None or row["resolved_at"] <= cut,
+                       None if row["resolved_at"] is None
+                       else (db.now - row["resolved_at"]).total_seconds())
+                      for (g, block, listing_id), row in db.scope_ids.items()
+                      if g == gen and (gen, listing_id) not in db.rt_fp)
     if sql == S.RT_SCOPE_ENTRANTS_SQL:
         cut = db.now - timedelta(seconds=int(p["lag"]))
         rows = sorted((listing_id, row["resolved_at"])

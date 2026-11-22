@@ -178,9 +178,17 @@ select w.id, w.first_seen_at
  limit %(limit)s
 """
 
+# A listing's first snapshot is its arrival, written in the transaction that inserts the row
+# (`listing_write.write_listings`), so the new feed already claims it: the changed feed skips it
+# (#2509) and claims only a snapshot that follows another. It stays in the window, so the cursor
+# still crosses it.
 RT_CHANGED_LISTINGS_SQL = """
 with win as (
-  select s.id as snapshot_id, s.listing_id as listing_id, s.scraped_at as scraped_at
+  select s.id as snapshot_id, s.listing_id as listing_id, s.scraped_at as scraped_at,
+         exists (select 1
+                   from public.listing_snapshots p
+                  where p.listing_id = s.listing_id
+                    and p.id < s.id)                      as follows
     from public.listing_snapshots s
    where s.id > %(after_id)s::bigint
      and s.listing_id is not null
@@ -192,13 +200,16 @@ with win as (
 select coalesce(max(w.snapshot_id), %(after_id)s::bigint) as window_max,
        count(*)                                           as window_size,
        coalesce(array_agg(w.listing_id order by w.snapshot_id)
-                filter (where %(all_scope)s::boolean or ll.listing_id is not null),
+                filter (where w.follows
+                          and (%(all_scope)s::boolean or ll.listing_id is not null)),
                 '{}'::bigint[])                           as ids,
        coalesce(array_agg(w.scraped_at order by w.snapshot_id)
-                filter (where %(all_scope)s::boolean or ll.listing_id is not null),
+                filter (where w.follows
+                          and (%(all_scope)s::boolean or ll.listing_id is not null)),
                 '{}'::timestamptz[])                      as stamps,
        coalesce(array_agg(w.snapshot_id order by w.snapshot_id)
-                filter (where %(all_scope)s::boolean or ll.listing_id is not null),
+                filter (where w.follows
+                          and (%(all_scope)s::boolean or ll.listing_id is not null)),
                 '{}'::bigint[])                           as cursors
   from win w
   left join public.listing_location ll
@@ -443,6 +454,22 @@ select s.listing_id, s.resolved_at
                       and f.listing_id = s.listing_id)
  order by s.listing_id
  limit %(limit)s
+"""
+
+# E987: every unread advert of the snapshot, ONE scan a pass outside a build: the reconcile's
+# `RC_UNREAD_BLOCKS_SQL` with the rows kept, so the entrant feed orders them by block and the
+# reconcile reads its blocks from what the pass left (`SqlWork.unread_blocks_after`).
+RT_SCOPE_UNREAD_SQL = """
+select s.block_key, s.listing_id, s.resolved_at,
+       (s.resolved_at is null
+        or s.resolved_at <= now() - make_interval(secs => %(lag)s)) as settled,
+       extract(epoch from now() - s.resolved_at)::double precision as waited_s
+  from autodedup.rt_scope_ids s
+ where s.generation = %(generation)s::text
+   and not exists (select 1
+                     from autodedup.rt_fp f
+                    where f.generation = %(generation)s::text
+                      and f.listing_id = s.listing_id)
 """
 
 # The same feed during a BUILD (E976): the LIVE adverts first, ids ascending within each half,
@@ -832,10 +859,6 @@ on conflict (phash) do update set
     n_listings  = excluded.n_listings,
     computed_at = now()
  where autodedup.phash_pop.n_listings is distinct from excluded.n_listings
-"""
-
-RT_PHASH_POP_COUNT_SQL = """
-select count(*) as n from autodedup.phash_pop
 """
 
 # ------------------------------------------------------------------ probe postings

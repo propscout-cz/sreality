@@ -133,7 +133,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
    earlier gone verdict ≥ `delist_policy.GONE_DWELL` (12 h) old with no sighting since** (`db.gone_evidence`;
    portals blink — sreality took 35–70% of its "gone" ads back within hours), a live page refreshes it, an error
    waits. `walk_coverage` is a logged `COVERAGE` warning, NEVER a gate. No staleness rail, no absence sweep, no
-   `supports_complete_walk` gate (an `indexless` portal — `web` — nominates via its own `presence_candidates` seam). `delist_flip_cap` (10%, floor 2k) THROTTLES nominations per walk (rest deferred;
+   `supports_complete_walk` gate (an `indexless` portal — `web` — nominates live ads via the shared orphan recheck). `delist_flip_cap` (10%, floor 2k) THROTTLES nominations per walk (rest deferred;
    `.overrides` lift it). Budget + gone-rate breaker + effective dwell `max(GONE_DWELL, RECHECK_THROTTLE)` = 24 h:
    `scraper/delist_policy.py`; every flip goes through `db.mark_listing_inactive` (guarded, stamps `inactive_at` once, dirties the property).
 4. **`last_seen_at` is driven by index sightings + successful detail fetches only; failed fetches never
@@ -183,7 +183,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     `toolkit/filter_compiler.compile_filter_where`; Browse's TS + RPCs are pinned per shared predicate. Portal + broker filters select ADS, rows stay
     properties, under the PROPERTY's status: P asks for an ad on P in that status (`active_sources` under active, else `all_sources`), a broker likewise,
     both met by one ad (estimation cohorts stay per-ad). **A property is SERVED (Browse, map, stats, the watchdog) only once PUBLISHED**
-    (`toolkit/publication.py`: `properties.settled_at`, stamped by the maintenance pass once photos and the engine are done, or 6 h old); detail by id
+    (`toolkit/publication.py`: `properties.settled_at`, stamped by the maintenance pass, never before the engine READ its in-scope ads); detail by id
     stays ungated. `notification_dispatches` is the event table, append-only for its producers' events (bar the deletions on record; account and
     collection deletion still cascade): three producers (`watchdog`; `collection_monitor`, anchored on `monitor_since` so a pre-membership change never
     fires; `share`, written only by `api/shares.py`) write facts, never routing; system alerts are no producer. ONE identity index
@@ -210,7 +210,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     through the shared `portal_runner` on the source-generic queue.
 20. **Property maintenance is dirty-set incremental, not full-table.** Every child-changing write (content change, revival,
     delist, column heal, re-attribution, broker re-point) enqueues `property_id` into `dirty_properties` (migration 106) in its own transaction (exceptions: the census ledger, and a crawler change confined to unhashed columns, which waits for the daily sweep — architecture § rule 20); the worker's maintenance lane (`run_incremental_pass`, 30 s)
-    attaches new singletons + recomputes only queued properties (O(changes)); the daily full sweep (04:15; it births stragglers per batch too) is
+    attaches new singletons + recomputes only queued properties (O(changes)); the daily full sweep (03:00; it births stragglers per batch too) is
     the reconcile backstop. Both hold the `property_maintenance` job_lease row, never overlapping. Merge/detach/split recompute inline through the drain's own after-step (`properties_changed`: rollup, broker book, Browse row) and never enqueue `dirty_properties`.
 21. **Every portal runs through ONE shared framework (Phase 4: `portal_base` / `portal` / `portal_runner`, one
     source-generic `listing_detail_queue`); per-portal code is a client (fetch + pacing) + a parser + a `Portal`

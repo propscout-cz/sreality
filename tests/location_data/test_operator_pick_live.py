@@ -18,6 +18,7 @@ import pytest
 from location_data import claims_intake as ci
 from location_data import claims_store, contracts
 from location_data import operator_corrections as oc
+from location_data import place_search
 from location_data.claims_common import Claim
 from location_data.name_index import normalize_name, normalize_street_name
 from location_data.resolver import drain
@@ -138,10 +139,9 @@ def test_a_pick_lands_on_every_ad_a_re_pick_replaces_it_and_a_clear_restores_the
     for ad in ads:
         assert _operator(conn, ad) == {"address_point_id": str(DOOR)}
         assert _resolved(conn, ad)[:4] == ("address_point", DOOR, LIPOVA, 500002)
-    # The picker's preview (`/maps/resolve`'s door label) is the label the row now reads.
-    maps = pytest.importorskip("api.maps")
+    # The door label the picker's preview and own search's door rows share is the label the row now reads.
     assert result["location"]["label"] == "Lipová 12, Betov" == conn.execute(
-        maps._DOOR_LABEL_SQL, (DOOR,)).fetchone()[0]
+        place_search.DOOR_LABEL_SQL, (DOOR,)).fetchone()[0]
     assert conn.execute("SELECT note FROM location_claim_batches WHERE lane ="
                         " 'operator_correction' ORDER BY id DESC LIMIT 1").fetchone() == (
         f"property {prop}: adresni_misto {DOOR} by ci",)

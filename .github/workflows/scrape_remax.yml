@@ -23,9 +23,8 @@ name: "Scraping: RE/MAX scraper (pilot)"
 # Writes an 'index' scrape_runs row under source='remax' (its own
 # Health-page lane; does not touch sreality liveness / reconciliation).
 #
-# Required secret: SUPABASE_DB_URL. (Coordinates come from each card's / detail
-# page's data-gps, so no MAPY_CZ_API_KEY is needed. Image bytes are downloaded
-# separately by the realtime worker's images lane.)
+# Required secret: SUPABASE_DB_URL. (Image bytes are downloaded separately by the
+# realtime worker's images lane.)
 
 on:
   schedule:

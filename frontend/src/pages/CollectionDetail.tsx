@@ -38,6 +38,8 @@ import { propertyPath } from '@/lib/listingUrl';
 import { useNewTabProps } from '@/lib/linkGestures';
 import { usePageTitle } from '@/lib/pageTitle';
 import { Field } from '@/components/controls';
+import NotifyKindsPicker, { NOTIFY_KINDS_EMPTY } from '@/components/NotifyKindsPicker';
+import { COLLECTION_KINDS } from '@/lib/notifyKinds';
 import ErrorBanner from '@/components/ErrorBanner';
 import ListingCards, { CARD_PHOTOS_PER_CARD } from '@/components/ListingCards';
 import OverflowMenu, { type OverflowMenuItem } from '@/components/OverflowMenu';
@@ -52,6 +54,7 @@ import {
 import { listingKindLabel } from '@/lib/enums';
 import type {
   Collection,
+  CollectionKind,
   CollectionPropertyRow,
   CollectionWithProperties,
 } from '@/lib/types';
@@ -281,6 +284,9 @@ function Header({
           </div>
         )}
       </div>
+      {own && !acting && collection.monitoring_enabled && (
+        <MonitorKinds collection={collection} setError={setError} />
+      )}
       {error && (
         <p className="mt-3 text-[0.75rem] text-[var(--color-brick)]">{error}</p>
       )}
@@ -445,7 +451,7 @@ function MonitorSwitch({
   const descriptionId = useId();
   const description = `${
     on
-      ? 'On — a property in this collection raises an alert when its price changes or it is delisted.'
+      ? 'On — a property in this collection raises an alert for the events chosen below.'
       : 'Off — properties here are not monitored for changes.'
   } Alerts appear in the Notifications feed.`;
 
@@ -483,6 +489,48 @@ function MonitorSwitch({
       <span id={descriptionId} className="sr-only">
         {description}
       </span>
+    </div>
+  );
+}
+
+/* What a watched collection tells (migration 735), under the header while Sledovat is on. Each
+ * click saves; the chips show the set being saved until the collection reads it back. The API
+ * refuses an empty set, so the last chip stays on and says why. */
+function MonitorKinds({
+  collection,
+  setError,
+}: {
+  collection: Collection;
+  setError: (message: string | null) => void;
+}) {
+  const qc = useQueryClient();
+  const labelId = useId();
+  const save = useMutation({
+    mutationFn: (next: CollectionKind[]) => updateCollection(collection.id, { notify_kinds: next }),
+    onSuccess: () => {
+      setError(null);
+      void revalidateTables(qc, ['collections']);
+    },
+    onError: (err: Error) => setError(err.message || 'Failed to update'),
+  });
+  const value = save.isPending && save.variables ? save.variables : collection.notify_kinds;
+
+  return (
+    <div className="mt-4">
+      <span
+        id={labelId}
+        className="block mb-1 text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]"
+      >
+        Notify me about
+      </span>
+      <NotifyKindsPicker
+        kinds={COLLECTION_KINDS}
+        value={value}
+        onChange={(next) => (next.length ? save.mutate(next) : setError(NOTIFY_KINDS_EMPTY))}
+        labelledBy={labelId}
+        about="About the properties in this collection, from now on."
+        disabled={save.isPending}
+      />
     </div>
   );
 }

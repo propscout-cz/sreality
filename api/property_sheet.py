@@ -39,6 +39,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from scraper.floor import storey_label
 from toolkit.filter_registry import CATEGORY_MAIN_NOUN_CS, label_cs, type_label_cs
 
 _FONT_DIR = Path(__file__).parent / "fonts"
@@ -127,19 +128,6 @@ def _area(n: float | Decimal | None) -> str | None:
     return None if n is None else f"{_num(n)}{NBSP}m²"
 
 
-def _floor(floor: int | None, total: int | None) -> str | None:
-    """fmtFloor: ground = 0 on every portal; total_floors counts podlaží, ground included."""
-    if floor is None:
-        return None
-    storey = (
-        "přízemí" if floor == 0
-        else "suterén" if floor == -1
-        else f"{-floor}. podzemní podlaží" if floor < 0
-        else f"{floor}. patro"
-    )
-    return storey if total is None else f"{storey} z {total} podlaží"
-
-
 def _day(value: datetime | date | None) -> str:
     if value is None:
         return "—"
@@ -192,7 +180,7 @@ def _facts(prop: dict[str, Any]) -> list[tuple[str, str]]:
         ("Druh", type_label(prop)),
         ("Dispozice", prop.get("disposition")),
         ("Plocha pozemku" if plot else "Plocha", _area(prop.get("area_m2"))),
-        ("Podlaží", _floor(prop.get("floor"), prop.get("total_floors"))),
+        ("Podlaží", storey_label(prop.get("floor"), prop.get("total_floors"))),
         ("Pozemek", _area(prop.get("estate_area"))),
         ("Zahrada", _area(prop.get("garden_area"))),
         ("Stavba", _label("building_type", prop.get("building_type"))),

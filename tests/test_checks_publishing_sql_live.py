@@ -102,11 +102,13 @@ def _ad(conn: Any, source: str, *, seen: _dt.timedelta = 2 * _H, active: bool = 
 
 def _property(conn: Any, *, status: str = "active", active: bool = True,
               born: _dt.timedelta = 3 * _H, seen: _dt.timedelta = _CAP + _H) -> int:
-    """First seen `seen` ago: past the cap by default, so browse_projection serves it unsettled."""
-    return conn.execute("insert into properties (status, is_active, created_at, first_seen_at) "
-                        "values (%s, %s, now() - make_interval(secs => %s), now() - make_interval(secs => %s)) "
-                        "returning id",
-                        (status, active, born.total_seconds(), seen.total_seconds())).fetchone()[0]
+    """First seen `seen` ago. At the cap or older (the default) it carries the publication stamp from its cap's
+    moment, as the maintenance pass stamps a property nothing holds; younger, it is unpublished."""
+    stamp = (seen - _CAP).total_seconds() if seen >= _CAP else None
+    return conn.execute("insert into properties (status, is_active, created_at, first_seen_at, settled_at) "
+                        "values (%s, %s, now() - make_interval(secs => %s), now() - make_interval(secs => %s), "
+                        "        now() - make_interval(secs => %s)) returning id",
+                        (status, active, born.total_seconds(), seen.total_seconds(), stamp)).fetchone()[0]
 
 
 def _located(conn: Any, listing_id: int, shape: tuple[bool, str, str], *,

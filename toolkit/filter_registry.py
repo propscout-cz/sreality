@@ -738,8 +738,8 @@ def _build_registry() -> dict[str, FilterDef]:
                 "shows both live and delisted properties; `active` = a live "
                 "property (with a portal filter: with an active ad there); "
                 "`inactive` = a delisted property, every ad ended. "
-                "The Watchdog matcher ignores this (it fires on new "
-                "properties only) — use `lifecycle` for the analytical "
+                "A watchdog ignores this (it watches the properties on "
+                "the market) — use `lifecycle` for the analytical "
                 "surfaces."
             ),
             category=CATEGORY_STATUS,

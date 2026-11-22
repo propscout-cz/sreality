@@ -22,6 +22,7 @@ import type {
   BuildingAttachment,
   BuildingRun,
   Collection,
+  CollectionKind,
   CollectionWithProperties,
   ConfirmBuildingUnitsIn,
   UpdateBuildingInputsIn,
@@ -48,6 +49,7 @@ import type {
   WatchdogDispatch,
   WatchdogDispatchesResponse,
   WatchdogFilterSpec,
+  WatchdogKind,
   WatchdogSeenFilter,
   WatchdogSubscription,
   FilterPreset,
@@ -666,6 +668,70 @@ export const startAgentRun = (body: StartAgentRun): Promise<{ id: number; status
   request<{ id: number; status: AgentRunStatus; created: boolean }>('/runs', { method: 'POST', json: body });
 export const setAgentRunLimit = (dailyLimitUsd: number): Promise<AccountLimit> =>
   request<AccountLimit>('/runs/limit', { method: 'PUT', json: { daily_limit_usd: dailyLimitUsd } });
+/* What the RÚIAN register states about a property's building (GET /properties/{id}/building). A coded value
+ * carries its label and whether the code means the register does not know. */
+export interface RegisterCode {
+  code: number;
+  /* null: a code our list of labels does not hold. */
+  label: string | null;
+  unknown: boolean;
+}
+export interface RegisterBuilding {
+  code: number;
+  iskn_building_id: number | null;
+  house_numbers: number[];
+  house_number_kind: string | null;
+  /* The register's date, and the period derived from it: equal ends are one year, a null start is open
+   * ("until 1919"); a period wider than a year means the register holds a placeholder date. */
+  completed: { on: string; from: number | null; to: number } | null;
+  /* Floors below ground count too, so this can exceed an ad's figure. */
+  floors: number | null;
+  dwellings: number | null;
+  entrances: number;
+  built_up_area_m2: number | null;
+  floor_area_m2: number | null;
+  enclosed_volume_m3: number | null;
+  valid_from: string;
+  /* The newest clean load of the building's obec; null when none is on record. */
+  source_date: string | null;
+  usage: RegisterCode | null;
+  construction: RegisterCode | null;
+  lift: RegisterCode | null;
+  heating: RegisterCode | null;
+  water: RegisterCode | null;
+  sewer: RegisterCode | null;
+  gas: RegisterCode | null;
+}
+export const fetchPropertyBuilding = (propertyId: number): Promise<{ building: RegisterBuilding | null }> =>
+  request<{ building: RegisterBuilding | null }>(`/properties/${propertyId}/building`);
+/* A registered sale in a property's building (GET /properties/{id}/building/sales), newest first. */
+export interface BuildingSale {
+  source: string;
+  source_record_id: string;
+  sold_at: string;
+  price_czk: number;
+  asking_last_czk: number | null;
+  category_main: string;
+  disposition: string | null;
+  area_m2: number | null;
+  /* The cadastre's own form, "<č.p.>/<unit number>"; null for a whole building. */
+  unit_label: string | null;
+  source_url: string | null;
+  price_per_m2: number | null;
+  price_per_m2_basis: string | null;
+}
+export const fetchPropertyBuildingSales = (propertyId: number): Promise<{ sales: BuildingSale[] }> =>
+  request<{ sales: BuildingSale[] }>(`/properties/${propertyId}/building/sales`);
+/* An account's own ČÚZK WSDP login. The password goes up once and never comes back. */
+export interface CuzkLoginState {
+  set: boolean;
+  username: string | null;
+  checked_at: string | null;
+}
+export const fetchCuzkLogin = (): Promise<CuzkLoginState> => request<CuzkLoginState>('/account/cuzk-login');
+export const saveCuzkLogin = (login: { username: string; password: string }): Promise<CuzkLoginState> =>
+  request<CuzkLoginState>('/account/cuzk-login', { method: 'PUT', json: login });
+export const removeCuzkLogin = (): Promise<void> => request<void>('/account/cuzk-login', { method: 'DELETE' });
 export const cancelAgentRun = (id: number): Promise<{ id: number; status: AgentRunStatus }> =>
   request<{ id: number; status: AgentRunStatus }>(`/runs/${id}/cancel`, { method: 'POST' });
 
@@ -2416,6 +2482,7 @@ export const updateCollection = (
     name?: string | null;
     description?: string | null;
     monitoring_enabled?: boolean;
+    notify_kinds?: CollectionKind[];
   },
 ): Promise<Collection> =>
   request<Collection>(`/collections/${id}`, {
@@ -2785,6 +2852,7 @@ export const createWatchdogSubscription = (input: {
   name: string;
   filter_spec: WatchdogFilterSpec;
   is_active?: boolean;
+  notify_kinds?: WatchdogKind[];
 }): Promise<WatchdogSubscription> =>
   request<WatchdogSubscription>('/notifications/subscriptions', {
     method: 'POST',
@@ -2797,6 +2865,7 @@ export const updateWatchdogSubscription = (
     name?: string;
     filter_spec?: WatchdogFilterSpec;
     is_active?: boolean;
+    notify_kinds?: WatchdogKind[];
   },
 ): Promise<WatchdogSubscription> =>
   request<WatchdogSubscription>(

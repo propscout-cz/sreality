@@ -51,11 +51,14 @@ def test_the_attended_tools_end_with_the_full_rebuild(workflow: str) -> None:
     assert "secrets.SUPABASE_DB_URL" in str(job.get("env", {}).get("SUPABASE_DB_URL"))
 
 
-def test_the_seed_rebuilds_after_a_real_seed_even_when_the_geocode_push_failed() -> None:
+def test_the_seed_rebuilds_after_a_successful_seed_with_no_inputs_no_write_grant_and_no_mapy_secret() -> None:
     doc = yaml.safe_load((WORKFLOWS / "seed_curated_cities.yml").read_text())
     (job,) = doc["jobs"].values()
     assert [s.get("id") for s in job["steps"]].count("seed") == 1
-    assert job["steps"][-1]["if"] == "${{ !cancelled() && steps.seed.outcome == 'success' && inputs.dry_run != 'true' }}"
+    assert job["steps"][-1]["if"] == "${{ !cancelled() && steps.seed.outcome == 'success' }}"
+    assert doc[True] == {"workflow_dispatch": None}, "no dry run, no commit_geocodes (#2454)"
+    assert job["permissions"] == {"contents": "read"}
+    assert set(job["env"]) == {"SUPABASE_DB_URL"}
 
 
 @REQUIRED_DB

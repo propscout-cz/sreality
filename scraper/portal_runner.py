@@ -216,6 +216,10 @@ class Portal(Protocol):
     # --- detail-drain seams ---
     def connect_drain(self) -> Any: ...
     def make_client(self, limiter: RateLimiter) -> Any: ...
+    # Release anything a cached fetcher holds; PortalDefaults gives every adapter a
+    # no-op, and the walk/probe teardown always calls it (ceskereality keeps a headless
+    # browser for the whole phase).
+    def close(self) -> None: ...
     def fetch_detail(self, client: Any, native_id: str, detail_ref: str | None) -> DrainItem: ...
     def write_details(self, conn: Any, items: list[DrainItem]) -> dict[str, int]: ...
     def record_failure(self, conn: Any, native_id: str, message: str) -> None: ...
@@ -236,6 +240,13 @@ class PortalDefaults:
 
     def make_client(self, limiter: RateLimiter) -> Any:
         return portal_factory.build_client_class(self.source)(limiter=limiter)
+
+    def close(self) -> None:
+        """Release whatever the portal's cached fetcher holds (default: nothing).
+
+        The walk/probe teardown calls it, so a portal that keeps a headless browser for
+        the whole phase (ceskereality, whose pages sit behind a JS interstitial) releases
+        it instead of leaking one per run."""
 
     def active_count(self, conn: Any, category: Any) -> int | None:
         scope = _scope(self, category)  # type: ignore[arg-type]
@@ -617,6 +628,26 @@ def _record_category_drift(portal: Portal, conn: Any, limiter: Any) -> None:
         LOG.warning("CATEGORY DRIFT: could not record for %s: %s", portal.source, exc)
 
 
+def _close_portal(portal: Portal) -> None:
+    """Release the portal's fetcher at the end of a phase. Best-effort: a teardown
+    failure must never fail a run whose pages were all fetched and written."""
+    try:
+        portal.close()
+    except Exception as exc:  # noqa: BLE001 - teardown is best-effort
+        LOG.warning("teardown: portal.close() failed (ignored): %r", exc)
+
+
+def _close_client(client: Any) -> None:
+    """Same, for the drain's own client (the drain builds one, not the adapter)."""
+    close = getattr(client, "close", None)
+    if close is None:
+        return
+    try:
+        close()
+    except Exception as exc:  # noqa: BLE001 - teardown is best-effort
+        LOG.warning("DRAIN teardown: client.close() failed (ignored): %r", exc)
+
+
 def run_index_walk(
     portal: Portal,
     dry_run: bool,
@@ -788,6 +819,7 @@ def run_index_walk(
             total_index, total_pages, total_enqueued,
         )
     finally:
+        _close_portal(portal)
         if conn is not None:
             conn.close()
 
@@ -941,6 +973,7 @@ def run_index_probe(
             if limiter.refused:
                 break
     finally:
+        _close_portal(portal)
         if conn is not None:
             conn.close()
 
@@ -961,7 +994,7 @@ def run_index_probe(
         "listings_enqueued": total_enqueued,
         "early_stopped": early_stopped,
         "errors": failed_categories,
-        "budget_refused": int(limiter.refused),
+        "budget_refused": int(limiter.refused and limiter.refused_reason not in OUR_REFUSALS),
         "by_category": by_category,
     }
     return (rc, agg)
@@ -1155,6 +1188,8 @@ def run_detail_drain(
         with portal.connect_index() as conn:
             claimable = db.claimable_counts(conn, portal.source).get(portal.source, 0)
         LOG.info("DRAIN dry-run claimable=%d max_claims=%s; exit", claimable, max_claims)
+        _close_client(client)
+        _close_portal(portal)
         return (0, {})
 
     claim_chunk = min(DRAIN_CLAIM_CHUNK, 100) if max_seconds else DRAIN_CLAIM_CHUNK
@@ -1321,6 +1356,8 @@ def run_detail_drain(
         # (errors=0, ended_at set) on its own connection. Any claim not yet
         # written stays claimed and is recovered by the next run's
         # reclaim_stale_claims, so swallowing a close failure loses nothing.
+        _close_client(client)
+        _close_portal(portal)
         try:
             conn.close()
         except Exception as exc:

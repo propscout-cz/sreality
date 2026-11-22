@@ -176,6 +176,37 @@ class BasePortalClient:
         if stop.wait(self.request_delay_s - (time.monotonic() - self._last_at)):
             self._stopped()
 
+    def _send(
+        self,
+        url: str,
+        *,
+        method: str = "GET",
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+    ) -> Any:
+        """Perform ONE request and return a response-like object.
+
+        The single seam for a portal whose bytes do not arrive over `requests` —
+        ceskereality drives a headless browser through it, because its pages sit behind a
+        JS proof-of-work interstitial (`scraper.browser_fetch`). Everything around this
+        call stays shared and portal-generic: pacing, `penalize()` on a throttle, the
+        retryable-status retry/backoff, gone detection and the stop signal.
+
+        A replacement must offer what the loop and the callers read: `.status_code`,
+        `.text`, `.url` and `raise_for_status()` (a JSON portal's client also reads
+        `.json()`), hence the loose return type.
+        """
+        if json_body is not None or method == "POST":
+            return self._session.post(url, json=json_body, timeout=self.timeout_s)
+        if params is None:
+            return self._session.get(url, timeout=self.timeout_s)
+        return self._session.get(url, params=params, timeout=self.timeout_s)
+
+    def close(self) -> None:
+        """Release whatever the fetcher holds. A no-op for every `requests` portal; the
+        walk/probe/drain teardown calls it, so a portal holding a browser (ceskereality)
+        does not leak one per run."""
+
     def _request(
         self,
         url: str,
@@ -184,7 +215,7 @@ class BasePortalClient:
         json_body: dict[str, Any] | None = None,
         method: str = "GET",
         pace: bool = True,
-    ) -> requests.Response:
+    ) -> Any:
         """GET (or POST) with retry/backoff + adaptive throttle. Returns a
         `< 400` response.
 
@@ -209,16 +240,9 @@ class BasePortalClient:
                 self._pace()
             try:
                 with stop.interruptible():
-                    if json_body is not None or method == "POST":
-                        response = self._session.post(
-                            url, json=json_body, timeout=self.timeout_s
-                        )
-                    elif params is None:
-                        response = self._session.get(url, timeout=self.timeout_s)
-                    else:
-                        response = self._session.get(
-                            url, params=params, timeout=self.timeout_s
-                        )
+                    response = self._send(
+                        url, method=method, params=params, json_body=json_body
+                    )
                 self._last_at = time.monotonic()
                 status = response.status_code
                 if status in (429, 403) and self._limiter is not None:

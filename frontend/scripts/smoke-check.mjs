@@ -12,8 +12,9 @@
 // Credentials: the environment, then this worktree's .env, then the main checkout's .env.
 // A one-off imports openSession() instead of copying the login; importing starts nothing.
 //
-// FIXTURES this script depends on, both on the admin test account (never name it here; a
-// missing fixture fails its check). Resolve the account from the address in the environment.
+// FIXTURES this script depends on (1 and 2 on the admin test account, 3 on both smoke accounts;
+// never name them here; a missing fixture fails its check). Resolve each account from the
+// address in the environment.
 //
 // 1. Pipeline cards. With none, the board's hydration chain short-circuits and five of its six
 //    hops go unexercised. The four properties are active, priced and carry photos.
@@ -38,6 +39,18 @@
 //   from account_members m join auth.users u on u.id = m.user_id
 //   where u.email = :'email'
 //   on conflict (id) do nothing;
+//
+// 3. The automation marker, on BOTH smoke accounts (admin and non-admin), beside their admin
+//    flag in app metadata: `/maps/resolve` records no place pick for a caller carrying it
+//    (ruling Q10, api/dependencies.is_automation), so a smoke run may pick a place. An operator
+//    step; a session picks it up on its next token refresh. :'nonadmin' is
+//    $SMOKE_TEST_NONADMIN_EMAIL; the SELECT confirms it with 2.
+//
+//   update auth.users
+//   set raw_app_meta_data = coalesce(raw_app_meta_data, '{}'::jsonb) || '{"automation": true}'::jsonb
+//   where email in (:'email', :'nonadmin');
+//   select count(*) from auth.users
+//   where email in (:'email', :'nonadmin') and raw_app_meta_data->>'automation' = 'true';
 
 import { chromium } from 'playwright';
 import { execFileSync } from 'node:child_process';
