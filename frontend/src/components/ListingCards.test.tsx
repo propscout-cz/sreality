@@ -68,6 +68,7 @@ vi.mock('@/lib/brokers', async (importOriginal) => ({
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   addPipelineCard: vi.fn(),
+  fetchPropertyBuildingSales: vi.fn(),
   listCollections: vi.fn(),
   addPropertiesToCollection: vi.fn(),
   removePropertyFromCollection: vi.fn(),
@@ -1248,5 +1249,44 @@ describe('<ListingCards> the empty slot', () => {
   it('without one, the filter empty state stays', async () => {
     renderGrid({ rows: [] });
     expect(await screen.findByText('No listings match these filters.')).toBeInTheDocument();
+  });
+});
+
+
+/* The delisted card's "Prodeje v domě" corner: asked only on a click, answered in place, building-level. */
+describe('the sold corner on a delisted card', () => {
+  const SALE = {
+    source: 'reas', source_record_id: 'x', sold_at: '2025-03-14', price_czk: 6450000, asking_last_czk: null,
+    category_main: 'byt', disposition: '3+kk', area_m2: 62, unit_label: '105/37', source_url: null,
+    price_per_m2: 104032, price_per_m2_basis: 'sale_capital_czk_m2',
+  };
+  const delisted = { ...ROW, is_active: false, active_sources: [] } as CardRow;
+
+  it('is not on a live card, and asks nothing until it is clicked', async () => {
+    const api = await import('@/lib/api');
+    vi.mocked(api.fetchPropertyBuildingSales).mockClear();
+    renderGrid({ row: ROW as CardRow });
+    expect(screen.queryByRole('button', { name: 'Prodeje v domě' })).toBeNull();
+    renderGrid({ row: delisted });
+    expect(await screen.findByRole('button', { name: 'Prodeje v domě' })).toBeInTheDocument();
+    expect(api.fetchPropertyBuildingSales).not.toHaveBeenCalled();
+  });
+
+  it('answers in place with the count and the median, linking to the list', async () => {
+    const api = await import('@/lib/api');
+    vi.mocked(api.fetchPropertyBuildingSales).mockResolvedValue({ sales: [SALE, { ...SALE, source_record_id: 'y' }] });
+    renderGrid({ row: delisted });
+    fireEvent.click(await screen.findByRole('button', { name: 'Prodeje v domě' }));
+    const link = await screen.findByRole('link', { name: /V domě 2 prodeje · medián 104\s032/ });
+    expect(link.getAttribute('href')).toContain('tab=hodnota');
+    expect(api.fetchPropertyBuildingSales).toHaveBeenCalledWith(delisted.property_id);
+  });
+
+  it('says so when the building has no sale we hold', async () => {
+    const api = await import('@/lib/api');
+    vi.mocked(api.fetchPropertyBuildingSales).mockResolvedValue({ sales: [] });
+    renderGrid({ row: delisted });
+    fireEvent.click(await screen.findByRole('button', { name: 'Prodeje v domě' }));
+    expect(await screen.findByText('V domě žádný známý prodej')).toBeInTheDocument();
   });
 });

@@ -219,6 +219,7 @@ jobs:
                  tests/location_data/test_operator_pick_live.py \
                  tests/location_data/test_registry_publish_live.py \
                  tests/location_data/test_registry_reparent_live.py \
+                 tests/location_data/test_ruian_buildings_live.py \
                  tests/location_data/test_location_position_replay_live.py \
                  tests/test_map_overlays_live.py \
                  tests/test_cuzk_login_checks_live.py \

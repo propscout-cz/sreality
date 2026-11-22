@@ -241,7 +241,7 @@ def test_the_test_service_is_an_allowed_base(monkeypatch: pytest.MonkeyPatch) ->
 def test_past_the_budget_nothing_is_sent_to_cuzk(client: Any, service: _Opener, checks: list, by: str,
                                                  monkeypatch: pytest.MonkeyPatch) -> None:
     def spent(conn: Any, account: Any, username: str) -> int:
-        raise cuzk_login.Throttled(by)
+        raise cuzk_login.Throttled(by, 900)
 
     monkeypatch.setattr(cuzk_login, "admit_check", spent)
     resp = client.put(URL, json={"username": "firma01", "password": PASSWORD})
@@ -260,10 +260,33 @@ def test_no_tenant_transaction_is_open_while_the_route_waits_on_cuzk(client: Any
 def test_a_throttled_save_says_how_long_to_wait_and_names_no_username(client: Any, monkeypatch: pytest.MonkeyPatch,
                                                                       caplog: pytest.LogCaptureFixture) -> None:
     def spent(conn: Any, account: Any, username: str) -> int:
-        raise cuzk_login.Throttled("username")
+        raise cuzk_login.Throttled("username", 86_000)
 
     monkeypatch.setattr(cuzk_login, "admit_check", spent)
     with caplog.at_level(logging.DEBUG):
         resp = client.put(URL, json={"username": "firma01", "password": PASSWORD})
-    assert resp.status_code == 429 and resp.headers["Retry-After"] == "900"
+    assert resp.status_code == 429 and resp.headers["Retry-After"] == "86000"
+    assert "24 hours" in resp.json()["detail"] and "not locked" in resp.json()["detail"]
     assert "firma01" not in resp.text and "firma01" not in caplog.text
+
+
+def test_the_released_account_helper_has_one_caller() -> None:
+    """`own_account_id_released` takes a route out of both route censuses, so who calls it is pinned here."""
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "api"
+    callers = set()
+    for path in root.rglob("*.py"):
+        for fn in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(fn, ast.FunctionDef) and any(
+                    isinstance(n, ast.Attribute) and n.attr == "own_account_id_released" for n in ast.walk(fn)):
+                callers.add(f"{path.relative_to(root.parent).as_posix()}::{fn.name}")
+    assert callers == {"api/routes/cuzk_login.py::put_cuzk_login"}
+
+
+def test_a_misconfigured_address_sends_nothing_and_spends_nothing(client: Any, ledger: dict, checks: list,
+                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(wsdp_client.BASE_ENV, "http://example.com/")
+    assert client.put(URL, json={"username": "firma01", "password": PASSWORD}).status_code == 502
+    assert ledger == {"admitted": [], "settled": []} and checks == []

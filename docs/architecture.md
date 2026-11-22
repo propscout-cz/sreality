@@ -6172,6 +6172,56 @@ to 0 height — no tiles, no points, an empty panel. Every map in the app (Detai
 ComparablesMap, the phone's PhoneMap) carries the same override for the same reason; the audit map shipped without it and
 rendered blank in production.
 
+## Register facts — what official registers state
+
+Spec #2590. **North star: one register record per real-world thing (a building, a unit, a sale), keyed by its
+official code, stored once with its source and date, and reached from a property by one link: its door**
+(`listing_location.ruian_adm_kod` of the property's location ad). A register fact is shown with its source and
+never overwrites what an ad says: it enters no property fact vote (`scripts/recompute_property_stats.py`) and adds
+no column to `listings`, `properties` or `listing_location`. Raising the share of listings with a door is the
+location programme's work, not this one's.
+
+**Buildings (RÚIAN, open data, CC BY 4.0; #2591).**
+- **Store.** `ruian_building_objects` (migration 381, extended by 758): one row per `(code, valid_from)`, the
+  current one `valid_to is null`; `valid_from` is the register's own PlatiOd, so a changed building gets a new row
+  and its old one is closed. `ruian_address_points.stavebni_objekt_code` is the door's building. Code lists and
+  their "not known" flags: `ruian_code_labels`. Both service-role only.
+- **Load.** `python -m location_data.ruian_buildings` (`--obec <code>`, `--max-seconds`), run by hand until its
+  scheduled job is registered (#2604, after the first load is measured). A hand run needs a SESSION-mode database
+  URL in its environment, `SUPABASE_DB_SESSION_URL` or `LOCATION_DB_DIRECT_URL` (`loader_db.open_loader_connection`
+  refuses the transaction pooler): the operator puts it in the local `.env`, never in a chat or a ticket. A run on
+  named obce logs every statement's rows and seconds. It reads
+  the per-obec state files of the exchange format (`…/vymenny_format/soucasna/<vintage>_OB_<obec>_UZSZ.xml.zip`,
+  parser `location_data/ruian_vfr.py`, stdlib) for the registry version the address mirror currently serves, so a
+  building and its address points are of one vintage. One obec = one file = one bounded transaction, with a receipt
+  in `ruian_building_loads` (a failed obec's receipt carries its `error`, the run goes on whatever the failure was, the next run tries it
+  again; a download is retried on any network error, a 429 or a 5xx, never on a 404; twenty 404s in a row stop the
+  run: the vintage is not published; a dropped database connection is reopened before the failure is written). A changed building's
+  current row is closed by its CODE, wherever it stands, and an obec's vanished buildings by the obec's code, never
+  by a unit row id (the registry load re-creates unit rows). A file that would close more than half of an obec's
+  current buildings (once it holds 20) is REFUSED before any write: nothing is closed, no address link is cleared,
+  the receipt keeps the counts, and the run's summary names it (`refused=`). The same floor guards the doors'
+  building links, and a full obec file with no building at all is refused by the parser. It stays refused on every run until
+  someone judges it; a real demolition or a split obec is applied by a hand run with `--accept-shrink <obec code>`; an obec with a receipt for that version is not read again, so a run resumes and a run
+  with nothing pending is one read; a building the new version did not change is not written. It is a module of its own and edits none of `ruian_load` (operator ruling
+  2026-11-22); it needs no geo library (the building's point is not loaded: nothing reads it).
+- **Read.** `GET /properties/{id}/building` (`api/property_building.py`, `require_token`): the building of the
+  location ad's door, each code with its label, or `{"building": null}`. The SPA's Budova card
+  (`components/listing-detail/BuildingCard.tsx`, desktop and phone) is its one consumer; a property without a
+  building shows no card.
+- **Three things a reader must know.** `floors` counts floors below ground, so it differs from an ad's count by
+  design: the card names that basis and never flags it against the ad. `completed_on` is a 31 December placeholder (1919 … 2000) for most older buildings and is shown as a
+  period MARKED as derived, with the register's own date beside it (`ruian_completion_period`; the bounds follow
+  the census age bands, an inference to check against the loaded data). Protection codes are stored but not
+  served: their code list is not seeded. The register calls these attributes non-reference data: a wrong record is possible,
+  which is why the ad's differing value is shown beside it, not replaced.
+
+**An account's own ČÚZK login (#2597).** `account_cuzk_logins` (migration 759), entered in the avatar menu's dialog,
+checked with WSDP's free status call and stored as a Fernet token (`CUZK_LOGIN_KEY`); routes and rules:
+`.claude/skills/database/references/tenancy.md`, `.claude/skills/toolkit-api/references/secrets-inventory.md`.
+Paid cadastre outputs are bought on that account and are visible only to the account that bought them (operator
+ruling 2026-11-22).
+
 ## Cross-reference map
 
 | Topic | Operational how-to |

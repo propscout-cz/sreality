@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<vf:VymennyFormat xmlns:gml="http://www.opengis.net/gml/3.2"
+                  xmlns:xlink="http://www.w3.org/1999/xlink"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  xmlns:ami="urn:cz:isvs:ruian:schemas:AdrMistoIntTypy:v1"
+                  xmlns:base="urn:cz:isvs:ruian:schemas:BaseTypy:v1"
+                  xmlns:coi="urn:cz:isvs:ruian:schemas:CastObceIntTypy:v1"
+                  xmlns:com="urn:cz:isvs:ruian:schemas:CommonTypy:v1"
+                  xmlns:kui="urn:cz:isvs:ruian:schemas:KatUzIntTypy:v1"
+                  xmlns:kri="urn:cz:isvs:ruian:schemas:KrajIntTypy:v1"
+                  xmlns:mci="urn:cz:isvs:ruian:schemas:MomcIntTypy:v1"
+                  xmlns:mpi="urn:cz:isvs:ruian:schemas:MopIntTypy:v1"
+                  xmlns:obi="urn:cz:isvs:ruian:schemas:ObecIntTypy:v1"
+                  xmlns:oki="urn:cz:isvs:ruian:schemas:OkresIntTypy:v1"
+                  xmlns:opi="urn:cz:isvs:ruian:schemas:OrpIntTypy:v1"
+                  xmlns:pai="urn:cz:isvs:ruian:schemas:ParcelaIntTypy:v1"
+                  xmlns:pui="urn:cz:isvs:ruian:schemas:PouIntTypy:v1"
+                  xmlns:rsi="urn:cz:isvs:ruian:schemas:RegSouIntiTypy:v1"
+                  xmlns:spi="urn:cz:isvs:ruian:schemas:SpravObvIntTypy:v1"
+                  xmlns:sti="urn:cz:isvs:ruian:schemas:StatIntTypy:v1"
+                  xmlns:soi="urn:cz:isvs:ruian:schemas:StavObjIntTypy:v1"
+                  xmlns:uli="urn:cz:isvs:ruian:schemas:UliceIntTypy:v1"
+                  xmlns:vci="urn:cz:isvs:ruian:schemas:VuscIntTypy:v1"
+                  xmlns:vf="urn:cz:isvs:ruian:schemas:VymennyFormatTypy:v1"
+                  xmlns:zji="urn:cz:isvs:ruian:schemas:ZsjIntTypy:v1"
+                  xmlns:voi="urn:cz:isvs:ruian:schemas:VOIntTypy:v1"
+                  xsi:schemaLocation="urn:cz:isvs:ruian:schemas:VymennyFormatTypy:v1 ../ruian/xsd/vymenny_format/VymennyFormatTypy.xsd"><!--
+  v 1.0 - základní verze
+v 1.1
+- doplnění verzování
+- doplnění dat platnosti (přidání elementu PlatnostDatK)
+- změna EPSG
+- doplnění hranice pro parcely OMP-V (OriginalniHraniceOmpv)
+v 1.3 - volební okrsky
+- speciální VFR
+v 1.4 - seznam adres
+v 1.5 - změna volební okrsky
+v 1.6 - datum vzniku
+v 1.8 - rozšření nesprávností o VO
+v 2.1 - nový set xsd
+v 3.1 - promítnutí zákona o územně správním členění státu; výměnný formát pro účelové územní prvky
+--><vf:Hlavicka>
+      <vf:VerzeVFR>3.1</vf:VerzeVFR>
+      <vf:TypZaznamu>Platne</vf:TypZaznamu>
+      <vf:TypDavky>Plna</vf:TypDavky>
+      <vf:TypSouboru>OB_UZSZ</vf:TypSouboru>
+      <vf:Datum>2026-11-01T00:00:29</vf:Datum>
+      <vf:TransakceOd>
+         <com:Id>0</com:Id>
+         <com:Zapsano>2012-06-29T01:36:44</com:Zapsano>
+      </vf:TransakceOd>
+      <vf:TransakceDo>
+         <com:Id>8518353</com:Id>
+         <com:Zapsano>2026-10-31T23:52:37</com:Zapsano>
+      </vf:TransakceDo>
+      <vf:Metadata xlink:type="simple"
+                   xlink:href="http://cuzk.cz/ruian/metadata/20261031_OB_550680_UZSZ.xml"/>
+      <vf:PlatnostDatK>
+         <com:ISUI>2026-10-31T23:00:40</com:ISUI>
+         <com:ISKN>2026-10-31T23:52:37</com:ISKN>
+      </vf:PlatnostDatK>
+   </vf:Hlavicka>
+   <vf:Data>
+<vf:StavebniObjekty>
+<vf:StavebniObjekt gml:id="SO.17562741">
+            <soi:Kod>17562741</soi:Kod>
+            <soi:CislaDomovni>
+               <com:CisloDomovni>2</com:CisloDomovni>
+            </soi:CislaDomovni>
+            <soi:IdentifikacniParcela>
+               <pai:Id>2825823306</pai:Id>
+            </soi:IdentifikacniParcela>
+            <soi:TypStavebnihoObjektuKod>1</soi:TypStavebnihoObjektuKod>
+            <soi:ZpusobVyuzitiKod>7</soi:ZpusobVyuzitiKod>
+            <soi:CastObce>
+               <coi:Kod>189120</coi:Kod>
+            </soi:CastObce>
+            <soi:PlatiOd>2023-12-25T00:00:00</soi:PlatiOd>
+            <soi:GlobalniIdNavrhuZmeny>3271092</soi:GlobalniIdNavrhuZmeny>
+            <soi:IdTransakce>5299176</soi:IdTransakce>
+            <soi:IsknBudovaId>291024306</soi:IsknBudovaId>
+            <soi:DruhKonstrukceKod>9</soi:DruhKonstrukceKod>
+            <soi:PocetBytu>1</soi:PocetBytu>
+            <soi:PocetPodlazi>1</soi:PocetPodlazi>
+            <soi:PripojeniKanalizaceKod>9</soi:PripojeniKanalizaceKod>
+            <soi:PripojeniPlynKod>9</soi:PripojeniPlynKod>
+            <soi:PripojeniVodovodKod>9</soi:PripojeniVodovodKod>
+            <soi:VybaveniVytahemKod>2</soi:VybaveniVytahemKod>
+            <soi:ZastavenaPlocha>117</soi:ZastavenaPlocha>
+            <soi:ZpusobVytapeniKod>9</soi:ZpusobVytapeniKod>
+            
+         </vf:StavebniObjekt>
+<vf:StavebniObjekt gml:id="SO.17562759">
+            <soi:Kod>17562759</soi:Kod>
+            <soi:CislaDomovni>
+               <com:CisloDomovni>3</com:CisloDomovni>
+            </soi:CislaDomovni>
+            <soi:IdentifikacniParcela>
+               <pai:Id>2825825306</pai:Id>
+            </soi:IdentifikacniParcela>
+            <soi:TypStavebnihoObjektuKod>1</soi:TypStavebnihoObjektuKod>
+            <soi:ZpusobVyuzitiKod>7</soi:ZpusobVyuzitiKod>
+            <soi:CastObce>
+               <coi:Kod>189120</coi:Kod>
+            </soi:CastObce>
+            <soi:PlatiOd>2023-12-25T00:00:00</soi:PlatiOd>
+            <soi:GlobalniIdNavrhuZmeny>3271092</soi:GlobalniIdNavrhuZmeny>
+            <soi:IdTransakce>5299176</soi:IdTransakce>
+            <soi:IsknBudovaId>291030306</soi:IsknBudovaId>
+            <soi:Dokonceni>1980-12-31T00:00:00</soi:Dokonceni>
+            <soi:DruhKonstrukceKod>7</soi:DruhKonstrukceKod>
+            <soi:PocetBytu>1</soi:PocetBytu>
+            <soi:PocetPodlazi>1</soi:PocetPodlazi>
+            <soi:PripojeniKanalizaceKod>3</soi:PripojeniKanalizaceKod>
+            <soi:PripojeniPlynKod>3</soi:PripojeniPlynKod>
+            <soi:PripojeniVodovodKod>1</soi:PripojeniVodovodKod>
+            <soi:VybaveniVytahemKod>2</soi:VybaveniVytahemKod>
+            <soi:ZastavenaPlocha>117</soi:ZastavenaPlocha>
+            <soi:ZpusobVytapeniKod>1</soi:ZpusobVytapeniKod>
+            
+         </vf:StavebniObjekt>
+<vf:StavebniObjekt gml:id="SO.17562767">
+            <soi:Kod>17562767</soi:Kod>
+            <soi:CislaDomovni>
+               <com:CisloDomovni>4</com:CisloDomovni>
+            </soi:CislaDomovni>
+            <soi:IdentifikacniParcela>
+               <pai:Id>2825796306</pai:Id>
+            </soi:IdentifikacniParcela>
+            <soi:TypStavebnihoObjektuKod>1</soi:TypStavebnihoObjektuKod>
+            <soi:ZpusobVyuzitiKod>7</soi:ZpusobVyuzitiKod>
+            <soi:CastObce>
+               <coi:Kod>189120</coi:Kod>
+            </soi:CastObce>
+            <soi:PlatiOd>2023-12-25T00:00:00</soi:PlatiOd>
+            <soi:GlobalniIdNavrhuZmeny>3271092</soi:GlobalniIdNavrhuZmeny>
+            <soi:IdTransakce>5299176</soi:IdTransakce>
+            <soi:IsknBudovaId>291012306</soi:IsknBudovaId>
+            <soi:DruhKonstrukceKod>9</soi:DruhKonstrukceKod>
+            <soi:PocetBytu>1</soi:PocetBytu>
+            <soi:PocetPodlazi>1</soi:PocetPodlazi>
+            <soi:PripojeniKanalizaceKod>9</soi:PripojeniKanalizaceKod>
+            <soi:PripojeniPlynKod>9</soi:PripojeniPlynKod>
+            <soi:PripojeniVodovodKod>9</soi:PripojeniVodovodKod>
+            <soi:VybaveniVytahemKod>2</soi:VybaveniVytahemKod>
+            <soi:ZastavenaPlocha>214</soi:ZastavenaPlocha>
+            <soi:ZpusobVytapeniKod>9</soi:ZpusobVytapeniKod>
+            
+         </vf:StavebniObjekt>
+<vf:StavebniObjekt gml:id="SO.17562783">
+            <soi:Kod>17562783</soi:Kod>
+            <soi:CislaDomovni>
+               <com:CisloDomovni>11</com:CisloDomovni>
+            </soi:CislaDomovni>
+            <soi:IdentifikacniParcela>
+               <pai:Id>2825801306</pai:Id>
+            </soi:IdentifikacniParcela>
+            <soi:TypStavebnihoObjektuKod>1</soi:TypStavebnihoObjektuKod>
+            <soi:ZpusobVyuzitiKod>7</soi:ZpusobVyuzitiKod>
+            <soi:CastObce>
+               <coi:Kod>189120</coi:Kod>
+            </soi:CastObce>
+            <soi:PlatiOd>2023-12-25T00:00:00</soi:PlatiOd>
+            <soi:GlobalniIdNavrhuZmeny>3271092</soi:GlobalniIdNavrhuZmeny>
+            <soi:IdTransakce>5299176</soi:IdTransakce>
+            <soi:IsknBudovaId>291004306</soi:IsknBudovaId>
+            <soi:Dokonceni>1919-12-31T00:00:00</soi:Dokonceni>
+            <soi:DruhKonstrukceKod>10</soi:DruhKonstrukceKod>
+            <soi:PocetBytu>2</soi:PocetBytu>
+            <soi:PocetPodlazi>3</soi:PocetPodlazi>
+            <soi:PripojeniKanalizaceKod>3</soi:PripojeniKanalizaceKod>
+            <soi:PripojeniPlynKod>3</soi:PripojeniPlynKod>
+            <soi:PripojeniVodovodKod>1</soi:PripojeniVodovodKod>
+            <soi:VybaveniVytahemKod>2</soi:VybaveniVytahemKod>
+            <soi:ZastavenaPlocha>275</soi:ZastavenaPlocha>
+            <soi:ZpusobVytapeniKod>1</soi:ZpusobVytapeniKod>
+            
+         </vf:StavebniObjekt>
+<vf:StavebniObjekt gml:id="SO.39951073">
+            <soi:Kod>39951073</soi:Kod>
+            <soi:IdentifikacniParcela>
+               <pai:Id>2825867306</pai:Id>
+            </soi:IdentifikacniParcela>
+            <soi:TypStavebnihoObjektuKod>3</soi:TypStavebnihoObjektuKod>
+            <soi:ZpusobVyuzitiKod>19</soi:ZpusobVyuzitiKod>
+            <soi:PlatiOd>2016-08-08T00:00:00</soi:PlatiOd>
+            <soi:GlobalniIdNavrhuZmeny>1041814</soi:GlobalniIdNavrhuZmeny>
+            <soi:IdTransakce>1394597</soi:IdTransakce>
+            <soi:IsknBudovaId>291020306</soi:IsknBudovaId>
+            
+         </vf:StavebniObjekt>
+</vf:StavebniObjekty>
+<vf:AdresniMista>
+<vf:AdresniMisto gml:id="AD.17690803">
+            <ami:Kod>17690803</ami:Kod>
+            <ami:CisloDomovni>2</ami:CisloDomovni>
+            <ami:Psc>38301</ami:Psc>
+            <ami:StavebniObjekt>
+               <soi:Kod>17562741</soi:Kod>
+            </ami:StavebniObjekt>
+            <ami:VOKod>19059</ami:VOKod>
+            <ami:PlatiOd>2013-12-05T00:00:00</ami:PlatiOd>
+            <ami:IdTransakce>422803</ami:IdTransakce>
+            <ami:GlobalniIdNavrhuZmeny>468800</ami:GlobalniIdNavrhuZmeny>
+            
+         </vf:AdresniMisto>
+<vf:AdresniMisto gml:id="AD.17690811">
+            <ami:Kod>17690811</ami:Kod>
+            <ami:CisloDomovni>3</ami:CisloDomovni>
+            <ami:Psc>38301</ami:Psc>
+            <ami:StavebniObjekt>
+               <soi:Kod>17562759</soi:Kod>
+            </ami:StavebniObjekt>
+            <ami:VOKod>19059</ami:VOKod>
+            <ami:PlatiOd>2013-12-05T00:00:00</ami:PlatiOd>
+            <ami:IdTransakce>422803</ami:IdTransakce>
+            <ami:GlobalniIdNavrhuZmeny>468800</ami:GlobalniIdNavrhuZmeny>
+            
+         </vf:AdresniMisto>
+<vf:AdresniMisto gml:id="AD.17690820">
+            <ami:Kod>17690820</ami:Kod>
+            <ami:CisloDomovni>4</ami:CisloDomovni>
+            <ami:Psc>38301</ami:Psc>
+            <ami:StavebniObjekt>
+               <soi:Kod>17562767</soi:Kod>
+            </ami:StavebniObjekt>
+            <ami:VOKod>19059</ami:VOKod>
+            <ami:PlatiOd>2013-12-05T00:00:00</ami:PlatiOd>
+            <ami:IdTransakce>422803</ami:IdTransakce>
+            <ami:GlobalniIdNavrhuZmeny>468800</ami:GlobalniIdNavrhuZmeny>
+            
+         </vf:AdresniMisto>
+<vf:AdresniMisto gml:id="AD.17690846">
+            <ami:Kod>17690846</ami:Kod>
+            <ami:CisloDomovni>11</ami:CisloDomovni>
+            <ami:Psc>38301</ami:Psc>
+            <ami:StavebniObjekt>
+               <soi:Kod>17562783</soi:Kod>
+            </ami:StavebniObjekt>
+            <ami:VOKod>19059</ami:VOKod>
+            <ami:PlatiOd>2013-12-05T00:00:00</ami:PlatiOd>
+            <ami:IdTransakce>422803</ami:IdTransakce>
+            <ami:GlobalniIdNavrhuZmeny>468800</ami:GlobalniIdNavrhuZmeny>
+            
+         </vf:AdresniMisto>
+</vf:AdresniMista>
+</vf:Data>
+</vf:VymennyFormat>
