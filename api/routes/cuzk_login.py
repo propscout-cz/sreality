@@ -23,8 +23,11 @@ from api import dependencies as deps
 
 LOG = logging.getLogger(__name__)
 
-_BUSY = ("A cadastre request is running on this login right now. Wait for it to finish (two minutes at most) and "
-         "try again; nothing was sent to ČÚZK and nothing was changed.")
+# Also for two minutes after a cadastre request whose answer from ČÚZK was lost: it keeps the login until its own
+# call cannot be alive any more (api/cadastre_prices.py, ChargeUncertain).
+_BUSY = ("A cadastre request is using this login right now, or one has just ended without an answer from ČÚZK and "
+         "the login is held until that request cannot still be running. Try again in two minutes; nothing was sent "
+         "to ČÚZK and nothing was changed.")
 
 router = APIRouter(prefix="/account/cuzk-login", tags=["account"])
 
