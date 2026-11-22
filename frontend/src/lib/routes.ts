@@ -140,8 +140,6 @@ export const ROUTES = {
   newDedupExam: def('/new-dedup/exam'),
   newDedupExamReview: def('/new-dedup/exam/review'),
   newDedupTaggingBakeoff: def('/new-dedup/tagging-bakeoff'),
-  // The set W5 hides from consumers until its location is resolved (mig 514).
-  newDedupPinAudit: def('/new-dedup/pin-audit'),
   // The AUTONOMOUS dedup program (docs/design/autodedup/PROGRAM.md) — a separate
   // program from NEW DEDUP above, with its own schema, lane and settings
   // namespace. Progress is its first surface (PROGRAM.md §12, W1); bare

@@ -1376,9 +1376,11 @@ component is slimmed twice — each wave rewrites one component and slims its st
   draws the "Positions" grid (grain heads in `pinPrecisionShort` words), the "By kind" strip, the "No location answer
   · every status" entry and the "Ads" list (`location_position_audit_public`, admin-gated, the list in the URL; a
   cell's list is the reading's cohort, kind rule and live grain). Measured 2026-11-05: 404,687 active ads, 0
-  unexplained, 182,048 (45 %) on their own pin below address grain. **Next:** the operator compares the new section
-  with `/new-dedup/pin-audit`; W6-c2 (destructive) then deletes the old page, `location_pin_audit_mv`, its cron and
-  artifact row.
+  unexplained, 182,048 (45 %) on their own pin below address grain.
+- **W6-c2 — the old pin audit retires — built 2026-11-22** (#2361; operator ruling 2026-11-22 on Q2; migration 765,
+  destructive, applied after the merge with an R2 backup; revert in `migrations/reverts/`). `/new-dedup/pin-audit`, its
+  page and lib, `!AUDIT POLOH`, `location_pin_audit_mv`, its cron `refresh-location-pin-audit` and its
+  `derived_artifacts` row are gone; the "No location answer" entry lists those rows.
 - **The property waterfall — built 2026-11-08** (#2443; spec #2441 Part 2, ruling Q18; no migration; as built:
   `docs/design/location-quality/PROGRAM.md` § W1). `served/town` stores `grains`; Location Quality draws every
   published property once at its location ad's finest level, one table pinning gauge and page. The four unread

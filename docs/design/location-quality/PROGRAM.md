@@ -294,6 +294,7 @@ Today the 1 km obec constant contains the truth 82 % of the time: 29 % for bazos
 - **Monitoring:** the W1 accuracy cell watches drift. Recalibration after a contract change is the one standing hand step; the cell turns Watch to trigger it, and the table header records the contract versions it was fitted on.
 - **UX consult:** the popup "±" changes, and blurred classes hit the 2 km drawn-circle cap more often (bazos about 3 to 4 km after v5.9).
 - **Deploy gate:** autodedup's `dist_norm` inputs shift, so the wave shadow must pass on the rulings ledger inside the affected blocks (the 413 post-2026-10-27 `same` pairs must hold). `DECISION_MODULES` stay untouched.
+- **W6-c2 built (Q2 ruled 2026-11-22):** the pin audit page, its lib, `location_pin_audit_mv`, its cron and registry row are deleted (migration 765); the position audit (W6-c1, migration 733) replaces them.
 
 ### W7: registry
 - **Praha's okres:** obec Praha takes okres 9999 from ČÚZK's own SHP pack, as every obec takes its okres from OBCE_P: no constant, and a blocking load assertion.

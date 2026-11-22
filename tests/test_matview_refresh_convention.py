@@ -120,19 +120,3 @@ def test_the_chokepoint_guards_before_it_refreshes():
         f"{latest.name}: expected EXECUTE revokes for public, anon and authenticated "
         f"(migration 287's default-ACL lesson), found {revokes}"
     )
-
-
-def test_the_pin_audit_cron_publishes_through_the_chokepoint():
-    """RED by: 719 dropping the old producer before the cron is re-pointed (the job would fail
-    every hour and the audit list would freeze), the budget leaving the command (migration
-    371's lesson), or the drop taking the matview the list still reads until W6."""
-    flat = " ".join(
-        _stripped(_MIGRATIONS / "719_location_audit_waterfall_drop.sql").lower().split()
-    )
-    repoint = flat.index("'refresh-location-pin-audit'")
-    assert "set statement_timeout='900s'; select public.refresh_matview('location_pin_audit_mv');" in flat
-    assert "raise notice 'pg_cron unavailable" in flat
-    assert repoint < flat.index("drop function if exists refresh_location_pin_audit_mv();")
-    assert "set producer = 'refresh_matview' where name = 'location_pin_audit_mv'" in flat
-    assert "drop table if exists location_audit_waterfall;" in flat
-    assert "drop materialized view" not in flat

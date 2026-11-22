@@ -271,8 +271,8 @@ describe("applyKeyset on one portal's order column", () => {
 });
 
 /* ---------------------------------------------------------------------- */
-/* A caller-supplied tiebreaker: the listing-grain pin audit                */
-/* (lib/pinAudit.ts), whose unique key is listing_id.                       */
+/* A caller-supplied tiebreaker: the listing-grain position audit           */
+/* (lib/positionAudit.ts), whose unique key is listing_id.                  */
 /* ---------------------------------------------------------------------- */
 
 describe('applyKeyset with a custom tiebreak', () => {
