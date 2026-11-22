@@ -5,7 +5,7 @@ them (the portal-URL reconciler, docs/design/portal-listing-url.md), so there is
 copy of each rule:
 
 * `wait_for_rebuild_gap` — `rebuild_browse_list()` holds AccessShareLock on `listings`
-  for 5-10 minutes every 15, and is its heaviest reader; starting a table sweep underneath
+  for 1-15 minutes every hour, and is its heaviest reader; starting a table sweep underneath
   it makes both slower. Waiting is I/O courtesy, never a lock conflict, so a job proceeds
   anyway once the budget expires.
 * `execute_with_lock_retry` — the hourly MF-yield recompute holds row locks on `listings`
@@ -61,9 +61,9 @@ _LOCK_WAIT_DELAY = 15.0
 def wait_for_rebuild_gap(conn: Any, budget_seconds: float) -> bool:
     """Poll until no `rebuild_%` statement is running, up to a budget.
 
-    `rebuild_browse_list()` runs every 15 minutes and holds its locks for 5-10
-    of them, so refusing outright means colliding roughly half the time and
-    never running. Waiting is the right move — and if the budget expires this
+    `rebuild_browse_list()` runs hourly at :45 and holds its locks for 1-15
+    minutes, so refusing outright means a job started then never runs.
+    Waiting is the right move — and if the budget expires this
     proceeds anyway rather than failing, because the contention is I/O only:
     these jobs take no lock a rebuild can block on, so overlapping is slow,
     never incorrect.

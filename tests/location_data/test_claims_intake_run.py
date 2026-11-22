@@ -263,7 +263,7 @@ def test_the_lane_has_no_watermark_left_to_read():
 
 def test_the_resume_lookup_is_per_source_per_mode_and_needs_a_cursor():
     sql = " ".join(_RESUME_SQL.split())
-    assert "source IS NOT DISTINCT FROM %(source)s" in sql
+    assert _SOURCE_MATCH in sql
     assert "scan_mode = %(scan_mode)s" in sql
     assert "cursor_after_id IS NOT NULL" in sql
     # A completed incremental run is resumed from too: its cursor is a position in an
@@ -332,7 +332,25 @@ def test_the_batch_row_carries_the_cursor_and_the_mode_that_wrote_it():
     # An operator-anchored run's cursor does not certify that everything below it was
     # scanned.
     assert "AND resumable" in resume
-    assert "ORDER BY started_at DESC, id DESC" in resume
+    assert resume.endswith("ORDER BY id DESC LIMIT 1")
+
+
+# `source IS NOT DISTINCT FROM %(source)s`, spelled so a NULL source (every minute-lane call) folds
+# to `source IS NULL`: PG 17 keeps the IDF form as a one-row-estimate filter, and the newest-row
+# reads planned a seq scan + sort of the whole never-pruned ledger (prod EXPLAIN, 2026-11-14).
+_SOURCE_MATCH = "(source = %(source)s OR (source IS NULL AND %(source)s::text IS NULL))"
+
+
+@pytest.mark.parametrize("sql", [_RESUME_SQL, _BODIES_RESUME_SQL])
+def test_the_newest_batch_row_is_a_pkey_probe(sql):
+    """Each half alone still planned the scan: the IDF filter estimates one row whatever the
+    order, and an IS NULL key gives lcb_resume no order. `id` is insert order; `started_at` is
+    stamped by the same INSERT, so the newest row is the same row unless a lane overlaps
+    itself within milliseconds (1 of 90,074 rows on 2026-11-14), and either one is a cursor
+    its own run walked to."""
+    flat = " ".join(sql.split())
+    assert _SOURCE_MATCH in flat and "NOT DISTINCT" not in flat
+    assert "started_at" not in flat and flat.endswith("ORDER BY id DESC LIMIT 1")
 
 
 def test_the_bodies_pass_cursor_is_stamped_with_the_versions_it_is_valid_for():
@@ -348,11 +366,11 @@ def test_the_bodies_pass_cursor_is_stamped_with_the_versions_it_is_valid_for():
     sql = " ".join(_BODIES_RESUME_SQL.split())
     assert sql.startswith(
         "SELECT bodies_cursor_after_id, bodies_cursor_versions FROM location_claim_batches")
-    assert "source IS NOT DISTINCT FROM %(source)s" in sql
+    assert _SOURCE_MATCH in sql
     assert "scan_mode" not in sql
     # Terminal rows only: this run's own 'running' row would otherwise be the newest.
     assert "outcome IN ('ok', 'stopped', 'failed')" in sql
-    assert sql.endswith("ORDER BY started_at DESC, id DESC LIMIT 1")
+    assert sql.endswith("ORDER BY id DESC LIMIT 1")
     # No filter on either column: what the newest run stamped IS the answer, NULL included.
     assert "IS NOT NULL" not in sql
 

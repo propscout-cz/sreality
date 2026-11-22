@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 import requests
 
-from scraper import db, listing_write, parser
+from scraper import db, listing_write, parser, stop
 from scraper.sreality_client import ListingGoneError, SrealityClient
 
 if TYPE_CHECKING:
@@ -54,13 +54,16 @@ def freshness_check(
     client: SrealityClient,
     sreality_id: int,
 ) -> FreshnessResult:
-    """Refetch one listing, classify, and audit. Never raises."""
+    """Refetch one listing, classify, and audit. Never raises, bar a stop signal (`scraper.stop`, #2438): a check the
+    stop cut is no check, so it records nothing."""
     prev = listing_write.latest_snapshot(conn, "sreality", str(sreality_id))
 
     try:
         raw = client.get_detail(sreality_id)
     except ListingGoneError:
         return _record_gone(conn, sreality_id, prev)
+    except stop.StopRequested:
+        raise
     except requests.HTTPError as exc:
         status = (
             exc.response.status_code

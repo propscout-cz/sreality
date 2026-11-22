@@ -699,6 +699,24 @@ def test_due_lists_free_reconciled_rows_oldest_first(cur: Any) -> None:
     assert job_lease.due(cur.connection, names) == [older, requested, newer]
 
 
+def test_two_db_heavy_rows_due_3_hours_ago_are_never_both_claimed(cur: Any) -> None:
+    """#2027: a replica back after hours down finds both daily sweeps due; the second waits for the first's run."""
+    _now(cur)
+    first, second, light = (_registered_job(cur) for _ in range(3))
+    cur.execute("UPDATE scheduled_jobs SET due_at = now() - interval '3 hours' WHERE job_name = ANY(%s)",
+                ([first, second, light],))
+    conn, names, heavy = cur.connection, [first, second, light], [first, second]
+    assert job_lease.due(conn, names, heavy=heavy) == sorted(names)
+    held = job_lease.claim(conn, first, holder="A", heavy=heavy)
+    assert held is not None
+    assert job_lease.due(conn, names, heavy=heavy) == [light], "the other heavy row waits; a light one does not"
+    assert job_lease.claim(conn, second, holder="B", heavy=heavy) is None
+    assert job_lease.claim(conn, light, holder="C", heavy=heavy) is not None
+    assert job_lease.release(conn, held, "ok")
+    assert job_lease.due(conn, names, heavy=heavy) == [second]
+    assert job_lease.claim(conn, second, holder="B", heavy=heavy) is not None
+
+
 def test_a_request_is_filed_once_and_only_for_a_runner_row(cur: Any) -> None:
     _now(cur)
     name = _registered_job(cur)
@@ -1072,6 +1090,30 @@ def test_two_holders_racing_for_one_due_job_get_one_run() -> None:
             assert cur.fetchall() == [("A",)]
     finally:
         _cleanup(a, [name])
+        a.close()
+        b.close()
+
+
+def test_two_replicas_claiming_two_db_heavy_jobs_at_once_start_one() -> None:
+    """No unique index spans two jobs: B's heavy claim waits for A's to commit, then reads A's open run."""
+    a, b = _sessions(2)
+    names = _registered_committed(a, 2)
+    try:
+        result: dict[str, Any] = {}
+        with a.transaction():
+            assert job_lease.claim(a, names[0], holder="A", heavy=names) is not None
+            racer = threading.Thread(target=lambda: result.update(
+                lease=job_lease.claim(b, names[1], holder="B", heavy=names)))
+            racer.start()
+            racer.join(timeout=1)
+            assert racer.is_alive(), "B's heavy claim must wait on A's uncommitted one"
+        racer.join(timeout=15)
+        assert result == {"lease": None}
+        with a.cursor() as cur:
+            cur.execute("SELECT job_name FROM job_runs WHERE job_name = ANY(%s)", (names,))
+            assert cur.fetchall() == [(names[0],)]
+    finally:
+        _cleanup(a, names)
         a.close()
         b.close()
 

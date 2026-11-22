@@ -30,33 +30,33 @@
 	}
 }
 
-# The brand domain's bare name is the landing page (frontend/landing/, a separate
-# Vite entry, no SPA code): three pages, their files under /landing/ and the
-# shared /assets/. Any other path goes to the app, as the Cloudflare redirect
-# that held this name before did, so an old propscout.cz/<path> link still opens
-# the app. The waitlist form posts to the API (api/routes/waitlist.py).
+# The brand domain's bare name redirects to the app, path and query kept. The
+# landing page (frontend/landing/, a separate Vite entry, no SPA code) is taken
+# down since 2026-11-09 but still built: only its privacy page answers here,
+# because the Chrome Web Store listing and the extension's sign-in card link
+# propscout.cz/soukromi and it is the notice for the app, the extension and the
+# waitlist already collected. The redirect is a 302 so no browser keeps it: to
+# bring the landing back, serve / and /dekujeme again as the git tag
+# landing-page-v1 does (docs/architecture.md § Frontend territory).
 http://propscout.cz:{$PORT:80} {
 	root * /srv
 	encode gzip zstd
 
 	import hashed_assets
 
-	@icons path /icons/* /apple-touch-icon.png /favicon.ico /landing/*
+	@icons path /icons/* /apple-touch-icon.png /favicon.ico
 	handle @icons {
 		header Cache-Control "public, max-age=86400"
 		file_server
 	}
 
-	@page path / /dekujeme /soukromi
-	handle @page {
+	handle /soukromi {
 		header Cache-Control "public, max-age=0, must-revalidate"
 		header X-Content-Type-Options "nosniff"
 		header Referrer-Policy "strict-origin-when-cross-origin"
 		header X-Frame-Options "DENY"
 		header -Server
-		rewrite / /landing/index.html
-		rewrite /dekujeme /landing/dekujeme.html
-		rewrite /soukromi /landing/soukromi.html
+		rewrite * /landing/soukromi.html
 		file_server
 	}
 

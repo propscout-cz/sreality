@@ -37,11 +37,12 @@ def _is(sql: str) -> Any:
 
 def _row(delivery: int, device: int, *, kind: str = "new", seen: bool = False, visible: bool = True,
          stale: bool = False, ttl: int = 80_000, ended: bool = False, label: str = "Praha 5",
-         dispatch: str | None = None) -> tuple[Any, ...]:
+         dispatch: str | None = None, reason: str | None = None) -> tuple[Any, ...]:
     """One CLAIM_SQL row, in its select's column order."""
     return (delivery, device, 1, dispatch or f"00000000-0000-4000-8000-{delivery:012d}", ACCOUNT, kind, seen,
             visible, stale, ttl, ended, None if ended else _endpoint(device), None if ended else P256DH,
-            None if ended else AUTH, ORIGIN, 6_490_000, 6_990_000, label, "byt", None, "2+kk", "za nemovitost")
+            None if ended else AUTH, ORIGIN, 6_490_000, 6_990_000, reason, label, "byt", None, "2+kk",
+            "za nemovitost")
 
 
 def _conn(claimed: list[tuple[Any, ...]], *, fanout: Any = None, unread: int = 4) -> ScriptConn:
@@ -125,7 +126,7 @@ def test_one_push_per_device_and_several_rows_coalesce() -> None:
     many, one = send.calls[0]["payload"], send.calls[1]["payload"]
     assert many["notification"]["title"] == "4 nová upozornění"
     assert many["notification"]["body"].split("\n") == [
-        "Zlevněno · Praha 5", "Nový inzerát · Brno", "Nový inzerát · Kolín"]
+        "Zlevněno · Praha 5", "Nová shoda · Brno", "Nová shoda · Kolín"]
     assert many["notification"]["navigate"] == f"{ORIGIN}/notifications?d=11"
     assert one["notification"] == {"title": "Sdíleno s vámi", "body": "Pipeline",
                                    "navigate": f"{ORIGIN}/n/00000000-0000-4000-8000-000000000020?d=20",

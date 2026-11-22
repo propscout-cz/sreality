@@ -227,13 +227,13 @@ def test_a_property_not_yet_published_is_expected_never_a_blocker() -> None:
 
 
 def test_unpublished_is_judged_after_location_before_the_rebuilds_lag_on_its_start() -> None:
-    """Off the newest rebuild's start (r.at), never now(): a property the cap or the stamp
-    released after that start is not in it yet either."""
+    """Off the newest rebuild's start (r.at), never now(): a property not stamped yet, or stamped
+    after that start, is not in it."""
     from toolkit.publication import visible_since_sql
 
     tail = " ".join(pub._STAGE_TAIL.split())
     arms = [tail.index(a) for a in ("then 'location_not_served'",
-                                    f"when {visible_since_sql('p')} > r.at then 'unpublished'",
+                                    f"when coalesce({visible_since_sql('p')} > r.at, true) then 'unpublished'",
                                     "then 'waiting_for_rebuild'")]
     assert arms == sorted(arms)
     for sql in (pub._VISIBLE_SQL, pub._STOCK_SQL):

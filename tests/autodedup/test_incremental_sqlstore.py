@@ -451,6 +451,63 @@ def test_each_feed_advances_only_its_own_cursor() -> None:
     assert CURSOR_FLIPPED not in out
 
 
+def test_the_new_feed_passes_over_a_row_the_lane_already_holds() -> None:
+    """E988, 2026-11-17 15:20Z: 414 listings between `rt_new` and the entrant's cursor already held
+    an `rt_fp` row (the entrant feed read them first); the new feed re-claimed each. It passes over
+    them now, and its cursor still stops at the last row it took."""
+    db = FakePg()
+    for listing_id in range(1001, 1011):
+        db.listings[listing_id] = {"first_seen_at": db.now - timedelta(hours=1),
+                                   "inactive_at": None, "is_active": True}
+    _place(db, *range(1001, 1011))
+    for listing_id in (1001, 1002, 1004):
+        db.rt_fp[(GEN, listing_id)] = {"category_main": None, "category_type": None,
+                                       "area_m2": None, "disposition": None, "floor": None,
+                                       "fp_digest": "d", "cell_key": "o1", "cell_group": "byt",
+                                       "is_active": True}
+    db.cursors[CURSOR_NEW] = {"last_listing_id": 1000}
+    work = SqlWork(db, SCOPE, GEN, straggler_window=0, revive_slice=0, drift_slice=0,
+                   enter_slice=0, evidence_slice=0)
+    items = work.claim(10)  # a share of two
+    assert [item.listing_id for item in items if item.feed == "new"] == [1003, 1005]
+    assert work.claim_bound["new_known"] == 3 and work.claim_bound["cut"]
+    assert work.commit(items)[CURSOR_NEW] == 1005
+    work = SqlWork(db, SCOPE, GEN, straggler_window=0, revive_slice=0, drift_slice=0,
+                   enter_slice=0, evidence_slice=0)
+    assert [item.listing_id for item in work.claim(50) if item.feed == "new"] == [
+        1006, 1007, 1008, 1009, 1010]
+
+
+def test_the_changed_feed_skips_a_listings_first_snapshot_and_still_crosses_it() -> None:
+    """#2509: a listing's first snapshot is its arrival, written with the row, and the new feed
+    claims that arrival; the changed feed claims only a snapshot that follows another."""
+    db = FakePg()
+    stamp = db.now - timedelta(hours=2)
+    for listing_id in (5, 6):
+        db.listings[listing_id] = {"first_seen_at": stamp, "inactive_at": None,
+                                   "is_active": True}
+    _place(db, 5, 6)
+    db.snapshots.extend([{"id": 90, "listing_id": 5, "scraped_at": stamp},
+                         {"id": 91, "listing_id": 6, "scraped_at": stamp},
+                         {"id": 92, "listing_id": 5, "scraped_at": stamp},
+                         {"id": 93, "listing_id": 6, "scraped_at": stamp}])
+
+    def changed(work: SqlWork, limit: int) -> list[int]:
+        items = work.claim(limit)
+        work.commit(items)
+        return [item.listing_id for item in items if item.feed == "changed"]
+
+    work = SqlWork(db, SCOPE, GEN, revive_slice=0, enter_slice=0, evidence_slice=0)
+    assert changed(work, 5) == [5], "a share of one: 92, never the arrival at 90"
+    assert db.cursors[CURSOR_CHANGED]["last_snapshot_id"] == 92, "stops at the row it took"
+    assert changed(work, 5) == [6]
+    assert db.cursors[CURSOR_CHANGED]["last_snapshot_id"] == 93
+    db.cursors.pop(CURSOR_CHANGED)
+    db.snapshots[2:] = []
+    assert changed(work, 5) == [], "two arrivals alone: nothing changed"
+    assert db.cursors[CURSOR_CHANGED]["last_snapshot_id"] == 91, "the window is still crossed"
+
+
 def test_a_refused_pass_advances_no_cursor() -> None:
     db = FakePg()
     db.listings[5] = {"first_seen_at": db.now - timedelta(hours=2), "inactive_at": None,

@@ -58,8 +58,8 @@ _LANE_SCOPE = [{"grain": "obec", "code": _TOWN}, {"grain": "cast_obce", "code": 
 _OPEN = {"blocks": [f"town:{_TOWN}"], "category_types": ["prodej", "pronajem"], "all_blocks": False,
          "listing_ids": None, "max_clusters_per_run": 600}
 _CLOSED = {**_OPEN, "blocks": []}
-_SUBJECTS = ["state", "stream", "build", "merge_pause", "decision_lag", "lease", "rulings/ads", "rulings/brokers",
-             "splits"]
+_SUBJECTS = ["state", "stream", "build", "merge_pause", "decision_lag", "unread_arrivals", "held_unpublished",
+             "lease", "rulings/ads", "rulings/brokers", "splits"]
 
 pytestmark = pytest.mark.skipif(
     not _DB_URL and not _REQUIRED,
@@ -354,7 +354,7 @@ def test_the_whole_check_reads_every_statement_on_the_replayed_schema(conn, name
 
     assert {subject: c["status"] for subject, c in cells.items()} == {
         "state": "ok", "stream": "ok", "build": "ok", "merge_pause": "ok", "decision_lag": "unknown",
-        "lease": "ok", "rulings/ads": "ok", "rulings/brokers": "ok", "splits": "unknown"}
+        "unread_arrivals": "ok", "held_unpublished": "ok", "lease": "ok", "rulings/ads": "ok", "rulings/brokers": "ok", "splits": "unknown"}
     assert cells["stream"]["facts"]["live"] is True and cells["build"]["message"] == "merging: not building"
     assert cells["decision_lag"]["facts"]["n"] == 0
     assert cells["rulings/brokers"]["facts"] == {"state": "merging", "active": 0, "lifted": 0, "violations": 0}

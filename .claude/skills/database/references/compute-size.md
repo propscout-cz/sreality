@@ -35,8 +35,8 @@ recommended size.
 
 - `LOAD`: engine backlog > 2,000 unread, or the detail queue holds > 20,000 pending, or its oldest row is
   > 6 h old. The thresholds are first guesses: 2,000 unread is ~3 h of engine reading on 2XL.
-- `STRAINED`: the Browse rebuild averaged > 300 s over the last hour (2XL ~65 s; the rebuild runs every
-  900 s), or a lane that is on has not passed for 15 min.
+- `STRAINED`: the newest Browse rebuild took > 300 s (2XL ~65 s; it runs hourly at :45 since migration
+  740), or a lane that is on has not passed for 15 min.
 - `QUIET`: neither.
 
 ## Switching
@@ -58,6 +58,8 @@ recommended size.
 
 Fixed so that nothing loops or stalls: the engine's row census (#2404), location refetch (#2405), the Health
 checks' budgets and scans (#2406), and text extraction's walk (#2408: the newest 24 h whole, then 25,000 older ads a
-pass, 215 k buffers at most). Still open: the publishing check's tag-cohort read (~1.2 M buffers;
-`image_clip_embeddings` not autovacuumed since 10-15) may still run past its 45 s on Large.
-Health cells can read "Not measured" during warm-up: that is a budget running out, not a fault.
+pass, 215 k buffers at most). Publishing and delisting run every 30 min on 75 s and description reading every 6 h
+on 120 s (#2512). Still open: the publishing check's tag-cohort read (~1.2 M buffers;
+`image_clip_embeddings` not autovacuumed since 10-15) may still run past 75 s on Large.
+Health cells can read "Not measured" during warm-up: that is a budget running out, not a fault. A check unmeasured
+for three cadences, gauge or alarm, opens a `stale:<key>` incident (migration 745).

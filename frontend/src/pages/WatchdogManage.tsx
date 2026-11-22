@@ -13,6 +13,7 @@ import {
 } from '@/lib/api';
 import { watchdogKeys } from '@/lib/queries';
 import { enumLabel } from '@/lib/enums';
+import { CHANGE_META } from '@/lib/changeKinds';
 import { mapAreaLabel } from '@/lib/filters';
 import { fmtAbsolute, fmtCount, fmtRelative } from '@/lib/format';
 import { PPM2_UNIT, ppm2BasisOfCohort } from '@/lib/measure';
@@ -85,9 +86,9 @@ function Header() {
           Manage watchdogs
         </h1>
         <p className="mt-2 text-sm text-[var(--color-ink-2)]">
-          A watchdog is a saved filter. The backend matcher fires a
-          notification when a freshly scraped listing matches the spec; its
-          alerts appear in Notifications.
+          A watchdog is a saved filter. It notifies you about the events you
+          chose on the properties it matches (new, price changes, delistings,
+          new portals); its alerts appear in Notifications.
         </p>
       </div>
       <div className="flex items-center gap-3">
@@ -171,6 +172,9 @@ function SubRow({
         <span className="block truncate" title={summary}>
           {summary}
         </span>
+        <div className="mt-0.5 text-[0.75rem] text-[var(--color-ink-3)]">
+          {sub.notify_kinds.map((k) => CHANGE_META[k].label).join(' · ')}
+        </div>
       </td>
       <td className="px-4 py-2.5 align-middle text-right tabular-nums text-[var(--color-ink-2)]">
         {fmtCount(sub.dispatch_count)}

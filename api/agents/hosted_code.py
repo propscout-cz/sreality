@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import mimetypes
 import re
@@ -13,6 +12,7 @@ from typing import Any, cast
 
 from api.llm_client import LLMClient
 from api.providers import Block, HostedCodeProvider, HostedFile, ProviderError, TextBlock
+from scraper.hashing import file_sha256
 
 LOG = logging.getLogger(__name__)
 
@@ -120,7 +120,7 @@ class RunFiles:
             return {"name": name, "error": str(exc)}
         file = HostedFile(name=name, media_type=_safe_media_type(info.media_type), data=data)
         self.produced[name] = file
-        return {**describe(file), "sha256": hashlib.sha256(data).hexdigest()}
+        return {**describe(file), "sha256": file_sha256(data)}
 
     def release(self) -> None:
         """Delete everything this run left at the provider, which keeps a file until told otherwise (ADR-0005)."""

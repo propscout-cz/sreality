@@ -194,10 +194,11 @@ export interface BrowseViewState {
   setBoard: (patch: Partial<BoardOptions>) => void;
 }
 
-/* The legacy spellings of a `layers` selection — `kraje` and the rent map's
- * `rentmap` + `rentvk` (layersFromSearchParams) — carried until a layer change
- * rewrites them, so an old link keeps its layers through filtering. */
-const LEGACY_LAYER_KEYS = ['kraje', 'rentmap', 'rentvk'];
+/* The legacy spellings of a `layers` selection — `kraje`, the rent map's
+ * `rentmap` + `rentvk` and the terrain's `relief` + `contours`
+ * (layersFromSearchParams) — carried until a layer change rewrites them, so an
+ * old link keeps its layers through filtering. */
+const LEGACY_LAYER_KEYS = ['kraje', 'rentmap', 'rentvk', 'relief', 'contours'];
 const OVERLAY_URL_KEYS = [
   'tab', 'sort', 'cities', 'colorby', 'layers', ...LEGACY_LAYER_KEYS, 'preset', 'pm', 'labels', 'pins',
   'dashboard', 'market', 'small', ...BOARD_URL_KEYS,

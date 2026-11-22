@@ -54,9 +54,9 @@ from api.dependencies import SYSTEM_ACCOUNT_ID, is_admin
 
 from psycopg.types.json import Jsonb
 
-from api import maps
 from api import schemas as s
 from location_data.claims_common import SUBJECT_LOCATION_JOIN
+from location_data.resolver.resolve_db import SqlRegistryView, current_registry_version
 from toolkit import ComparableFilters, TargetSpec
 from toolkit.rent_map import compute_reference_rent
 from toolkit.subject import match_listing, subject_mf_facts
@@ -1486,13 +1486,24 @@ def _load_subject_condition(
     return {"condition": row[0]}
 
 
+# Any query error raises: read as "no obec" it would become a confident `location_unknown` frozen into a run.
+def _typed_point_obec_kod(conn: "psycopg.Connection", target: TargetSpec) -> int | None:
+    """The RÚIAN code of the obec covering a typed point, or None outside every obec or with no current registry."""
+    try:
+        version, _ = current_registry_version(conn)
+    except LookupError:
+        return None
+    obec = SqlRegistryView(conn, version).containing_obec(target.lat, target.lng)
+    return obec.code if obec else None
+
+
 def _subject_mf_facts(
     conn: "psycopg.Connection", resolution: _Resolution, target: TargetSpec,
     body: s.CreateEstimationIn,
 ) -> dict[str, Any]:
     """What mf_reference() needs about the run's subject besides the target's
     disposition and area. A raw-spec subject has no stored location: its obec comes
-    from the one containing-obec statement and it never binds a KÚ."""
+    from the resolver's registry view at the current version and it never binds a KÚ."""
     if resolution.input_listing_id is not None:
         facts = subject_mf_facts(conn, resolution.input_listing_id)
         if facts is not None:
@@ -1506,7 +1517,7 @@ def _subject_mf_facts(
         "terrace": spec.get("terrace"), "furnished": spec.get("furnished"),
         "garage": spec.get("garage"), "has_lift": spec.get("has_lift"),
         "building_type": spec.get("building_type"),
-        "obec_kod": maps.containing_obec_kod(conn, lat=target.lat, lng=target.lng),
+        "obec_kod": _typed_point_obec_kod(conn, target),
         "country_status": None,
     }
 

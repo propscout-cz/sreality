@@ -222,6 +222,43 @@ describe('the remembered pin limit', () => {
   });
 });
 
+/* ČÚZK's photo, relief and contours are keys of the one `layers` selection (since
+ * 2026-11-20); the terrain's own keys of 2026-11-11 (`relief=1`, `contours=1`) still read. */
+describe('the basemap picks', () => {
+  const urlState = (initial: string) =>
+    renderHook(() => ({ view: useUrlBrowseState(), search: useLocation().search }), {
+      wrapper: ({ children }: { children: ReactNode }) =>
+        createElement(MemoryRouter, { initialEntries: [initial] }, children),
+    });
+
+  it('read an old terrain link into the selection, beside what `layers` names', () => {
+    expect(urlState('/browse?relief=1').result.current.view.overlay.layers).toBe('relief');
+    expect(urlState('/browse?layers=metro&contours=1&relief=1').result.current.view.overlay.layers)
+      .toBe('contours,metro,relief');
+  });
+
+  it('keep an old terrain link through a filter change, and rewrite it on a layer change', () => {
+    const { result } = urlState('/browse?relief=1&contours=1');
+    act(() => result.current.view.setFilters({ ...DEFAULT_FILTERS, priceMax: 5_000_000 }));
+    expect(result.current.view.overlay.layers).toBe('contours,relief');
+    act(() => result.current.view.setOverlay({ layers: 'aerial,relief' }));
+    const sp = new URLSearchParams(result.current.search);
+    expect(sp.get('layers')).toBe('aerial,relief');
+    expect(sp.has('relief') || sp.has('contours')).toBe(false);
+  });
+
+  it('serialise into the Browse link as layers and stay out of the filter spec', () => {
+    const url = browseUrlFromState({
+      filters: DEFAULT_FILTERS,
+      sort: DEFAULT_SORT,
+      tab: 'map',
+      overlay: { ...DEFAULT_OVERLAY, layers: 'aerial,contours,relief' },
+    });
+    expect(new URLSearchParams(url.split('?')[1]).get('layers')).toBe('aerial,contours,relief');
+    expect(fromSearchParams(new URLSearchParams('layers=aerial&relief=1'))).toEqual(fromSearchParams(new URLSearchParams('')));
+  });
+});
+
 /* `?tab=` names the stats tab, the brokers tab or nothing: an old `?tab=table` link opens the Properties tab, not a blank page. */
 describe('the tab in the URL', () => {
   const tabOf = (initial: string) =>

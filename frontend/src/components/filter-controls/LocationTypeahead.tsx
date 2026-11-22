@@ -28,6 +28,7 @@ import { useQuery } from '@tanstack/react-query';
 
 import {
   fetchSuggest,
+  placePick,
   resolveSuggestion,
   type LocationResolution,
   type MapySuggestion,
@@ -57,19 +58,20 @@ const sameChip = (a: DistrictChip, b: DistrictChip): boolean =>
 /* The chips a resolve answer makes, or why it makes none. `res` null = the
  * resolve call threw, which says nothing about the place. */
 const chipsFromResolve = (
-  pick: MapySuggestion,
+  suggestion: MapySuggestion,
   res: LocationResolution | null,
 ): DistrictChip[] | string => {
   if (res == null) return PICK_NOTICE.failed;
-  if (res.level == null && pick.type === 'regional.country') return PICK_NOTICE.country;
+  if (res.level == null && suggestion.type === 'regional.country') return PICK_NOTICE.country;
   const units = res.parts ?? [res];
   const chips = units
     .map((u) => ({ name: u.name, context: res.context, level: res.level, id: u.id }))
     .filter(isDistrictChip);
-  return chips.length === units.length && chips.length > 0 ? chips : PICK_NOTICE.refused(pick.name);
+  return chips.length === units.length && chips.length > 0 ? chips : PICK_NOTICE.refused(suggestion.name);
 };
 
-/* The Mapy suggest read behind a place box: the typed query, debounced, and its answer. */
+/* The Mapy suggest read behind a place box: the typed query, debounced, and its answer.
+ * `answered` is the text `matches` answer, which lags `query` while the user types on. */
 export function usePlaceSuggest() {
   const [query, setQuery] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -91,6 +93,7 @@ export function usePlaceSuggest() {
       setQuery('');
       setDebounced('');
     },
+    answered: debounced,
     matches: suggestQ.data ?? [],
     isLoading: suggestQ.isFetching && debounced.length >= MIN_QUERY_LEN,
     tooShort: debounced.length > 0 && debounced.length < MIN_QUERY_LEN,
@@ -156,13 +159,15 @@ export function LocationTypeahead({
 
   /* The map flies at once; the chip waits for `/maps/resolve`. Dedupe runs
    * after resolving, because identity is the resolved unit — a re-pick changes
-   * nothing (an excluded chip stays excluded). */
-  const add = async (s: MapySuggestion) => {
+   * nothing (an excluded chip stays excluded). The resolve carries the text the
+   * list answered and the row's rank, which the server records (ruling Q10). */
+  const add = async (s: MapySuggestion, rank: number) => {
+    const pick = placePick(suggest.answered, rank);
     onPick?.(s);
     suggest.reset();
     setNotice(null);
     setPending((n) => n + 1);
-    const res = await resolveSuggestion(s).catch(() => null);
+    const res = await resolveSuggestion(s, { pick }).catch(() => null);
     if (!alive.current) return;
     setPending((n) => n - 1);
     const chips = chipsFromResolve(s, res);
@@ -305,7 +310,8 @@ export function SuggestPanel({
   isLoading: boolean;
   tooShort: boolean;
   matches: ReadonlyArray<MapySuggestion>;
-  onPick: (s: MapySuggestion) => void;
+  /* `rank` is the row's 1-based position in the list. */
+  onPick: (s: MapySuggestion, rank: number) => void;
 }) {
   if (tooShort) {
     return (
@@ -331,7 +337,7 @@ export function SuggestPanel({
         <li key={`${s.name}-${idx}`}>
           <button
             type="button"
-            onClick={() => onPick(s)}
+            onClick={() => onPick(s, idx + 1)}
             className="w-full flex items-center justify-between gap-3 px-3 py-1.5 text-left hover:bg-[var(--color-copper-soft)]"
           >
             <span className="min-w-0 flex-1 truncate">

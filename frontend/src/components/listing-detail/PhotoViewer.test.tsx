@@ -70,4 +70,14 @@ describe('the Fotky tab and the phone', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Fotka 3 z 4' }));
     expect(viewer()).toHaveAccessibleName('3 / 4');
   });
+
+  it('the phone swiper goes round: a hidden copy at each end opens the photo it stands for', () => {
+    render(<PropertyGallery images={photos(4)} loading={false} isActive />);
+    const frames = Array.from(screen.getByRole('group', { name: 'Fotky' }).children) as HTMLElement[];
+    expect(frames).toHaveLength(6);
+    expect(frames[0]).toHaveAttribute('aria-hidden', 'true');
+    expect(frames[5]).toHaveAttribute('aria-hidden', 'true');
+    fireEvent.click(frames[0]);
+    expect(viewer()).toHaveAccessibleName('4 / 4');
+  });
 });

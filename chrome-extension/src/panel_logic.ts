@@ -73,14 +73,12 @@ export type FactRow = Pick<
   PortalListing, 'category_main' | 'floor' | 'total_floors' | 'condition' | 'ownership' | 'property_subtype' | 'plot_area_m2'
 >;
 
-/* A chip's text, and the longer wording its tooltip carries when it has one. */
 export interface Fact {
   text: string;
-  title?: string;
 }
 
 export interface FactFormat {
-  floor: (floor: number, totalFloors: number | null) => Fact | null;
+  floor: (floor: number, totalFloors: number | null) => string | null;
   /* An enum column's Czech label. */
   label: (column: 'condition' | 'ownership' | 'subtype', slug: string) => string | null;
   plot: (m2: number) => string;
@@ -91,7 +89,7 @@ export function factChips(row: FactRow, fmt: FactFormat): Fact[] {
   const fact = (text: string | null): Fact | null => (text ? { text } : null);
   const value = (key: FactKey): Fact | null => {
     switch (key) {
-      case 'floor': return row.floor == null ? null : fmt.floor(row.floor, row.total_floors);
+      case 'floor': return row.floor == null ? null : fact(fmt.floor(row.floor, row.total_floors));
       case 'condition': return row.condition ? fact(fmt.label('condition', row.condition)) : null;
       case 'ownership': return row.ownership ? fact(fmt.label('ownership', row.ownership)) : null;
       case 'subtype': return row.property_subtype ? fact(fmt.label('subtype', row.property_subtype)) : null;

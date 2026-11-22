@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from scraper import db, portal_runner
+from scraper import db, portal_runner, stop
 from scraper.maxima_main import MaximaPortal
 from scraper.rate_ledger import RateBudgetUnavailable
 from scraper.portal import default_config
@@ -210,6 +210,26 @@ def test_probe_gives_up_on_a_refused_source_without_counting_an_error():
     rc, agg = portal_runner.run_index_probe(p, dry_run=False)
     assert asked == ["A", "B"]
     assert (rc, agg["errors"], agg["budget_refused"]) == (0, 0, 1)
+    assert agg["listings_enqueued"] == 1
+
+
+def test_a_stop_ends_the_probe_as_ours_never_as_a_blocked_portal():
+    # #2438: the worker's SIGTERM reaches the probe through `scraper.stop`. The limiter refuses the run as "stop" and
+    # the probe stops asking; a deploy reads neither as an error nor as the shared ledger blocking the portal.
+    p = _ProbePortal(categories=["A", "B", "C"])
+    asked: list[str] = []
+
+    def probe_category(category, conn, dry_run, limiter, probe_pages):
+        asked.append(category)
+        if category == "B":
+            stop.EVENT.set()
+            limiter.acquire()
+        return ({"x"}, {"found_new": 1, "enqueued": 1}, 99, 1, False)
+
+    p.probe_category = probe_category
+    rc, agg = portal_runner.run_index_probe(p, dry_run=False)
+    assert asked == ["A", "B"]
+    assert (rc, agg["errors"], agg["budget_refused"]) == (0, 0, 0)
     assert agg["listings_enqueued"] == 1
 
 

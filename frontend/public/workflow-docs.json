@@ -846,43 +846,6 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/frontend-build.yml"
     },
     {
-      "filename": "heal_bazos_floor_zero.yml",
-      "name": "Ops: heal bazos/web flats whose floor is 0 but whose text names a storey",
-      "description": "The one-off heal that rides PR #2054 (scraper/floor.py: a stray \"přízemí\" anywhere in the text used to set floor 0). `scripts/heal_bazos_floor_zero.py` selects source in ('bazos','web'), category_main='byt', floor = 0 whose description names an above-ground storey, and writes the fixed parser's reading when it is above 0, otherwise NULL — a column-only compare-and-set on floor = 0 that enqueues `dirty_properties` in the same statement, never snapshots and never touches `last_seen_at` (rules 2 and 20; ledgered in tests/scraper/test_listing_write_census.py).",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "dry_run",
-          "description": "true = report what would change only. false = write (needs confirm=APPLY).",
-          "required": false,
-          "type": "boolean",
-          "default": "true",
-          "options": null
-        },
-        {
-          "name": "confirm",
-          "description": "Type APPLY to arm the real write. Ignored when dry_run=true.",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "heal-bazos-floor-zero",
-      "cancelInProgress": false,
-      "timeoutMinutes": 60,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/heal_bazos_floor_zero.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/heal_bazos_floor_zero.yml"
-    },
-    {
       "filename": "idnes_index_walk.yml",
       "name": "Scraping: iDNES Reality index walk",
       "description": "The fast half of the iDNES cadence split (architectural rule #19, like sreality). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, unseen ids are nominated for a page check (rule #3) once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='idnes'). No detail fetch — the realtime worker's drain lane consumes the queue. Records run_type='index'.",
@@ -1535,59 +1498,6 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/realitymix_index_walk.yml"
     },
     {
-      "filename": "recompute_property_stats.yml",
-      "name": "Jobs: recompute property stats (daily full reconcile)",
-      "description": "DAILY FULL SWEEP for the canonical `properties` parent. Attaches any straggler unlinked listings, then recomputes EVERY property's is_active rollup, source / site counts, first/last-seen span, representative child, current price, and the price-history aggregates (drop / rise counts, max drop %) from the union of its children's snapshots. Finally it clears the dirty_properties rows queued before it started, for the id range it recomputed.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "15 4 * * *",
-          "human": "Daily at 04:15 UTC"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "batch_size",
-          "description": "Properties recomputed per statement",
-          "required": true,
-          "type": "string",
-          "default": "2000",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Report straggler + dirty + property counts and the resume cursor, then exit without writing",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        },
-        {
-          "name": "max_seconds",
-          "description": "Wall-clock sweep budget in seconds (clean-stop past it, saving where the next run resumes; a resumed run that stops again is RED; clamped to 6000 — timeout-minutes is sized for that ceiling, raise both together in the yml)",
-          "required": false,
-          "type": "string",
-          "default": "6000",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "sreality-property-maintenance",
-      "cancelInProgress": false,
-      "timeoutMinutes": 130,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/recompute_property_stats.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/recompute_property_stats.yml"
-    },
-    {
       "filename": "reextract.yml",
       "name": "Data: re-extract a field from stored pages",
       "description": "Replays the CURRENT parser over already-stored `portal_raw_pages` HTML to recover the two things a portal publishes that are NOT `listings` columns: the `images` child rows and the `raw_json.broker` block. Every typed column is `reparse.yml`'s work. No re-fetch, no LLM, no new secrets — and it repairs INACTIVE listings too, which a re-fetch structurally cannot.",
@@ -1778,51 +1688,6 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/reparse.yml"
     },
     {
-      "filename": "resolve_brokers_full.yml",
-      "name": "Broker resolution (full sweep + backfill)",
-      "description": "Broker intelligence: the daily full-sweep RECONCILE + the one-shot backfill. Re-attributes a rotating lap of broker-bearing listings from raw_json (keyset-batched so the raw_json scan never times out over the pooler), runs the cross-source merge step, recomputes ALL broker rollups + memberships in ONE merged statement (recompute_brokers(None), Broker Unify W3 — the old 9-window loop paid ~27 full index walks and 100+ min), relabels firms, generates candidates, and clears the dirty queue — the self-healing backstop for anything the incremental drain missed. It publishes no count: every broker number is read from the broker book, which the property pass keeps. Nominally runs after the property recompute (04:15); in practice GH throttling drifts both into the same mid-morning window. mode=backfill is the same code path (the first population); dispatch it once after this lands on main. Source-agnostic. The broker_resolution lease keeps it apart from the worker's incremental broker lane.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "35 4 * * *",
-          "human": "Daily at 04:35 UTC"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "mode",
-          "description": "full | backfill (same code path; backfill = first population)",
-          "required": false,
-          "type": "choice",
-          "default": "full",
-          "options": [
-            "full",
-            "backfill"
-          ]
-        },
-        {
-          "name": "max_seconds",
-          "description": "Wall-clock budget for the attribution scan; finalize cleanly before timeout",
-          "required": false,
-          "type": "string",
-          "default": "1500",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "broker-resolution-full",
-      "cancelInProgress": false,
-      "timeoutMinutes": 180,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/resolve_brokers_full.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/resolve_brokers_full.yml"
-    },
-    {
       "filename": "run_job.yml",
       "name": "Jobs: run now",
       "description": "Asks the Railway job runner to run one of its jobs now. It only FILES a request (one row on scheduled_jobs, written by the runner's own `request` verb) and runs nothing here. The runner starts it within seconds once the job and its shared resource are free, even while its schedule is paused; a second request is refused while one waits; a job its own workflow still schedules is refused until its move PR lands. A green run means \"asked\", not \"done\": follow the run on Health (job/<name>). Required secret: SUPABASE_DB_URL.",
@@ -1862,7 +1727,7 @@
     {
       "filename": "runner_image.yml",
       "name": "CI: runner image",
-      "description": "Builds the job-runner image, the root Dockerfile with EXTRAS=api,clip,geo (CPU torch, the baked CLIP checkpoint, the geo wheels), on every pull request that changes an image input, before Railway first builds it after the merge (#2025): a failure there would leave main unable to build the runner until a fix lands. The build's own offline RUN is the proof (CPU torch, and the checkpoint loads with the hub offline), so the scraper files it imports are inputs too; the log then shows the image size. A second job builds the API image (EXTRAS=api, the API's and the worker's one build) at the base and with this pull request, fails if it can import torch or transformers or holds the hub cache, and prints both sizes and the package diff (#2032). No secrets; it pushes and deploys nothing. About 10 minutes a run, billed once the repository is private.",
+      "description": "Builds the job-runner image, the root Dockerfile with EXTRAS=api,clip,geo (CPU torch, the baked CLIP checkpoint, the geo wheels), on every pull request that changes an image input, before Railway first builds it after the merge (#2025): a failure there would leave main unable to build the runner until a fix lands. The build's own offline RUN is the proof (CPU torch, and the checkpoint loads with the hub offline), so the scraper files it imports are inputs too; the log then shows the image size. A second job builds the API image (EXTRAS=api) at the base and with this pull request, fails if it can import torch or transformers or holds the hub cache, and prints both sizes and the package diff (#2032). A third builds the WORKER image (EXTRAS=api,browser) and launches chromium inside the finished image with no network: that arm was missing, so the first browser build reached Railway unbuilt and failed there instead (2026-11-16). No secrets; it pushes and deploys nothing. About 10 minutes a run, billed once the repository is private.",
       "manual": false,
       "schedules": [],
       "onPush": false,
@@ -2295,45 +2160,20 @@
     {
       "filename": "seed_curated_cities.yml",
       "name": "Data: seed curated cities",
-      "description": "One-shot workflow that geocodes the cities in data/obce_v_datech_2025.csv via Mapy.cz, then writes them into curated_cities + city_index_definitions + city_index_revisions + city_index_values. A new city is bound to the RÚIAN town under its centroid; its population is that town's, loaded by load_obec_population.yml.",
+      "description": "Writes the index definitions and one revision of index values from data/obce_v_datech_2025.csv into city_index_definitions + city_index_revisions + city_index_values, for cities already in curated_cities (matched by name and kraj). A row naming no such city, or an unknown CSV column, refuses the run by name and writes nothing: a new city arrives as a one-line data migration checked against the register. A city's population is its town's, loaded by load_obec_population.yml.",
       "manual": true,
       "schedules": [],
       "onPush": false,
       "onPullRequest": false,
       "paths": null,
-      "inputs": [
-        {
-          "name": "dry_run",
-          "description": "Plan only — geocode, but skip DB writes",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        },
-        {
-          "name": "commit_geocodes",
-          "description": "Commit data/curated_cities_geocoded.json back to the branch",
-          "required": false,
-          "type": "choice",
-          "default": "true",
-          "options": [
-            "true",
-            "false"
-          ]
-        }
-      ],
+      "inputs": [],
       "secrets": [
-        "MAPY2_CZ_API_KEY",
-        "MAPY_CZ_API_KEY",
         "SUPABASE_DB_URL"
       ],
       "concurrencyGroup": null,
       "cancelInProgress": null,
       "timeoutMinutes": 90,
-      "permissions": "contents: write",
+      "permissions": "contents: read",
       "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/seed_curated_cities.yml",
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/seed_curated_cities.yml"
     },

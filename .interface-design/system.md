@@ -132,7 +132,7 @@ with `tabular-nums` on EVERY number.
   component draws every page tab strip: Browse and its Explore windows, the property page (`PropertyTabs` keeps its
   tab list, address and panels), a collection's members, NEW DEDUP Labeling's statuses.
   - The 1px `--color-rule` rule belongs to the strip and runs its container's whole content column. A trailing slot
-    (Browse's Split | Cards and Small | Large) sits at the strip's right end above the rule; on a row too narrow for
+    (Browse's Map | Cards and Small | Large) sits at the strip's right end above the rule; on a row too narrow for
     both it wraps to a line ABOVE the tabs, never below them, so the tabs never leave the rule.
   - The first label sits on the title's edge: tab buttons have no horizontal padding, tabs are `gap-6` apart.
   - Open = `ink` plus a 2px copper line exactly as wide as the label and its count, laid ON the rule (covering it);
@@ -171,7 +171,7 @@ with `tabular-nums` on EVERY number.
     the caption: ChartBuilder's "Hodnota: Cena"); `disabled` for the whole control; `box` + `aria` make it the form
     box (the Valuo editor: the track is the 34px box, dashed while absent, brick while `aria-invalid`).
   - `tone="phone"` on the phone's own screens (Makléři Řadit and the horizon bar, the account sheet's
-    Vzhled, Notifications inside the phone frame): a `rule-strong` track hairline, 32px, 13px type; chosen = ink on
+    Vzhled, Notifications inside the phone frame, every map's Podklad Mapa / Letecká in the phone's Vrstvy sheet): a `rule-strong` track hairline, 32px, 13px type; chosen = ink on
     `--color-inset` wearing the phone chip's pressed `ink-2` hairline as an inset ring (`chipState`; the well alone
     is ~1.05:1 on paper; a ring, so no width moves, and no weight); colour there only ever means a stage. The
     Filtry sheet hosts desktop controls and keeps the copper bar.

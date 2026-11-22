@@ -364,12 +364,12 @@ function DigestPanel({ digest }: { digest: AutodedupDigest | null }) {
     ['podtyp', digest.subtype ?? '—'],
     ['dispozice', digest.disposition ?? '—'],
     ['plocha', digest.area_m2 == null ? '—' : String(digest.area_m2)],
-    /* fmtFloor says the storey AND the building count, and says which scale. It
-     * returns null on an absent storey, so the count keeps its own row: 77.8k active
-     * rows (mostly houses) state podlaží and no patro, and on a same/different verdict
-     * '2 podlaží' against '3' is exactly the distinguishing fact. */
-    ['patro', fmtFloor(digest.floor, digest.total_floors) ?? '—'],
-    ['podlaží', digest.total_floors == null ? '—' : String(digest.total_floors)],
+    /* fmtFloor says the storey AND the building count. It returns null on an absent
+     * storey, so the count keeps its own row: 77.8k active rows (mostly houses) state
+     * a count and no storey, and on a same/different verdict '2' against '3' is
+     * exactly the distinguishing fact. */
+    ['podlaží', fmtFloor(digest.floor, digest.total_floors) ?? '—'],
+    ['počet podlaží', digest.total_floors == null ? '—' : String(digest.total_floors)],
     ['cena', digest.price == null ? '—' : fmtCzk(digest.price)],
     ['první', digest.first_seen ?? '—'],
     ['poslední', digest.last_seen ?? '—'],

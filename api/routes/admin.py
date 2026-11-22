@@ -16,8 +16,8 @@ from typing import TYPE_CHECKING, Any, Literal
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
+from api import attachments, rent_map
 from api import dependencies as deps
-from api import rent_map
 from api.agent import list_agent_tools
 from api.agents.definition import DefinitionError
 from api.skills import (
@@ -297,6 +297,9 @@ def put_portal_limits(
 
 # --- rent map: MF Cenová mapa nájemného (revision history + ingest) --------
 
+_RENT_MAP_TYPES = frozenset({"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"})
+
+
 @router.get("/rent-map")
 def get_rent_map_status(
     conn: Any = Depends(deps.get_db_conn),
@@ -316,14 +319,13 @@ def post_rent_map_upload(
     file: UploadFile = File(...),
     conn: Any = Depends(deps.get_db_conn),
 ) -> dict[str, Any]:
-    """Operator uploads a Cenová mapa XLSX from Settings. Re-uploading a known file
-    (same sha256) writes no revision; it stamps `rent_map_cells` current when the cells serve it."""
-    data = file.file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="empty upload")
+    """Operator uploads a Cenová mapa XLSX from Settings, read like an attachment (size cap, type).
+    Re-uploading a known file (same sha256) writes no revision; it stamps `rent_map_cells` current
+    when the cells serve it."""
+    upload = attachments.read_upload(file, _RENT_MAP_TYPES)
     try:
         return rent_map.ingest_bytes(
-            conn, data,
+            conn, upload.data,
             source_filename=file.filename or "upload.xlsx",
             uploaded_by="settings_ui",
         )

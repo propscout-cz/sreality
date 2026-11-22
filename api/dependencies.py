@@ -202,7 +202,8 @@ def require_token(authorization: str | None = Header(default=None)) -> None:
 
 def token_claims(authorization: str | None = Header(default=None)) -> dict | None:
     """require_token's gate, returning the claims (None under the local-dev opt-out) for a flag gated on
-    admin, as a forced refresh is; never a scope: identity routes take verify_jwt / `TenantConn` (tenant_pool)."""
+    admin, as a forced refresh is, or on the automation marker (`is_automation`); never a scope: identity routes take
+    verify_jwt / `TenantConn` (tenant_pool)."""
     return _bearer(authorization)
 
 
@@ -314,6 +315,11 @@ def is_admin(claims: dict) -> bool:
     """The is_admin claim, top-level or under app_metadata — require_admin's test."""
     meta = claims.get("app_metadata") or {}
     return claims.get("is_admin") is True or meta.get("is_admin") is True
+
+
+def is_automation(claims: dict) -> bool:
+    """The smoke accounts' `app_metadata.automation` marker; any truthy value counts, so a malformed one still marks."""
+    return bool((claims.get("app_metadata") or {}).get("automation"))
 
 
 def require_admin(claims: dict = Depends(verify_jwt)) -> dict:

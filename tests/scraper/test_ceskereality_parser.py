@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from scraper.ceskereality_client import SUBTYPE_SLUGS
 from scraper.ceskereality_parser import (
     extract_subtype_slugs,
@@ -239,6 +241,24 @@ def test_parse_detail_published_at_none_when_absent():
     assert listing.published_at is None
 
 
+
+_PATRO_ROW = ('<div class="i-info"><span class="i-info__title">Patro</span>'
+              '<span class="i-info__value"> 1. </span></div>')
+_PROSE = "Byt po rekonstrukci."
+
+
+@pytest.mark.parametrize(("prose", "expected"), [
+    (_PROSE, 0),                                             # no row, no storey named: ground
+    ("Byt po rekonstrukci ve 4. NP.", 3),                    # the advert's own words lead
+    ("Byt po rekonstrukci ve 3. patře.", None),              # a storey is named, on no scale
+])
+def test_a_flat_with_no_patro_row_is_on_the_ground_storey_unless_its_text_says_otherwise(
+        prose: str, expected: int | None) -> None:
+    assert _PATRO_ROW in DETAIL_HTML and _PROSE in DETAIL_HTML
+    page = DETAIL_HTML.replace(_PATRO_ROW, "").replace(_PROSE, prose)
+    assert parse_detail(page, source_url=_DETAIL_URL).floor == expected
+
+
 def test_parse_detail_street_from_slug_when_no_jsonld_address():
     listing = parse_detail(SLUG_STREET_HTML, source_url=SLUG_STREET_URL)
     # The SEO slug's street segment (ASCII-folded), capitalized for display.
@@ -297,9 +317,10 @@ _W2_PAGE = (
     Path(__file__).resolve().parents[1] / "fixtures" / "location_w2" / "ceskereality_detail.html"
 ).read_text(encoding="utf-8")
 _W2_URL = "https://www.ceskereality.cz/prodej/byty/x-1234567.html"
-# digest(hash_doc()) of parse_detail(_W2_PAGE, source_url=_W2_URL) on f0fed8d49, before the
-# parser read the canonical at all.
-_W2_HASH = "8db8d3f72b5598f148658b0fc82a259f7fcac894e77f3c0f5a16daf875fbd8e2"
+# digest(hash_doc()) of parse_detail(_W2_PAGE, source_url=_W2_URL) before the parser read
+# the canonical at all (re-pinned by #2552: the page is a flat with no "Patro" row, which
+# now reads as the ground storey).
+_W2_HASH = "1d7d51a65dea5678fe1d9efda49ba44b2dbea728627a07474159cc28482a679f"
 
 
 def _with_canonical(href: str) -> str:

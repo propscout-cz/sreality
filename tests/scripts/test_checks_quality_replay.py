@@ -5,8 +5,9 @@
 # read-only, never by hand, from the SQL below (each export wrapped its rows as CSV text beside
 # that text's md5, computed server-side, and the file was written once the two md5s agreed). The
 # checks run at their own cadence over the window the exports hold, parsing and data_quality every
-# 6 h, location every 6 h from the export on, text_extraction hourly, and each result reaches the
-# ladder (toolkit.system_alerts.reconcile) as production feeds it. pipeline_check_results is pruned
+# 6 h, location every 6 h from the export on, text_extraction hourly (its cadence at the export;
+# every 6 h since #2512, see _TEXT_CADENCE_S), and each result reaches the ladder
+# (toolkit.system_alerts.reconcile) as production feeds it. pipeline_check_results is pruned
 # at 35 days, so no replay reaches further back than 09-14.
 #
 # tests/fixtures/health_quality_churn_28d.csv (day,source,snapshots,first_snapshots,resnapshots,
@@ -681,6 +682,9 @@ _SLOT = 10 * _MINUTE
 # An ordinary day's median minutes to the first reading is 3.4-7.1.
 _PROMPT = 5 * _MINUTE
 _TEXT_START, _TEXT_END = _utc("2026-09-22T00:00:00Z"), _utc("2026-10-19T14:00:00Z")
+# The registry's text_extraction cadence when the exports were taken. Production measures it every 6 h
+# since #2512; this replay keeps the hourly ticks its pinned history was read at, so it is no model of today's.
+_TEXT_CADENCE_S = 3_600
 
 
 @functools.cache
@@ -787,14 +791,15 @@ def _flow_rows(at: _dt.datetime) -> list[tuple[Any, ...]]:
 
 @functools.cache
 def _text() -> tuple[_Ladder, list[_Result]]:
-    """check_text_extraction hourly over the 28 days, told through the ladder as a gauge."""
+    """check_text_extraction hourly (_TEXT_CADENCE_S) over the 28 days, told through the ladder as a gauge."""
     def answers(at: _dt.datetime, history: _History) -> dict[str, Any]:
         return {text_lane.MODEL_SQL: [(_MODEL,)], text_lane.LLM_TEXT_SOURCES_SQL: [("bazos",)],
                 text_lane.EXTRACTION_LATENCY_SQL: _flow_rows(at),
                 text_lane.ELIGIBLE_LAG_SQL: [_stock_row(at)]}
 
-    results = _replay(_ticks(_TEXT_START, _TEXT_END, _HOUR), qu.check_text_extraction, answers)
-    return _told("text_extraction", 3_600, results, cls="gauge"), results
+    ticks = _ticks(_TEXT_START, _TEXT_END, _dt.timedelta(seconds=_TEXT_CADENCE_S))
+    results = _replay(ticks, qu.check_text_extraction, answers)
+    return _told("text_extraction", _TEXT_CADENCE_S, results, cls="gauge"), results
 
 
 # --- the retiring keys ----------------------------------------------------------------------------
@@ -1157,7 +1162,7 @@ def _ship() -> dict[str, tuple[_Ladder, list[_Result]]]:
             text_lane.MODEL_SQL: [(_MODEL,)], text_lane.LLM_TEXT_SOURCES_SQL: [("bazos",)],
             text_lane.EXTRACTION_LATENCY_SQL: _flow_rows(at), text_lane.ELIGIBLE_LAG_SQL: [lane]}),
     }
-    cadence = {"data_quality": 21_600, "location_town_coverage": 21_600, "text_extraction": 3_600}
+    cadence = {"data_quality": 21_600, "location_town_coverage": 21_600, "text_extraction": _TEXT_CADENCE_S}
     return {key: (_told(key, cadence[key], results, cls="gauge"), results)
             for key, results in runs.items()}
 

@@ -101,7 +101,7 @@ production.
   (`tests/scraper/test_job_registry.py`): every argv parses; walk set = `PORTAL_CLASSES`; static co-tenancy
   (the largest `RUNNER_MAX_CONCURRENT` memory declarations, one per resource, ≤ 81 % of a replica, 70 % until #2155); no two
   DB-heavy jobs in one hour (a wait for a shared resource and the kill grace counted; scheduled runs and their
-  retries, not a deploy's at-once re-run of an interrupted one); the API's stuck-run
+  retries, not a deploy's at-once re-run of an interrupted one, which waits instead: #2027's heavy turn); the API's stuck-run
   cutoff (`STUCK_RUN_CUTOFF_MINUTES`) exceeds the longest walk timeout (the walks are the `scrape_runs`
   writers) plus `STUCK_RUN_GRACE_S`; the GitHub schedule set is exactly {verify_pipeline,
   scrape_price_stats} once the files still running a waiting job are set aside, so it tightens by itself
@@ -148,7 +148,7 @@ production.
   runs back off exponentially from 60 s, capped at the cadence and the next slot; a timeout retries on that
   backoff floored at the job's own `timeout_s`; a lost run (lease expired) is re-run once, then backs off. A
   DB-heavy job's failure, timeout and lost retries wait for its own hour (the next day at most); its interrupted
-  run is due at once like any other (#2024 R-a). A SIGKILL the runner did not send (likely the OOM killer) is
+  run is due at once like any other (#2024 R-a), and no DB-heavy job starts while another's run is open (#2027). A SIGKILL the runner did not send (likely the OOM killer) is
   `failed`, with the peak in its error. A pure request run never moves the schedule (its exit 75 only pulls it to
   60 s), nor does its loss (#2317) unless its row was paused and already due when it started: `due_at` then moves on,
   never earlier. A request that also took a due slot advances it; an interrupted or lost request is not re-filed.
@@ -299,6 +299,11 @@ GitHub group and the last `SCRAPE_CHAIN_TOKEN` users deleted. (The full location
 sweeps itself; nothing to move.) The sweeps reach the runner on consolidated leases (operator ruling 2026-10-26):
 the property sweep's moved onto `job_lease` in #2107, with #2267 dropping the old acquire after gate #2110, and the
 broker sweep's in #2108, with #2273 doing the same after gate #2111.
+**Built (#2027, PR #2410):** property_sweep at 03:00 UTC (T 150 min, 1.5× its budget) and broker_sweep at 06:00 UTC
+(T 75 min, from its measured phases) on the runner, their two workflows deleted; migration 731 re-hosts the
+`property_sweep` artifact at 56 h with no slack (the same fail line). `job_lease` starts no DB-heavy job while another
+DB-heavy run is open, so a recovery, a deploy's re-run or a request waits instead of overlapping (the #2122 review's
+fix (b)). Their 7-day measurement is its gate ticket; location_intake is #2028.
 **Gate (7 days):** derived artifacts fresh; `location_town_coverage` not worse; sweep durations ± 20 %; a
 backlog drains at least as fast as the chain did; no two DB-heavy jobs overlap; intake reads `held by
 sibling` during a registry load instead of red.

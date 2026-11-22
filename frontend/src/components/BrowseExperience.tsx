@@ -46,7 +46,8 @@ import type { AnchorPoint, MapFlyToCommand, MapFrameCommand } from '@/components
 import type { MapySuggestion } from '@/lib/maps';
 import { fetchDatasets, fetchGrowth, fetchGrowthShapes, fetchSeries, priceStatsKeys } from '@/lib/priceStats';
 import { buildHoverData, type GrowthMetric } from '@/lib/growthChoropleth';
-import { useMapOverlayRegistry } from '@/lib/mapOverlays';
+import { hasRegistryLayers, useMapOverlayRegistry } from '@/lib/mapOverlays';
+import { readGroupFailure } from '@/lib/readGroup';
 import {
   countedWords,
   isDefault,
@@ -61,7 +62,6 @@ import {
 } from '@/lib/filters';
 import { usePageTitle } from '@/lib/pageTitle';
 import { portalLabel } from '@/lib/portals';
-import CreateWatchdogModal from '@/components/CreateWatchdogModal';
 import MergeBar from '@/components/MergeBar';
 import AppliedFilterPills from '@/components/AppliedFilterPills';
 import FilterPresetBar from '@/components/FilterPresetBar';
@@ -100,6 +100,8 @@ import type { KeysetCursor } from '@/lib/keyset';
 import type { BrowseViewState, TabKey } from '@/lib/browseState';
 
 const ListingMap = lazyChunk(() => import('@/components/ListingMap'));
+/* Lazy: the dialog mounts only on "Create watchdog", so it stays out of the first visit. */
+const CreateWatchdogModal = lazyChunk(() => import('@/components/CreateWatchdogModal'));
 
 export interface BrowseFeatures {
   /* The saved-set bars (filter presets; the Stats tab's dashboards) — page only. */
@@ -304,13 +306,16 @@ export default function BrowseExperience({
     for (const p of cityPolygonsQuery.data ?? []) m.set(p.city_id, p.geojson);
     return m;
   }, [cityPolygonsQuery.data]);
+  /* The four city reads fail as one layer: any of them failed leaves Města empty
+   * (2026-11-22: the outlines alone failed, the key showed over an empty map). */
+  const cityLoadFailure = readGroupFailure([citiesQuery, cityDefsQuery, cityValuesQuery, cityPolygonsQuery]);
 
   /* The reference-overlay registry (metro, flood zones, kraje, the rent map,
    * …): tiny, and the same cache entry the listing-detail and comparables maps
    * read. */
   const overlayRegistryQuery = useMapOverlayRegistry(mapVisible);
   /* Only worth a toast when layers are selected: they would silently not draw. */
-  const overlayRegistryFailed = overlayRegistryQuery.isError && overlay.layers !== '';
+  const overlayRegistryFailed = overlayRegistryQuery.isError && hasRegistryLayers(overlay.layers);
   useEffect(() => {
     if (overlayRegistryFailed) {
       pushToast('err', 'Referenční vrstvy mapy se nepodařilo načíst — zůstanou skryté.');
@@ -735,6 +740,7 @@ export default function BrowseExperience({
                     cityIndexValues={cityOverlay.cityIndexValues}
                     cityIndexValuesAll={cityOverlay.cityIndexValuesAll}
                     cityIndexDefinitions={cityDefsQuery.data ?? []}
+                    cityLoadFailure={cityLoadFailure}
                     onColorByIndexChange={(name) => view.setOverlay({ colorByIndexName: name })}
                     overlayRegistry={overlayRegistryQuery.data}
                     overlayLayers={overlay.layers}
@@ -805,7 +811,9 @@ export default function BrowseExperience({
 
       {f.watchdog && watchdogModalOpen
         ? (
-            <CreateWatchdogModal filters={filters} onClose={() => setWatchdogModalOpen(false)} />
+            <Suspense fallback={null}>
+              <CreateWatchdogModal filters={filters} onClose={() => setWatchdogModalOpen(false)} />
+            </Suspense>
           )
         : null}
     </div>
@@ -968,7 +976,7 @@ function MapViewToggle({
       hug
       label="Properties layout"
       options={[
-        { value: false, label: 'Split', title: 'Show the map beside the cards', glyph: <SplitGlyph /> },
+        { value: false, label: 'Map', title: 'Show the map beside the cards', glyph: <MapGlyph /> },
         { value: true, label: 'Cards', title: 'Hide the map — full-width cards', glyph: <CardsGlyph /> },
       ]}
       value={collapsed}
@@ -977,8 +985,8 @@ function MapViewToggle({
   );
 }
 
-/* Two panes (wide cards | narrow map). */
-function SplitGlyph() {
+/* A folded map. */
+function MapGlyph() {
   return (
     <svg
       width="13"
@@ -990,8 +998,9 @@ function SplitGlyph() {
       strokeLinejoin="round"
       aria-hidden
     >
-      <rect x="2" y="3" width="12" height="10" rx="1.5" />
-      <line x1="9.5" y1="3" x2="9.5" y2="13" />
+      <path d="M2 4.5 6 3l4 1.5L14 3v8.5L10 13l-4-1.5L2 13Z" />
+      <line x1="6" y1="3" x2="6" y2="11.5" />
+      <line x1="10" y1="4.5" x2="10" y2="13" />
     </svg>
   );
 }

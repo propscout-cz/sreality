@@ -29,7 +29,7 @@ import type { AutodedupMember } from '@/lib/api';
 import ImageCarousel from '@/components/ImageCarousel';
 import { imageSrc } from '@/lib/imageUrl';
 import { advertPath } from '@/lib/listingUrl';
-import { portalBadge, portalLabel } from '@/lib/portals';
+import { advertLink, portalBadge, portalLabel } from '@/lib/portals';
 import { categoryMainLabel, categoryTypeLabel } from '@/lib/enums';
 import { fmtArea, fmtCzk, fmtFloor, fmtShortDate } from '@/lib/format';
 import { type RoutePath } from '@/lib/routes';
@@ -46,7 +46,7 @@ export function memberAttrs(m: AutodedupMember): Array<[string, string]> {
     ['Cena', fmtCzk(m.price_czk)],
     ['Plocha', fmtArea(m.area_m2)],
     ['Dispozice', m.disposition ?? '—'],
-    ['Patro', fmtFloor(m.floor, m.total_floors) ?? '—'],
+    ['Podlaží', fmtFloor(m.floor, m.total_floors) ?? '—'],
   ];
 }
 
@@ -175,6 +175,7 @@ export default function ListingMini({
   dense?: boolean;
 }) {
   const inApp = memberListingPath(member);
+  const link = advertLink(member);
   const kind = [categoryMainLabel(member.category_main), categoryTypeLabel(member.category_type)]
     .filter((s) => s && s !== '—')
     .join(' · ');
@@ -240,9 +241,9 @@ export default function ListingMini({
               Detail
             </Link>
           )}
-          {member.source_url && (
+          {link && (
             <a
-              href={member.source_url}
+              href={link}
               target="_blank"
               rel="noopener noreferrer"
               className="text-[var(--color-copper-2)] underline decoration-dotted underline-offset-2"

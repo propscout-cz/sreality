@@ -1,10 +1,9 @@
 """Mapy.cz proxy — autocomplete suggest + RÚIAN code resolve.
 
 The frontend never holds the Mapy.cz API key; it talks to these proxy
-routes instead. Suggest responses are cached in-process for a few
-minutes since identical queries don't change on that timescale and the
-free tier is rate-limited. Resolve responses are NOT cached because
-they depend on registry state which can change between deploys.
+routes instead. Nothing Mapy answers is kept: its terms forbid storing or
+caching an API result, so every suggest asks Mapy (the in-process cache
+went early, ruling 2026-11-13, #2454).
 
 WHAT YOU PICK IS WHAT YOU FILTER. A location chip is ONE RÚIAN unit at the
 level the operator picked — kraj, okres, obec, část obce or ulice
@@ -41,8 +40,8 @@ Suggestions are regional only (`type=regional`): a POI has no register unit.
 from __future__ import annotations
 
 import logging
+import os
 import re
-import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -51,6 +50,7 @@ from fastapi import HTTPException
 
 from api import http_json
 from api.location_filter import ChipLevel
+from location_data.place_search import DOOR_LABEL_SQL
 from location_data.resolver.bind import REGISTRY_PIN_CONFLICT_M
 from location_data.resolver.composite import match_streets
 from location_data.resolver.geo import haversine_m
@@ -68,7 +68,6 @@ from location_data.resolver.resolve_db import (
     SqlRegistryView,
 )
 from location_data.resolver.types import RegistryView, Street
-from scraper.geocoding import KEY_LEVEL_STATUS, MapyKeyRefused, mapy_api_keys, with_mapy_key_failover
 
 LOG = logging.getLogger(__name__)
 
@@ -92,50 +91,34 @@ _STREET_SLACK_M = 200.0
 _OKRES_PREFIX = re.compile(r"^\s*okres\s+", re.IGNORECASE)
 
 MAPY_SUGGEST_URL = "https://api.mapy.cz/v1/suggest"
-_SUGGEST_TTL_SECONDS = 300
-_SUGGEST_CACHE_MAX = 256
-
-_suggest_cache: dict[tuple[str, int, str], tuple[float, dict[str, Any]]] = {}
+# 401/403 = the key was rejected; 429 = it hit its rate limit. A different key may succeed, so a backup key is tried
+# at once. A 5xx or a lost connection is a Mapy outage, which a second key cannot fix.
+_KEY_LEVEL_STATUS: frozenset[int] = frozenset({401, 403, 429})
 
 
 def _api_keys() -> list[str]:
-    keys = mapy_api_keys()
+    """Mapy.cz keys in priority order: `MAPY_CZ_API_KEY`, then the backup `MAPY2_CZ_API_KEY`; a blank or a repeat
+    is no key."""
+    keys: list[str] = []
+    for name in ("MAPY_CZ_API_KEY", "MAPY2_CZ_API_KEY"):
+        value = (os.environ.get(name) or "").strip()
+        if value and value not in keys:
+            keys.append(value)
     if not keys:
         raise HTTPException(status_code=503, detail="geocoding not configured")
     return keys
 
 
-def _cache_evict_expired(now: float) -> None:
-    for k, (exp, _) in list(_suggest_cache.items()):
-        if exp <= now:
-            del _suggest_cache[k]
-
-
-def clear_suggest_cache() -> None:
-    _suggest_cache.clear()
-
-
 def suggest(query: str, *, limit: int = 10, lang: str = "cs") -> dict[str, Any]:
-    keys = _api_keys()
-    cache_key = (query, limit, lang)
-    now = time.monotonic()
-    hit = _suggest_cache.get(cache_key)
-    if hit is not None and hit[0] > now:
-        return hit[1]
-    _cache_evict_expired(now)
-    raw = _fetch_suggest(query, limit=limit, lang=lang, keys=keys)
-    items = raw.get("items") or []
-    payload = {"items": items}
-    if len(_suggest_cache) >= _SUGGEST_CACHE_MAX:
-        _suggest_cache.pop(next(iter(_suggest_cache)))
-    _suggest_cache[cache_key] = (now + _SUGGEST_TTL_SECONDS, payload)
-    return payload
+    raw = _fetch_suggest(query, limit=limit, lang=lang, keys=_api_keys())
+    return {"items": raw.get("items") or []}
 
 
 def _fetch_suggest(
     query: str, *, limit: int, lang: str, keys: list[str]
 ) -> dict[str, Any]:
-    def attempt(key: str, last: bool) -> dict[str, Any]:
+    """Asks Mapy with each key in turn while a key is refused (`_KEY_LEVEL_STATUS`); the last key's answer is final."""
+    for n, key in enumerate(keys, 1):
         try:
             return http_json.fetch_json(
                 "GET", MAPY_SUGGEST_URL, timeout=10,
@@ -145,8 +128,10 @@ def _fetch_suggest(
                 },
             )
         except http_json.HttpJsonError as exc:
-            if exc.status in KEY_LEVEL_STATUS and not last:
-                raise MapyKeyRefused(exc.status) from exc
+            if exc.status in _KEY_LEVEL_STATUS and n < len(keys):
+                LOG.warning("Mapy suggest key %d/%d rejected (status=%s); failing over to backup",
+                            n, len(keys), exc.status)
+                continue
             # A rejected key / throttle / outage from Mapy must NOT surface as a raw
             # 500: the typeahead says "Place search is unavailable" only on a 503, and
             # a 500 leaves a silent empty dropdown. Log the real upstream status.
@@ -154,10 +139,7 @@ def _fetch_suggest(
             raise HTTPException(
                 status_code=503, detail="geocoding temporarily unavailable",
             ) from exc
-
-    return with_mapy_key_failover(
-        attempt, keys, log=LOG, refused="Mapy suggest key %d/%d rejected (status=%s); failing over to backup",
-    )
+    raise AssertionError("unreachable: _api_keys returns at least one key")
 
 
 _CURRENT_VERSION_SQL = "SELECT id FROM registry_versions WHERE is_current LIMIT 1"
@@ -245,22 +227,6 @@ def _containing_chain(
     }
 
 
-def containing_obec_kod(conn: Any, *, lat: float | None, lng: float | None) -> int | None:
-    """The RÚIAN code of the obec covering a point, or None (outside every obec / no current
-    registry) -- the one containing-obec statement, for subjects with no stored location
-    (an estimation of a typed point). Any query error raises: read
-    as "no obec" it would become a confident `location_unknown` frozen into a run."""
-    if lat is None or lng is None:
-        return None
-    with conn.cursor() as cur:
-        cur.execute(_CURRENT_VERSION_SQL)
-        row = cur.fetchone()
-    if not row or row[0] is None:
-        return None
-    obec = _containing_chain(conn, version=int(row[0]), lat=lat, lng=lng).get("obec")
-    return obec[1] if obec else None
-
-
 def _lookup_part(
     conn: Any, *, version: int, name: str, obec_unit_id: int,
 ) -> list[tuple[int, str]]:
@@ -277,8 +243,10 @@ def _lookup_part(
 
 @dataclass(frozen=True)
 class _Momc:
-    """A městská část a pick named: no code of its own (rows carry none), only its části."""
+    """A městská část a pick named: no code in the answer (rows carry none), only its části. `code` is for the
+    pick's record (location_data.place_picks) alone."""
 
+    code: int
     name: str
     parts: list[tuple[int, str]]
 
@@ -315,7 +283,7 @@ def _bind_momc(
         LOG.info("maps.resolve: %s pick binds městská část %s of obec %s, which has no část on any door "
                  "— no code", level, momc_code, obec_code)
         return None
-    return _Momc(name=momc_name, parts=parts)
+    return _Momc(code=int(momc_code), name=momc_name, parts=parts)
 
 
 def _name_variants(name: str) -> list[str]:
@@ -450,21 +418,6 @@ def _street_of(type_: str, name: str, regional_structure: Sequence[Any]) -> str 
     return name if type_ != "regional.address" else _entry_name(regional_structure, "regional.street")
 
 
-# The door's label: the ONE label (rule 25) over its register fields, as the row will read.
-# `kod_adm` is the mirror's primary key (migration 381): one row or none, so no LIMIT/ORDER.
-_DOOR_LABEL_SQL = """
-SELECT location_display_label(
-         s.name, CASE WHEN ap.typ_so = 'č.p.' THEN ap.cislo_domovni::text END,
-         ap.cislo_orientacni::text || coalesce(ap.znak_orientacniho, ''),
-         o.name, c.name, 'CZ', 'cz')
-  FROM ruian_address_points ap
-  LEFT JOIN ruian_streets s ON s.id = ap.street_id
-  LEFT JOIN ruian_admin_units o ON o.id = ap.obec_unit_id
-  LEFT JOIN ruian_admin_units c ON c.id = ap.cast_obce_unit_id
- WHERE ap.kod_adm = %s AND ap.valid_to IS NULL
-"""
-
-
 # THE ADDRESS PICKER'S DOOR (W3b). The number is the `regional.address` entry's; a street
 # entry binds as the chip does and, unbound, binds nothing (never the whole obec). One keyed
 # read of the resolver's own lookup — nothing searches the 3 M points — and exactly ONE door
@@ -503,7 +456,7 @@ def _resolve_address_point(
                  "— no code", len(near), REGISTRY_PIN_CONFLICT_M, obec[1], None if street is None else street.code)
         return None
     with conn.cursor() as cur:
-        cur.execute(_DOOR_LABEL_SQL, (near[0].kod_adm,))
+        cur.execute(DOOR_LABEL_SQL, (near[0].kod_adm,))
         row = cur.fetchone()
     return near[0].kod_adm, None if row is None else row[0]
 
@@ -564,6 +517,15 @@ def _resolve_admin(
     return unit[0], (unit[1], unit[2]), None
 
 
+@dataclass(frozen=True)
+class PickedUnit:
+    """What a pick named, for its record (ruling Q10): the bound level and code, the typed level and no code when
+    refused, `momc` and its code for a městská část."""
+
+    level: str
+    code: int | None
+
+
 def resolve(
     conn: Any,
     *,
@@ -573,18 +535,20 @@ def resolve(
     name: str,
     regional_structure: Sequence[Any],
     address_point: bool = False,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], PickedUnit | None]:
     """A Mapy pick -> `{level, id, name, context}`: its bound unit, else its typed level.
     With `address_point` (the address picker) an address pick answers its ONE door. A městská
-    část has no id and adds `parts`: `[{id, name}]`, the `cast_obce` units the typeahead chips."""
+    část has no id and adds `parts`: `[{id, name}]`, the `cast_obce` units the typeahead chips.
+    Beside the answer, the place a pick's record names; None when there is nothing to record (no level, no
+    registry)."""
     door = address_point and type_ == "regional.address"
     level = "adresni_misto" if door else _TYPE_LEVEL.get(type_)
     out: dict[str, Any] = {"level": level, "id": None, "name": None, "context": None}
     if level is None:
-        return out
+        return out, None
     version = _registry_version(conn)
     if version is None:
-        return out
+        return out, None
     if door:
         unit = _resolve_address_point(conn, version=version, lat=lat, lng=lng, name=name,
                                       regional_structure=regional_structure)
@@ -593,9 +557,12 @@ def resolve(
             conn, version=version, lat=lat, lng=lng, level=level,
             name=_street_of(type_, name, regional_structure),
         )
+    place = PickedUnit(level, None)
     if isinstance(unit, _Momc):
         out["name"] = unit.name
         out["parts"] = [{"id": code, "name": nm} for code, nm in unit.parts]
+        place = PickedUnit("momc", unit.code)
     elif unit is not None:
         out["id"], out["name"] = unit
-    return out
+        place = PickedUnit(out["level"], out["id"])
+    return out, place

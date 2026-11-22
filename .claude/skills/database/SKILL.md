@@ -152,7 +152,7 @@ where a caller needs it. Exception for a hot function: `references/tenancy.md` �
 - **Open with `set local lock_timeout = '5s';` when a migration GRANT/REVOKEs or
   CREATE-OR-REPLACEs a hot or cron-refreshed relation** (any matview, `browse_list`, `listings`).
   Those take ACCESS EXCLUSIVE and a whole-transaction loop holds every lock it already took —
-  without a timeout it queues behind, or blocks, the `*/15` list rebuild or an hourly matview refresh.
+  without a timeout it queues behind, or blocks, the hourly list rebuild (:45) or a matview refresh.
 - **Destructive migrations** (`DROP TABLE`/`COLUMN`, type-changing `ALTER`, `DELETE`
   without `WHERE`, `TRUNCATE`) — **pause for explicit operator OK** ("yes, apply it") and
   back up the affected data *first* (`backup_before_drop.yml`, to R2). There's no staging
@@ -163,7 +163,7 @@ Correct flow for any schema change: (1) write the new numbered migration file in
 `migrations/`; (2) for destructive changes, get explicit approval + back up first;
 (3) apply BEFORE merging — via MCP (`apply_migration`), or with no MCP in the session
 `gh workflow run apply_migration.yml --ref <branch> -f file=NNN_x.sql -f dry_run=false -f confirm=APPLY`
-(`psql -f`, statement autocommit: every statement idempotent, plain `SET lock_timeout`); verify
+(`psql -f`, statement autocommit: every statement idempotent, plain `SET lock_timeout`; default `statement_timeout`: 2 min); verify
 with a SELECT; (4) commit the migration file in the same change; (5) report what was applied.
 
 **APPLY BEFORE YOU MERGE when the code reads the new schema.** Merging and applying are
@@ -258,15 +258,14 @@ allowlisted with a reason) + `tests/api/test_account_scope_census.py` (no nullab
 **Browse read model** (migrations 275–278, 283; PRs #705/#707/#711/#714/#724): a
 `properties_public`-style view is fed from `browse_projection` (the column contract,
 defined once) into `browse_list` — an **UNLOGGED
-table**, blue-green rebuilt every 15 minutes by a `SECURITY DEFINER` pg_cron function
+table**, blue-green rebuilt hourly at :45 (mig 740) by a `SECURITY DEFINER` pg_cron function
 (`rebuild_browse_list()`, `pg_try_advisory_xact_lock` guards overlapping runs, `ANALYZE`
 *before* the swap is mandatory or the planner uses stale stats on the fresh table). Since 630 it lays the table out by category, lat, lng, builds `browse_list_map_idx` (the map index is only cheap on a heap in its own order) and, once its DROP holds the lock, re-patches every property a `property_merge_events` row created or undid since the previous run (less 15 min).
 The map reads `browse_list` too: 631 dropped the 30-min `properties_map_mv` matview and its rebuild. (The legacy publication-gate predicate went in migration
 475 with the removed engine, rule #15; `properties.published_at` survives as a frozen historical column that
 constrains nothing. Since 669 `browse_projection`'s WHERE carries rule 16's publication rule, an inline column expression
-(no function, so no per-row call): the live fact is `properties.settled_at` (668), spelled once in `toolkit/publication.py`.) Moving the rebuilds to pg_cron retired the old `scripts/refresh_map_mv.py` GH Actions cron entirely —
-pg_cron runs on-the-minute where GH Actions cron was measured ~2× jittered (see
-`gh-actions-cron-throttle-fleet` if you need the numbers).
+(no function, so no per-row call): the live fact is `properties.settled_at` (668), spelled once in `toolkit/publication.py`.) pg_cron fires on the minute (GH
+Actions cron: ~2× jitter).
 
 **Appending a column to `browse_projection`** (migration 584's recipe; append LAST, each body verbatim from its
 latest definer): take the list rebuild's advisory lock (`statement_timeout` > the 1800 s cron cap); in ONE transaction
@@ -324,9 +323,8 @@ id space and is NOT interchangeable — worth knowing before W7a collapses the i
 DROP+CREATEs `browse_list` every tick, including the `GRANT SELECT ... TO authenticated` (never
 `anon` — migration 299 deliberately narrowed this) and the district/price
 covering indexes (migration 283's 9-column form, not migration 277's original 3-column form).
-Migration 371 copied from an outdated body and silently reintroduced BOTH the anon grant and
-the narrow indexes while its own commit message claimed no behavior change — live-anon-readable
-for an unknown period, fixed in migration 376. Always `CREATE OR REPLACE` from the CURRENT
+Migration 371 copied an outdated body and silently restored BOTH the anon grant and the
+narrow indexes (fixed in 376). Always `CREATE OR REPLACE` from the CURRENT
 function body (`pg_get_functiondef`), never from an old migration file or a design doc's
 emergency-rollback snippet. It also self-checks after granting
 (`if has_table_privilege('anon', ..., 'SELECT') then raise exception`) — a regression RAISEs,
@@ -347,10 +345,9 @@ everything revoked, read by the backend only (the `jobs` check's `artifact/<name
 them; migration 643 dropped its browser view `derived_artifacts_public`). **A new derived artifact needs a registry row**, and
 `tests/test_derived_artifacts_registry.py` goes RED without one — its `_W7_BACKLOG` exemption
 set is now empty and **nothing may be added to it**. One budget is deliberately NOT its
-cadence: `property_sweep` (migration 622,
-the daily full sweep's completed cycle, stamped by `recompute_property_stats`) 38 h, because the
-`jobs` check adds GitHub's 18 h delivery slack to a `github-actions` row: Problem at 56 h, as
-ruled for the two-run cycle. `rent_map_cells`'s `host` is honestly `api-request`:
+cadence: `property_sweep` (migrations 622, 731: the daily full sweep's completed cycle, stamped by
+`recompute_property_stats`) 56 h, ruled for the two-run cycle; `jobs` adds GitHub's 18 h delivery
+slack to a `github-actions` row only. `rent_map_cells`'s `host` is honestly `api-request`:
 it is refreshed inside a FastAPI request handler — don't launder it into a cron string.
 `llm_cost_rollup_state` is a watermark FOR an artifact, not an artifact, and is deliberately
 unregistered.
@@ -470,6 +467,11 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
 - **Map reference overlays (mig 600) are a MIRROR, service-role-only:** `map_overlay_{sections,layers,features,tiles}`
   are rebuilt by `scripts/ingest_map_overlays.py` (the `map_overlays` job;
   `rent_map` by every rent-map ingest) and read only through `/map-overlays*`; change a layer in the registry, never the rows.
+- **`place_picks` (mig 737, Q10): service-role-only telemetry**, one INSERT per `/maps/resolve` pick; pg_cron
+  `place-picks-retention` deletes rows >12 months daily. Architecture § the pick record.
+- **`place_served_counts` + `place_facts` (mig 738): `/places/suggest`'s service-role-only read models.** The first
+  refreshes at :37 (pg_cron), reading `browse_list` via `place_served_rows()` (a dependent matview fails the hourly
+  DROP); the second, facts and not a location store, in `ruian_load.finish`.
 - **Location-data relations (`location_*`, `ruian_*`, `portal_contract*`; migs 380+) are
   service-role-only** — RLS on + explicit `anon`/`authenticated` REVOKEs on every table, sequence
   + function; the SPA reads a listing's place through the public views, never the store.

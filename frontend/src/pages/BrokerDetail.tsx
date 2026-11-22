@@ -12,7 +12,7 @@ import {
   type BrokerMembership,
 } from '../lib/brokers';
 import { fmtCount, fmtCzk, fmtArea, fmtRelative } from '../lib/format';
-import { portalBadge } from '../lib/portals';
+import { advertLink, portalBadge } from '../lib/portals';
 import { SegmentedBar } from '../components/controls';
 import BrokerContactCard from '@/components/BrokerContactCard';
 import { brokerContact } from '@/lib/brokerContact';
@@ -393,49 +393,52 @@ function Inventory({
               </tr>
             </thead>
             <tbody className="font-[family-name:var(--font-mono)] text-[0.78rem]">
-              {filtered.map((l) => (
-                <tr
-                  key={l.listing_id}
-                  className="border-b border-[var(--color-rule-soft)] last:border-0 hover:bg-[var(--color-paper-2)]"
-                >
-                  <td className="px-3 py-1.5 max-w-[16rem]">
-                    <LocalityCell l={l} />
-                  </td>
-                  <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-2)] font-[family-name:var(--font-sans)]">
-                    {[
-                      // The specific kind (subtype for commercial/houses, else
-                      // disposition); the umbrella category word only when no
-                      // subtype is shown, to avoid "Ubytování · Komerční" doubling.
-                      listingKindLabel(l),
-                      l.subtype ? null : categoryMainLabel(l.category_main),
-                      l.category_type ? categoryTypeLabel(l.category_type).toLowerCase() : null,
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')}
-                  </td>
-                  <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-right text-[var(--color-ink-3)]">
-                    {fmtArea(l.area_m2)}
-                  </td>
-                  <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-right">
-                    {fmtCzk(l.price_czk)}
-                  </td>
-                  <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-3)] font-[family-name:var(--font-sans)]">
-                    {l.source_url ? (
-                      <a
-                        href={l.source_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="hover:text-[var(--color-copper)] transition-colors"
-                      >
-                        {portalBadge(l.source, l.source_url)}
-                      </a>
-                    ) : portalBadge(l.source)}
-                  </td>
-                  <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-4)] font-[family-name:var(--font-sans)]">
-                    {fmtRelative(l.last_seen_at)}
-                  </td>
-                </tr>
-              ))}
+              {filtered.map((l) => {
+                const link = advertLink(l);
+                return (
+                  <tr
+                    key={l.listing_id}
+                    className="border-b border-[var(--color-rule-soft)] last:border-0 hover:bg-[var(--color-paper-2)]"
+                  >
+                    <td className="px-3 py-1.5 max-w-[16rem]">
+                      <LocalityCell l={l} />
+                    </td>
+                    <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-2)] font-[family-name:var(--font-sans)]">
+                      {[
+                        // The specific kind (subtype for commercial/houses, else
+                        // disposition); the umbrella category word only when no
+                        // subtype is shown, to avoid "Ubytování · Komerční" doubling.
+                        listingKindLabel(l),
+                        l.subtype ? null : categoryMainLabel(l.category_main),
+                        l.category_type ? categoryTypeLabel(l.category_type).toLowerCase() : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </td>
+                    <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-right text-[var(--color-ink-3)]">
+                      {fmtArea(l.area_m2)}
+                    </td>
+                    <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-right">
+                      {fmtCzk(l.price_czk)}
+                    </td>
+                    <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-3)] font-[family-name:var(--font-sans)]">
+                      {link ? (
+                        <a
+                          href={link}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="hover:text-[var(--color-copper)] transition-colors"
+                        >
+                          {portalBadge(l.source, l.source_url)}
+                        </a>
+                      ) : portalBadge(l.source)}
+                    </td>
+                    <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-4)] font-[family-name:var(--font-sans)]">
+                      {fmtRelative(l.last_seen_at)}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

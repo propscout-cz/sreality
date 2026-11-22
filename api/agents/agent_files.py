@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import time
@@ -18,6 +17,7 @@ from fastapi import Response
 from api import attachments
 from api.agents.hosted_code import safe_name
 from api.providers import HostedFile
+from scraper.hashing import file_sha256
 
 LOG = logging.getLogger(__name__)
 
@@ -138,7 +138,7 @@ def store_files(files: Sequence[HostedFile], *, target: FileStore | None, accoun
     deadline = _monotonic() + STORE_BUDGET_S
     stored = []
     for file in files:
-        sha = hashlib.sha256(file.data).hexdigest()
+        sha = file_sha256(file.data)
         key = None
         if target is not None:
             if _monotonic() < deadline:

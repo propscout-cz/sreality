@@ -7,6 +7,28 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Map layers on the property map, web and phone; one list for every map (2026-11-20, no migration)
+- **Done** (operator ask 2026-11-20: "turn on the various map layers on the property detail map, both
+  apps; reuse/unify"). Rulings 2026-11-20: (1) the 170 px web minimap keeps a clean face, its Vrstvy
+  button opens a large map dialog with Browse's rail, list and keys, a pick there drawn on the minimap
+  too; (2) ČÚZK's aerial photo on every map, Browse included (Podklad Mapa / Letecká); (3) reference
+  layers only (no Města / Růst cen a nájmů on the property map); (4) phone Poloha: one Vrstvy button →
+  a bottom sheet with the same list, the keys under the plate. Supersedes the 2026-10-23 "minimap = zoom
+  only" ruling.
+- Unified: the photo, relief and contours are keys of the one `layers` selection (one memory, one URL key);
+  `lib/usePointMap` is the one hook of the three point maps; `MapOverlayControls` is every map's one list.
+- Next (unruled): Města / Růst cen a nájmů stay Browse's; the photo carries no street names (a "hybrid"
+  would need the basemap's buildings hidden under it).
+
+### Terrain on the map: ČÚZK relief and contours (2026-11-11, no migration, #2494)
+- **Done** (operator ask 2026-11-11: turn on "relief" and "vrstevnice" to judge the terrain). OpenFreeMap
+  carries no elevation; ČÚZK, already the aerial photo's source, serves DMR 5G shaded relief and ZABAGED
+  contours (1 m base interval, thinned on steep slopes by ZABAGED's own `ZOBRAZ_K` pick, from zoom 16).
+  Browse: "Reliéf a vrstevnice" in Vrstvy, each switchable alone, URL `relief=1` / `contours=1`. Phone
+  Poloha: Mapa / Letecká / Terén. Not the listing-detail minimap (ruling 2026-10-23: no overlay toggles).
+- Next (unruled): both services draw each tile on request; if they turn slow under use, cache the tiles
+  on our side (R2) behind the API.
+
 ### Browse's circle is a true circle, placed on the main map (2026-10-30, migrations 694 + 695)
 - **Done** (operator report 2026-10-30: "I do not see pins for inactive properties" — the view held
   more than the pin limit, and a centre + radius with no centre filtered nothing). Rulings 2026-10-30:
@@ -446,7 +468,7 @@ toolkit work.
   no estimation start); the fifth tab `/link` takes a pasted link (the first URL in the text) to its
   property, keeps the last five per device, and says "Tento inzerát v databázi nemáme" with the
   portal link for an ad we lack. A password sign-in with nothing stashed lands on `/`. Resolves on the
-  install walk. Follow-up (PR open): **Poloha** — Mapy's static map streamed through the API (never stored), label + note + Apple/Google/Mapy.cz links, as the feed card's fourth margin mark (a sheet) and the property page's first section; `MAPY_STATIC_MAPS_ENABLED=0` turns the image off.
+  install walk. Follow-up: **Poloha** — label + note + Apple/Google/Mapy.cz links, as the feed card's fourth margin mark (a sheet) and the property page's first section; since #2446 over a lazy OpenFreeMap map at the location ad's point (zoom by precision, two-finger pan, dimmed after dusk); the Mapy image and its switch are gone. Since #2447 a Mapa / Letecká bar lays ČÚZK's aerial photo over that map (hidden until the tap, so no aerial tile loads before it).
 - **W3: the pipeline as swiped stage pages** (#1768): on the phone `/pipeline` renders
   `components/phone/PhonePipeline.tsx` instead of the kanban (never mounted there) — a stage strip
   (code badge, label, count; a hairline before the closed stages) over one scroll-snapped page per

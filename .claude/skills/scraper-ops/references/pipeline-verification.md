@@ -79,8 +79,8 @@ Wave 4 retired seven portal keys into the four portal checks the worker measures
 into `delisting`. `property_maintenance`'s sweep arm (the 2026-08-06 sweep death and stranded lease,
 read from a stamp, never a properties scan) became the `jobs` check's `artifact/property_sweep`
 cell: a completed cycle (one run, or two through `app_settings.property_sweep_cursor` since
-2026-10-03) stamps the `property_sweep` derived artifact (migration 622), whose 38 h budget plus
-GitHub's 18 h delivery slack keeps its Problem at 56 h, as ruled for the two-run cycle; its 52 h
+2026-10-03) stamps the `property_sweep` derived artifact (migration 622), whose Problem stays at 56 h, as
+ruled for the two-run cycle (38 h + GitHub's 18 h slack; 56 h on the runner since 731, #2027); its 52 h
 Watch is gone, because an artifact cell has no Watch tier, and the sweep's own RED exit is the
 faster alarm. Their thresholds, SQL and tests went with them.
 Health dashboard sprint wave 5 retired `broker_merge_suppression` (hourly, on GitHub) into the
@@ -646,7 +646,7 @@ dead. Its cells judge what must not judge itself:
 | --- | --- | --- |
 | `worker/<name>` | that worker's newest heartbeat is more than 10 min old; one subject per `worker_heartbeats` row since migration 675, so each worker (the realtime worker, each job-runner replica) has its own incident (with no heartbeat row at all, one `worker` cell, `unknown`: "no worker on record") | beats come every 30 s, the worker's watchdog exits at 300 s, a deploy gap is under 2 min |
 | `health_lane` | the health lane's own pass, read from its heartbeat entry (`details -> 'health'`, migration 621): no completed pass for 10 min, counted from the later of `last_pass_at` and the worker's `started_at` (the boot seed carries the last pass across a restart, so a restart is judged 10 min after boot, not in its first minute), a pass in flight for 10 min (`in_flight_s`: a pass skipped behind an abandoned one still records a pass) or failing for 10 min (`failing_since`, the message quoting `last_error`); `value` = minutes on that clock; emitted once the heartbeat carries a `health` entry, and folded into a failing `worker/realtime-worker` cell. Never result rows (620 judged them): the lane writes one only for a due check, so a restart near a cycle's end read as a Problem | a pass is in flight at most 500 s, the lane's pass budget since Health dashboard sprint wave 6 (360 s in waves 4-5, 300 s in wave 3), 530 s with the heartbeat's 30 s lag; the lane sleeps its 60 s tick after each pass, so a full pass completes at most 560 s after the previous one, 590 s with the lag: both arms stay under the 10 min line, the 10 s left being the pass's own overrun (its connection and due read, each statement's 1 s floor, the daily prune); measured passes ran p50 1.9 s, max 23.1 s on 2026-10-19 |
-| `stale:<key>` | an alarm other than `liveness` whose newest measured result (ok/warn/fail written since its `declared_at`) is past its staleness budget (`public.health_stale`); with no measured result it counts from `declared_at`, so a key whose every run is Not measured is still told; facts `key`, `host`, `last_measured_at`, `budget_s` | the budget is 3 × cadence on the worker and pg_cron, cadence + 18 h on GitHub, whose crons arrive up to ~13 h late |
+| `stale:<key>` | a check other than `liveness`, alarm or gauge (gauges since migration 745, #2512), whose newest measured result (ok/warn/fail written since its `declared_at`) is past its staleness budget (`public.health_stale`); with no measured result it counts from `declared_at`, so a key whose every run is Not measured is still told; facts `key`, `host`, `last_measured_at`, `budget_s` | the budget is 3 × cadence on the worker and pg_cron, cadence + 18 h on GitHub, whose crons arrive up to ~13 h late |
 | `unalerted` | a cell fails in an alarm's newest result (in budget, written since `declared_at`) and also failed in its newest measured result at least 2 cadences older, and has no open `cell:<key>:<subject>` incident; cells are read as the ladder reads them (the explicit `details.cells`; the implicit cell named by the key went in migration 633, Health dashboard sprint wave 6); one cell, `value` = the cells counted, its facts naming the keys and cells | a fail that has stood for two cadences has had every 60 s ladder pass in between to open its incident; like the ladder, it counts no stale or unmeasured result |
 | `job/<name>` | one cell per registered job-runner row (`runner = 'job-runner'`, `registry_at` set), live or retired under an hour (a blink), from `public.health_job_cells()` (migration 682, #2026): its run past `timeout_s` + `STUCK_RUN_GRACE_S` (600 s), its latest closed run `timeout` (ruling R-3), 3 failures in a row whose first is min(cadence, 1 h) old, late past cadence + `timeout_s` + the longest sibling run on its resource + min(cadence, 1 d), due or requested 10 min with no job-runner replica beating, or refused at boot by a replica (`details.skipped`; a refused name with no row gets a cell too). Watch: in flight past ⅔ of `timeout_s` or past it, 1-2 failures (or 3 in under an hour), late past the first line, waiting 10 min while a replica beats, paused longer than greater(cadence, 7 d). Never `unknown`; paused, held, not run yet and the first slot of a (re)registered row read ok and say why; every row is judged on its runs since `registry_at` (when it joined the runner, kept by 682's trigger). State table: `references/job-runner.md` | the runner's own mechanics: SIGTERM at `timeout_s`, SIGKILL 90 s later and the run recorded `timeout`; backoff retries 60 s, 120 s, 240 s; a live replica claims every 5 s |
 | `job-runner` | never: ok `N replicas beating; M jobs registered`, Watch when no `job-runner/%` heartbeat is under 10 min old; present while a live registered row exists, or one retired under an hour (a blink; M counts only the live ones) | a cleanly stopped runner deletes its beats, so the job cells turn Problem once a job is due + 10 min; each replica's own `worker/job-runner/<id>` cell judges an unclean death |
@@ -763,8 +763,8 @@ at a time under `_HEALTH_PASS_LOCK`. Each pass, `_health_sync()` runs in a threa
   host's rows;
 - every pass, `verify_pipeline.run_due(conn, THRESHOLDS, "realtime-worker", now=now,
   lane_budget_s=HEALTH_PASS_BUDGET_SECONDS)` (500 s since Health dashboard sprint wave 6; every worker alarm due at
-  once owes `scripts.verify_pipeline.WORKER_ALARMS_DUE_AT_ONCE_S`, 670 s since the Large-compute budgets (505 s from
-  `curation_sync`), so all but the last alarm (`parsing`, 300 s) fit even at their whole budgets (370 s) and it is deferred one tick, like a gauge
+  once owes `scripts.verify_pipeline.WORKER_ALARMS_DUE_AT_ONCE_S`, 730 s since #2512 (670 s from the Large-compute budgets, 505 s from
+  `curation_sync`), so all but the last alarm (`parsing`, 300 s) fit even at their whole budgets (430 s) and it is deferred one tick, like a gauge
   whose budget no longer fits what is left; `tests/scraper/test_realtime_worker.py` pins both; a further alarm needs
   the pass or a budget reworked; 360 s in waves 4-5, 300 s in wave 3), which measures the due worker-hosted checks,
   each on its own clock (self-rule 3);
@@ -776,12 +776,12 @@ Its heartbeat `last` is `{"measured": [keys], "pruned": n}`. The worker imports
 `scripts.verify_pipeline` inside the pass (the image carries `scripts/`; `migrations/` is
 dockerignored, which only `migration_drift` reads, and that check stays on GitHub);
 `verify_pipeline.main()` takes `--host github-actions` only, and the worker never calls it. The
-worker's keys carry the 45 s per-check budget (300 s `parsing`, 150 s `coverage`, 120 s `location_town_coverage`,
-90 s `scraping`) and a staleness budget of 3 × cadence
-(30 min for `jobs`, `llm`, `scraping`, `publishing`, `delisting` and `dedup`, 90 min for `capacity`, 3 h for
-`curation_sync` and the `coverage` and `text_extraction` gauges, 18 h for `parsing` and the `data_quality` and
-`location_town_coverage` gauges), so the watcher's `stale:<key>` tells a stopped worker alarm within 5 min of that
-(it covers alarms only: a stopped gauge just reads Not measured on the page), its `health_lane` cell (no completed
+worker's keys carry the 45 s per-check budget (300 s `parsing`, 150 s `coverage`, 120 s `location_town_coverage` and
+`text_extraction`, 90 s `scraping`, 75 s `publishing` and `delisting`) and a staleness budget of 3 × cadence
+(30 min for `jobs`, `llm`, `scraping` and `dedup`, 90 min for `capacity`, `publishing` and `delisting`, 3 h for
+`curation_sync` and the `coverage` gauge, 18 h for `parsing` and the `data_quality`, `location_town_coverage` and
+`text_extraction` gauges), so the watcher's `stale:<key>` tells a stopped worker check, alarm or gauge (since
+migration 745), within 5 min of that, its `health_lane` cell (no completed
 pass, a pass in flight or a failing spell for 10 min; a 500 s pass stays under the in-flight line, its row
 above) tells a stopped lane, and the lane is a `lane/health` job cell like any other. The image carries
 `data/` too, so the `parsing` alarm's fill arm reads its blessed baseline there.
@@ -870,7 +870,7 @@ failing rule; the other lanes' `last.errors` count per-item failures inside comp
 
 A portal failing inside the probe or drain lane has its own cell, `lane/<lane>/<portal>`, from
 `portal_errors`, and so does a step failing inside the notifications lane (notifications W2a:
-`portal_errors` keyed by step, `watchdog_new` / `price` / `monitor`, so the cell is
+`portal_errors` keyed by step, `watchdog_new` / `price` / `lifecycle`, so the cell is
 `lane/notifications/<step>` with the step as its `portal`; red iff a statement raised, never for a
 stored spec the matcher refuses, which `last` counts as `subscriptions_invalid`), and inside the push
 lane (notifications push W4: `key` / `fan_out` / `claim` / `send`, each error the exception's CLASS
@@ -914,10 +914,10 @@ whose `host` is `github-actions` is stale only past the budget plus `GITHUB_DELI
 (18 h), because GitHub delivers a cron late by hours (54 of the canary's last 65 scheduled gaps
 exceeded 6 h: median 7.2 h, longest 13.5 h, 09-28..10-18); Not measured ("never succeeded") while `last_succeeded_at` is NULL. Facts: `producer`, `host`,
 `cadence`, `last_succeeded_at`, `last_rows`, `last_duration_ms`, `budget_s`, `slack_s` and
-`is_serving` (a fact, never a verdict). Each budget is at least 3 cadences (`browse_list` 45 min on
-`*/15`) except `rent_map_cells` (40 days on a monthly job, migration 565) and `property_sweep` (wave 4, migration 622, the daily full sweep's completed cycle):
-38 h on a daily cron, so with the slack it reads Problem at 56 h, the retired `property_maintenance`
-sweep arm's fail line, and its 52 h Watch has no equivalent; 622 seeded it from
+`is_serving` (a fact, never a verdict). Each budget is at least 2 cadences (`browse_list` 130 min on
+its hourly cron, migration 740) except `rent_map_cells` (40 days on a monthly job, migration 565) and `property_sweep` (wave 4, migration 622, the daily full sweep's completed cycle):
+38 h on a daily cron, so with the slack it read Problem at 56 h, the retired `property_maintenance`
+sweep arm's fail line (migration 731 moved it to `job-runner` at 56 h, no slack, #2027), and its 52 h Watch has no equivalent; 622 seeded it from
 `app_settings.property_sweep_last_complete`, so its verdict is continuous across the deploy. Every
 live row was inside its budget at build.
 
@@ -1138,16 +1138,16 @@ page's SQL checks on the same questions rendered until wave 8 retired the page, 
 
 ## `publishing` — do new ads reach Browse quickly, with their photos? (wave 4)
 
-`check_publishing` (`scripts/checks/publishing.py`; an alarm on the worker, cadence 600 s, label
+`check_publishing` (`scripts/checks/publishing.py`; an alarm on the worker, cadence 1,800 s and budget 75 s since #2512, label
 "Publishing", unit "cells"):
 
 | cell | measures | Watch | Problem |
 | --- | --- | --- | --- |
 | `<portal>/ingest` | age (from `enqueued_at`) of the oldest NEW-priority queue row, claimed or not, not given up, with no listings row for `(source, native_id)` — so `refresh_stale_image_urls`' known ads at that priority do not count | above 3 h (`publishing_queue_warn_h`) | above 6 h (`publishing_queue_fail_h`) |
 | `<portal>/changes` | the same for the oldest CHANGED or FAILURE row, not given up | above 3 h | above 6 h |
-| `<portal>/visible` | of active ads first written 30 min-24 h ago, the share whose property is not in `browse_list`, judged on its Wilson lower bound, split by the stage that blocks it: no property (`property_id` NULL), property not active (`status <> 'active'`), location not served (the property's canonical ad fails the consumer rule, `claims_common.served_location_predicate`, re-keyed onto that ad as `browse_projection` judges it), else not yet in `browse_list`; a property the publication rule had not published when the newest successful rebuild started (`derived_artifacts.last_succeeded_at` of `browse_list`; rule 16, `toolkit/publication.py`: neither settled nor 6 h old at that start) is shown as not yet published, expected like the rebuild wait, never a blocker; else a property born after that start, or whose canonical ad's location was resolved or re-resolved after it (`listing_location.resolved_at`, rewritten on every re-resolve: the resolver never patches `browse_list`), is shown as waiting for the next rebuild, a fact, not a blocker | above 2 % (`publishing_visible_warn`) | above 10 % (`publishing_visible_fail`) |
+| `<portal>/visible` | of active ads first written 30 min-24 h ago, the share whose property is not in `browse_list`, judged on its Wilson lower bound, split by the stage that blocks it: no property (`property_id` NULL), property not active (`status <> 'active'`), location not served (the property's canonical ad fails the consumer rule, `claims_common.served_location_predicate`, re-keyed onto that ad as `browse_projection` judges it), else not yet in `browse_list`; a property the publication rule had not published when the newest successful rebuild started (`derived_artifacts.last_succeeded_at` of `browse_list`; rule 16, `toolkit/publication.py`: no publication stamp at that start) is shown as not yet published, expected like the rebuild wait, never a blocker; else a property born after that start, or whose canonical ad's location was resolved or re-resolved after it (`listing_location.resolved_at`, rewritten on every re-resolve: the resolver never patches `browse_list`), is shown as waiting for the next rebuild, a fact, not a blocker | above 2 % (`publishing_visible_warn`) | above 10 % (`publishing_visible_fail`) |
 | `<portal>/stock`, `fleet/stock` | of properties with `status = 'active' AND is_active`, the share missing from `browse_list`, by the same stages (not yet published and waiting for the next rebuild included: expected, never a blocker); a portal cell counts the properties with an active ad on that portal (counted from listings' `source`, `is_active` and `property_id` columns), the fleet cell all of them | above 0.1 % (`publishing_stock_warn`) | Wilson lower bound above 1 % (`publishing_stock_fail`) |
-| `<portal>/photos` | of the photos of ads first written 1-24 h ago, excluding `unavailable_reason = 'listing_taken_down'`: not stored (`storage_path IS NULL`: pending, throttled, given up, `source_unavailable`, `not_an_image`), judged on its Wilson lower bound; and narrow, `stored_width` under 600 px (`publishing_photos_min_px`) among stored photos with a width | not stored above 2 % (`publishing_photos_unstored_warn`); narrow above 10 % (`publishing_photos_narrow_warn`) | not stored above 10 % (`publishing_photos_unstored_fail`); narrow above 50 % (`publishing_photos_narrow_fail`) |
+| `<portal>/photos` | of the photos of ads first written 1-24 h ago, excluding `unavailable_reason = 'listing_taken_down'`: not stored (`storage_path IS NULL`: pending, throttled, `download_given_up`, `source_unavailable`, `not_an_image`), judged on its Wilson lower bound; and narrow, `stored_width` under 600 px (`publishing_photos_min_px`) among stored photos with a width | not stored above 2 % (`publishing_photos_unstored_warn`); narrow above 10 % (`publishing_photos_narrow_warn`) | not stored above 10 % (`publishing_photos_unstored_fail`); narrow above 50 % (`publishing_photos_narrow_fail`) |
 | `fleet/dirty` | age of the oldest `dirty_properties.marked_at` | above 4 h (`publishing_dirty_warn_h`) | above 8 h (`publishing_dirty_fail_h`) |
 | `fleet/photo_tags` (#2032) | of the photos stored (`storage_path` set, aged from `last_download_attempt_at`) since the latest of 24 h ago, the `clip` row's `registry_at` on the job runner and the end of its last pause (a `paused_until` passed), and more than 45 min ago (`publishing_tag_late_min`): the share CLIP tagged over 45 min after storage or not yet, judged on its Wilson lower bound; a photo is tagged only once stamped (`clip_tagged_at`) AND vectored (an `image_clip_embeddings` row of the taxonomy's model), so a stamp with no vector (a terminal mark, an undecodable photo) is late and counted as `stamped_no_vector`; an untagged photo ages to now. While the `clip` row is paused (`paused_until` ahead) the cell reads Watch at most, never Problem, with `paused by <who> until <when>: <note>` and the waiting count, so a deliberate pause (the AC2 hold, a rollback brake) opens no incident, and once it ends the cohort starts afresh, so the photos that waited under it never turn the lift into a Problem | above 5 % (`publishing_tag_late_warn`) | above 10 % (`publishing_tag_late_fail`): the day's p90 past the line |
 
@@ -1191,7 +1191,8 @@ a promotion keeps `enqueued_at`. Births no longer wait for the daily full proper
 the maintenance lease for up to its 6,000 s budget (`recompute_property_stats._MAX_BUDGET_SECONDS`)
 while the worker's 30 s maintenance lane skips, so since 2026-10-20 it attaches stragglers after
 every batch under that lease (a failed attach is logged and the sweep goes on), and a new ad waits
-one batch at most. Before, it attached only at its start, and on a sweep day longer than about
+one batch at most; since #2505 the published enqueue and the dirty drain follow each attach, so a cap
+release or a queued change waits one batch too, not for the sweep's end or the hourly rebuild. Before, it attached only at its start, and on a sweep day longer than about
 40 min visible read Problem for the sweep's duration: the 28-day replay holds five such onsets on
 four days (ceskereality and sreality 10-02, ceskereality 10-05, sreality 10-08, bezrealitky 10-09;
 new ads held 41-100 min, each closed within 80 min). Those ads really were out of Browse past the
@@ -1202,7 +1203,7 @@ It replaces `acquisition_lag` (unclaimed NEW rows only, 6 h
 
 ## `delisting` — do ads that left their portal go inactive on time, and correctly? (wave 4)
 
-`check_delisting` (`scripts/checks/delisting.py`; an alarm on the worker, cadence 600 s, label
+`check_delisting` (`scripts/checks/delisting.py`; an alarm on the worker, cadence 1,800 s and budget 75 s since #2512, label
 "Delisting", unit "cells"). Its limits come from `scraper/delist_policy.py`'s `GONE_DWELL` (12 h)
 and `RECHECK_THROTTLE` (24 h: `db.presence_candidates` re-nominates no ad with a completion in the
 last 24 h; named in wave 4, unchanged), whose larger is the **effective dwell**, 24 h today
@@ -1211,7 +1212,7 @@ last 24 h; named in wave 4, unchanged), whose larger is the **effective dwell**,
 | cell | measures | Watch | Problem |
 | --- | --- | --- | --- |
 | `<portal>/outflow` | ads made inactive in the trailing 24 h (`listings.inactive_at`) against the four weeks 7, 14, 21 and 28 d earlier, each read at every 24 h window ending within ±3 h (`delisting_outflow_align_h`) of this hour: `baseline` is the median of each week's quietest window, `baseline_busy` the median of each week's busiest | below 50 % of `baseline` (`delisting_outflow_warn_share`), or above 300 % of `baseline_busy` (`delisting_outflow_spike_share`) and at least 500 (`delisting_outflow_spike_min`) | below 20 % of `baseline` (`delisting_outflow_fail_share`) |
-| `<portal>/stuck` | active ads whose first unrefuted gone verdict — the earliest `gone` completion newer than the ad's `last_seen_at`, found per ad before counting (`db.gone_evidence`'s rule) — is older than the effective dwell + 2 × the portal's p90 walk-start gap (finished walks, 14 d) + 1 h (`delisting_stuck_slack_h`) | 25 or more (`delisting_stuck_warn`) | 250 or more (`delisting_stuck_fail`) |
+| `<portal>/stuck` | active ads whose first unrefuted gone verdict — the earliest `gone` completion newer than the ad's `last_seen_at`, found per ad before counting (`db.gone_evidence`'s rule; a verdict older than the ad's latest `flipped` completion, which can never stand, is dropped before the probe, #2512) — is older than the effective dwell + 2 × the portal's p90 walk-start gap (finished walks, 14 d) + 1 h (`delisting_stuck_slack_h`) | 25 or more (`delisting_stuck_warn`) | 250 or more (`delisting_stuck_fail`) |
 | `<portal>/verify_backlog` | age of the oldest VERIFY-priority queue row, claimed or not, not given up | above 6 h (`delisting_verify_warn_h`) | above 24 h (`delisting_verify_fail_h`) |
 | `<portal>/deferrals` | the flip cap's `verify_deferred`, summed per finished walk | 2 consecutive walks in which a unit reached the end, each with deferrals (`delisting_deferral_walks`) | never: the cap is a throttle by design |
 | `<portal>/precision` | of a day of `flipped` completions from 2 × the portal's p90 walk-start gap + 1 h old (the stuck limit less the dwell: the age by which a walk has sighted any ad still listed), the share whose ad is active again (`listings.is_active` now), judged on its Wilson lower bound; a later return is a re-list, never counted | above 10 % (`delisting_precision_warn`) | above 15 % (`delisting_precision_fail`) |
@@ -1355,6 +1356,8 @@ its incident open for 7 days.
 | `build` | while building: first decisions per hour in the last 3 h (`dedup_build_window_h`), the window clipped at the build's start (`rt_bootstrap:rt` `updated_at`) and at the last brake lift (the newest `app_settings_history` row of the interval key whose stored OLD value is 0); the backlog (`RT_SCOPE_BACKLOG_SQL`, bound as the lane binds it) and ETA = backlog / rate, a lower bound; facts `blocks_total` and `blocks_walked` (`RT_SCOPE_SCAN_SEEN_SQL`) | the ETA above 7 d (`dedup_build_eta_warn_d`) | 0 decisions in a clipped window at least 3 h long, with backlog > 0 and the lane not braked |
 | `merge_pause` | while building: hours since the newest engine merge, measured from the build's start (operator merges go on during a build and do not count) | above 48 h (`dedup_pause_warn_h`) | never (Q3) |
 | `decision_lag` | while merging or idle: of the ads in the engine's area first seen 1-24 h ago (the lane's own new-feed statement, `RT_NEW_LISTINGS_SQL`, imported whole, with `RT_FP_READ_SQL` for their decisions in place of the contract's `RT_KNOWN_SQL`: the same predicate plus the first-decision stamp), the share with no decision, judged on its Wilson lower bound; Not measured within 24 h of a brake lift, a build's end, a seed or an engine change, unless the lane has stalled, or a Problem this arm read is still open and the cohort is clean, which then reads OK through the excuse (below); facts `n`, `undecided`, `share`, `lower_bound`, and `p50_min` / `p90_min` arrival to decision over the decided part, and while a Problem is open `open_reading`, `opened_at` and `recovering_since` | above 1 % (`dedup_lag_warn`) | above 10 % (`dedup_lag_fail`) |
+| `unread_arrivals` | the oldest ad in the engine's area, first seen 1-24 h ago, that the engine has not read (the same window read as `decision_lag`); its property stays unpublished until the read (`toolkit/publication.py`). Nothing is excused: a brake and a build hold publication like any other lag | never | oldest unread ad older than 2 h (`dedup_unread_fail_h`) |
+| `held_unpublished` | active properties with no publication stamp first seen more than 24 h ago (past `unread_arrivals`' window): held by an unread ad, or the stamper is not running; facts `n`, `oldest_property_id` | 1 or more | more than 25 (`dedup_held_fail`) |
 | `lease` | the `rt_lease` row (`RT_LEASE_READ_SQL`, imported); facts `holder_kind` (`pass`, `seed`, `dispatch`, `other` or `none`), `remaining_s` and, for an ended lease, `past_expiry_s`, `untaken_s`, `untaken_since` and `ended_by` (release or expiry) | a live lease held by anything but the live worker, after a 120 s deploy grace: a predecessor's pass (a pass holder whose start, its third field, is before the worker's `worker_heartbeats.started_at`), a seed, a batch run or an unknown holder | while merging or idle and seeded, no pass has taken the lease for the lane's interval + 10 min (`dedup_lease_fail_past_expiry_min`; 11 min at the 60 s interval), counted from the latest of its expiry, the last brake lift and the build's end: the lane stopped taking it |
 | `rulings/ads` | pairs whose standing negative ruling (the newest `autodedup.verdicts` row per pair in `ui_sql.NEGATIVE_VERDICTS`, or a `must_not_link` row of any source) has both ads on one property now while either ad carries a live engine merge newer than the ruling, timed at the start of its current negative spell; facts `breaches`, `negatives` (standing pairs), `together_now` and `set_rulings_unjudged` | never | 1 or more (`dedup_rulings_fail`) |
 | `rulings/brokers` | active `broker_merge_suppressions` whose two identities share a broker (the retired check's SQL, verbatim); facts `active`, `lifted`, `violations` | never | 1 or more (`dedup_rulings_fail`) |
@@ -1777,7 +1780,7 @@ the text lane's reading unless the ad carries a map-link pin: here after 24 h, a
 
 ### `text_extraction` — are new ads' descriptions read promptly?
 
-`check_text_extraction` (cadence 3,600 s, label "Description reading", unit "cells", owner page `/costs`).
+`check_text_extraction` (cadence 21,600 s and budget 120 s since #2512, label "Description reading", unit "cells", owner page `/costs`).
 
 | cell | measures | Watch | Problem |
 | --- | --- | --- | --- |

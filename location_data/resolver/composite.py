@@ -252,16 +252,27 @@ def _tokens(value: str) -> list[str]:
 #     sides: 1,001 register streets change key and no two streets of one obec share a key
 #     that did not share one before (per entry: csa 19, ceskoslovenske armady 45, nam 597, tr
 #     60, nabr 27, gen 85, kpt 126, plk 25, sidl 30 streets — 0 new collisions each).
-_ABBREVIATIONS = tuple((re.compile(rf"\b{short}\b"), full) for short, full in (
+_ABBREVIATION_PAIRS = (
     ("ceskoslovenske armady", "cs armady"), ("csa", "cs armady"), ("nam", "namesti"),
     ("tr", "trida"), ("nabr", "nabrezi"), ("gen", "generala"), ("kpt", "kapitana"),
-    ("plk", "plukovnika"), ("sidl", "sidliste")))
+    ("plk", "plukovnika"), ("sidl", "sidliste"))
+_ABBREVIATIONS = tuple((re.compile(rf"\b{short}\b"), full) for short, full in _ABBREVIATION_PAIRS)
 
 
 def fold_abbreviations(key: str) -> str:
     for pattern, full in _ABBREVIATIONS:
         key = pattern.sub(full, key)
     return key
+
+
+def abbreviation_spellings(key: str) -> frozenset[str]:
+    """Every spelling `fold_abbreviations` folds onto `key`'s fold: the raw `ruian_streets.name_norm` keys one name may
+    have, for a read that cannot fold the register's side as `register_street_keys` does (place_search, #2451)."""
+    folded = fold_abbreviations(key)
+    spellings = {folded}
+    for short, full in _ABBREVIATION_PAIRS:
+        spellings |= {re.sub(rf"\b{full}\b", short, s) for s in spellings}
+    return frozenset(s for s in spellings if fold_abbreviations(s) == folded)
 
 
 @dataclass(frozen=True, slots=True)

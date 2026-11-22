@@ -508,6 +508,7 @@ def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
     if price.record is not None:
         raw["price_reading"] = price.record
 
+    floor = floor_from_portal(floor_convention(SOURCE), read("floor"))
     return ScrapedListing(
         source=SOURCE,
         source_id_native=source_id,
@@ -528,8 +529,8 @@ def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
         house_number=house_number,
         lat=lat,
         lon=lon,
-        floor=floor_from_portal(floor_convention(SOURCE), read("floor")),
-        total_floors=total_floors_from_portal(_parse_int(read("total_floors"))),
+        floor=floor,
+        total_floors=total_floors_from_portal(_parse_int(read("total_floors")), floor=floor),
         parking_lots=_parse_int(read("parking_lots")),
         # Each amenity is its OWN labelled row whose value is the size ("Balkon: 4 m²"),
         # so the label is the fact and the value only ever negates it.

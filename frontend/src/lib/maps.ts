@@ -49,6 +49,12 @@ interface SuggestResponse {
 
 export const SUGGEST_NOT_CONFIGURED = 'suggest_not_configured';
 
+/* The server's pick bounds (api/schemas.PlacePickIn, migration 737; a pytest holds them equal). The
+ * list is never longer than the highest rank a pick may record. */
+const PICK_TEXT_MAX = 200;
+const PICK_RANK_MAX = 10;
+const SUGGEST_LIMIT = PICK_RANK_MAX;
+
 export const fetchSuggest = async (
   query: string,
   signal?: AbortSignal,
@@ -56,7 +62,7 @@ export const fetchSuggest = async (
   try {
     const res = await apiGet<SuggestResponse>(
       '/maps/suggest',
-      { query, limit: 10, lang: 'cs' },
+      { query, limit: SUGGEST_LIMIT, lang: 'cs' },
       signal,
     );
     return res.items ?? [];
@@ -68,24 +74,42 @@ export const fetchSuggest = async (
   }
 };
 
+/* What the place typeahead tells resolve about a pick, which the server records (ruling Q10,
+ * migration 737): the text its list answered and the row's 1-based rank. */
+export interface PlacePick {
+  text: string;
+  rank: number;
+}
+
+/* A pick outside the server's bounds is not sent, so the resolve itself never 422s on it. Length
+ * counts code points, as the server does. */
+export const placePick = (text: string, rank: number): PlacePick | undefined => {
+  const length = [...text].length;
+  return length >= 1 && length <= PICK_TEXT_MAX && rank >= 1 && rank <= PICK_RANK_MAX
+    ? { text, rank }
+    : undefined;
+};
+
 /* The request is strict (no nulls), so a pick without a position is refused here,
  * the same way a failed call is. `addressPoint` (the address picker only) binds an
- * address to its one door; without it, Browse's request is unchanged. */
+ * address to its one door; without it, Browse's request is unchanged. `pick` is the
+ * place typeahead's alone: the address picker sends none. */
 export const resolveSuggestion = (
-  pick: MapySuggestion,
-  { addressPoint = false }: { addressPoint?: boolean } = {},
+  suggestion: MapySuggestion,
+  { addressPoint = false, pick }: { addressPoint?: boolean; pick?: PlacePick } = {},
 ): Promise<LocationResolution> => {
-  if (!pick.position) return Promise.reject(new Error('suggestion has no position'));
+  if (!suggestion.position) return Promise.reject(new Error('suggestion has no position'));
   return apiPost<LocationResolution>('/maps/resolve', {
-    lat: pick.position.lat,
-    lng: pick.position.lon,
-    type: pick.type,
+    lat: suggestion.position.lat,
+    lng: suggestion.position.lon,
+    type: suggestion.type,
     /* Read server-side for the levels with no polygon to point-in-polygon
      * against: the quarter and the street (`name`, or an address pick's
      * `regional.street` entry). */
-    name: pick.name,
-    regional_structure: (pick.regionalStructure ?? []).map(({ name, type }) => ({ name, type })),
+    name: suggestion.name,
+    regional_structure: (suggestion.regionalStructure ?? []).map(({ name, type }) => ({ name, type })),
     ...(addressPoint ? { address_point: true } : {}),
+    ...(pick ? { pick } : {}),
   });
 };
 
