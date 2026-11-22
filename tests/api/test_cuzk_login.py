@@ -270,7 +270,7 @@ def test_a_throttled_save_says_how_long_to_wait_and_names_no_username(client: An
     assert "firma01" not in resp.text and "firma01" not in caplog.text
 
 
-def test_the_released_account_helper_has_one_caller() -> None:
+def test_the_released_account_helper_has_two_callers() -> None:
     """`own_account_id_released` takes a route out of both route censuses, so who calls it is pinned here."""
     import ast
     from pathlib import Path
@@ -282,7 +282,7 @@ def test_the_released_account_helper_has_one_caller() -> None:
             if isinstance(fn, ast.FunctionDef) and any(
                     isinstance(n, ast.Attribute) and n.attr == "own_account_id_released" for n in ast.walk(fn)):
                 callers.add(f"{path.relative_to(root.parent).as_posix()}::{fn.name}")
-    assert callers == {"api/routes/cuzk_login.py::put_cuzk_login"}
+    assert callers == {"api/routes/cuzk_login.py::put_cuzk_login", "api/routes/cadastre_prices.py::post_building_prices"}
 
 
 def test_a_misconfigured_address_sends_nothing_and_spends_nothing(client: Any, ledger: dict, checks: list,
