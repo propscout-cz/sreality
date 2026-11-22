@@ -6,6 +6,7 @@ import { buyBuildingPrices, fetchBuildingPrices, fetchPropertyBuildingSales, typ
 import { saleRows, type SaleRow } from '@/lib/buildingSales';
 import { fmtArea, fmtCzk, fmtDateSlash, fmtMeasuredPricePerM2 } from '@/lib/format';
 import { ppm2BasisFromToken } from '@/lib/measure';
+import { advertLink } from '@/lib/portals';
 
 /* Prodeje v domě: the registered sales in the building at the property's door. Two sources in one list, each row
  * naming its own: the shared sales we hold, and the cadastre deeds THIS account bought (visible to no other account).
@@ -94,6 +95,7 @@ const CELL = 'px-2.5 py-2 whitespace-nowrap';
 const NUM = `${CELL} text-right font-mono text-[13px] tabular-nums`;
 
 function SaleRowView({ row }: { row: SaleRow }) {
+  const link = advertLink(row);
   const price = row.price_czk == null ? '—' : row.currency && row.currency !== 'CZK'
     ? `${row.price_czk.toLocaleString('cs-CZ')} ${row.currency}`
     : fmtCzk(row.price_czk);
@@ -111,8 +113,8 @@ function SaleRowView({ row }: { row: SaleRow }) {
       <td className={`${CELL} text-[var(--color-ink-2)]`}>
         {row.source === 'katastr' ? (
           <span title={row.proceeding ?? undefined}>Katastr <span className="font-mono text-xs text-[var(--color-ink-3)]">{row.proceeding}</span></span>
-        ) : row.source_url ? (
-          <a href={row.source_url} target="_blank" rel="noreferrer"
+        ) : link ? (
+          <a href={link} target="_blank" rel="noreferrer"
             className="underline decoration-[var(--color-rule-strong)] underline-offset-2 hover:text-[var(--color-copper)]">
             Reas
           </a>
