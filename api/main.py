@@ -70,6 +70,7 @@ from api.routes.filter_presets import router as filter_presets_router
 from api.routes.stats_dashboards import router as stats_dashboards_router
 from api.routes.images import router as images_router
 from api.routes.property_download import router as property_download_router
+from api.routes.property_building_sales import router as property_building_sales_router
 from api.routes.property_location import router as property_location_router
 from api.routes.property_price_history import router as property_price_history_router
 from api.routes.valuo import router as valuo_router
@@ -308,6 +309,9 @@ app.include_router(waitlist_admin_router)   # GET /admin/waitlist: the admin Sig
 app.include_router(property_download_router)
 # /properties/{id}/location — the phone's Poloha: the location ad's point, granularity, label and note. JWT-gated.
 app.include_router(property_location_router)
+# /properties/{id}/building/sales — the registered sales we hold in the property's building (its door's RÚIAN
+# building code = the sale's own). JWT-gated, service role (shared market data).
+app.include_router(property_building_sales_router)
 # /properties/{id}/price-history — the extension's price chart: every ad of the property and its
 # price snapshots, the SPA property page's two reads. JWT-gated, service role (market data).
 app.include_router(property_price_history_router)
