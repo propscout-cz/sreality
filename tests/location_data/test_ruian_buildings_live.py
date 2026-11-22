@@ -79,8 +79,6 @@ def _link(conn, kod: int) -> int | None:
 
 def _load(conn, world, rows, obec_kod=OBEC, sha="a"):
     version, units = world
-    with conn.cursor() as cur:
-        cur.execute("delete from ruian_building_loads where version_id = %s", (version.id,))
     return rb.write_obec(conn, version, units[OBEC], obec_kod, rows, sha)
 
 
@@ -129,3 +127,102 @@ def test_the_completion_period_reads_a_placeholder_as_a_period(conn):
             "ruian_completion_period('2012-06-30')::text, ruian_completion_period('2012-12-31')::text, "
             "ruian_completion_period(null)")
         assert cur.fetchone() == ("[1920,1946)", "(,1920)", "[2012,2013)", "[2012,2013)", None)
+
+
+def _versions(conn, code: int) -> list[tuple]:
+    with conn.cursor() as cur:
+        cur.execute("select first_version_id, last_version_id, valid_to from ruian_building_objects "
+                    "where code = %s order by valid_from", (code,))
+        return cur.fetchall()
+
+
+def _next_version(conn, world):
+    with conn.cursor() as cur:
+        cur.execute(
+            "insert into registry_versions (label, kind, source_date, artifact_urls, proj_version, proj_pipeline) "
+            "values ('test:buildings:2', 'baseline', %s, '{}', 'p', 'q') returning id", (DAY,))
+        return (rb.Version(int(cur.fetchone()[0]), DAY), world[1])
+
+
+def test_a_new_version_does_not_write_an_unchanged_building(conn, world):
+    _load(conn, world, [BUILDING])
+    later = _next_version(conn, world)
+    _load(conn, later, [BUILDING])
+    assert _versions(conn, BUILDING.code) == [(world[0].id, world[0].id, None)]
+
+
+def test_a_new_version_writes_a_building_whose_facts_changed_in_place(conn, world):
+    _load(conn, world, [BUILDING])
+    later = _next_version(conn, world)
+    _load(conn, later, [dataclasses.replace(BUILDING, floors=9)])
+    assert _versions(conn, BUILDING.code) == [(world[0].id, later[0].id, None)]
+    assert _current(conn, BUILDING.code)[0][1] == 9
+
+
+def test_a_building_that_reappears_is_opened_again(conn, world):
+    _load(conn, world, [BUILDING])
+    _load(conn, world, [])
+    later = _next_version(conn, world)
+    _load(conn, later, [BUILDING])
+    assert _versions(conn, BUILDING.code) == [(world[0].id, later[0].id, None)]
+
+
+def test_a_reversioned_obec_unit_never_leaves_two_current_rows(conn, world):
+    """ruian_load gives an obec a new unit row on a rename or a parent's re-version (M2)."""
+    version, units = world
+    _load(conn, world, [BUILDING, ruian_vfr.AddressLink(ADM, BUILDING.code)])
+    with conn.cursor() as cur:
+        cur.execute("update ruian_admin_units set valid_to = %s where id = %s", (DAY, units[OBEC]))
+        cur.execute(
+            "insert into ruian_admin_units (level, code, name, name_norm, path, valid_from, "
+            "first_version_id, last_version_id) values ('obec', %s, 'x', 'x', 't990001b'::ltree, %s, %s, %s) "
+            "returning id", (OBEC, DAY + datetime.timedelta(days=1), version.id, version.id))
+        renamed = int(cur.fetchone()[0])
+    changed = dataclasses.replace(BUILDING, plati_od=datetime.date(2026, 10, 1), floors=9)
+    rb.write_obec(conn, version, renamed, OBEC, [changed], "b")
+    rows = _current(conn, BUILDING.code)
+    assert [(r[1], r[7]) for r in rows] == [(8, changed.plati_od), (9, None)]
+    assert _link(conn, ADM) is None, "the old unit row's door is still this obec's door"
+
+
+def test_a_building_that_moves_obec_is_one_current_row_in_its_new_obec(conn, world):
+    version, units = world
+    _load(conn, world, [BUILDING])
+    with conn.cursor() as cur:
+        cur.execute(
+            "insert into ruian_admin_units (level, code, name, name_norm, path, valid_from, "
+            "first_version_id, last_version_id) values ('obec', 990009, 'y', 'y', 't990009'::ltree, %s, %s, %s) "
+            "returning id", (DAY, version.id, version.id))
+        other = int(cur.fetchone()[0])
+    moved = dataclasses.replace(BUILDING, plati_od=datetime.date(2026, 10, 2))
+    rb.write_obec(conn, version, other, 990009, [moved], "c")
+    with conn.cursor() as cur:
+        cur.execute("select obec_unit_id from ruian_building_objects where code = %s and valid_to is null",
+                    (BUILDING.code,))
+        assert cur.fetchall() == [(other,)]
+    _load(conn, world, [])
+    with conn.cursor() as cur:
+        cur.execute("select count(*) from ruian_building_objects where code = %s and valid_to is null",
+                    (BUILDING.code,))
+        assert cur.fetchone()[0] == 1
+
+
+def test_a_failed_obec_keeps_its_error_and_stays_pending(conn, world):
+    version, _ = world
+    rb.record_failure(conn, version, OBEC, "Unavailable: HTTP 404")
+    assert OBEC in [code for _, code in rb.pending_obce(conn, version)]
+    rb.write_obec(conn, version, world[1][OBEC], OBEC, [], "a")
+    with conn.cursor() as cur:
+        cur.execute("select error from ruian_building_loads where version_id = %s and obec_kod = %s",
+                    (version.id, OBEC))
+        assert cur.fetchone() == (None,)
+    assert OBEC not in [code for _, code in rb.pending_obce(conn, version)]
+
+
+def test_an_obec_the_served_version_no_longer_holds_is_not_pending(conn, world):
+    version, units = world
+    later = _next_version(conn, world)[0]
+    assert OBEC not in [code for _, code in rb.pending_obce(conn, later)]
+    with conn.cursor() as cur:
+        cur.execute("update ruian_admin_units set last_version_id = %s where id = %s", (later.id, units[OBEC]))
+    assert OBEC in [code for _, code in rb.pending_obce(conn, later)]

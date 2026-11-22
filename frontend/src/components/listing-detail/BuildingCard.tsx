@@ -1,8 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import Panel from '@/components/Panel';
 import { fetchPropertyBuilding } from '@/lib/api';
-import { fmtShortDate } from '@/lib/format';
-import { registerBuildingUrl, registerFacts, type AdFacts } from '@/lib/registerBuilding';
+import { registerBuildingUrl, registerDate, registerFacts, type AdFacts } from '@/lib/registerBuilding';
 
 /* Budova: what the RÚIAN register states about the building at the property's door. Its own card, apart from the
  * facts the ads state, with the source and the date of the data on it (the licence asks for both). A property
@@ -30,6 +29,7 @@ export default function BuildingCard({ propertyId, ad }: { propertyId: number; a
             <dt className="shrink-0 text-[12px] text-[var(--color-ink-3)]">{f.label}</dt>
             <dd className="min-w-0 text-right text-[13px] text-[var(--color-ink)]">
               {f.value ?? <span className="text-[var(--color-ink-3)]">nezjištěno</span>}
+              {f.derived ? <span className="block text-[12px] text-[var(--color-ink-3)]">{f.derived}</span> : null}
               {f.note ? (
                 <span className="block text-[12px] text-[var(--color-ink-2)]">
                   <span aria-hidden className="mr-1.5 inline-block size-[7px] rounded-full bg-[var(--color-ochre)]" />
@@ -41,7 +41,7 @@ export default function BuildingCard({ propertyId, ad }: { propertyId: number; a
         ))}
       </dl>
       <p className="border-t border-[var(--color-rule-soft)] pt-2.5 text-xs text-[var(--color-ink-3)]">
-        Zdroj: ČÚZK, RÚIAN, stav k {fmtShortDate(building.source_date)} ·{' '}
+        Zdroj: ČÚZK, RÚIAN, stav k {registerDate(building.source_date)} ·{' '}
         <a href={registerBuildingUrl(building.code)} target="_blank" rel="noreferrer"
           className="text-[var(--color-ink-2)] underline decoration-[var(--color-rule-strong)] underline-offset-2 hover:text-[var(--color-copper)]">
           stavební objekt <span className="font-mono">{building.code}</span>

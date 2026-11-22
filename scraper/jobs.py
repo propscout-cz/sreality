@@ -75,10 +75,6 @@ _FIXED: tuple[Job, ...] = (
         15 * 60, 5 * 60, 55 * 60, 3072, 4, RUNNER),
     Job("ruian_load", ("location_data.ruian_load",), 30 * DAY, 10 * HOUR, 6 * HOUR, 2048, 1, UNTIL_MOVED,
         LOCATION_HEAVY, db_heavy=True),
-    # Buildings of the registry version the address mirror serves (#2591). Daily and resumable: with no obec
-    # pending it is one read; after a new version it reads ~6,250 obec files over one or two runs.
-    Job("ruian_buildings", ("location_data.ruian_buildings", "--max-seconds", "10800"), DAY, 13 * HOUR, 5 * HOUR,
-        1024, 1, RUNNER, LOCATION_HEAVY, db_heavy=True),
     Job("price_stats", ("scraper.price_stats_main", "--start-year", "2015", "--window-years", "5"),
         7 * DAY, 4 * DAY + 4 * HOUR, 1 * HOUR, 1024, 1, GITHUB),  # the epoch began on a Thursday: Monday 04:00
     Job("verify_pipeline", ("scripts.verify_pipeline", "--host", "github-actions"),

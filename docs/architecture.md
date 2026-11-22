@@ -6185,21 +6185,26 @@ location programme's work, not this one's.
   current one `valid_to is null`; `valid_from` is the register's own PlatiOd, so a changed building gets a new row
   and its old one is closed. `ruian_address_points.stavebni_objekt_code` is the door's building. Code lists and
   their "not known" flags: `ruian_code_labels`. Both service-role only.
-- **Load.** `python -m location_data.ruian_buildings`, the daily `ruian_buildings` job on the job runner. It reads
+- **Load.** `python -m location_data.ruian_buildings` (`--obec <code>`, `--max-seconds`), run by hand until its
+  scheduled job is registered (a follow-up to #2591, after the first load is measured). It reads
   the per-obec state files of the exchange format (`…/vymenny_format/soucasna/<vintage>_OB_<obec>_UZSZ.xml.zip`,
   parser `location_data/ruian_vfr.py`, stdlib) for the registry version the address mirror currently serves, so a
-  building and its address points are of one vintage. One obec = one file = one transaction, with a receipt in
-  `ruian_building_loads`; an obec with a receipt for that version is not read again, so a run resumes and a day
-  with nothing pending is one read. It is a module of its own and edits none of `ruian_load` (operator ruling
+  building and its address points are of one vintage. One obec = one file = one bounded transaction, with a receipt
+  in `ruian_building_loads` (a failed obec's receipt carries its `error`, the run goes on, the next run tries it
+  again; a download is retried on a refused connection, a 429 or a 5xx, never on a 404). A changed building's
+  current row is closed by its CODE, wherever it stands, and an obec's vanished buildings by the obec's code, never
+  by a unit row id (the registry load re-creates unit rows); an obec with a receipt for that version is not read again, so a run resumes and a run
+  with nothing pending is one read; a building the new version did not change is not written. It is a module of its own and edits none of `ruian_load` (operator ruling
   2026-11-22); it needs no geo library (the building's point is not loaded: nothing reads it).
 - **Read.** `GET /properties/{id}/building` (`api/property_building.py`, `require_token`): the building of the
   location ad's door, each code with its label, or `{"building": null}`. The SPA's Budova card
   (`components/listing-detail/BuildingCard.tsx`, desktop and phone) is its one consumer; a property without a
   building shows no card.
 - **Three things a reader must know.** `floors` counts floors below ground, so it differs from an ad's count by
-  design. `completed_on` is a 31 December placeholder (1919 … 2000) for most older buildings and is shown as a
-  period (`ruian_completion_period`; the period bounds follow the census age bands, an inference to check
-  against the loaded data). The register calls these attributes non-reference data: a wrong record is possible,
+  design: the card names that basis and never flags it against the ad. `completed_on` is a 31 December placeholder (1919 … 2000) for most older buildings and is shown as a
+  period MARKED as derived, with the register's own date beside it (`ruian_completion_period`; the bounds follow
+  the census age bands, an inference to check against the loaded data). Protection codes are stored but not
+  served: their code list is not seeded. The register calls these attributes non-reference data: a wrong record is possible,
   which is why the ad's differing value is shown beside it, not replaced.
 
 **An account's own ČÚZK login (#2597).** `account_cuzk_logins` (migration 759), entered in the avatar menu's dialog,

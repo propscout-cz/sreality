@@ -1,4 +1,5 @@
 import datetime
+import pathlib
 import zipfile
 
 import pytest
@@ -86,3 +87,21 @@ def test_links_only_address_points_that_name_a_building(tmp_path):
 def test_refuses_another_product(tmp_path, kwargs):
     with pytest.raises(ruian_vfr.VfrSchemaError):
         list(ruian_vfr.iter_obec_state(_zip(tmp_path, **kwargs)))
+
+
+_REAL = pathlib.Path(__file__).resolve().parents[1] / "fixtures" / "location_data" / "20261031_OB_550680_UZSZ.trimmed.xml"
+
+
+def test_a_real_file_reads_through(tmp_path):
+    """Obec 550680 of vintage 2026-10-31, trimmed to five buildings and their address points (ČÚZK, CC BY 4.0)."""
+    path = tmp_path / "real.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("20261031_OB_550680_UZSZ.xml", _REAL.read_bytes())
+    rows = list(ruian_vfr.iter_obec_state(path))
+    buildings = [r for r in rows if isinstance(r, ruian_vfr.BuildingRow)]
+    links = [r for r in rows if isinstance(r, ruian_vfr.AddressLink)]
+    assert len(buildings) == 5 and len(links) == 4
+    assert {link.building_code for link in links} <= {b.code for b in buildings}
+    assert any(b.floors for b in buildings) and any(b.completed_on for b in buildings)
+    assert any(not b.house_numbers for b in buildings), "a building with no house number is read too"
+    assert all(b.iskn_building_id is None or b.iskn_building_id > 0 for b in buildings)

@@ -7,40 +7,52 @@ export interface RegisterFact {
   label: string;
   /* null = the register does not know. */
   value: string | null;
+  /* The ad states something else. */
   note?: string;
+  /* How the value was arrived at, when it is not the register's own wording. */
+  derived?: string;
 }
 
-/* What the property's ads say, for the two facts both sides state. */
+/* What the property's ads say, for the one fact both sides state on the same basis. */
 export interface AdFacts {
-  total_floors: number | null;
   has_lift: boolean | null;
 }
 
 const LIFT_YES = 1;
 const LIFT_NO = 2;
+/* An ISO date as "31. 12. 1990": a register date always shows its year. */
+export const registerDate = (iso: string): string => {
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+  return `${d}. ${m}. ${y}`;
+};
 const num = (n: number) => n.toLocaleString('cs-CZ');
-const coded = (c: RegisterCode | null): string | null => (c == null || c.unknown ? null : c.label);
+const coded = (c: RegisterCode | null): string | null =>
+  c == null || c.unknown ? null : c.label ?? `kód ${c.code}`;
 const area = (m2: number | null): string | null => (m2 == null ? null : `${num(m2)} m²`);
 
-export function completionLabel(completed: RegisterBuilding['completed']): string | null {
-  if (completed == null) return null;
-  if (completed.from == null) return `do ${completed.to}`;
-  return completed.from === completed.to ? String(completed.to) : `${completed.from}–${completed.to}`;
+/* The register holds a 31 December placeholder for most older buildings; the period is our reading of it, so the
+ * row says which date it comes from. A real date is shown as the register gives it. */
+export function completionFact(completed: RegisterBuilding['completed']): RegisterFact {
+  const label = 'Dokončení';
+  if (completed == null) return { label, value: null };
+  if (completed.from === completed.to) return { label, value: registerDate(completed.on) };
+  return {
+    label,
+    value: completed.from == null ? `do ${completed.to}` : `${completed.from}–${completed.to}`,
+    derived: `období odvozené z data v registru (${registerDate(completed.on)})`,
+  };
 }
 
 export function registerFacts(b: RegisterBuilding, ad: AdFacts): RegisterFact[] {
-  const floors: RegisterFact = { label: 'Podlaží', value: b.floors == null ? null : num(b.floors) };
-  if (b.floors != null && ad.total_floors != null && ad.total_floors !== b.floors) {
-    floors.note = `inzerát uvádí ${ad.total_floors}`;
-  }
   const lift: RegisterFact = { label: 'Výtah', value: coded(b.lift) };
   if (b.lift?.code === LIFT_NO && ad.has_lift === true) lift.note = 'inzerát uvádí výtah';
   if (b.lift?.code === LIFT_YES && ad.has_lift === false) lift.note = 'inzerát uvádí bez výtahu';
   return [
     { label: 'Využití', value: coded(b.usage) },
-    { label: 'Dokončení', value: completionLabel(b.completed) },
+    completionFact(b.completed),
     { label: 'Konstrukce', value: coded(b.construction) },
-    floors,
+    /* The register counts storeys below ground too, an ad does not: a different basis, so never a disagreement. */
+    { label: 'Podlaží včetně podzemních', value: b.floors == null ? null : num(b.floors) },
     { label: 'Bytů v domě', value: b.dwellings == null ? null : num(b.dwellings) },
     { label: 'Vchody', value: num(b.entrances) },
     lift,
@@ -50,7 +62,6 @@ export function registerFacts(b: RegisterBuilding, ad: AdFacts): RegisterFact[] 
     { label: 'Plyn', value: coded(b.gas) },
     { label: 'Zastavěná plocha', value: area(b.built_up_area_m2) },
     { label: 'Podlahová plocha', value: area(b.floor_area_m2) },
-    { label: 'Památková ochrana', value: b.protected ? 'Ano' : 'Žádná' },
   ];
 }
 

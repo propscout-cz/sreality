@@ -672,7 +672,8 @@ export const setAgentRunLimit = (dailyLimitUsd: number): Promise<AccountLimit> =
  * carries its label and whether the code means the register does not know. */
 export interface RegisterCode {
   code: number;
-  label: string;
+  /* null: a code our list of labels does not hold. */
+  label: string | null;
   unknown: boolean;
 }
 export interface RegisterBuilding {
@@ -680,8 +681,9 @@ export interface RegisterBuilding {
   iskn_building_id: number | null;
   house_numbers: number[];
   house_number_kind: string | null;
-  /* The completion period in years; equal ends are one year, a null start is open ("until 1919"). */
-  completed: { from: number | null; to: number } | null;
+  /* The register's date, and the period derived from it: equal ends are one year, a null start is open
+   * ("until 1919"); a period wider than a year means the register holds a placeholder date. */
+  completed: { on: string; from: number | null; to: number } | null;
   /* Floors below ground count too, so this can exceed an ad's figure. */
   floors: number | null;
   dwellings: number | null;
@@ -689,7 +691,6 @@ export interface RegisterBuilding {
   built_up_area_m2: number | null;
   floor_area_m2: number | null;
   enclosed_volume_m3: number | null;
-  protected: boolean;
   valid_from: string;
   source_date: string;
   usage: RegisterCode | null;

@@ -39,17 +39,22 @@ alter table public.ruian_building_objects
 
 create unique index if not exists ruian_bo_current_code
   on public.ruian_building_objects (code) where valid_to is null;
+-- The load closes an obec's vanished buildings by its unit rows.
+create index if not exists ruian_bo_current_obec
+  on public.ruian_building_objects (obec_unit_id) where valid_to is null;
 create index if not exists ruian_bo_current_iskn
   on public.ruian_building_objects (iskn_building_id)
   where valid_to is null and iskn_building_id is not null;
 
--- One row per obec file read into a registry version: the load's resume point and its receipt.
+-- One row per obec file read into a registry version: the load's resume point and its receipt. A row with an
+-- `error` is a failed read, tried again by the next run.
 create table if not exists public.ruian_building_loads (
   version_id  bigint      not null references public.registry_versions(id),
   obec_kod    bigint      not null,
   buildings   integer     not null,
   links       integer     not null,
-  sha256      text        not null,
+  sha256      text,
+  error       text,
   loaded_at   timestamptz not null default now(),
   primary key (version_id, obec_kod)
 );

@@ -27,7 +27,7 @@ def _row(**over: Any) -> dict[str, Any]:
         "code": 22948236, "iskn_building_id": 470801805, "house_numbers": [564, 565], "typ_so": "č.p.",
         "completed_on": datetime.date(1990, 12, 31), "completed_from": 1981, "completed_to": 1990,
         "floors": 8, "dwelling_count": 46, "built_up_area_m2": 612, "floor_area_m2": None,
-        "enclosed_volume_m3": None, "protected": False, "valid_from": datetime.date(2023, 12, 18),
+        "enclosed_volume_m3": None, "valid_from": datetime.date(2023, 12, 18),
         "source_date": datetime.date(2026, 10, 31), "entrances": 2,
         "usage": _label(6, "bytový dům"), "construction": _label(4, "Stěnové panely"), "lift": _label(1, "S výtahem"),
         "heating": _label(2, "Centrální dálkové (kotel mimo stavbu)"), "water": _label(1, "S vodovodem"),
@@ -79,7 +79,8 @@ def client():
 def test_the_building_is_what_the_register_states(client, conn):
     building = client.get("/properties/7/building", headers=AUTH).json()["building"]
     assert building["code"] == 22948236 and building["house_numbers"] == [564, 565]
-    assert building["completed"] == {"from": 1981, "to": 1990}
+    assert building["completed"] == {"on": "1990-12-31", "from": 1981, "to": 1990}
+    assert "protected" not in building
     assert (building["floors"], building["dwellings"], building["entrances"]) == (8, 46, 2)
     assert building["floor_area_m2"] is None
     assert building["gas"] == {"code": 9, "label": "Nezjištěno", "unknown": True}
@@ -103,7 +104,7 @@ def test_a_register_silent_on_completion_gives_no_period(client, conn):
 def test_an_open_ended_period_keeps_its_gap(client, conn):
     conn.row = _row(completed_on=datetime.date(1919, 12, 31), completed_from=None, completed_to=1919)
     assert client.get("/properties/7/building", headers=AUTH).json()["building"]["completed"] == {
-        "from": None, "to": 1919}
+        "on": "1919-12-31", "from": None, "to": 1919}
 
 
 def test_a_property_whose_door_names_no_building_has_none(client, conn):

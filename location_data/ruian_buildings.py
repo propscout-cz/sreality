@@ -1,8 +1,9 @@
 """Load RÚIAN buildings and each address point's building code, one obec file at a time.
 
 Reads the per-obec state files of the registry version the address mirror currently serves,
-so a building and its address points are always of one vintage. Resumable: an obec recorded in
-`ruian_building_loads` for that version is not read again.
+so a building and its address points are always of one vintage. Resumable: an obec with a clean
+receipt in `ruian_building_loads` for that version is not read again. One obec failing never
+stops the others: its receipt carries the error and the next run tries it again.
 """
 from __future__ import annotations
 
@@ -26,6 +27,8 @@ LOG = logging.getLogger("location_data.ruian_buildings")
 
 _PAUSE_S = 0.2
 _TIMEOUT = (30, 600)
+_RETRY_WAITS_S = (2, 10, 30)
+_OBEC_STATEMENT_TIMEOUT_S = 900  # Praha, the largest obec, is 152,517 buildings in one transaction
 _TYP_SO = {1: "č.p.", 2: "č.ev."}
 
 _STAGE_BUILDINGS = """
@@ -62,29 +65,34 @@ def current_version(conn: psycopg.Connection) -> Version:
 
 
 def pending_obce(conn: psycopg.Connection, version: Version) -> list[tuple[int, int]]:
-    """(unit id, code) of every current obec not yet read for this version."""
+    """(unit id, code) of every obec the served version holds and this load has no clean receipt for.
+
+    `last_version_id = version` and not only `valid_to is null`: the registry load never closes a unit missing
+    from a new vintage, and an abolished obec has no file.
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
             select u.id, u.code
               from ruian_admin_units u
-             where u.level = 'obec' and u.valid_to is null
+             where u.level = 'obec' and u.valid_to is null and u.last_version_id = %(v)s
                and not exists (select 1 from ruian_building_loads l
-                                where l.version_id = %s and l.obec_kod = u.code)
+                                where l.version_id = %(v)s and l.obec_kod = u.code and l.error is null)
              order by u.code
             """,
-            (version.id,),
+            {"v": version.id},
         )
         return [(int(i), int(c)) for i, c in cur.fetchall()]
 
 
 def write_obec(conn: psycopg.Connection, version: Version, obec_unit_id: int, obec_kod: int,
                rows: list[ruian_vfr.BuildingRow | ruian_vfr.AddressLink], sha256: str) -> tuple[int, int]:
-    """One obec, one transaction: its buildings, its address links, its receipt."""
+    """One obec, one bounded transaction: its buildings, its address links, its receipt."""
     buildings = [r for r in rows if isinstance(r, ruian_vfr.BuildingRow)]
     links = [r for r in rows if isinstance(r, ruian_vfr.AddressLink)]
     facts = ", ".join(_FACTS)
-    with conn.transaction(), conn.cursor() as cur:
+    params = {"v": version.id, "obec": obec_unit_id, "obec_kod": obec_kod, "source_date": version.source_date}
+    with loader_db.bounded(conn, _OBEC_STATEMENT_TIMEOUT_S) as cur:
         cur.execute("drop table if exists stage_buildings, stage_links")
         cur.execute(_STAGE_BUILDINGS)
         cur.execute(_STAGE_LINKS)
@@ -100,24 +108,36 @@ def write_obec(conn: psycopg.Connection, version: Version, obec_unit_id: int, ob
         with cur.copy("copy stage_links from stdin") as copy:
             for link in links:
                 copy.write_row((link.kod_adm, link.building_code))
+        cur.execute("analyze stage_buildings")
+        cur.execute("analyze stage_links")
 
-        # A building the register changed gets a new row; one that left the obec's file is closed.
+        # A building the register changed gets a new row: close its current one first, by CODE, wherever it
+        # stands (an obec's unit row is re-created on a rename or a parent's re-version, and a building can
+        # move obec), so the one-current-row-per-code index never sees two.
         cur.execute(
             """
-            update ruian_building_objects t
-               set valid_to = coalesce(s.valid_from, %(source_date)s), last_version_id = %(v)s
-              from (select b.id, s.valid_from
-                      from ruian_building_objects b
-                 left join stage_buildings s on s.code = b.code
-                     where b.valid_to is null and b.obec_unit_id = %(obec)s
-                       and (s.code is null or s.valid_from <> b.valid_from)) s
-             where t.id = s.id
+            update ruian_building_objects b
+               set valid_to = greatest(s.valid_from, b.valid_from), last_version_id = %(v)s
+              from stage_buildings s
+             where b.code = s.code and b.valid_to is null and b.valid_from <> s.valid_from
             """,
-            {"v": version.id, "obec": obec_unit_id, "source_date": version.source_date},
+            params,
+        )
+        # A building gone from this obec's file is closed. The obec is named by its CODE: every unit row it had.
+        cur.execute(
+            """
+            update ruian_building_objects b
+               set valid_to = %(source_date)s, last_version_id = %(v)s
+             where b.valid_to is null
+               and b.obec_unit_id in (select u.id from ruian_admin_units u
+                                       where u.level = 'obec' and u.code = %(obec_kod)s)
+               and not exists (select 1 from stage_buildings s where s.code = b.code)
+            """,
+            params,
         )
         cur.execute(
             f"""
-            insert into ruian_building_objects
+            insert into ruian_building_objects as t
                    (code, obec_unit_id, cast_obce_unit_id, valid_from, valid_to,
                     first_version_id, last_version_id, {facts})
             select s.code, %(obec)s, c.id, s.valid_from, null, %(v)s, %(v)s, {", ".join(f"s.{f}" for f in _FACTS)}
@@ -128,40 +148,74 @@ def write_obec(conn: psycopg.Connection, version: Version, obec_unit_id: int, ob
                    valid_to = null, last_version_id = excluded.last_version_id,
                    obec_unit_id = excluded.obec_unit_id, cast_obce_unit_id = excluded.cast_obce_unit_id,
                    {", ".join(f"{f} = excluded.{f}" for f in _FACTS)}
+            -- An unchanged building is not written, so last_version_id is the last version that changed it.
+            where t.valid_to is not null
+               or (t.obec_unit_id, t.cast_obce_unit_id, {", ".join(f"t.{f}" for f in _FACTS)})
+                  is distinct from
+                  (excluded.obec_unit_id, excluded.cast_obce_unit_id, {", ".join(f"excluded.{f}" for f in _FACTS)})
             """,
-            {"v": version.id, "obec": obec_unit_id},
+            params,
+        )
+        # Each door's building, by the door's own key; then the obec's doors the file no longer links.
+        cur.execute(
+            """
+            update ruian_address_points a
+               set stavebni_objekt_code = l.building_code
+              from stage_links l
+             where a.kod_adm = l.kod_adm and a.stavebni_objekt_code is distinct from l.building_code
+            """
         )
         cur.execute(
             """
             update ruian_address_points a
-               set stavebni_objekt_code = s.building_code
-              from (select a.kod_adm, l.building_code
-                      from ruian_address_points a
-                 left join stage_links l on l.kod_adm = a.kod_adm
-                     where a.obec_kod = %(obec_kod)s
-                       and a.stavebni_objekt_code is distinct from l.building_code) s
-             where a.kod_adm = s.kod_adm
+               set stavebni_objekt_code = null
+             where a.obec_unit_id in (select u.id from ruian_admin_units u
+                                       where u.level = 'obec' and u.code = %(obec_kod)s)
+               and a.stavebni_objekt_code is not null
+               and not exists (select 1 from stage_links l where l.kod_adm = a.kod_adm)
             """,
-            {"obec_kod": obec_kod},
+            params,
         )
-        cur.execute(
-            "insert into ruian_building_loads (version_id, obec_kod, buildings, links, sha256) "
-            "values (%s, %s, %s, %s, %s)",
-            (version.id, obec_kod, len(buildings), len(links), sha256),
-        )
+        cur.execute(_RECEIPT_SQL, (version.id, obec_kod, len(buildings), len(links), sha256, None))
     return len(buildings), len(links)
 
 
+_RECEIPT_SQL = """
+insert into ruian_building_loads (version_id, obec_kod, buildings, links, sha256, error)
+values (%s, %s, %s, %s, %s, %s)
+on conflict (version_id, obec_kod) do update set
+       buildings = excluded.buildings, links = excluded.links, sha256 = excluded.sha256,
+       error = excluded.error, loaded_at = now()
+"""
+
+
+class Unavailable(RuntimeError):
+    """The obec's file could not be fetched; the message is what the receipt keeps."""
+
+
 def download(sess: requests.Session, url: str, dest: Path) -> str:
-    """Stream one file to disk; its sha256. (Not `ruian_csv.download`: that module needs pyproj, the runner has none.)"""
-    digest = hashlib.sha256()
-    with sess.get(url, timeout=_TIMEOUT, stream=True) as resp:
-        resp.raise_for_status()
-        with dest.open("wb") as fh:
-            for chunk in resp.iter_content(1 << 20):
-                digest.update(chunk)
-                fh.write(chunk)
-    return digest.hexdigest()
+    """Stream one file to disk; its sha256. A refused connection, a 429 or a 5xx is tried again, a 404 is not.
+
+    (Not `ruian_csv.download`: that module needs pyproj, which the runner's image has not.)
+    """
+    for wait in (*_RETRY_WAITS_S, None):
+        try:
+            digest = hashlib.sha256()
+            with sess.get(url, timeout=_TIMEOUT, stream=True) as resp:
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    raise requests.ConnectionError(f"HTTP {resp.status_code}")
+                if resp.status_code != 200:
+                    raise Unavailable(f"HTTP {resp.status_code}")
+                with dest.open("wb") as fh:
+                    for chunk in resp.iter_content(1 << 20):
+                        digest.update(chunk)
+                        fh.write(chunk)
+            return digest.hexdigest()
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            if wait is None:
+                raise Unavailable(type(exc).__name__ + ": " + str(exc)[:120]) from None
+            time.sleep(wait)
+    raise AssertionError("unreachable")
 
 
 def load_obec(conn: psycopg.Connection, sess: requests.Session, version: Version, obec_unit_id: int,
@@ -176,6 +230,11 @@ def load_obec(conn: psycopg.Connection, sess: requests.Session, version: Version
     return write_obec(conn, version, obec_unit_id, obec_kod, rows, sha256)
 
 
+def record_failure(conn: psycopg.Connection, version: Version, obec_kod: int, error: str) -> None:
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(_RECEIPT_SQL, (version.id, obec_kod, 0, 0, None, error[:300]))
+
+
 def run(*, max_seconds: int | None, only: list[int] | None, work_dir: Path) -> int:
     started = time.monotonic()
     conn = loader_db.open_loader_connection()
@@ -185,17 +244,25 @@ def run(*, max_seconds: int | None, only: list[int] | None, work_dir: Path) -> i
         LOG.info("BUILDINGS start version=%d vintage=%s pending=%d", version.id, version.source_date, len(todo))
         sess = requests.Session()
         sess.headers["User-Agent"] = contact.USER_AGENT
-        done = buildings = links = 0
+        done = failed = buildings = links = 0
         for obec_unit_id, obec_kod in todo:
             if max_seconds is not None and time.monotonic() - started > max_seconds:
                 break
-            b, n = load_obec(conn, sess, version, obec_unit_id, obec_kod, work_dir)
+            began = time.monotonic()
+            try:
+                b, n = load_obec(conn, sess, version, obec_unit_id, obec_kod, work_dir)
+            except (Unavailable, ruian_vfr.VfrSchemaError, psycopg.Error) as exc:
+                failed += 1
+                LOG.warning("BUILDINGS obec=%d failed: %s: %s", obec_kod, type(exc).__name__, str(exc)[:200])
+                record_failure(conn, version, obec_kod, f"{type(exc).__name__}: {exc}")
+                continue
             done, buildings, links = done + 1, buildings + b, links + n
-            if done % 250 == 0:
-                LOG.info("BUILDINGS progress obce=%d/%d buildings=%d links=%d", done, len(todo), buildings, links)
+            if only is not None or done % 250 == 0:
+                LOG.info("BUILDINGS progress obce=%d/%d buildings=%d links=%d last_obec=%d last_seconds=%.1f",
+                         done, len(todo), buildings, links, obec_kod, time.monotonic() - began)
             time.sleep(_PAUSE_S)
-        LOG.info("BUILDINGS done obce=%d remaining=%d buildings=%d links=%d seconds=%d",
-                 done, len(todo) - done, buildings, links, int(time.monotonic() - started))
+        LOG.info("BUILDINGS done obce=%d failed=%d remaining=%d buildings=%d links=%d seconds=%d",
+                 done, failed, len(todo) - done - failed, buildings, links, int(time.monotonic() - started))
     finally:
         conn.close()
     return 0
