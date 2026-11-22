@@ -449,6 +449,7 @@ the old email + Telegram transports, the outbox, `ChannelClient`, `POST /webhook
   the file: `python3 -c "import os,base64;from cryptography.hazmat.primitives.asymmetric import ec;os.umask(0o077);k=ec.generate_private_key(ec.SECP256R1()).private_numbers().private_value.to_bytes(32,'big');open(os.path.expanduser('~/vapid_private_key.txt'),'x').write(base64.urlsafe_b64encode(k).rstrip(b'=').decode())"`.
   Transport `api/push.py` (RFC 8291 aes128gcm + RFC 8292 VAPID ES256 on `cryptography` + PyJWT, `*.push.apple.com` only, no
   redirects, a transport error = its class name); devices `api/push_devices.py`; the ledger pass `api/push_delivery.py`.
+- `CUZK_LOGIN_KEY` — Fernet key, API only: encrypts an account's own ČÚZK password (`api/cuzk_login.py`; unset → `PUT /account/cuzk-login` 503; no route returns a password). Generate, rotate: `references/secrets-inventory.md`.
 - The system-alerts loop (`api/system_alerts_loop.py`, the API's only background loop, off under `HEALTH_TELLER_DISABLED`) runs the health ladder `toolkit.system_alerts.reconcile` every 60 s (a constant, no setting): it keeps the `ops_incidents` ladder (onset, reminders by rung, recovery, acknowledgement on Health) and writes no `notification_dispatches` row (ruling R2b, 2026-10-21, superseding Q1's "bell only"); the external alarm is the health canary's GitHub e-mail (scraper-ops skill).
 - `STRIPE_WEBHOOK_SECRET` — Stripe webhook signing secret (Dashboard → Developers →
   Webhooks). Railway API env. Unset = `POST /billing/webhook` 503s (fail closed); the

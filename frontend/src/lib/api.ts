@@ -668,6 +668,16 @@ export const startAgentRun = (body: StartAgentRun): Promise<{ id: number; status
   request<{ id: number; status: AgentRunStatus; created: boolean }>('/runs', { method: 'POST', json: body });
 export const setAgentRunLimit = (dailyLimitUsd: number): Promise<AccountLimit> =>
   request<AccountLimit>('/runs/limit', { method: 'PUT', json: { daily_limit_usd: dailyLimitUsd } });
+/* An account's own ČÚZK WSDP login. The password goes up once and never comes back. */
+export interface CuzkLoginState {
+  set: boolean;
+  username: string | null;
+  checked_at: string | null;
+}
+export const fetchCuzkLogin = (): Promise<CuzkLoginState> => request<CuzkLoginState>('/account/cuzk-login');
+export const saveCuzkLogin = (login: { username: string; password: string }): Promise<CuzkLoginState> =>
+  request<CuzkLoginState>('/account/cuzk-login', { method: 'PUT', json: login });
+export const removeCuzkLogin = (): Promise<void> => request<void>('/account/cuzk-login', { method: 'DELETE' });
 export const cancelAgentRun = (id: number): Promise<{ id: number; status: AgentRunStatus }> =>
   request<{ id: number; status: AgentRunStatus }>(`/runs/${id}/cancel`, { method: 'POST' });
 

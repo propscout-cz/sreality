@@ -526,6 +526,8 @@ statement names that account (shape 3), and `opened` reaches the account through
 `require_token` with no connection (the public key derives from `VAPID_PRIVATE_KEY`). The worker's push lane routes by ONE
 join, `ps.account_id = d.account_id AND ps.ended_at IS NULL`: recipients come from the event's account at send time.
 
+The ČÚZK login routes (`api/routes/cuzk_login.py`, migration 759) are the same shape over `account_cuzk_logins`: `require_account_id` (in `_NEVER_ACTS`: the account that pays is never handed over with a board), then `deps.open_background_conn`, every statement naming the account; the password column is encrypted by the API.
+
 **Fourth instance — the run routes (`api/routes/agent_runs.py`, #2071).** `require_account_id` on the router (all in
 `_NEVER_ACTS`), so a start lands on the user's oldest membership, with no picker. Reads take `TenantConn` and name no account
 (shape 1), so a second membership reads both accounts' runs. A start and a cancel then open the service role in the handler

@@ -418,6 +418,10 @@ def test_estimation_child_routes_ride_the_tenant_connection() -> None:
     ("PUT", "/push/subscription"),
     ("DELETE", "/push/subscription"),
     ("POST", "/push/opened"),
+    # An account's own ČÚZK login (migration 759): the same shape.
+    ("GET", "/account/cuzk-login"),
+    ("PUT", "/account/cuzk-login"),
+    ("DELETE", "/account/cuzk-login"),
 ])
 def test_the_share_routes_open_the_service_role_only_after_their_gate(key: tuple[str, str]) -> None:
     # tenancy.md's second "tenant gate, then a service-role write": a recipient's or a

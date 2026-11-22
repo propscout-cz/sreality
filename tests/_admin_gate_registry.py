@@ -102,6 +102,8 @@ ADMIN_ONLY_RELATIONS: tuple[str, ...] = (
     # The push device registry and its delivery ledger (migration 654).
     "push_subscriptions",
     "notification_deliveries",
+    # An account's own ČÚZK login, its password encrypted (migration 759).
+    "account_cuzk_logins",
     # The scheduled-jobs lease and its run history (migration 675): holders, host names and log tails.
     "scheduled_jobs",
     "job_runs",
