@@ -26,6 +26,13 @@ import { advertLink } from '@/lib/portals';
 const pricesKey = (propertyId: number) => ['property-building-prices', propertyId] as const;
 const NOTE = 'text-[0.78rem] text-[var(--color-ink-2)]';
 const LIVE_POLL_MS = 4000;
+/* Why a request did nothing, in the user's words. `preparing` and `fetching` are said by the state's own note. */
+const NOTICE: Record<string, string> = {
+  busy: 'Vaše přihlášení k ČÚZK právě používá jiný požadavek, proto se teď nic neprovedlo. Zkuste to za chvíli znovu.',
+  in_flight: 'Načtení této budovy už je rozpracované, nové se proto nezačalo. Pokračujte v rozpracovaném.',
+  time: 'Požadavek nestihl doběhnout, nic dalšího se neodeslalo. Pokračujte tlačítkem pro dokončení.',
+  login: 'Uložené přihlášení k ČÚZK teď nelze použít (bylo změněno či odmítnuto, nebo se na něj právě čeká). Nic dalšího se neodeslalo.',
+};
 
 type How = { repeat?: boolean; resume?: number; cancel?: number };
 
@@ -40,7 +47,7 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
     queryKey: pricesKey(propertyId),
     queryFn: () => fetchBuildingPrices(propertyId),
     /* The read calls nothing at ČÚZK, so watching a live run costs nothing. */
-    refetchInterval: (q) => (q.state.data?.running ? LIVE_POLL_MS : false),
+    refetchInterval: (q) => (q.state.data?.running || q.state.data?.purchase?.fetching ? LIVE_POLL_MS : false),
   });
   const [confirming, setConfirming] = useState(false);
   const buy = useMutation({
@@ -63,18 +70,24 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
   const inFlight = purchase != null && (purchase.status === 'pending' || purchase.status === 'ordered');
   const unread = purchase?.status === 'paid_unread' ? purchase : null;
   const paidBefore = bought ?? unread;
-  /* A live run (this tab's or another's) holds the account's ČÚZK login: nothing may be asked beside it. */
+  /* A live request (this tab's or another's) holds the account's ČÚZK login: nothing may be asked beside it. */
   const live = buy.isPending || !!prices?.running;
-  const canPay = !!prices?.available && prices.login_set && !prices.login_refused && !live;
+  /* A fetch was sent moments ago and may still be being served: it is not sent again until that cannot be. */
+  const fetching = !!purchase?.fetching;
+  const loginUsable = !!prices?.login_set && !prices.login_refused;
+  const canPay = !!prices?.available && loginUsable && !live;
+  const notice = buy.data?.notice ? NOTICE[buy.data.notice] : undefined;
 
   let accessory = null;
-  if (canPay && inFlight) {
+  if (canPay && inFlight && !fetching) {
     accessory = (
       <button type="button" className={PANEL_ACTION} onClick={() => buy.mutate({ resume: purchase.id })}>
-        {purchase.fetch_sent ? 'Dokončit načtení (bez dalšího poplatku)' : `Dokončit načtení z katastru · ${price} Kč`}
+        {purchase.fetch_sent
+          ? `Dokončit načtení (celkem nejvýše ${price} Kč)`
+          : `Dokončit načtení z katastru · ${price} Kč`}
       </button>
     );
-  } else if (canPay) {
+  } else if (canPay && !inFlight) {
     accessory = (
       <button type="button" className={PANEL_ACTION} disabled={confirming} onClick={() => setConfirming(true)}>
         {paidBefore ? 'Načíst znovu' : 'Načíst ceny'} z katastru · {price} Kč
@@ -104,39 +117,57 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
           Načítání z katastru právě probíhá. Může trvat až dvě minuty; nic dalšího teď neodesílejte.
         </p>
       ) : null}
-      {inFlight && !live ? (
+      {notice && !live ? <p role="status" className={NOTE}>{notice}</p> : null}
+      {fetching && !live ? (
+        <p role="status" className={NOTE}>
+          Sestava byla u ČÚZK vyžádána před chvílí a možná se ještě vyřizuje; mohla být zaúčtována ({price} Kč).
+          Několik minut počkejte: mezitím se nic znovu neodesílá, aby nemohla být zaúčtována dvakrát.
+        </p>
+      ) : null}
+      {inFlight && !live && !fetching ? (
         <p role="status" className={`${NOTE} flex flex-wrap items-center gap-x-3 gap-y-2`}>
           <span className="min-w-0 flex-1">
             {purchase.fetch_sent
-              ? `Sestava byla u ČÚZK vyžádána, ale odpověď nedorazila, takže mohla být zaúčtována (${price} Kč). Nezačínejte nový nákup: dokončení načte tutéž sestavu bez dalšího poplatku, ČÚZK účtuje jen první otevření.`
+              ? `Sestava byla u ČÚZK vyžádána, ale odpověď nedorazila, takže mohla být zaúčtována (${price} Kč). Nezačínejte nový nákup: dokončení načte tutéž sestavu, a pokud už zaúčtována byla, bez dalšího poplatku (ČÚZK účtuje jen první otevření).`
               : `Načtení z katastru je rozpracované: ČÚZK sestavu připravuje, nebo se objednávka nedokončila. Dokončením zaplatíte nejvýše jednou, ${price} Kč.`}
             {' '}Pokud dokončení opakovaně selhává, můžete toto načtení zrušit; tím se nic neodesílá
             {purchase.fetch_sent ? ' a sestava zůstane vedená jako možná zaplacená.' : ' a nic se neúčtuje.'}
           </span>
-          {prices?.login_set ? (
-            <button type="button" className={PANEL_ACTION} onClick={() => buy.mutate({ cancel: purchase.id })}>
-              Zrušit toto načtení
-            </button>
-          ) : null}
+          <button type="button" className={PANEL_ACTION} onClick={() => buy.mutate({ cancel: purchase.id })}>
+            Zrušit toto načtení
+          </button>
         </p>
       ) : null}
-      {unread && !live ? (
+      {unread && !live && !fetching ? (
         <p role="status" className={`${NOTE} flex flex-wrap items-center gap-x-3 gap-y-2`}>
           <span className="min-w-0 flex-1">
             {unread.file_kept
               ? 'Sestavu z katastru jste zaplatili, ale nepodařilo se ji přečíst. Je u nás uložená; přečíst ji lze zkusit znovu bez placení.'
-              : `Sestava byla u ČÚZK vyžádána a mohla být zaúčtována, ale nemáme ji. Můžeme ji zkusit vyzvednout znovu: za tuto sestavu nezaplatíte celkem víc než ${price} Kč. Pokud ji ČÚZK už nenabízí, najdete ji mezi výstupy svého účtu u ČÚZK.`}
+              : unread.gone
+                ? 'ČÚZK tuto sestavu už nenabízí (je smazaná). Byla u něj vyžádána, takže mohla být zaúčtována; ověříte to ve vyúčtování svého účtu u ČÚZK. Ceny teď získáte jen novým placeným načtením.'
+                : `Sestava byla u ČÚZK vyžádána a mohla být zaúčtována, ale nemáme ji. Můžeme ji zkusit vyzvednout znovu: za tuto sestavu nezaplatíte celkem víc než ${price} Kč.`}
           </span>
-          {prices?.login_set ? (
+          {unread.file_kept ? (
             <button type="button" className={PANEL_ACTION} onClick={() => buy.mutate({ resume: unread.id })}>
-              {unread.file_kept ? 'Zkusit přečíst znovu (zdarma)' : 'Zkusit vyzvednout znovu'}
+              Zkusit přečíst znovu (zdarma)
+            </button>
+          ) : !unread.gone && loginUsable ? (
+            <button type="button" className={PANEL_ACTION} onClick={() => buy.mutate({ resume: unread.id })}>
+              Zkusit vyzvednout znovu (celkem nejvýše {price} Kč)
             </button>
           ) : null}
         </p>
       ) : null}
       {boughtNothing ? (
-        <p role="status" className={NOTE}>
-          Katastr k této budově neeviduje žádnou cenu (načteno {fmtDateSlash(bought.finished_at ?? bought.requested_at)}).
+        <p role="status" className={`${NOTE} flex flex-wrap items-center gap-x-3 gap-y-2`}>
+          <span className="min-w-0 flex-1">
+            V sestavě z katastru jsme nenašli žádný prodej (načteno {fmtDateSlash(bought.finished_at ?? bought.requested_at)}).
+          </span>
+          {bought.file_kept && !live ? (
+            <button type="button" className={PANEL_ACTION} onClick={() => buy.mutate({ resume: bought.id })}>
+              Zkusit přečíst znovu (zdarma)
+            </button>
+          ) : null}
         </p>
       ) : null}
       {confirming && canPay && !inFlight ? (
@@ -206,7 +237,7 @@ function SaleRowView({ row }: { row: SaleRow }) {
     <tr className="border-b border-[var(--color-rule-soft)] last:border-b-0">
       <td className={`${CELL} font-mono text-[13px] tabular-nums`}>{fmtDateSlash(row.date)}</td>
       <td className={`${CELL} font-mono text-[13px]`}>
-        {row.unit ?? <span className="font-sans text-[var(--color-ink-3)]">celá budova</span>}
+        {row.unit ?? <span className="font-sans text-[var(--color-ink-3)]">{row.scope ?? 'celá budova'}</span>}
         {row.also ? <span className="ml-1.5 font-sans text-xs text-[var(--color-ink-3)]">{row.also}</span> : null}
       </td>
       <td className={CELL}>{row.disposition ?? '—'}</td>

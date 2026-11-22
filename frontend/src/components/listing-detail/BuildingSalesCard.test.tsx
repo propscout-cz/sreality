@@ -34,7 +34,8 @@ const NONE: BuildingPrices = {
 };
 const READY: BuildingPrices = { ...NONE, available: true, login_set: true };
 const PURCHASE: NonNullable<BuildingPrices['purchase']> = {
-  id: 31, status: 'done', cost_czk: 50, object_count: 46, fetch_sent: true, file_kept: false,
+  id: 31, status: 'done', cost_czk: 50, object_count: 46, fetch_sent: true, file_kept: false, fetching: false,
+  gone: false,
   requested_at: '2026-11-22T10:00:00Z', finished_at: '2026-11-22T10:00:09Z',
 };
 const BOUGHT: BuildingPrices = {
@@ -136,7 +137,7 @@ describe('<BuildingSalesCard>', () => {
     mount();
     expect(await screen.findByText(/mohla být zaúčtována \(50 Kč\)\. Nezačínejte nový nákup/)).toBeInTheDocument();
     expect(screen.getByText(/sestava zůstane vedená jako možná zaplacená/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Dokončit načtení (bez dalšího poplatku)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Dokončit načtení (celkem nejvýše 50 Kč)' }));
     await waitFor(() => expect(buy).toHaveBeenCalledWith(7, 50, { resume: 31 }));
   });
 
@@ -176,7 +177,7 @@ describe('<BuildingSalesCard>', () => {
   it('says a finished purchase found no price, instead of "not loaded"', async () => {
     prices.mockResolvedValue({ ...BOUGHT, deeds: [] });
     mount();
-    expect(await screen.findByText(/Katastr k této budově neeviduje žádnou cenu \(načteno 22\/11\/2026\)/))
+    expect(await screen.findByText(/V sestavě z katastru jsme nenašli žádný prodej \(načteno 22\/11\/2026\)/))
       .toBeInTheDocument();
     expect(screen.queryByText(/Z katastru zatím nenačteno/)).toBeNull();
   });
@@ -195,15 +196,54 @@ describe('<BuildingSalesCard>', () => {
     buy.mockResolvedValue(lost);
     mount();
     expect(await screen.findByText(/mohla být zaúčtována, ale nemáme ji/)).toBeInTheDocument();
-    expect(screen.getByText(/najdete ji mezi výstupy svého účtu u ČÚZK/)).toBeInTheDocument();
     expect(screen.queryByText(/Je u nás uložená/)).toBeNull();
     expect(screen.getByText(/nezaplatíte celkem víc než 50 Kč/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Zkusit vyzvednout znovu' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Zkusit vyzvednout znovu (celkem nejvýše 50 Kč)' }));
     await waitFor(() => expect(buy).toHaveBeenLastCalledWith(7, 50, { resume: 31 }));
     fireEvent.click(await screen.findByRole('button', { name: 'Načíst znovu z katastru · 50 Kč' }));
     expect(screen.getByRole('group', { name: STEP })).toHaveTextContent('Za tuto budovu jste už jednou platili');
     fireEvent.click(screen.getByRole('button', { name: 'Zaplatit 50 Kč a načíst' }));
     await waitFor(() => expect(buy).toHaveBeenLastCalledWith(7, 50, { repeat: true }));
+  });
+
+  it('waits, with no button, while a fetch sent moments ago may still be being served', async () => {
+    prices.mockResolvedValue({ ...ORDERED, purchase: { ...ORDERED.purchase!, fetch_sent: true, fetching: true } });
+    mount();
+    expect(await screen.findByText(/mezitím se nic znovu neodesílá, aby nemohla být zaúčtována dvakrát/)).toBeInTheDocument();
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('says a report ČÚZK deleted cannot be tried again, and offers only the confirmed new purchase', async () => {
+    prices.mockResolvedValue({
+      ...READY, purchase: { ...PURCHASE, status: 'paid_unread', cost_czk: null, file_kept: false, gone: true },
+    });
+    mount();
+    expect(await screen.findByText(/už nenabízí \(je smazaná\).*ověříte to ve vyúčtování svého účtu u ČÚZK/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Zkusit/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Načíst znovu z katastru · 50 Kč' })).toBeInTheDocument();
+  });
+
+  it('says so when a request did nothing because another one is using the login', async () => {
+    prices.mockResolvedValue(READY);
+    buy.mockResolvedValue({ ...READY, notice: 'busy' });
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: /Načíst ceny/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Zaplatit 50 Kč a načíst' }));
+    expect(await screen.findByText(/právě používá jiný požadavek, proto se teď nic neprovedlo/)).toBeInTheDocument();
+  });
+
+  it('gives up and re-reads a kept file without a stored login, and offers nothing that needs one', async () => {
+    prices.mockResolvedValue({ ...ORDERED, login_set: false });
+    mount();
+    expect(await screen.findByRole('button', { name: 'Zrušit toto načtení' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Dokončit/ })).toBeNull();
+  });
+
+  it('offers a free re-read of a report in which no sale was found, when its file is kept', async () => {
+    prices.mockResolvedValue({ ...BOUGHT, deeds: [], purchase: { ...PURCHASE, file_kept: true } });
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Zkusit přečíst znovu (zdarma)' }));
+    await waitFor(() => expect(buy).toHaveBeenCalledWith(7, 50, { resume: 31 }));
   });
 
   it('shows the server\'s own words when a request fails, and reads the state again', async () => {

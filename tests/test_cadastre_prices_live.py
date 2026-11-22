@@ -171,6 +171,14 @@ def _lease_free(conn, account) -> bool:
                         (account,)).fetchone()[0]
 
 
+def _later(conn, account) -> None:
+    """Minutes pass: a lease nobody renewed is stale, and a fetch that was sent can no longer be being served."""
+    conn.execute("update account_cuzk_logins set run_beat_at = now() - interval '1 hour' where account_id = %s",
+                 (account,))
+    conn.execute("update cadastre_price_purchases set fetch_sent_at = fetch_sent_at - interval '1 hour' "
+                 "where account_id = %s", (account,))
+
+
 DONE = ("done", 9001, 50, False, True)
 
 
@@ -186,7 +194,7 @@ def test_a_purchase_is_ordered_once_fetched_once_and_its_deeds_are_the_buyers(co
     assert mine["purchase"]["status"] == "done" and len(mine["deeds"]) == PARSED and mine["running"] is False
     theirs = prices.state(conn, other, BUILDING.code)
     assert theirs["purchase"] is None and theirs["deeds"] == []
-    assert _checks(conn, me) == ["accepted"], "four calls to ČÚZK, one use of the login"
+    assert _checks(conn, me) == ["accepted"] * 4, "four calls to ČÚZK, each its own row of the login ledger"
 
 
 def test_a_house_with_no_units_is_priced_as_a_building(conn, monkeypatch):
@@ -228,13 +236,14 @@ def test_while_a_run_is_live_every_other_request_of_the_account_changes_nothing(
     arrived, go = cuzk.hold(held_in)
     first, first_outcome = _in_thread(cuzk, me)
     assert arrived.wait(20)
-    sent, purchase_id = cuzk.calls, _id(conn, me)
+    sent, purchase_id, checks = cuzk.calls, _id(conn, me), _checks(conn, me)
     assert prices.state(conn, me, BUILDING.code)["running"] is True
     for kw in ({}, {"repeat": True}, {"resume": purchase_id}, {"property_id": 8}):
-        with pytest.raises(prices.InProgress):
+        with pytest.raises(prices.InProgress) as busy:
             _buy(cuzk, me, **kw)
+        assert busy.value.why == "busy"
     assert cuzk.calls == sent, "nothing was sent to ČÚZK beside the live run"
-    assert len(_checks(conn, me)) == 1, "and none of them spent a row of the login ledger"
+    assert _checks(conn, me) == checks, "and none of them spent a row of the login ledger"
     go.set()
     first.join(20)
     assert first_outcome == [None]
@@ -318,7 +327,7 @@ def test_a_building_already_paid_for_is_not_bought_again_without_the_repeat(conn
     with pytest.raises(prices.AlreadyBought) as refused:
         _buy(cuzk, me)
     assert refused.value.finished_at is not None
-    assert cuzk.calls == sent and _checks(conn, me) == ["accepted"], "nothing sent, no budget used"
+    assert cuzk.calls == sent and len(_checks(conn, me)) == 4, "nothing sent, no budget used"
     _buy(cuzk, me, repeat=True)
     assert len(cuzk.generated) == 2 and [r[0] for r in _rows(conn, me)] == ["done", "done"]
     shown = prices.state(conn, me, BUILDING.code)["deeds"]
@@ -341,10 +350,63 @@ def test_a_lost_answer_to_the_charging_fetch_is_known_and_continued_on_the_same_
         _buy(cuzk, me)
     assert _rows(conn, me) == [("ordered", 9001, None, False, True)]
     shown = prices.state(conn, me, BUILDING.code)["purchase"]
-    assert shown["status"] == "ordered" and shown["fetch_sent"] is True and shown["file_kept"] is False
+    assert shown["status"] == "ordered" and shown["fetch_sent"] and shown["fetching"] and not shown["file_kept"]
+    _later(conn, me)
+    assert prices.state(conn, me, BUILDING.code)["purchase"]["fetching"] is False
     cuzk.ready_state = "zaúčtován"  # ČÚZK did serve it: the report now reads as charged
     _buy(cuzk, me, resume=_id(conn, me))
     assert len(cuzk.generated) == 1 and cuzk.fetched == [9001], "the same report, never a second order"
+    assert _rows(conn, me) == [DONE] and _deeds(conn, me) == PARSED
+
+
+def test_no_second_fetch_leaves_while_the_first_may_still_be_being_served(conn, monkeypatch):
+    """The third review's M1. The caller of a fetch gives up; the request itself lives on at ČÚZK. An immediate
+    'finish' must not send a second FIRST fetch beside it: the lease is not given back, and even once it is stale
+    the fetch is not sent again inside its cool-down."""
+    cuzk, me = _Cuzk(monkeypatch), _account(conn)
+    cuzk.raises["fetch"] = [TIMEOUT]
+    with pytest.raises(prices.ChargeUncertain):
+        _buy(cuzk, me)
+    sent, checks, purchase = cuzk.calls, _checks(conn, me), _id(conn, me)
+    assert not _lease_free(conn, me), "the lease is left to go stale, not released"
+    with pytest.raises(prices.InProgress) as busy:
+        _buy(cuzk, me, resume=purchase)
+    assert busy.value.why == "busy"
+    conn.execute("update account_cuzk_logins set run_beat_at = now() - interval '1 hour' where account_id = %s", (me,))
+    with pytest.raises(prices.InProgress) as cooling:
+        _buy(cuzk, me, resume=purchase)  # the lease is free now; the fetch still is not sent again
+    assert cooling.value.why == "fetching"
+    assert cuzk.calls == sent and _checks(conn, me) == checks, "nothing sent, not even a poll; no budget used"
+    assert _lease_free(conn, me)
+
+
+def test_a_run_taken_over_during_its_fetch_does_not_get_a_second_fetch_beside_it(conn, monkeypatch):
+    """Takeover at the fetch: the old holder's fetch is still in flight when another request takes the stale
+    lease. Inside the cool-down it sends nothing; the old run's answer is kept and read whoever holds the lease."""
+    cuzk, me = _Cuzk(monkeypatch), _account(conn)
+    arrived, go = cuzk.hold("fetch")
+    first, first_outcome = _in_thread(cuzk, me)
+    assert arrived.wait(20)
+    conn.execute("update account_cuzk_logins set run_beat_at = now() - interval '1 hour' where account_id = %s", (me,))
+    with pytest.raises(prices.InProgress) as cooling:
+        _buy(cuzk, me, resume=_id(conn, me))
+    assert cooling.value.why == "fetching" and cuzk.fetched == []
+    go.set()
+    first.join(20)
+    assert first_outcome == [None], "the old run's fetch answered: its file and deeds are stored without the lease"
+    assert cuzk.fetched == [9001] and _rows(conn, me) == [DONE] and _deeds(conn, me) == PARSED
+
+
+def test_two_fetches_of_one_report_long_apart_store_its_deeds_once(conn, monkeypatch):
+    cuzk, me = _Cuzk(monkeypatch), _account(conn)
+    arrived, go = cuzk.hold("fetch")
+    first, first_outcome = _in_thread(cuzk, me)
+    assert arrived.wait(20)
+    _later(conn, me)  # the first fetch has been "in flight" for an hour
+    _buy(cuzk, me, resume=_id(conn, me))
+    go.set()
+    first.join(20)
+    assert first_outcome == [None] and cuzk.fetched == [9001, 9001]
     assert _rows(conn, me) == [DONE] and _deeds(conn, me) == PARSED
 
 
@@ -354,6 +416,7 @@ def test_one_passing_service_error_does_not_end_a_possibly_paid_purchase(conn, m
     cuzk.raises["fetch"] = [TIMEOUT]
     with pytest.raises(prices.ChargeUncertain):
         _buy(cuzk, me)
+    _later(conn, me)
     cuzk.raises["poll"] = [OTHER_ERROR]
     with pytest.raises(wsdp_client.WsdpError):
         _buy(cuzk, me, resume=_id(conn, me))
@@ -367,15 +430,20 @@ def test_a_possibly_charged_report_cuzk_no_longer_serves_ends_truthfully_and_can
     cuzk.raises["fetch"] = [TIMEOUT]
     with pytest.raises(prices.ChargeUncertain):
         _buy(cuzk, me)
+    _later(conn, me)
     cuzk.raises["poll"] = [GONE]
     with pytest.raises(prices.ReportGone) as gone:
         _buy(cuzk, me, resume=_id(conn, me))
     assert gone.value.possibly_charged is True
     assert _rows(conn, me) == [("paid_unread", 9001, None, False, True)]
     shown = prices.state(conn, me, BUILDING.code)["purchase"]
-    assert shown["status"] == "paid_unread" and shown["file_kept"] is False
+    assert shown["status"] == "paid_unread" and shown["file_kept"] is False and shown["gone"] is True
+    sent = cuzk.calls
+    with pytest.raises(prices.NotResumable):
+        _buy(cuzk, me, resume=_id(conn, me))  # ČÚZK said it is deleted: there is nothing to try again
     with pytest.raises(prices.AlreadyBought):
         _buy(cuzk, me)
+    assert cuzk.calls == sent
     _buy(cuzk, me, repeat=True)
     assert [r[0] for r in _rows(conn, me)] == ["paid_unread", "done"]
 
@@ -386,11 +454,13 @@ def test_a_paid_purchase_with_no_file_is_fetched_again_for_free_while_cuzk_serve
     cuzk.raises["fetch"] = [TIMEOUT]
     with pytest.raises(prices.ChargeUncertain):
         _buy(cuzk, me)
-    cuzk.raises["poll"] = [GONE]
-    with pytest.raises(prices.ReportGone):
-        _buy(cuzk, me, resume=_id(conn, me))
-    cuzk.ready_state = "zaúčtován"  # it was a passing 304 after all, or the report came back
-    _buy(cuzk, me, resume=_id(conn, me))
+    _later(conn, me)
+    first = _id(conn, me)
+    prices.cancel(me, 7, first, opener=_open)  # given up: paid, perhaps, and nothing kept
+    assert _rows(conn, me) == [("paid_unread", 9001, None, False, True)]
+    assert prices.state(conn, me, BUILDING.code)["purchase"]["gone"] is False
+    cuzk.ready_state = "zaúčtován"
+    _buy(cuzk, me, resume=first)
     assert len(cuzk.generated) == 1 and cuzk.fetched == [9001]
     assert _rows(conn, me) == [DONE] and _deeds(conn, me) == PARSED
 
@@ -437,7 +507,7 @@ def test_a_fetched_report_that_cannot_be_read_is_kept_and_has_two_ways_out(conn,
         _buy(cuzk, me, resume=_id(conn, me))  # a free re-read: it still cannot be read
     with pytest.raises(prices.AlreadyBought):
         _buy(cuzk, me)
-    assert cuzk.calls == sent and _checks(conn, me) == ["accepted"], "nothing sent, no budget used"
+    assert cuzk.calls == sent and len(_checks(conn, me)) == 4, "nothing sent, no budget used"
     cuzk.document = REPORT
     _buy(cuzk, me, repeat=True)  # the confirmed new purchase is the other way out
     assert [r[0] for r in _rows(conn, me)] == ["paid_unread", "done"]
@@ -517,7 +587,7 @@ def test_a_refusal_later_in_the_run_is_ledgered_and_ends_the_run_at_once(conn, m
     cuzk.raises["poll"] = [REFUSED]
     with pytest.raises(wsdp_client.WsdpError):
         _buy(cuzk, me)
-    assert _checks(conn, me) == ["refused"], "the row its first answer settled as accepted now reads refused"
+    assert _checks(conn, me) == ["accepted", "accepted", "refused"], "each call its own row: two answered, one refused"
     assert cuzk_login.state(conn, me)["refused"] and cuzk.fetched == [] and cuzk.polls == 0
     assert _rows(conn, me) == [("ordered", 9001, None, False, False)], "the order stands for after the re-save"
 
@@ -527,7 +597,8 @@ def test_a_fetch_cuzk_refused_outright_charged_nothing_and_does_not_read_as_sent
     cuzk.raises["fetch"] = [REFUSED]
     with pytest.raises(wsdp_client.WsdpError):
         _buy(cuzk, me)
-    assert _rows(conn, me) == [("ordered", 9001, None, False, False)] and _checks(conn, me) == ["refused"]
+    assert _rows(conn, me) == [("ordered", 9001, None, False, False)]
+    assert _checks(conn, me) == ["accepted"] * 3 + ["refused"]
     assert cuzk_login.state(conn, me)["refused"] and cuzk.fetched == []
 
 
@@ -546,30 +617,90 @@ def test_a_run_stops_before_its_next_call_once_its_login_is_refused_resaved_or_r
         assert cuzk.calls - sent_before == 2 and cuzk.fetched == [], f"no poll and no fetch after: {change}"
 
 
-def test_a_call_is_not_sent_when_it_could_be_the_usernames_third_unaccepted_check(conn, monkeypatch):
-    """Accounts sharing one ČÚZK username. A run between two of its calls reads 'accepted', so two other checks can
-    be admitted meanwhile; its next call would then be the third in flight, and is not sent."""
+def test_a_call_is_not_admitted_when_it_could_be_the_usernames_third_unaccepted_check(conn, monkeypatch):
+    """Accounts sharing one ČÚZK username. Every call of a run is admitted like a save's check, so with two other
+    checks on the username in flight this run's next call is not sent."""
     me, other, third = _account(conn, "sdilene"), _account(conn, "sdilene"), _account(conn, "sdilene")
-    mine = cuzk_login.admit_check(conn, me, "sdilene")
-    cuzk_login.settle_check(conn, mine, "accepted")  # the run's first call was answered
-    theirs = cuzk_login.admit_check(conn, other, "sdilene")
-    assert cuzk_login.call_begins(conn, mine), "one other in flight: with this call that is two, the budget"
-    assert _checks(conn, me) == ["pending"]
+    cuzk_login.settle_check(conn, cuzk_login.admit_check(conn, me, "sdilene"), "accepted")
+    cuzk_login.admit_check(conn, other, "sdilene")
+    mine = cuzk_login.admit_check(conn, me, "sdilene", in_run=True)  # one other in flight: this makes two
     cuzk_login.settle_check(conn, mine, "accepted")
     cuzk_login.admit_check(conn, third, "sdilene")
-    assert not cuzk_login.call_begins(conn, mine), "two others in flight: this call would be the third"
-    assert _checks(conn, me) == ["accepted"], "a call that is not sent leaves the row as it was"
-    cuzk_login.settle_check(conn, theirs, "refused")
-    assert not cuzk_login.call_begins(conn, mine), "a refused check counts until an accepted one resets it"
+    with pytest.raises(cuzk_login.Throttled):
+        cuzk_login.admit_check(conn, me, "sdilene", in_run=True)  # two others in flight: this would be the third
 
 
-def test_a_run_whose_next_call_may_not_be_sent_stops_and_keeps_its_order(conn, monkeypatch):
+def test_a_runs_further_calls_do_not_count_toward_the_accounts_hourly_total(conn, monkeypatch):
+    me = _account(conn)
+    for _ in range(cuzk_login.ACCOUNT_TOTAL_BUDGET + 5):
+        cuzk_login.settle_check(conn, cuzk_login.admit_check(conn, me, "firma", in_run=True), "accepted")
+    for _ in range(cuzk_login.ACCOUNT_TOTAL_BUDGET):
+        cuzk_login.settle_check(conn, cuzk_login.admit_check(conn, me, "firma"), "accepted")
+    with pytest.raises(cuzk_login.Throttled):
+        cuzk_login.admit_check(conn, me, "firma")  # the total caps runs and saves, not a run's calls
+
+
+def test_a_run_whose_next_call_is_not_admitted_stops_and_keeps_its_order(conn, monkeypatch):
     cuzk, me = _Cuzk(monkeypatch), _account(conn)
-    monkeypatch.setattr(cuzk_login, "call_begins", lambda c, check: cuzk.calls < 2)
+    real = cuzk_login.admit_check
+
+    def admit(c: Any, account: Any, username: str, *, in_run: bool = False) -> int:
+        if in_run and cuzk.calls >= 2:
+            raise cuzk_login.Throttled("username", 3600)
+        return real(c, account, username, in_run=in_run)
+
+    monkeypatch.setattr(cuzk_login, "admit_check", admit)
+    with pytest.raises(prices.InProgress) as stopped:
+        _buy(cuzk, me)
+    assert stopped.value.why == "login"
+    assert cuzk.calls == 2 and cuzk.fetched == [] and cuzk.polls == 0
+    assert _rows(conn, me) == [("ordered", 9001, None, False, False)] and _checks(conn, me) == ["accepted"] * 2
+
+
+def test_a_run_that_ends_before_its_first_call_leaves_no_check_behind(conn, monkeypatch):
+    """The third review's M2, the no-send half: a check that was admitted and never sent is withdrawn."""
+    cuzk, me = _Cuzk(monkeypatch), _account(conn)
+    monkeypatch.setattr(cuzk_login, "renew", lambda c, a, t, held: False)
     with pytest.raises(prices.InProgress):
         _buy(cuzk, me)
-    assert cuzk.calls == 2 and cuzk.fetched == [] and cuzk.polls == 0
-    assert _rows(conn, me) == [("ordered", 9001, None, False, False)]
+    assert cuzk.calls == 0 and _checks(conn, me) == [] and _lease_free(conn, me)
+
+
+def test_a_dead_requests_check_does_not_throttle_the_username_for_a_day(conn, monkeypatch):
+    """The third review's M2: an API deploy kills a run mid-call and its row stays in flight for ever. Once no
+    call could still be alive, an accepted check resets it like a call that got no answer."""
+    me = _account(conn)
+    stranded = cuzk_login.admit_check(conn, me, "firma")
+    cuzk_login.settle_check(conn, cuzk_login.admit_check(conn, me, "firma"), "accepted")
+    one_more = cuzk_login.admit_check(conn, me, "firma")  # the stranded row still counts: this is the second
+    with pytest.raises(cuzk_login.Throttled):
+        cuzk_login.admit_check(conn, me, "firma")
+    cuzk_login.settle_check(conn, one_more, "accepted")
+    conn.execute("update account_cuzk_login_checks set admitted_at = admitted_at - interval '10 minutes' "
+                 "where id = %s", (stranded,))
+    cuzk_login.settle_check(conn, cuzk_login.admit_check(conn, me, "firma"), "accepted")  # resets the dead row
+    a, b = cuzk_login.admit_check(conn, me, "firma"), cuzk_login.admit_check(conn, me, "firma")
+    assert a and b, "two fresh checks are admitted again"
+
+
+def test_an_accepted_answer_is_never_wiped_by_the_runs_later_calls(conn, monkeypatch):
+    """The third review's M3: two ordinary timeouts with an accepted answer between them are one unaccepted
+    check, not two."""
+    cuzk, me = _Cuzk(monkeypatch), _account(conn)
+    cuzk.raises["poll"] = [TIMEOUT]
+    with pytest.raises(wsdp_client.WsdpError):
+        _buy(cuzk, me)
+    conn.execute("update account_cuzk_login_checks set admitted_at = admitted_at - interval '1 minute', "
+                 "answered_at = answered_at - interval '1 minute' where account_id = %s", (me,))
+    cuzk.ready_after = 1  # the resume's first poll is answered (accepted), its fetch then times out
+    with pytest.raises(prices.InProgress):
+        _buy(cuzk, me, resume=_id(conn, me))
+    cuzk.raises["poll"] = [TIMEOUT]
+    with pytest.raises(wsdp_client.WsdpError):
+        _buy(cuzk, me, resume=_id(conn, me))
+    assert _checks(conn, me) == ["accepted", "accepted", "no_answer", "accepted", "no_answer"]
+    _buy(cuzk, me, resume=_id(conn, me))  # not throttled: the accepted poll reset the first timeout
+    assert _rows(conn, me) == [DONE]
 
 
 def test_marking_a_login_refused_marks_only_the_login_that_was_sent(conn, monkeypatch):
@@ -616,16 +747,17 @@ def test_a_login_past_its_budget_sends_nothing_and_writes_no_purchase(conn, monk
     assert cuzk.calls == sent and len(_rows(conn, me)) == rows and _lease_free(conn, me)
 
 
-def test_every_call_of_a_run_counts_as_in_flight_until_cuzk_answers_it(conn, monkeypatch):
-    """The second review's B2, the ledger half: a run past its first accepted answer must not read as 'accepted'
-    while a later call is on its way, or others are admitted beside a call that may be refused."""
+def test_every_call_of_a_run_is_in_flight_in_the_ledger_until_cuzk_answers_it(conn, monkeypatch):
+    """The second review's B2, the ledger half: while a call is on its way it counts as unaccepted, so nobody is
+    admitted beside a call that may be refused."""
     cuzk, me = _Cuzk(monkeypatch), _account(conn)
     seen: dict[str, Any] = {}
     for call in ("find", "generate", "poll", "fetch"):
         cuzk.hook[call] = lambda call=call: seen.__setitem__(call, _checks(conn, me))
     _buy(cuzk, me)
-    assert seen == {call: ["pending"] for call in ("find", "generate", "poll", "fetch")}
-    assert _checks(conn, me) == ["accepted"]
+    assert seen == {"find": ["pending"], "generate": ["accepted", "pending"],
+                    "poll": ["accepted", "accepted", "pending"], "fetch": ["accepted"] * 3 + ["pending"]}
+    assert _checks(conn, me) == ["accepted"] * 4
 
 
 def test_a_later_call_that_gets_no_answer_is_ledgered_as_such(conn, monkeypatch):
@@ -633,7 +765,28 @@ def test_a_later_call_that_gets_no_answer_is_ledgered_as_such(conn, monkeypatch)
     cuzk.raises["poll"] = [TIMEOUT]
     with pytest.raises(wsdp_client.WsdpError):
         _buy(cuzk, me)
-    assert _checks(conn, me) == ["no_answer"]
+    assert _checks(conn, me) == ["accepted", "accepted", "no_answer"]
+
+
+def test_the_fetched_file_is_kept_before_the_ledger_is_settled(conn, monkeypatch):
+    """The third review's b: a failure settling the ledger must not cost a paid document."""
+    cuzk, me = _Cuzk(monkeypatch), _account(conn)
+    real = cuzk_login.settle_check
+
+    def settle(c: Any, check_id: int, outcome: str) -> None:
+        if cuzk.fetched:
+            assert _rows(conn, me)[0][3], "the file is already kept"
+            raise RuntimeError("the ledger write failed")
+        real(c, check_id, outcome)
+
+    monkeypatch.setattr(cuzk_login, "settle_check", settle)
+    with pytest.raises(RuntimeError):
+        _buy(cuzk, me)
+    assert _rows(conn, me) == [("ordered", 9001, 50, True, True)]
+    monkeypatch.setattr(cuzk_login, "settle_check", real)
+    sent = cuzk.calls
+    _buy(cuzk, me, resume=_id(conn, me))
+    assert cuzk.calls == sent and _rows(conn, me) == [DONE] and _deeds(conn, me) == PARSED
 
 
 # --- giving a purchase up ---------------------------------------------------------------------------------------
@@ -661,6 +814,9 @@ def test_a_purchase_whose_fetch_was_sent_is_given_up_as_possibly_paid(conn, monk
     cuzk.raises["fetch"] = [TIMEOUT]
     with pytest.raises(prices.ChargeUncertain):
         _buy(cuzk, me)
+    with pytest.raises(prices.InProgress):
+        _cancel(me, _id(conn, me))  # the fetch may still be being served: nothing is decided beside it
+    _later(conn, me)
     _cancel(me, _id(conn, me))
     assert _rows(conn, me) == [("paid_unread", 9001, None, False, True)]
     with pytest.raises(prices.AlreadyBought):
@@ -724,3 +880,42 @@ def test_a_report_that_held_no_deed_keeps_its_file(conn, monkeypatch):
     assert _rows(conn, me) == [("done", 9001, 50, True, True)] and _deeds(conn, me) == 0
     kept = conn.execute("select raw_report from cadastre_price_purchases where account_id = %s", (me,)).fetchone()[0]
     assert cuzk_login.unseal(kept) == empty
+
+
+def test_giving_up_and_reading_a_kept_file_need_no_stored_login(conn, monkeypatch):
+    """The third review's f: neither sends anything to ČÚZK."""
+    cuzk, me = _Cuzk(monkeypatch, ready_after=1, document=b"<not a report"), _account(conn)
+    with pytest.raises(prices.InProgress):
+        _buy(cuzk, me)
+    cuzk_login.remove(conn, me)
+    _cancel(me, _id(conn, me))
+    assert _rows(conn, me) == [("failed", 9001, None, False, False)]
+
+    other = _account(conn)
+    cuzk.polls = 10
+    with pytest.raises(prices.PaidUnread):
+        _buy(cuzk, other)
+    cuzk_login.remove(conn, other)
+    monkeypatch.setattr(prices.cadastre_price_report, "parse", lambda document: [])
+    sent = cuzk.calls
+    _buy(cuzk, other, resume=_id(conn, other))
+    assert cuzk.calls == sent and _rows(conn, other)[0][0] == "done"
+    with pytest.raises(prices.NoLogin):
+        _buy(cuzk, other, repeat=True)
+
+
+def test_a_report_read_as_no_deed_can_be_read_again_and_does_not_hide_earlier_deeds(conn, monkeypatch):
+    """The third review's h."""
+    empty = b"<CenoveUdajeDleNemovitosti></CenoveUdajeDleNemovitosti>"
+    cuzk, me = _Cuzk(monkeypatch), _account(conn)
+    _buy(cuzk, me)
+    cuzk.document = empty
+    _buy(cuzk, me, repeat=True)
+    shown = prices.state(conn, me, BUILDING.code)
+    assert shown["purchase"]["file_kept"] is True and len(shown["deeds"]) == PARSED, "the earlier deeds still show"
+    cuzk_copy = conn.execute("select raw_report from cadastre_price_purchases where id = %s", (_id(conn, me),))
+    assert cuzk_login.unseal(cuzk_copy.fetchone()[0]) == empty
+    monkeypatch.setattr(prices.cadastre_price_report, "parse", lambda document: prices.cadastre_price_report.Deed and [])
+    sent = cuzk.calls
+    _buy(cuzk, me, resume=_id(conn, me))  # read again, free; still nothing in it
+    assert cuzk.calls == sent and [r[0] for r in _rows(conn, me)] == ["done", "done"]

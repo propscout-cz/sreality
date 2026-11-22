@@ -92,6 +92,10 @@ alter table public.account_cuzk_logins
   add column if not exists run_token   uuid,
   add column if not exists run_beat_at timestamptz;
 
+-- A purchase run sends about twenty calls on the login; each is one row of the check ledger (762). `in_run`
+-- marks the calls after a run's first, which do not count toward the account's hourly total of checks.
+alter table public.account_cuzk_login_checks add column if not exists in_run boolean not null default false;
+
 alter table public.cadastre_price_purchases enable row level security;
 alter table public.cadastre_deeds enable row level security;
 revoke all on public.cadastre_price_purchases from public, anon, authenticated;

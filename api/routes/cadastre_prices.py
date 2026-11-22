@@ -40,10 +40,11 @@ _NO_ANSWER = "ČÚZK neodpověděl nebo odpověděl chybou. Tento pokus nic neza
 _TOO_MANY = "Tato budova má více než 200 jednotek, což jeden výstup zatím nepokryje. Nic nebylo objednáno."
 _GONE_UNCHARGED = ("ČÚZK objednanou sestavu už nenabízí. Nebyla vyzvednuta, takže nebylo nic zaúčtováno. Ceny můžete "
                    "načíst znovu.")
-_GONE_MAYBE_CHARGED = ("ČÚZK tuto sestavu už nenabízí. Byla u něj vyžádána, takže mohla být zaúčtována: v tom případě "
-                       "ji najdete mezi výstupy svého účtu u ČÚZK. Zde ji lze získat jen novým placeným načtením.")
+_GONE_MAYBE_CHARGED = ("ČÚZK tuto sestavu už nenabízí (je smazaná). Byla u něj vyžádána, takže mohla být zaúčtována; "
+                       "ověříte to ve vyúčtování svého účtu u ČÚZK. Zde ji lze získat jen novým placeným načtením.")
 _UNCERTAIN = ("Sestava byla u ČÚZK vyžádána, ale odpověď nedorazila, takže MOHLA být zaúčtována. Nezačínejte nový "
-              "nákup: zvolte Dokončit a načte se tatáž sestava bez dalšího poplatku (ČÚZK účtuje jen první otevření).")
+              "nákup: za několik minut zvolte Dokončit a načte se tatáž sestava bez dalšího poplatku (ČÚZK účtuje jen "
+              "první otevření).")
 _PAID_UNREAD = ("ČÚZK sestavu vydal a zaúčtoval, ale nepodařilo se ji přečíst. Je u nás uložená; přečíst ji lze "
                 "zkusit znovu bez placení a nic dalšího se neúčtuje.")
 _NOT_RESUMABLE = ("Toto načtení už není rozpracované, není tedy co dokončit ani zrušit. Nic nebylo odesláno ani "
@@ -70,8 +71,7 @@ def _throttled(exc: cuzk_login.Throttled) -> str:
     why = ("toto přihlašovací jméno k ČÚZK nebylo při posledních pokusech přijato" if exc.by == "username"
            else "tento účet použil své přihlášení k ČÚZK v poslední hodině příliš často")
     return (f"Na ČÚZK nebylo nic odesláno a nic nebylo zaúčtováno: {why}. Další pokusy zatím neodesíláme, aby se váš "
-            f"účet u ČÚZK nezablokoval. Zkuste to znovu asi za {wait}; pokud se vaše heslo u ČÚZK změnilo, nejprve ho "
-            f"uložte znovu {_WHERE}.")
+            f"účet u ČÚZK nezablokoval. Zkuste to znovu asi za {wait}.")
 
 
 def _login(conn: Any, account_id: uuid.UUID) -> dict[str, bool]:
@@ -106,21 +106,23 @@ def post_building_prices(
     claims: dict = Depends(deps.verify_jwt),
     act_as: uuid.UUID | None = Depends(tenant_pool.act_as_header),
 ) -> dict[str, Any]:
-    """Start or continue the caller's purchase of the building's price report, then answer as GET does. A request
-    that changed nothing (another run is live, ČÚZK is still preparing) is a 200 with the state as it stands."""
+    """Start, continue or give up the caller's purchase of the building's price report, then answer as GET does,
+    plus `notice`: null when the request did what it asked, else why it did not (`InProgress.why`): the state is
+    then as it stands, and the card says which."""
     account_id = tenant_pool.own_account_id_released(claims, act_as, "POST")
     cancel = body.get("cancel") if isinstance(body, dict) else None
     if cancel is not None and (isinstance(cancel, bool) or not isinstance(cancel, int) or len(body) != 1):
         raise HTTPException(status_code=422, detail="Neplatný požadavek: zrušit lze jen jedno určené načtení.")
     repeat, resume = (False, None) if cancel is not None else _request(body)
+    notice: str | None = None
     try:
         if cancel is not None:
             cadastre_prices.cancel(account_id, property_id, cancel, opener=deps.open_background_conn)
         else:
             cadastre_prices.buy(account_id, property_id, opener=deps.open_background_conn, repeat=repeat,
                                 resume=resume)
-    except cadastre_prices.InProgress:
-        pass
+    except cadastre_prices.InProgress as exc:
+        notice = exc.why  # nothing was done; the state as it stands, and why, so the card can say so
     except cadastre_prices.NoProperty:
         raise HTTPException(status_code=404, detail=_NO_PROPERTY) from None
     except cadastre_prices.NoBuilding:
@@ -167,4 +169,4 @@ def post_building_prices(
         if exc.reason == "refused":
             raise HTTPException(status_code=422, detail=_REFUSED_NOW) from None
         raise HTTPException(status_code=502, detail=_NO_ANSWER) from None
-    return _state(account_id, property_id)
+    return {**_state(account_id, property_id), "notice": notice}

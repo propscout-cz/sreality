@@ -27,13 +27,11 @@ KEY_ENV = "CUZK_LOGIN_KEY"
 # also forgets after USERNAME_WINDOW; that is the one place this is a judgement and not ČÚZK's rule: an attacker
 # who knows a username can make ČÚZK's counter reach three across two windows unless its owner logged in between.
 # A check in flight, and one ČÚZK did not answer, count as unaccepted: we cannot know that ČÚZK did not count them.
-# A cadastre price purchase (`api/cadastre_prices.py`) takes ONE row for its whole run of calls (about twenty: two
-# to order, a poll every two seconds for half a minute, one fetch): all carry the same login, so its first answer
-# settles the row, and every later call settles it again by its own answer; a refusal ends the run. That is safe only
-# because ONE request per account uses the login at a time (the login lease, `lease` below), each call is sent
-# only after `renew` says the login is still the one read and not refused, and `call_begins` puts the row back
-# in flight for the call (so it counts as unaccepted until answered) unless anyone else's check on the username
-# is in doubt.
+# A cadastre price purchase (`api/cadastre_prices.py`) takes ONE ROW PER CALL it sends to ČÚZK (about twenty a run:
+# two to order, a poll every two seconds for half a minute, one fetch): each is admitted through the budgets just
+# before it leaves and settled by its own answer, exactly like a save's check, and a row is never changed after
+# it is settled. That is enough only because ONE request per account uses the login at a time (the login lease,
+# `lease` below), so a run's calls are one after another.
 USERNAME_WINDOW = datetime.timedelta(hours=24)
 USERNAME_BUDGET = 2
 # One account over any usernames, per hour: unaccepted ones, so it cannot walk a list; and all of them whatever
@@ -42,6 +40,10 @@ ACCOUNT_WINDOW = datetime.timedelta(hours=1)
 ACCOUNT_UNACCEPTED_BUDGET = 5
 ACCOUNT_TOTAL_BUDGET = 10  # so also at most ten purchase requests an hour, resumes included
 LEDGER_KEEPS = datetime.timedelta(days=2)
+# A check still in flight this long after it was admitted is a dead request's (no call lasts a third of it): from
+# then on an accepted check resets it like one that got no answer. Without this a killed request's row could never
+# be reset, and one more timeout would throttle the username for a day.
+STRANDED_AFTER = datetime.timedelta(seconds=120)
 _LOCK_ACCOUNT, _LOCK_USERNAME = 2601, 2600  # advisory-lock namespaces, always taken in this order
 
 
@@ -185,33 +187,10 @@ def mark_refused(conn: psycopg.Connection, account_id: uuid.UUID, held: Leased) 
         )
 
 
-def call_begins(conn: psycopg.Connection, check_id: int) -> bool:
-    """Before each call of a run: put its ledger row in flight, so the call counts as unaccepted until ČÚZK
-    answers it (as a check in flight does), and say whether it may be sent. False when, with this call, the
-    username would have more than USERNAME_BUDGET unaccepted checks not reset by a later accepted one: it could be
-    ČÚZK's third consecutive refusal. The same count as `_SPENT_SQL`'s username arm, taken under the same lock."""
-    with conn.transaction(), conn.cursor() as cur:
-        cur.execute("select username_key from account_cuzk_login_checks where id = %s", (check_id,))
-        row = cur.fetchone()
-        if row is None:
-            return False
-        cur.execute("select pg_advisory_xact_lock(hashtextextended(%s, %s))", (row[0], _LOCK_USERNAME))
-        cur.execute(
-            """
-            select count(*) from account_cuzk_login_checks r
-             where r.username_key = %(key)s and r.id <> %(mine)s and r.outcome <> 'accepted'
-               and coalesce(r.answered_at, r.admitted_at) > now() - %(uw)s::interval
-               and not exists (select 1 from account_cuzk_login_checks l
-                                where l.username_exact_key = r.username_exact_key and l.outcome = 'accepted'
-                                  and r.answered_at < l.admitted_at)
-            """,
-            {"key": row[0], "mine": check_id, "uw": USERNAME_WINDOW},
-        )
-        if cur.fetchone()[0] >= USERNAME_BUDGET:
-            return False
-        cur.execute("update account_cuzk_login_checks set outcome = 'pending', answered_at = null where id = %s",
-                    (check_id,))
-    return True
+def withdraw_check(conn: psycopg.Connection, check_id: int) -> None:
+    """A check that was admitted and then not sent after all: it never happened, so it leaves the ledger."""
+    with conn.cursor() as cur:
+        cur.execute("delete from account_cuzk_login_checks where id = %s and outcome = 'pending'", (check_id,))
 
 
 def seal(data: bytes) -> bytes:
@@ -306,17 +285,17 @@ with username_run as (
      and coalesce(r.answered_at, r.admitted_at) > now() - %(uw)s::interval
      and not exists (select 1 from account_cuzk_login_checks l
                       where l.username_exact_key = r.username_exact_key and l.outcome = 'accepted'
-                        and r.answered_at < l.admitted_at)
+                        and coalesce(r.answered_at, r.admitted_at + %(tail)s::interval) < l.admitted_at)
 ), account_hour as (
-  select admitted_at as at, outcome from account_cuzk_login_checks
+  select admitted_at as at, outcome, in_run from account_cuzk_login_checks
    where account_id = %(account)s and admitted_at > now() - %(aw)s::interval
 )
 select (select count(*) from username_run),
        (select extract(epoch from min(at) + %(uw)s::interval - now()) from username_run),
        (select count(*) from account_hour where outcome <> 'accepted'),
        (select extract(epoch from min(at) + %(aw)s::interval - now()) from account_hour where outcome <> 'accepted'),
-       (select count(*) from account_hour),
-       (select extract(epoch from min(at) + %(aw)s::interval - now()) from account_hour)
+       (select count(*) from account_hour where not in_run),
+       (select extract(epoch from min(at) + %(aw)s::interval - now()) from account_hour where not in_run)
 """
 
 
@@ -325,8 +304,10 @@ def _wait(seconds: float | None, *, to_the_hour: bool = False) -> int:
     return -(-wait // 3600) * 3600 if to_the_hour else wait
 
 
-def admit_check(conn: psycopg.Connection, account_id: uuid.UUID, username: str) -> int:
+def admit_check(conn: psycopg.Connection, account_id: uuid.UUID, username: str, *, in_run: bool = False) -> int:
     """Take one login check from the budgets, before the outbound call: the ledger row's id, or `Throttled`.
+    `in_run`: a further call of a purchase run whose first call was already admitted; it counts for the username
+    and as unaccepted like any other, but not toward the account's hourly total, which caps runs, not their calls.
 
     One transaction under two transaction-scoped advisory locks, the account's and then the username's, always in
     that order: concurrent requests of one account, or on one username, are counted one after another, and the
@@ -336,7 +317,8 @@ def admit_check(conn: psycopg.Connection, account_id: uuid.UUID, username: str) 
         cur.execute("select pg_advisory_xact_lock(hashtextextended(%s, %s))", (str(account_id), _LOCK_ACCOUNT))
         cur.execute("select pg_advisory_xact_lock(hashtextextended(%s, %s))", (key, _LOCK_USERNAME))
         cur.execute("delete from account_cuzk_login_checks where admitted_at < now() - %s::interval", (LEDGER_KEEPS,))
-        cur.execute(_SPENT_SQL, {"key": key, "account": account_id, "uw": USERNAME_WINDOW, "aw": ACCOUNT_WINDOW})
+        cur.execute(_SPENT_SQL, {"key": key, "account": account_id, "uw": USERNAME_WINDOW, "aw": ACCOUNT_WINDOW,
+                                 "tail": STRANDED_AFTER})
         on_username, username_wait, unaccepted, unaccepted_wait, total, total_wait = cur.fetchone()
         if on_username >= USERNAME_BUDGET:
             # Rounded up to the hour: the exact second would tell a caller when someone else tried this username.
@@ -346,9 +328,9 @@ def admit_check(conn: psycopg.Connection, account_id: uuid.UUID, username: str) 
         if total >= ACCOUNT_TOTAL_BUDGET:
             raise Throttled("account", _wait(total_wait))
         cur.execute(
-            "insert into account_cuzk_login_checks (account_id, username_key, username_exact_key) "
-            "values (%s, %s, %s) returning id",
-            (account_id, key, exact),
+            "insert into account_cuzk_login_checks (account_id, username_key, username_exact_key, in_run) "
+            "values (%s, %s, %s, %s) returning id",
+            (account_id, key, exact, in_run),
         )
         return int(cur.fetchone()[0])
 

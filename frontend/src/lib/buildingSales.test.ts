@@ -42,4 +42,13 @@ describe('saleRows', () => {
   it('dates a deed by its legal effect, else by its signing', () => {
     expect(saleRows([], [deed({ effective_on: null })])[0].date).toBe('2025-03-01');
   });
+
+  it('never calls a deed over several buildings, or over land alone, "the whole building"', () => {
+    const scope = (properties: CadastreDeed['properties']) => saleRows([], [deed({ properties })])[0];
+    const one = scope([{ kind: 'stavba', iskn_id: 1, label: 'č.p. 565' }, { kind: 'parcela', iskn_id: 2, label: 'St. 1' }]);
+    expect([one.unit, one.scope, one.also]).toEqual([null, null, '+ pozemek']);
+    const two = scope([{ kind: 'stavba', iskn_id: 1, label: 'č.p. 565' }, { kind: 'stavba', iskn_id: 3, label: 'garáž' }]);
+    expect([two.unit, two.scope]).toEqual([null, '2 stavby společně']);
+    expect(scope([{ kind: 'parcela', iskn_id: 2, label: 'St. 1' }]).scope).toBe('bez stavby');
+  });
 });

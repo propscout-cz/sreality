@@ -754,8 +754,15 @@ export interface BuildingPrices {
    * its deeds not stored; continuing reads the kept file (file_kept) or fetches the report again, both free. */
   purchase: { id: number; status: 'pending' | 'ordered' | 'done' | 'paid_unread'; cost_czk: number | null;
               object_count: number | null; fetch_sent: boolean; file_kept: boolean;
+              /* A fetch was sent moments ago and may still be being served: nothing fetches again meanwhile. */
+              fetching: boolean;
+              /* ČÚZK said the report no longer exists: there is nothing left to try again. */
+              gone: boolean;
               requested_at: string; finished_at: string | null } | null;
+  /* The deeds of the newest purchase that holds any. */
   deeds: CadastreDeed[];
+  /* On a POST's answer: null when the request did what it asked; else why it did nothing (the state is as it stood). */
+  notice?: 'busy' | 'in_flight' | 'preparing' | 'fetching' | 'time' | 'login' | null;
 }
 export const fetchBuildingPrices = (propertyId: number): Promise<BuildingPrices> =>
   request<BuildingPrices>(`/properties/${propertyId}/building/prices`);

@@ -6,8 +6,10 @@ import type { BuildingSale, CadastreDeed } from './api';
 export interface SaleRow {
   key: string;
   date: string | null;
-  /* The unit(s) in the cadastre's own form; null = the whole building. */
+  /* The unit(s) in the cadastre's own form; null = no unit: the whole building, or what `scope` says. */
   unit: string | null;
+  /* A deed without a unit that is not one whole building: it covers several, or none (land only). */
+  scope: string | null;
   /* What a deed transfers besides its unit(s): "+ pozemek", "+ 2 pozemky". */
   also: string | null;
   disposition: string | null;
@@ -35,16 +37,19 @@ function alsoOf(deed: CadastreDeed): string | null {
 
 export function saleRows(sales: BuildingSale[], deeds: CadastreDeed[]): SaleRow[] {
   const held: SaleRow[] = sales.map((s) => ({
-    key: `${s.source}:${s.source_record_id}`, date: s.sold_at, unit: s.unit_label, also: null,
+    key: `${s.source}:${s.source_record_id}`, date: s.sold_at, unit: s.unit_label, scope: null, also: null,
     disposition: s.disposition, area_m2: s.area_m2, price_czk: s.price_czk, currency: 'CZK',
     price_per_m2: s.price_per_m2, price_per_m2_basis: s.price_per_m2_basis, source: 'reas',
     source_url: s.source_url, proceeding: null,
   }));
   const bought: SaleRow[] = deeds.map((d, i) => {
     const units = d.properties.filter((p) => p.kind === 'jednotka').map((p) => p.label);
+    const buildings = d.properties.filter((p) => p.kind === 'stavba').length;
+    /* One price for everything the deed transfers: a deed over two buildings is not "the whole building". */
+    const scope = units.length > 0 || buildings === 1 ? null : buildings > 1 ? `${buildings} stavby společně` : 'bez stavby';
     return {
       key: `katastr:${d.proceeding}:${i}`, date: d.effective_on ?? d.signed_on,
-      unit: units.length > 0 ? units.join(' + ') : null, also: alsoOf(d), disposition: null, area_m2: null,
+      unit: units.length > 0 ? units.join(' + ') : null, scope, also: alsoOf(d), disposition: null, area_m2: null,
       price_czk: d.price, currency: d.currency, price_per_m2: null, price_per_m2_basis: null, source: 'katastr',
       source_url: null, proceeding: d.proceeding,
     };

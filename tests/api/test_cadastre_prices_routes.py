@@ -137,6 +137,7 @@ def _text(client: Any) -> str:
     (cadastre_prices.ChargeUncertain("x"), "MOHLA být zaúčtována", "nic nezaúčtoval"),
     (cadastre_prices.PaidUnread("x"), "vydal a zaúčtoval", "nebylo nic zaúčtováno"),
     (cadastre_prices.ReportGone(True), "mohla být zaúčtována", "nebylo nic zaúčtováno"),
+    (cadastre_prices.ReportGone(True), "ve vyúčtování svého účtu", "mezi výstupy"),
     (cadastre_prices.ReportGone(False), "nebylo nic zaúčtováno", "mohla být"),
     (cadastre_prices.PriceChanged(60), "nic nebylo zaúčtováno", "mohla být"),
     (cadastre_prices.TooManyUnits(340), "Nic nebylo objednáno", "zaúčtována"),
@@ -191,7 +192,7 @@ def test_a_login_past_its_budget_is_a_429_that_names_its_cause(client: Any, monk
     assert resp.status_code == 429 and resp.headers["Retry-After"] == "86400"
     assert "nic nebylo zaúčtováno" in detail and "aby se váš účet u ČÚZK nezablokoval" in detail
     assert "asi za 24 h" in detail
-    assert "přihlašovací jméno" in detail
+    assert "přihlašovací jméno" in detail and "uložte" not in detail, "a re-save would hit the same budget"
     _raising(monkeypatch, cuzk_login.Throttled("account", 1500))
     detail = client.post(URL, json=PAY).json()["detail"]
     assert "v poslední hodině příliš často" in detail and "asi za 25 min" in detail
@@ -201,13 +202,26 @@ def test_a_request_that_changed_nothing_answers_the_state_as_it_stands(client: A
                                                                       monkeypatch: pytest.MonkeyPatch) -> None:
     """Another run is live, or ČÚZK is still preparing: a 200 with the stored state, which the card renders. (A 202
     with a `detail` body replaced the card's state: the first review's M6.)"""
-    _raising(monkeypatch, cadastre_prices.InProgress("vytváří se"))
+    _raising(monkeypatch, cadastre_prices.InProgress("preparing"))
     monkeypatch.setattr(cadastre_prices, "state", lambda c, a, code: {
         **STATE, "running": True, "purchase": {**STATE["purchase"], "status": "ordered"}, "deeds": []})
     resp = client.post(URL, json=PAY)
     body = resp.json()
     assert resp.status_code == 200 and body["purchase"]["status"] == "ordered" and body["running"] is True
-    assert body["available"] is True and body["login_refused"] is False
+    assert body["available"] is True and body["login_refused"] is False and body["notice"] == "preparing"
+
+
+@pytest.mark.parametrize("why", ["busy", "in_flight", "fetching", "time", "login"])
+def test_a_request_that_did_nothing_says_why(client: Any, monkeypatch: pytest.MonkeyPatch, why: str) -> None:
+    """The third review's e: a confirmed purchase or a cancel that was dropped must not look like success."""
+    _raising(monkeypatch, cadastre_prices.InProgress(why))
+    assert client.post(URL, json=PAY).json()["notice"] == why
+    monkeypatch.setattr(cadastre_prices, "cancel", lambda *a, **kw: (_ for _ in ()).throw(cadastre_prices.InProgress(why)))
+    assert client.post(URL, json={"cancel": 31}).json()["notice"] == why
+
+
+def test_a_request_that_did_what_it_asked_carries_no_notice(client: Any) -> None:
+    assert client.post(URL, json=PAY).json()["notice"] is None
 
 
 def test_a_purchase_in_flight_is_given_up_by_name_and_needs_no_price(client: Any, bought: list,
