@@ -61,7 +61,7 @@ import type { MergeMode } from '@/lib/useMergeMode';
  * properties cascade), so they can never drift. auto-fill (not auto-fit)
  * keeps trailing empty tracks, so a short final row keeps the same card size
  * instead of stretching. The min() wrapper caps the track floor at the
- * column's own width: at "large" (23rem) a narrow Split column — the map
+ * column's own width: at "large" (23rem) a narrow Map-layout column — the map
  * dragged toward MAP_SPLIT_MAX — would otherwise be narrower than the floor
  * and force a horizontal scrollbar; capped, it instead falls back to one
  * full-width card per row, same as any responsive auto-fill grid. */
@@ -94,7 +94,7 @@ interface Props {
   cohortKind?: CohortKind | null;
   /* Card image size: "large" doubles the grid's --card-min (and therefore
    * the photo + card width); everything else in the card body is fixed-size
-   * and untouched. Shared identically by the Split and Cards (map-collapsed)
+   * and untouched. Shared identically by the Map and Cards (map-collapsed)
    * layouts, since both render this one grid — see ImageSizeToggle. */
   imageLarge: boolean;
   /* Which tagged photo every card opens on — see COVER_OPTIONS. A per-browser

@@ -971,7 +971,7 @@ function MapViewToggle({
       hug
       label="Properties layout"
       options={[
-        { value: false, label: 'Split', title: 'Show the map beside the cards', glyph: <SplitGlyph /> },
+        { value: false, label: 'Map', title: 'Show the map beside the cards', glyph: <SplitGlyph /> },
         { value: true, label: 'Cards', title: 'Hide the map — full-width cards', glyph: <CardsGlyph /> },
       ]}
       value={collapsed}
