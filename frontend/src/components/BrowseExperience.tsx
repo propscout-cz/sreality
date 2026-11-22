@@ -971,7 +971,7 @@ function MapViewToggle({
       hug
       label="Properties layout"
       options={[
-        { value: false, label: 'Map', title: 'Show the map beside the cards', glyph: <SplitGlyph /> },
+        { value: false, label: 'Map', title: 'Show the map beside the cards', glyph: <MapGlyph /> },
         { value: true, label: 'Cards', title: 'Hide the map — full-width cards', glyph: <CardsGlyph /> },
       ]}
       value={collapsed}
@@ -980,8 +980,8 @@ function MapViewToggle({
   );
 }
 
-/* Two panes (wide cards | narrow map). */
-function SplitGlyph() {
+/* A folded map. */
+function MapGlyph() {
   return (
     <svg
       width="13"
@@ -993,8 +993,9 @@ function SplitGlyph() {
       strokeLinejoin="round"
       aria-hidden
     >
-      <rect x="2" y="3" width="12" height="10" rx="1.5" />
-      <line x1="9.5" y1="3" x2="9.5" y2="13" />
+      <path d="M2 4.5 6 3l4 1.5L14 3v8.5L10 13l-4-1.5L2 13Z" />
+      <line x1="6" y1="3" x2="6" y2="11.5" />
+      <line x1="10" y1="4.5" x2="10" y2="13" />
     </svg>
   );
 }
