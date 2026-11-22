@@ -1,7 +1,11 @@
--- Stored storeys that today's reading rules no longer produce (#2552).
+-- Stored bazos storeys that today's reading rules no longer produce (#2552).
 --
--- The reparse seam never blanks a stored value, so two populations outlived the rule that
--- wrote them:
+-- APPLIED 2026-11-22 07:05Z (apply_migration run 44996386764). NEVER RE-RUN: the heal wrote the
+-- storeys back right after it (reparse run 44996694296), and a second run would blank every one
+-- of them again.
+--
+-- The reparse seam never blanks a stored value, so this population outlived the rule that
+-- wrote it (the idnes one is migration 756):
 --
 --   * bazos `floor`. Since #2559 a storey worded only as "patro" is not read (it names no
 --     scale: against the idnes twin the old reading was right in 50 % and one high in 46 %).
@@ -12,19 +16,16 @@
 --     stored page is the portal's deleted-advert page (migration 519 stamped those 410),
 --     which the heal could not refill.
 --
---   * idnes `total_floors`. 247 rows read "1" out of the page's own unfilled template,
---     `%1$s podlaží` (fixed in #2555). The literal template in the stored page names them.
---
 -- DESTRUCTIVE (overwrites stored values): operator OK 2026-11-22, backup
 -- `backup_before_drop.yml` label `floors-753` (listings: id, floor, total_floors) taken first.
--- Run the bazos heal straight after applying. Each statement is idempotent.
+-- The bazos heal runs straight after applying.
 --
 -- The bazos statement does NOT enqueue its properties, by the merge coordinator's ruling: the
 -- enqueue would put ~80,000 properties in front of the maintenance lane at once, recompute
 -- them to a blank storey, and the heal would then mark most of them again. Without it a
 -- property keeps its old storey until the heal writes the advert back and enqueues it, paced;
 -- the ~11,000 adverts that stay blank get no heal write, so their properties take the
--- corrected storey at the 03:00 full sweep. The idnes statement is small and enqueues (rule 20).
+-- corrected storey at the 03:00 full sweep.
 set lock_timeout = '5s';
 
 update public.listings l
@@ -36,19 +37,3 @@ update public.listings l
         where y.source = 'bazos'
           and y.source_id_native = l.source_id_native
           and y.http_status = 410);
-
-with cleared as (
-    update public.listings l
-       set total_floors = null
-      from public.portal_raw_pages p
-     where l.source = 'idnes'
-       and l.total_floors = 1
-       and p.source = 'idnes'
-       and p.source_id_native = l.source_id_native
-       and p.page_kind = 'detail'
-       and position('%1$s podlaží' in p.html) > 0
- returning l.property_id
-)
-insert into public.dirty_properties (property_id)
-select distinct property_id from cleared where property_id is not null
-on conflict (property_id) do update set marked_at = now();
