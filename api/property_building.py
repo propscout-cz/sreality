@@ -29,7 +29,7 @@ select b.code,
        b.valid_from,
        (select max(rv.source_date) from ruian_building_loads bl
           join registry_versions rv on rv.id = bl.version_id
-         where bl.obec_kod = ap.obec_kod) as source_date,
+         where bl.obec_kod = ap.obec_kod and bl.error is null) as source_date,
        (select count(*) from ruian_address_points a
          where a.stavebni_objekt_code = b.code and a.valid_to is null) as entrances,
        {coded}
@@ -76,7 +76,8 @@ def load_building(conn: Any, property_id: int) -> dict[str, Any] | None:
         "floor_area_m2": row["floor_area_m2"],
         "enclosed_volume_m3": row["enclosed_volume_m3"],
         "valid_from": row["valid_from"].isoformat(),
-        "source_date": row["source_date"].isoformat(),
+        # The newest clean load of the door's obec; None when there is none on record.
+        "source_date": row["source_date"].isoformat() if row["source_date"] is not None else None,
     }
     out.update({name: row[name] for name in _CODED})
     return out

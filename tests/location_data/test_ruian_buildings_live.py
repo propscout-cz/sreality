@@ -99,9 +99,11 @@ def test_a_changed_building_gets_a_new_row_and_the_old_one_is_closed(conn, world
 
 
 def test_a_building_gone_from_the_file_is_closed_and_its_link_cleared(conn, world):
-    _load(conn, world, [BUILDING, ruian_vfr.AddressLink(ADM, BUILDING.code)])
-    _load(conn, world, [])
+    other = dataclasses.replace(BUILDING, code=77000002)
+    _load(conn, world, [BUILDING, other, ruian_vfr.AddressLink(ADM, BUILDING.code)])
+    _load(conn, world, [other])
     assert _current(conn, BUILDING.code)[0][7] == DAY
+    assert _current(conn, other.code)[0][7] is None
     assert _link(conn, ADM) is None
 
 
@@ -226,3 +228,79 @@ def test_an_obec_the_served_version_no_longer_holds_is_not_pending(conn, world):
     with conn.cursor() as cur:
         cur.execute("update ruian_admin_units set last_version_id = %s where id = %s", (later.id, units[OBEC]))
     assert OBEC in [code for _, code in rb.pending_obce(conn, later)]
+
+
+def _many(n: int) -> list:
+    return [dataclasses.replace(BUILDING, code=78000000 + i) for i in range(n)]
+
+
+def test_a_file_that_would_empty_an_obec_is_refused_and_writes_nothing(conn, world):
+    held = _many(30)
+    _load(conn, world, [*held, ruian_vfr.AddressLink(ADM, held[0].code)])
+    for rows in ([], held[:10]):
+        with pytest.raises(rb.ShrinkRefused):
+            _load(conn, world, rows)
+    with conn.cursor() as cur:
+        cur.execute("select count(*) from ruian_building_objects where code >= 78000000 and valid_to is null")
+        assert cur.fetchone()[0] == 30
+    assert _link(conn, ADM) == held[0].code
+
+
+def test_an_obec_may_lose_a_minority_of_its_buildings(conn, world):
+    held = _many(30)
+    _load(conn, world, held)
+    _load(conn, world, held[:20])
+    with conn.cursor() as cur:
+        cur.execute("select count(*) from ruian_building_objects where code >= 78000000 and valid_to is null")
+        assert cur.fetchone()[0] == 20
+
+
+def test_a_judged_shrink_is_applied_by_hand(conn, world):
+    held = _many(30)
+    _load(conn, world, [*held, ruian_vfr.AddressLink(ADM, held[0].code)])
+    version, units = world
+    with pytest.raises(rb.ShrinkRefused, match="holds 0 buildings and would drop 30 of 30"):
+        rb.write_obec(conn, version, units[OBEC], OBEC, [], "a")
+    rb.write_obec(conn, version, units[OBEC], OBEC, [], "a", accept_shrink=True)
+    with conn.cursor() as cur:
+        cur.execute("select count(*) from ruian_building_objects where code >= 78000000 and valid_to is null")
+        assert cur.fetchone()[0] == 0
+    assert _link(conn, ADM) is None
+
+
+def test_a_file_that_would_clear_most_of_an_obecs_door_links_is_refused(conn, world):
+    version, units = world
+    doors = list(range(99100000, 99100030))
+    with conn.cursor() as cur:
+        for kod in doors:
+            cur.execute(
+                "insert into ruian_address_points (kod_adm, obec_unit_id, obec_kod, psc, plati_od, "
+                "first_version_id, last_version_id) values (%s, %s, %s, '11000', %s, %s, %s)",
+                (kod, units[OBEC], OBEC, DAY, version.id, version.id))
+    links = [ruian_vfr.AddressLink(kod, BUILDING.code) for kod in doors]
+    _load(conn, world, [BUILDING, *links])
+    with pytest.raises(rb.ShrinkRefused, match="holds 0 address links and would drop 30 of 30"):
+        _load(conn, world, [BUILDING])
+    assert _link(conn, doors[0]) == BUILDING.code
+    _load(conn, world, [BUILDING, *links[:20]])
+    assert (_link(conn, doors[0]), _link(conn, doors[29])) == (BUILDING.code, None)
+
+
+def test_a_vanished_building_under_a_superseded_unit_row_is_still_closed(conn, world):
+    """The gone-close names the obec by CODE: a regression to `obec_unit_id = <the new unit row>` fails here."""
+    version, units = world
+    other = dataclasses.replace(BUILDING, code=77000002)
+    _load(conn, world, [BUILDING, other])
+    with conn.cursor() as cur:
+        cur.execute("update ruian_admin_units set valid_to = %s where id = %s", (DAY, units[OBEC]))
+        cur.execute(
+            "insert into ruian_admin_units (level, code, name, name_norm, path, valid_from, "
+            "first_version_id, last_version_id) values ('obec', %s, 'x', 'x', 't990001c'::ltree, %s, %s, %s) "
+            "returning id", (OBEC, DAY + datetime.timedelta(days=1), version.id, version.id))
+        renamed = int(cur.fetchone()[0])
+    rb.write_obec(conn, version, renamed, OBEC, [other], "b")
+    assert _current(conn, BUILDING.code)[0][7] == DAY
+    with conn.cursor() as cur:
+        cur.execute("select obec_unit_id from ruian_building_objects where code = %s and valid_to is null",
+                    (other.code,))
+        assert cur.fetchall() == [(renamed,)]

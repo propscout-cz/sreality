@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime
 import zipfile
+import zlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -128,7 +129,20 @@ def _check_header(header: dict[str, str], member: str) -> None:
 
 
 def iter_obec_state(zip_path: Path) -> Iterator[BuildingRow | AddressLink]:
-    """Every building and every address point's building link of one obec's state file."""
+    """Every building and every address point's building link of one obec's state file. A file that is not a
+    whole zip of whole XML is a `VfrSchemaError`, raised before or while reading, never a silent short read."""
+    buildings = 0
+    try:
+        for row in _iter_obec_state(zip_path):
+            buildings += isinstance(row, BuildingRow)
+            yield row
+    except (zipfile.BadZipFile, zlib.error, ET.ParseError, EOFError, OSError, ValueError) as exc:
+        raise VfrSchemaError(f"{zip_path.name}: unreadable: {type(exc).__name__}") from None
+    if not buildings:
+        raise VfrSchemaError(f"{zip_path.name}: a full obec file with no building")
+
+
+def _iter_obec_state(zip_path: Path) -> Iterator[BuildingRow | AddressLink]:
     with zipfile.ZipFile(zip_path) as archive:
         members = archive.namelist()
         if len(members) != 1:

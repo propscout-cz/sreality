@@ -692,7 +692,8 @@ export interface RegisterBuilding {
   floor_area_m2: number | null;
   enclosed_volume_m3: number | null;
   valid_from: string;
-  source_date: string;
+  /* The newest clean load of the building's obec; null when none is on record. */
+  source_date: string | null;
   usage: RegisterCode | null;
   construction: RegisterCode | null;
   lift: RegisterCode | null;

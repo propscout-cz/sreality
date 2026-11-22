@@ -6186,14 +6186,22 @@ location programme's work, not this one's.
   and its old one is closed. `ruian_address_points.stavebni_objekt_code` is the door's building. Code lists and
   their "not known" flags: `ruian_code_labels`. Both service-role only.
 - **Load.** `python -m location_data.ruian_buildings` (`--obec <code>`, `--max-seconds`), run by hand until its
-  scheduled job is registered (a follow-up to #2591, after the first load is measured). It reads
+  scheduled job is registered (#2604, after the first load is measured). A hand run needs a SESSION-mode database
+  URL in its environment, `SUPABASE_DB_SESSION_URL` or `LOCATION_DB_DIRECT_URL` (`loader_db.open_loader_connection`
+  refuses the transaction pooler): the operator puts it in the local `.env`, never in a chat or a ticket. A run on
+  named obce logs every statement's rows and seconds. It reads
   the per-obec state files of the exchange format (`…/vymenny_format/soucasna/<vintage>_OB_<obec>_UZSZ.xml.zip`,
   parser `location_data/ruian_vfr.py`, stdlib) for the registry version the address mirror currently serves, so a
   building and its address points are of one vintage. One obec = one file = one bounded transaction, with a receipt
-  in `ruian_building_loads` (a failed obec's receipt carries its `error`, the run goes on, the next run tries it
-  again; a download is retried on a refused connection, a 429 or a 5xx, never on a 404). A changed building's
+  in `ruian_building_loads` (a failed obec's receipt carries its `error`, the run goes on whatever the failure was, the next run tries it
+  again; a download is retried on any network error, a 429 or a 5xx, never on a 404; twenty 404s in a row stop the
+  run: the vintage is not published; a dropped database connection is reopened before the failure is written). A changed building's
   current row is closed by its CODE, wherever it stands, and an obec's vanished buildings by the obec's code, never
-  by a unit row id (the registry load re-creates unit rows); an obec with a receipt for that version is not read again, so a run resumes and a run
+  by a unit row id (the registry load re-creates unit rows). A file that would close more than half of an obec's
+  current buildings (once it holds 20) is REFUSED before any write: nothing is closed, no address link is cleared,
+  the receipt keeps the counts, and the run's summary names it (`refused=`). The same floor guards the doors'
+  building links, and a full obec file with no building at all is refused by the parser. It stays refused on every run until
+  someone judges it; a real demolition or a split obec is applied by a hand run with `--accept-shrink <obec code>`; an obec with a receipt for that version is not read again, so a run resumes and a run
   with nothing pending is one read; a building the new version did not change is not written. It is a module of its own and edits none of `ruian_load` (operator ruling
   2026-11-22); it needs no geo library (the building's point is not loaded: nothing reads it).
 - **Read.** `GET /properties/{id}/building` (`api/property_building.py`, `require_token`): the building of the

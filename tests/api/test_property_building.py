@@ -117,3 +117,14 @@ def test_an_unknown_property_is_404(client, conn):
     conn.row = None
     assert client.get("/properties/7/building", headers=AUTH).status_code == 404
 
+
+
+def test_a_building_with_no_clean_load_on_record_has_no_date(client, conn):
+    conn.row = _row(source_date=None)
+    res = client.get("/properties/7/building", headers=AUTH)
+    assert res.status_code == 200 and res.json()["building"]["source_date"] is None
+
+
+def test_the_date_reads_clean_receipts_only(client, conn):
+    client.get("/properties/7/building", headers=AUTH)
+    assert "bl.obec_kod = ap.obec_kod and bl.error is null" in conn.statements[0][0]

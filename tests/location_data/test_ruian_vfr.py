@@ -105,3 +105,33 @@ def test_a_real_file_reads_through(tmp_path):
     assert any(b.floors for b in buildings) and any(b.completed_on for b in buildings)
     assert any(not b.house_numbers for b in buildings), "a building with no house number is read too"
     assert all(b.iskn_building_id is None or b.iskn_building_id > 0 for b in buildings)
+
+
+def test_a_truncated_file_is_refused_not_read_short(tmp_path):
+    whole = _HEAD.format(kind="OB_UZSZ", batch="Plna") + _BODY
+    path = tmp_path / "cut.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("cut.xml", whole[: whole.index("<vf:AdresniMista>")])
+    with pytest.raises(ruian_vfr.VfrSchemaError, match="unreadable"):
+        list(ruian_vfr.iter_obec_state(path))
+    (tmp_path / "junk.zip").write_bytes(b"not a zip")
+    with pytest.raises(ruian_vfr.VfrSchemaError, match="unreadable"):
+        list(ruian_vfr.iter_obec_state(tmp_path / "junk.zip"))
+
+
+def test_a_full_file_with_no_building_is_refused(tmp_path):
+    body = _BODY[: _BODY.index("<vf:StavebniObjekty>")] + _BODY[_BODY.index("<vf:AdresniMista>"):]
+    path = tmp_path / "empty.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("empty.xml", _HEAD.format(kind="OB_UZSZ", batch="Plna") + body)
+    with pytest.raises(ruian_vfr.VfrSchemaError, match="no building"):
+        list(ruian_vfr.iter_obec_state(path))
+
+
+def test_a_value_that_is_not_a_number_is_a_schema_error(tmp_path):
+    path = tmp_path / "bad.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("bad.xml", _HEAD.format(kind="OB_UZSZ", batch="Plna")
+                         + _BODY.replace("<soi:PocetPodlazi>8<", "<soi:PocetPodlazi>osm<"))
+    with pytest.raises(ruian_vfr.VfrSchemaError, match="unreadable"):
+        list(ruian_vfr.iter_obec_state(path))

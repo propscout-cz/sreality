@@ -41,7 +41,7 @@ export default function BuildingCard({ propertyId, ad }: { propertyId: number; a
         ))}
       </dl>
       <p className="border-t border-[var(--color-rule-soft)] pt-2.5 text-xs text-[var(--color-ink-3)]">
-        Zdroj: ČÚZK, RÚIAN, stav k {registerDate(building.source_date)} ·{' '}
+        Zdroj: ČÚZK, RÚIAN{building.source_date ? `, stav k ${registerDate(building.source_date)}` : ''} ·{' '}
         <a href={registerBuildingUrl(building.code)} target="_blank" rel="noreferrer"
           className="text-[var(--color-ink-2)] underline decoration-[var(--color-rule-strong)] underline-offset-2 hover:text-[var(--color-copper)]">
           stavební objekt <span className="font-mono">{building.code}</span>
