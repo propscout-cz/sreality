@@ -14,7 +14,7 @@
 -- share one budget; `username_exact_key` of the name as typed, which an accepted check RESETS by, so a
 -- correct login on 'Novak' never clears the run of 'novak' should ČÚZK hold them as two accounts. A
 -- dictionary cannot reverse either without the server's key, and a password typed into the wrong box never
--- lands here in clear. `admitted_at` is when we took the check from the budget, `settled_at` when ČÚZK
+-- lands here in clear. `admitted_at` is when we took the check from the budget, `answered_at` when ČÚZK
 -- answered: an accepted check resets only the unaccepted ones that had SETTLED before it was ADMITTED,
 -- because the order we admitted two overlapping checks in is not the order ČÚZK handled them in. `account_id` goes NULL when its account is deleted and the row stays: the
 -- per-username budget is over ALL accounts, so deleting an account must not hand its spend back.
@@ -35,8 +35,8 @@ create table if not exists public.account_cuzk_login_checks (
   outcome            text        not null default 'pending'
                      check (outcome in ('pending', 'accepted', 'refused', 'no_answer')),
   admitted_at        timestamptz not null default now(),
-  settled_at         timestamptz,
-  constraint account_cuzk_login_checks_settled_ck check ((outcome = 'pending') = (settled_at is null))
+  answered_at         timestamptz,
+  constraint account_cuzk_login_checks_answered_ck check ((outcome = 'pending') = (answered_at is null))
 );
 
 create index if not exists account_cuzk_login_checks_username_idx

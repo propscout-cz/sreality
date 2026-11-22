@@ -141,13 +141,13 @@ def exact_key(username: str) -> str:
 # A check still in flight is never reset. (Ids are the order we admitted in, not the order ČÚZK handled.)
 _SPENT_SQL = """
 with username_run as (
-  select coalesce(r.settled_at, r.admitted_at) as at
+  select coalesce(r.answered_at, r.admitted_at) as at
     from account_cuzk_login_checks r
    where r.username_key = %(key)s and r.outcome <> 'accepted'
-     and coalesce(r.settled_at, r.admitted_at) > now() - %(uw)s::interval
+     and coalesce(r.answered_at, r.admitted_at) > now() - %(uw)s::interval
      and not exists (select 1 from account_cuzk_login_checks l
                       where l.username_exact_key = r.username_exact_key and l.outcome = 'accepted'
-                        and r.settled_at < l.admitted_at)
+                        and r.answered_at < l.admitted_at)
 ), account_hour as (
   select admitted_at as at, outcome from account_cuzk_login_checks
    where account_id = %(account)s and admitted_at > now() - %(aw)s::interval
@@ -197,5 +197,5 @@ def admit_check(conn: psycopg.Connection, account_id: uuid.UUID, username: str) 
 def settle_check(conn: psycopg.Connection, check_id: int, outcome: str) -> None:
     """The check's outcome and when ČÚZK answered; the time we admitted it stays."""
     with conn.cursor() as cur:
-        cur.execute("update account_cuzk_login_checks set outcome = %s, settled_at = now() where id = %s",
+        cur.execute("update account_cuzk_login_checks set outcome = %s, answered_at = now() where id = %s",
                     (outcome, check_id))

@@ -51,7 +51,7 @@ def _account(conn) -> uuid.UUID:
 
 def _age(conn, by: str) -> None:
     conn.execute(f"update account_cuzk_login_checks set admitted_at = admitted_at - interval '{by}', "
-                 f"settled_at = settled_at - interval '{by}'")
+                 f"answered_at = answered_at - interval '{by}'")
 
 
 def _check(conn, account, username: str, outcome: str = "refused") -> None:
@@ -164,7 +164,7 @@ def test_settling_keeps_the_admit_time_and_stamps_the_answer(conn):
                  (check,))
     cuzk_login.settle_check(conn, check, "refused")
     admitted, settled = conn.execute(
-        "select extract(epoch from now() - admitted_at), extract(epoch from now() - settled_at) "
+        "select extract(epoch from now() - admitted_at), extract(epoch from now() - answered_at) "
         "from account_cuzk_login_checks where id = %s", (check,)).fetchone()
     assert admitted > 25 and settled < 5
 
@@ -220,7 +220,7 @@ def test_the_account_wait_runs_from_the_oldest_check_of_the_kind_over_its_cap(co
     a = _account(conn)
     _check(conn, a, "old-accepted", "accepted")
     conn.execute("update account_cuzk_login_checks set admitted_at = now() - interval '50 minutes', "
-                 "settled_at = now() - interval '50 minutes'")
+                 "answered_at = now() - interval '50 minutes'")
     for i in range(cuzk_login.ACCOUNT_UNACCEPTED_BUDGET):
         _check(conn, a, f"user{i}")
     with pytest.raises(cuzk_login.Throttled) as spent:
