@@ -668,6 +668,42 @@ export const startAgentRun = (body: StartAgentRun): Promise<{ id: number; status
   request<{ id: number; status: AgentRunStatus; created: boolean }>('/runs', { method: 'POST', json: body });
 export const setAgentRunLimit = (dailyLimitUsd: number): Promise<AccountLimit> =>
   request<AccountLimit>('/runs/limit', { method: 'PUT', json: { daily_limit_usd: dailyLimitUsd } });
+/* What the RÚIAN register states about a property's building (GET /properties/{id}/building). A coded value
+ * carries its label and whether the code means the register does not know. */
+export interface RegisterCode {
+  code: number;
+  /* null: a code our list of labels does not hold. */
+  label: string | null;
+  unknown: boolean;
+}
+export interface RegisterBuilding {
+  code: number;
+  iskn_building_id: number | null;
+  house_numbers: number[];
+  house_number_kind: string | null;
+  /* The register's date, and the period derived from it: equal ends are one year, a null start is open
+   * ("until 1919"); a period wider than a year means the register holds a placeholder date. */
+  completed: { on: string; from: number | null; to: number } | null;
+  /* Floors below ground count too, so this can exceed an ad's figure. */
+  floors: number | null;
+  dwellings: number | null;
+  entrances: number;
+  built_up_area_m2: number | null;
+  floor_area_m2: number | null;
+  enclosed_volume_m3: number | null;
+  valid_from: string;
+  /* The newest clean load of the building's obec; null when none is on record. */
+  source_date: string | null;
+  usage: RegisterCode | null;
+  construction: RegisterCode | null;
+  lift: RegisterCode | null;
+  heating: RegisterCode | null;
+  water: RegisterCode | null;
+  sewer: RegisterCode | null;
+  gas: RegisterCode | null;
+}
+export const fetchPropertyBuilding = (propertyId: number): Promise<{ building: RegisterBuilding | null }> =>
+  request<{ building: RegisterBuilding | null }>(`/properties/${propertyId}/building`);
 /* An account's own ČÚZK WSDP login. The password goes up once and never comes back. */
 export interface CuzkLoginState {
   set: boolean;
