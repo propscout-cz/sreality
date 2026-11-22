@@ -88,10 +88,10 @@ def test_the_storey_count_band_is_the_parsers_band():
     assert m
     low, high = int(m[1]), int(m[2])
     assert high == floor._FLOOR_MAX
-    assert floor.total_floors_from_portal(low - 1) is None
-    assert floor.total_floors_from_portal(low) == low
-    assert floor.total_floors_from_portal(high) == high
-    assert floor.total_floors_from_portal(high + 1) is None
+    assert floor.total_floors_from_portal(low - 1, floor=None) is None
+    assert floor.total_floors_from_portal(low, floor=None) == low
+    assert floor.total_floors_from_portal(high, floor=None) == high
+    assert floor.total_floors_from_portal(high + 1, floor=None) is None
 
 
 def test_f1_is_the_idnes_placeholder_the_contract_declares():

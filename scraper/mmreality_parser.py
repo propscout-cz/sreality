@@ -475,7 +475,8 @@ def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
     garage_flag, _ = source_values(SOURCE, "garage", obj)
     equipment = read("furnished")
     equipment = None if equipment is None else str(_to_int(equipment))
-    total_floors = total_floors_from_portal(_to_int(read("total_floors")))
+    floor = floor_from_portal(floor_convention(SOURCE), read("floor"))
+    total_floors = total_floors_from_portal(_to_int(read("total_floors")), floor=floor)
 
     cellar_flag, _ = source_values(SOURCE, "cellar", obj)
     disposition = vocabulary.disposition(
@@ -508,7 +509,7 @@ def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
         street=street,
         lat=lat,
         lon=lon,
-        floor=floor_from_portal(floor_convention(SOURCE), read("floor")),
+        floor=floor,
         total_floors=total_floors,
         building_type=vocabulary.canonical("building_type", SOURCE, label("building_type")),
         condition=vocabulary.canonical("condition", SOURCE, label("condition")),

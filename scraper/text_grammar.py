@@ -277,7 +277,7 @@ def _storeys(said: defaultdict[str, list[str]], category_main: str | None,
         if floor is not None:
             break
     counts = (re.search(r"\d{1,3}", v) for v in said["total_floors"])
-    total = _first(total_floors_from_portal(int(m.group(0))) for m in counts if m) or total
+    total = _first(total_floors_from_portal(int(m.group(0)), floor=None) for m in counts if m) or total
     text_floor, text_total = floor_from_text(haystack, category_main=category_main)
     floor = floor if floor is not None else text_floor
     total = total if total is not None else text_total

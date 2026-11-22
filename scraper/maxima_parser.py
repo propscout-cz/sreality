@@ -399,7 +399,7 @@ def parse_detail(
         # 2-segment case where the last token is a village, not a street.
         street=street_from_locality(locality, position="last", require_morphology=True),
         floor=floor,
-        total_floors=total_floors_from_portal(total_floors),
+        total_floors=total_floors_from_portal(total_floors, floor=floor),
         building_type=vocabulary.canonical("building_type", SOURCE, read("building_type")),
         condition=vocabulary.canonical("condition", SOURCE, read("condition")),
         ownership=vocabulary.canonical("ownership", SOURCE, read("ownership")),

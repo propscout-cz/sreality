@@ -50,7 +50,8 @@ emits". That is now one table and one module rather than nine copies of each:
   parsers as they stood before the module existed, so a value that moves is visible.
 - **Value bands, declined BEFORE the content hash** (so a refused value never disagrees with its
   own snapshot): a storey outside -3..40 is absence on either convention and a building count
-  outside 1..40 is absence (`scraper/floor.py` `floor_from_portal` / `total_floors_from_portal`,
+  outside 1..40, or one the advert's own storey reaches (floor ≥ count), is absence (`scraper/floor.py`
+  `floor_from_portal` / `total_floors_from_portal`,
   every parser and the text lane); a dwelling headline must sit in `scraper/area.py`
   `dwelling_area_band` — ≥ 5 m² on byt/dum/komercni, and < 1,000 m² on a byt and on a house's
   UNLABELLED figure (bazos's first prose m², a title figure: at 1,000 m² or more that is the

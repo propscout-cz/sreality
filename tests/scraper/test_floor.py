@@ -7,6 +7,7 @@ from scraper.floor import (
     is_plausible_floor,
     normalize_floor,
     storey_label,
+    total_floors_from_portal,
 )
 
 
@@ -113,6 +114,16 @@ def test_floor_from_portal_ground1_shifts_only_positive_storeys():
     assert floor_from_portal("ground1", -1) == -1
     assert floor_from_portal("ground1", "3") == 2
     assert floor_from_portal("ground1", None) is None
+
+
+def test_a_count_the_adverts_own_storey_contradicts_is_absence():
+    # ground = 0, so the top storey of an 8-storey building is 7
+    assert total_floors_from_portal(8, floor=7) == 8
+    assert total_floors_from_portal(8, floor=8) is None
+    assert total_floors_from_portal(1, floor=2) is None
+    assert total_floors_from_portal(1, floor=-1) == 1
+    assert total_floors_from_portal(5, floor=None) == 5
+    assert total_floors_from_portal(0, floor=None) is None
 
 
 def test_floor_from_portal_ground0_is_a_passthrough():

@@ -587,6 +587,7 @@ def parse_detail(
         "broker": parse_idnes_broker(html),
     }
 
+    floor = floor_from_portal(floor_convention(SOURCE), read("floor"))
     return ScrapedListing(
         source=SOURCE,
         source_id_native=source_id,
@@ -610,8 +611,8 @@ def parse_detail(
         street=street_from_locality(locality, position="first", lat=lat, lon=lon),
         lat=lat,
         lon=lon,
-        floor=floor_from_portal(floor_convention(SOURCE), read("floor")),
-        total_floors=total_floors_from_portal(_parse_int(read("total_floors"))),
+        floor=floor,
+        total_floors=total_floors_from_portal(_parse_int(read("total_floors")), floor=floor),
         building_type=vocabulary.canonical("building_type", SOURCE, read("building_type")),
         # A flat labels its condition row "Stav bytu"; a house or a commercial unit
         # labels it "Stav budovy".

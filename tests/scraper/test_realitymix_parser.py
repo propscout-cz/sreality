@@ -288,7 +288,8 @@ def test_parse_detail_byt_full():
     assert listing.district == "Praha-východ"
     # 'číslo podlaží v domě' 2 -> ground=0 storey 1 (W8).
     assert listing.floor == 1
-    assert listing.total_floors == 1
+    # 'počet podlaží' 1 under a flat on the 2nd storey: contradicted, so absence.
+    assert listing.total_floors is None
     assert listing.building_type == "cihla"
     assert listing.condition == "velmi_dobry"
     assert listing.ownership == "osobni"
