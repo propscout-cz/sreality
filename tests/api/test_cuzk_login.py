@@ -53,6 +53,16 @@ def service(monkeypatch: pytest.MonkeyPatch) -> _Opener:
     return opener
 
 
+@pytest.fixture(autouse=True)
+def ledger(monkeypatch: pytest.MonkeyPatch) -> dict[str, list]:
+    """The check budget, scripted: every check is admitted; what was admitted and settled is recorded.
+    Its own semantics run on the real schema in tests/test_cuzk_login_checks_live.py."""
+    seen: dict[str, list] = {"admitted": [], "settled": []}
+    monkeypatch.setattr(cuzk_login, "admit_check", lambda c, a, u: seen["admitted"].append((a, u)) or 7)
+    monkeypatch.setattr(cuzk_login, "settle_check", lambda c, i, o: seen["settled"].append((i, o)))
+    return seen
+
+
 @pytest.fixture()
 def checks(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
     seen: list[tuple[str, str]] = []
@@ -81,10 +91,12 @@ def test_the_state_names_the_username_and_never_the_password(client: Any, servic
     assert service.conn.executed[0][1] == (_ME,)
 
 
-def test_a_save_checks_the_login_then_stores_it_encrypted(client: Any, service: _Opener, checks: list) -> None:
+def test_a_save_checks_the_login_then_stores_it_encrypted(client: Any, service: _Opener, checks: list,
+                                                          ledger: dict) -> None:
     resp = client.put(URL, json={"username": "firma01", "password": PASSWORD})
     assert resp.status_code == 200 and resp.json()["set"] is True
     assert checks == [("firma01", PASSWORD)]
+    assert ledger == {"admitted": [(_ME, "firma01")], "settled": [(7, "accepted")]}
     (sql, params), = _writes(service)
     assert params[0] == _ME and params[1] == "firma01"
     assert PASSWORD not in str(params) and PASSWORD not in resp.text
@@ -92,7 +104,8 @@ def test_a_save_checks_the_login_then_stores_it_encrypted(client: Any, service: 
 
 
 @pytest.mark.parametrize(("reason", "status"), [("refused", 422), ("timeout", 502), ("status", 502)])
-def test_a_login_that_is_not_accepted_stores_nothing(client: Any, service: _Opener, reason: str, status: int,
+def test_a_login_that_is_not_accepted_stores_nothing(client: Any, service: _Opener, ledger: dict, reason: str,
+                                                     status: int,
                                                      monkeypatch: pytest.MonkeyPatch,
                                                      caplog: pytest.LogCaptureFixture) -> None:
     def refuse(u: str, p: str) -> str:
@@ -102,7 +115,8 @@ def test_a_login_that_is_not_accepted_stores_nothing(client: Any, service: _Open
     with caplog.at_level(logging.DEBUG):
         resp = client.put(URL, json={"username": "firma01", "password": PASSWORD})
     assert resp.status_code == status
-    assert service.opened == 0
+    assert _writes(service) == []
+    assert ledger["settled"] == [(7, "refused" if reason == "refused" else "no_answer")]
     assert PASSWORD not in resp.text and PASSWORD not in caplog.text
 
 
@@ -207,3 +221,16 @@ def test_a_login_is_sent_only_to_cuzk_over_https(monkeypatch: pytest.MonkeyPatch
 def test_the_test_service_is_an_allowed_base(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(wsdp_client.BASE_ENV, "https://wsdptrial.cuzk.gov.cz/trial/ws/wsdp/3.1/")
     assert wsdp_client.base_url().startswith("https://wsdptrial.cuzk.gov.cz/")
+
+
+@pytest.mark.parametrize("by", ["username", "account"])
+def test_past_the_budget_nothing_is_sent_to_cuzk(client: Any, service: _Opener, checks: list, by: str,
+                                                 monkeypatch: pytest.MonkeyPatch) -> None:
+    def spent(conn: Any, account: Any, username: str) -> int:
+        raise cuzk_login.Throttled(by)
+
+    monkeypatch.setattr(cuzk_login, "admit_check", spent)
+    resp = client.put(URL, json={"username": "firma01", "password": PASSWORD})
+    assert resp.status_code == 429 and "15 minutes" in resp.json()["detail"]
+    assert checks == [] and _writes(service) == []
+    assert PASSWORD not in resp.text

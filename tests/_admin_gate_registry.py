@@ -104,6 +104,8 @@ ADMIN_ONLY_RELATIONS: tuple[str, ...] = (
     "notification_deliveries",
     # An account's own ČÚZK login, its password encrypted (migration 759).
     "account_cuzk_logins",
+    # The ledger and budget of ČÚZK login checks (migration 762).
+    "account_cuzk_login_checks",
     # The scheduled-jobs lease and its run history (migration 675): holders, host names and log tails.
     "scheduled_jobs",
     "job_runs",
