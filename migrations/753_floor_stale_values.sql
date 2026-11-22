@@ -17,25 +17,25 @@
 --
 -- DESTRUCTIVE (overwrites stored values): operator OK 2026-11-22, backup
 -- `backup_before_drop.yml` label `floors-753` (listings: id, floor, total_floors) taken first.
--- Run the bazos heal straight after applying. Each statement is idempotent, and each enqueues
--- the properties it touched in its own statement (rule 20).
+-- Run the bazos heal straight after applying. Each statement is idempotent.
+--
+-- The bazos statement does NOT enqueue its properties, by the merge coordinator's ruling: the
+-- enqueue would put ~80,000 properties in front of the maintenance lane at once, recompute
+-- them to a blank storey, and the heal would then mark most of them again. Without it a
+-- property keeps its old storey until the heal writes the advert back and enqueues it, paced;
+-- the ~11,000 adverts that stay blank get no heal write, so their properties take the
+-- corrected storey at the 03:00 full sweep. The idnes statement is small and enqueues (rule 20).
 set lock_timeout = '5s';
 
-with cleared as (
-    update public.listings l
-       set floor = null
-     where l.source = 'bazos'
-       and l.floor is not null
-       and not exists (
-           select 1 from public.portal_raw_payloads y
-            where y.source = 'bazos'
-              and y.source_id_native = l.source_id_native
-              and y.http_status = 410)
- returning l.property_id
-)
-insert into public.dirty_properties (property_id)
-select distinct property_id from cleared where property_id is not null
-on conflict (property_id) do update set marked_at = now();
+update public.listings l
+   set floor = null
+ where l.source = 'bazos'
+   and l.floor is not null
+   and not exists (
+       select 1 from public.portal_raw_payloads y
+        where y.source = 'bazos'
+          and y.source_id_native = l.source_id_native
+          and y.http_status = 410);
 
 with cleared as (
     update public.listings l
