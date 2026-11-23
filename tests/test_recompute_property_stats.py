@@ -1677,20 +1677,23 @@ def test_a_tenth_portal_is_offered_only_with_its_read_model_lines():
 
 
 def test_the_price_history_is_the_canonical_adverts_lineage():
-    """MS10: the canonical advert's same-portal predecessors' steps plus one handover per link."""
+    """MS10: the price figures are `listing_price_history` of the canonical advert (migration 768), the one
+    definition the broker book reads too, and the rollup spells no lineage of its own."""
+    from pathlib import Path
+
     from scripts.recompute_property_stats import _RECOMPUTE_BATCH_SQL
 
     sql = " ".join(_RECOMPUTE_BATCH_SQL.split())
     assert sql.startswith("WITH batch AS (")
-    assert "lineage AS ( WITH RECURSIVE link AS (" in sql
-    assert ("WHERE l.property_id = k.pid AND l.source = k.source "
-            "AND l.last_seen_at < k.first_seen_at AND l.first_seen_at < k.first_seen_at "
-            "ORDER BY l.last_seen_at DESC, l.id DESC LIMIT 1") in sql
-    assert "FROM lineage g JOIN listing_price_steps ps ON ps.listing_id = g.id" in sql
-    assert "FROM lineage g JOIN listing_snapshots s ON s.listing_id = g.id" in sql
-    assert "FROM steps ps GROUP BY ps.pid" in sql
-    assert "LEFT JOIN lineage_span cs ON cs.pid = r.pid" in sql
-    assert "ps.property_id" not in sql
+    assert "CROSS JOIN LATERAL listing_price_history(c.id, NULL) ph" in sql
+    assert "measure_price_change_pct(ph.first_price_czk, ph.last_price_czk)" in sql
+    for own in ("RECURSIVE", "listing_price_steps", "lineage", "/ "):
+        assert own not in sql
+    body = " ".join(Path("migrations/768_listing_price_history.sql").read_text().split())
+    assert ("where l.property_id = k.pid and l.source = k.source "
+            "and l.last_seen_at < k.first_seen_at and l.first_seen_at < k.first_seen_at") in body
+    assert "order by l.last_seen_at desc, l.id desc limit 1" in body
+    assert "join public.listing_price_steps ps on ps.listing_id = g.id" in body
 
 
 def test_the_canonical_handover_is_stamped_for_the_price_alerts():
@@ -1792,7 +1795,7 @@ def test_every_recompute_variant_carries_the_whole_statement():
     import scripts.recompute_property_stats as rps
 
     for sql in (rps._RECOMPUTE_BATCH_SQL, rps._RECOMPUTE_SCOPED_SQL):
-        for rule in ("property_canonical_listings", "lineage AS (", "city_proximity_computed_at",
+        for rule in ("property_canonical_listings", "listing_price_history(", "city_proximity_computed_at",
                      "newest_ad_at_", "active_sources"):
             assert rule in sql
         assert "price_per_m2_source_id" not in sql

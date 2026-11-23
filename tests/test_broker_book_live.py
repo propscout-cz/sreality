@@ -20,7 +20,7 @@ from scripts.recompute_property_stats import (
     properties_changed,
 )
 from scripts.resolve_brokers import _apply_merges, _attach_singletons, _resolve_firms
-from tests._live_property import OP, REQUIRED_DB, _advert, _property
+from tests._live_property import OP, REQUIRED_DB, _advert, _property, _snapshot
 from toolkit.broker_sources import BROKER_SOURCES
 from toolkit.property_identity import detach_listings, merge_property_set
 
@@ -282,6 +282,40 @@ def test_a_quiescent_pass_writes_nothing_and_the_range_form_deletes_a_gone_row(c
     cur.execute("UPDATE listings SET broker_identity_id = NULL WHERE id = %s", (lone,))
     cur.execute(_BROKER_BOOK_BATCH_SQL, {"lo": pid, "hi": pid + 1})
     assert set(_book(cur, pid)) == {two}
+
+
+def _prices(cur: Any, pid: int) -> dict[int, tuple[int | None, int | None]]:
+    cur.execute("SELECT broker_id, first_price_czk, last_price_czk FROM broker_book WHERE property_id = %s", (pid,))
+    return {int(b): (first, last) for b, first, last in cur.fetchall()}
+
+
+def test_the_book_holds_each_brokers_own_first_and_last_price(cur: Any) -> None:
+    """Migration 768: a row's prices are the history of the broker's lead ad over the broker's own same-portal
+    predecessors. A re-list at a new price is the broker's change; another broker's earlier ad on the portal is not;
+    a concurrent ad on another portal at another price is no change; an ad never priced leaves the pair NULL."""
+    now = _now(cur)
+    pid, one, two, three = _property(cur), _broker(cur), _broker(cur), _broker(cur)
+    first = _ad(cur, pid, _identity(cur, one), now - 60 * _D, now - 40 * _D, active=False, price=5_000_000)
+    _snapshot(cur, first, 5_000_000, 60 * 24)
+    _snapshot(cur, first, 4_800_000, 50 * 24)
+    relist = _ad(cur, pid, _identity(cur, one), now - 30 * _D, now - 20 * _D, active=False, price=4_500_000)
+    _snapshot(cur, relist, 4_500_000, 30 * 24)
+    taken = _ad(cur, pid, _identity(cur, two), now - 10 * _D, now, price=4_000_000)
+    _snapshot(cur, taken, 4_000_000, 10 * 24)
+    _snapshot(cur, taken, 4_100_000, 5 * 24)
+    other = _ad(cur, pid, _identity(cur, two, "idnes"), now - 9 * _D, now, source="idnes", price=4_300_000)
+    _snapshot(cur, other, 4_300_000, 9 * 24)
+    _ad(cur, pid, _identity(cur, three, "remax"), now - 8 * _D, now, source="remax", price=None)
+
+    properties_changed(cur.connection, [pid])
+    assert _prices(cur, pid) == {one: (5_000_000, 4_500_000), two: (4_000_000, 4_100_000), three: (None, None)}
+
+    cur.execute("SELECT repr_listing_ref_id, total_price_change_pct, price_change_count FROM properties WHERE id = %s",
+                (pid,))
+    assert cur.fetchone() == (taken, pytest.approx(-18.0), 4)
+    cur.execute("SELECT measure_price_change_pct(first_price_czk, last_price_czk) FROM broker_book "
+                "WHERE property_id = %s AND broker_id = %s", (pid, one))
+    assert cur.fetchone()[0] == pytest.approx(-10.0)
 
 
 def test_tom_observed_follows_the_brokers_first_ad_in_the_projection_order(cur: Any) -> None:
