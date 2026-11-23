@@ -43,18 +43,22 @@ function alsoOf(deed: CadastreDeed): string | null {
 
 const MANY_UNITS = 3;
 
+/* Whether the list shows anything this account bought: a deed row, or a held sale a bought deed confirms. */
+export const showsCadastre = (rows: SaleRow[]): boolean => rows.some((r) => r.proceeding != null);
+
 export function saleRows(sales: BuildingSale[], deeds: CadastreDeed[]): SaleRow[] {
   const heldIds = new Set(sales.map((s) => s.source_record_id));
-  const confirmed = new Map<string, string>();
+  const confirmed = new Map<string, CadastreDeed>();
   for (const d of deeds) {
     const id = d.match?.source === 'reas' ? d.match.source_record_id : null;
-    if (id != null && heldIds.has(id)) confirmed.set(id, d.proceeding);
+    if (id != null && heldIds.has(id)) confirmed.set(id, d);
   }
   const held: SaleRow[] = sales.map((s) => ({
-    key: `${s.source}:${s.source_record_id}`, date: s.sold_at, unit: s.unit_label, scope: null, also: null,
+    key: `${s.source}:${s.source_record_id}`, date: s.sold_at, unit: s.unit_label, scope: null,
+    also: confirmed.has(s.source_record_id) ? alsoOf(confirmed.get(s.source_record_id)!) : null,
     disposition: s.disposition, area_m2: s.area_m2, price_czk: s.price_czk, currency: 'CZK',
     price_per_m2: s.price_per_m2, price_per_m2_basis: s.price_per_m2_basis, source: 'reas',
-    source_url: s.source_url, proceeding: confirmed.get(s.source_record_id) ?? null, area_property_id: null,
+    source_url: s.source_url, proceeding: confirmed.get(s.source_record_id)?.proceeding ?? null, area_property_id: null,
   }));
   const shownAsHeld = (d: CadastreDeed) =>
     d.match?.source === 'reas' && d.match.source_record_id != null && heldIds.has(d.match.source_record_id);

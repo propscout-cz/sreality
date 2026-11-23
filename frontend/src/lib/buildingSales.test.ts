@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BuildingSale, CadastreDeed } from './api';
-import { saleRows } from './buildingSales';
+import { saleRows, showsCadastre } from './buildingSales';
 
 const SALE: BuildingSale = {
   source: 'reas', source_record_id: '1_unit_22906291-565-54', sold_at: '2023-09-12', price_czk: 5990000,
@@ -25,6 +25,16 @@ describe('saleRows', () => {
       source: 'reas', source_record_id: SALE.source_record_id, property_id: null, area_m2: null, disposition: null,
       price_per_m2: null, price_per_m2_basis: null } })]);
     expect(rows.map((r) => [r.source, r.unit, r.proceeding, r.area_m2])).toEqual([['reas', '565/54', 'V-1/2025-101', 61]]);
+    expect(showsCadastre(rows)).toBe(true);
+    expect(showsCadastre(saleRows([SALE], []))).toBe(false);
+  });
+
+  it('keeps what the deed transfers besides the unit on the held sale that stands for it', () => {
+    const [row] = saleRows([SALE], [deed({
+      properties: [{ kind: 'jednotka', iskn_id: 1, label: '565/54' }, { kind: 'parcela', iskn_id: 2, label: 'St. 1' }],
+      match: { source: 'reas', source_record_id: SALE.source_record_id, property_id: null, area_m2: null,
+        disposition: null, price_per_m2: null, price_per_m2_basis: null } })]);
+    expect([row.source, row.also]).toEqual(['reas', '+ pozemek']);
   });
 
   it('keeps a deed whose matched sale is not in the list', () => {

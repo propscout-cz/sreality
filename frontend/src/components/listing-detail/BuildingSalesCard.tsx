@@ -6,7 +6,7 @@ import { Th } from '@/components/table';
 import {
   buyBuildingPrices, cancelBuildingPurchase, fetchBuildingPrices, fetchPropertyBuildingSales, type BuildingPrices,
 } from '@/lib/api';
-import { saleRows, type SaleRow } from '@/lib/buildingSales';
+import { saleRows, showsCadastre, type SaleRow } from '@/lib/buildingSales';
 import { fmtArea, fmtCzk, fmtDateSlash, fmtMeasuredPricePerM2 } from '@/lib/format';
 import { propertyPath } from '@/lib/listingUrl';
 import { ppm2BasisFromToken } from '@/lib/measure';
@@ -21,8 +21,9 @@ import { advertLink } from '@/lib/portals';
  * text that says truthfully whether money moved, and a way forward. While a run of the account is live the card
  * offers nothing and re-reads the state.
  *
- * Building-level facts: the card never says which sale, if any, is this property's own flat. With no building and no
- * sale, no card. */
+ * Building-level facts. The card does not claim a sale is this property's own flat; a bought deed that borrows its
+ * area from an advertisement says whose (a link to that property, plain text when it is the one on screen). With
+ * no building and no sale, no card. */
 
 const pricesKey = (propertyId: number) => ['property-building-prices', propertyId] as const;
 const NOTE = 'text-[0.78rem] text-[var(--color-ink-2)]';
@@ -98,7 +99,7 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
   const note = bought?.finished_at
     ? `ceny z katastru načteny ${fmtDateSlash(bought.finished_at)}`
     : 'registrované prodeje ve stejné budově';
-  const boughtNothing = !!bought && !rows.some((r) => r.source === 'katastr');
+  const boughtNothing = !!bought && (prices?.deeds ?? []).length === 0;
 
   return (
     <Panel title="Prodeje v domě" count={rows.length} note={note} accessory={accessory}>
@@ -211,16 +212,16 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => <SaleRowView key={row.key} row={row} />)}
+              {rows.map((row) => <SaleRowView key={row.key} row={row} propertyId={propertyId} />)}
             </tbody>
           </table>
         </div>
       )}
-      {rows.some((r) => r.source === 'katastr') ? (
+      {showsCadastre(rows) ? (
         <p className="text-xs text-[var(--color-ink-3)]">
-          Cena z katastru je za celou listinu a katastr neuvádí plochu. Kde inzerát v tomto domě žádal přesně stejnou
-          cenu, je plocha a dispozice převzatá z něj (odkaz „inzerát“); jinak je řádek bez ceny za m². Ceny z katastru
-          vidí jen váš účet. Zdroj: ČÚZK.
+          Cena z katastru je za celou listinu a katastr neuvádí plochu. Kde přesně tu cenu před prodejem žádal jediný
+          inzerát v tomto domě, je plocha a dispozice převzatá z něj (označeno „inzerát“); jinak je řádek bez ceny za
+          m². Ceny z katastru vidí jen váš účet. Zdroj: ČÚZK.
         </p>
       ) : null}
     </Panel>
@@ -231,7 +232,7 @@ const CELL = 'px-2.5 py-2 whitespace-nowrap';
 const LINK = 'underline decoration-[var(--color-rule-strong)] underline-offset-2 hover:text-[var(--color-copper)]';
 const NUM = `${CELL} text-right font-mono text-[13px] tabular-nums`;
 
-function SaleRowView({ row }: { row: SaleRow }) {
+function SaleRowView({ row, propertyId }: { row: SaleRow; propertyId: number }) {
   const link = advertLink(row);
   const price = row.price_czk == null ? '—' : row.currency && row.currency !== 'CZK'
     ? `${row.price_czk.toLocaleString('cs-CZ')} ${row.currency}`
@@ -246,12 +247,17 @@ function SaleRowView({ row }: { row: SaleRow }) {
       <td className={CELL}>{row.disposition ?? '—'}</td>
       <td className={NUM}>
         {fmtArea(row.area_m2)}
-        {row.area_property_id != null ? (
+        {row.area_property_id == null ? null : row.area_property_id === propertyId ? (
+          <span title="Plocha a dispozice podle inzerátu této nemovitosti, který žádal stejnou cenu"
+            className="ml-1.5 font-sans text-xs text-[var(--color-ink-3)]">
+            inzerát
+          </span>
+        ) : (
           <a href={propertyPath(row.area_property_id)} title="Plocha a dispozice podle inzerátu se stejnou cenou"
             className={`ml-1.5 font-sans text-xs ${LINK}`}>
             inzerát
           </a>
-        ) : null}
+        )}
       </td>
       <td className={NUM}>{price}</td>
       <td className={NUM}>{fmtMeasuredPricePerM2(row.price_per_m2, ppm2BasisFromToken(row.price_per_m2_basis))}</td>

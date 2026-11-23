@@ -421,13 +421,17 @@ def state(conn: psycopg.Connection, account_id: uuid.UUID, building_code: int) -
         purchase = cur.fetchone()
         cur.execute(_DEEDS_SQL, (account_id, account_id, building_code))
         deeds = cur.fetchall()
-    matched = cadastre_deed_matches.matches(conn, account_id, deeds[0]["purchase_id"], building_code) if deeds else {}
+    running = cuzk_login.run_live(conn, account_id)
+    # The card re-reads this state every few seconds while a run is live; the match is not worth that (it scans
+    # `listing_location` for the building's doors), so it waits for the run to end.
+    matched = (cadastre_deed_matches.matches(conn, account_id, deeds[0]["purchase_id"], building_code)
+               if deeds and not running else {})
     if purchase is not None:
         purchase = {**purchase, "requested_at": purchase["requested_at"].isoformat(),
                     "finished_at": purchase["finished_at"].isoformat() if purchase["finished_at"] else None}
     return {
         "price_czk": PRICE_CZK,
-        "running": cuzk_login.run_live(conn, account_id),
+        "running": running,
         "purchase": purchase,
         "deeds": [{**{k: v for k, v in d.items() if k not in ("id", "purchase_id")},
                    "price": float(d["price"]) if d["price"] is not None else None,

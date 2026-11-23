@@ -6206,10 +6206,12 @@ ruling 2026-11-22).
 
 **A bought deed borrows, never stores, an area (ruling 2026-11-23).** ČÚZK's price report states no area. A deed
 over exactly one unit is matched at READ time (`api/cadastre_deed_matches.py`) to what we hold of the same sale: a
-held sale of the building with its unit label and price, dated within the deed's signing-to-entry span (the card then shows that one row, the proceeding beside
-it), else an ad at a door of the building that asked exactly the deed's price before the deed was entered, kept
-only when unambiguous (one property, one area, no other deed at that price). The ad's area is shown with a link to
-its property; a deed over several units is one price for all of them and never gets a per-m² figure.
+held sale of the building with its unit label and price, dated within the deed's signing-to-entry span (the card
+then shows that one row, the proceeding beside it), else an ad at a door of the building that was asking exactly
+the deed's price in a snapshot no later than the deed's signing, kept only when unambiguous (one property, one
+area, no other deed at that price). The ad's area is shown with a link to its property; a deed over several units
+is one price for all of them and never gets a per-m² figure. The match scans `listing_location` by door (no index
+on `ruian_adm_kod`, ~160 ms on prod), so it is skipped while a run of the account is live and the card polls.
 
 ## Cross-reference map
 

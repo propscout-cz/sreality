@@ -3,10 +3,12 @@ has none), so the area is borrowed, named by its source, from a record we hold o
 
   reas  a registered sale of the building with the deed's unit label and the deed's price, dated within the deed's
         own span (signing to entry; the held sales seen carry the entry date): the same sale, held twice. A resale
-        of the unit at the same price in another year is another sale.
-  ad    an advertisement at a door of the building that asked exactly the deed's price at some point and was first
-        seen before the deed was entered. Kept only when it is unambiguous: one property among the ads at that
-        price, one area among them, and no other single-unit deed of the purchase at that price.
+        of the unit at the same price in another year is another sale, and a sale two deeds could claim is no
+        deed's.
+  ad    an advertisement at a door of the building that was asking exactly the deed's price in a snapshot taken
+        no later than the deed was signed (else took effect, else was entered): an ad repriced to that sum
+        afterwards is not evidence. Kept only when it is unambiguous: one property among the ads at that price,
+        one area among them, and no other single-unit deed of the purchase at that price.
 
 Only a deed over exactly one unit and no building is matched (one price over several units is no unit's price);
 reas wins over an ad. Nothing is stored: a read over the account's deeds, recomputed as ads and sales arrive. The
@@ -21,9 +23,11 @@ from psycopg.rows import dict_row
 
 _MATCH_SQL = """
 with deed as (
-  select d.id, d.price, coalesce(d.entered_on, d.effective_on, d.signed_on) as dated, u.label,
+  select d.id, d.price, u.label,
+         coalesce(d.signed_on, d.effective_on, d.entered_on) as agreed_on,
          least(d.signed_on, d.effective_on, d.entered_on) as first_on,
-         greatest(d.signed_on, d.effective_on, d.entered_on) as last_on
+         greatest(d.signed_on, d.effective_on, d.entered_on) as last_on,
+         count(*) over (partition by d.price) as at_this_price
     from cadastre_deeds d
    cross join lateral (
           select min(e->>'label') filter (where e->>'kind' = 'jednotka') as label,
@@ -33,12 +37,13 @@ with deed as (
    where d.account_id = %(account)s and d.purchase_id = %(purchase)s
      and d.currency = 'CZK' and d.price is not null and u.units = 1 and u.buildings = 0
 ), sale as (
-  select d.id, min(s.source_record_id) as source_record_id
-    from deed d
-    join sold_transactions s on s.building_code = %(building)s and s.unit_label = d.label and s.price_czk = d.price
-                               and s.sold_at between d.first_on and d.last_on
-   group by d.id
-  having count(*) = 1
+  select id, source_record_id
+    from (select d.id, s.source_record_id, count(*) over (partition by d.id) as sales_of_deed,
+                 count(*) over (partition by s.source, s.source_record_id) as deeds_of_sale
+            from deed d
+            join sold_transactions s on s.building_code = %(building)s and s.unit_label = d.label
+                                    and s.price_czk = d.price and s.sold_at between d.first_on and d.last_on) m
+   where sales_of_deed = 1 and deeds_of_sale = 1
 ), ad as (
   select d.id, min(l.property_id) as property_id, min(l.area_m2) as area_m2,
          case when count(distinct l.disposition) = 1 then min(l.disposition) end as disposition,
@@ -48,11 +53,10 @@ with deed as (
     join listing_location ll on ll.ruian_adm_kod = ap.kod_adm
     join listings l on l.id = ll.listing_id and l.category_type = 'prodej' and l.area_m2 is not null
                    and l.category_main not in ('pozemek', 'ostatni')
-                   and l.first_seen_at::date <= d.dated
     join properties p on p.id = l.property_id and p.status = 'active'
-   where (l.price_czk = d.price
-          or exists (select 1 from listing_snapshots s where s.listing_id = l.id and s.price_czk = d.price))
-     and (select count(*) from deed other where other.price = d.price) = 1
+   where d.at_this_price = 1
+     and exists (select 1 from listing_snapshots s
+                  where s.listing_id = l.id and s.price_czk = d.price and s.scraped_at::date <= d.agreed_on)
    group by d.id
   having count(distinct l.property_id) = 1 and count(distinct l.area_m2) = 1 and count(distinct l.category_main) = 1
 )
