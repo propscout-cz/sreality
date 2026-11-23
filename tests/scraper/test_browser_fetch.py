@@ -319,3 +319,52 @@ def test_rotating_a_closed_fetcher_is_refused_like_a_fetch() -> None:
     fetcher.close()
     with pytest.raises(BrowserTransportError):
         fetcher.rotate("403")
+
+
+def _subreaper(on: bool) -> None:
+    import ctypes
+    ctypes.CDLL("libc.so.6", use_errno=True).prctl(36, int(on), 0, 0, 0)
+
+
+def _zombie_children() -> set[int]:
+    import os
+    out = set()
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat") as fh:
+                rest = fh.read().rsplit(")", 1)[1].split()
+        except OSError:
+            continue
+        if rest[0] == "Z" and int(rest[1]) == os.getpid():
+            out.add(int(name))
+    return out
+
+
+@pytest.mark.skipif(not __import__("os").path.isdir("/proc/self"), reason="needs Linux /proc")
+def test_an_orphaned_chromium_helper_is_reaped_and_no_other_child_is(tmp_path) -> None:
+    """#2565: as PID 1 the worker inherits chromium's orphans; each one held a PID for good."""
+    import shutil
+    import subprocess
+
+    from scraper.browser_fetch import reap_browser_orphans
+
+    fake = tmp_path / "chrome-headless"
+    shutil.copy(shutil.which("true"), fake)
+    _subreaper(True)
+    try:
+        before = _zombie_children()
+        # The parent exits without waiting, so its child is handed to us, as to PID 1.
+        subprocess.run(["sh", "-c", f"{fake} & exec true"], check=True)
+        other = subprocess.Popen(["true"])
+        deadline = time.monotonic() + 5
+        while len(_zombie_children() - before) < 2 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert len(_zombie_children() - before) == 2
+        reaped, _held = reap_browser_orphans()
+        assert reaped == 1
+        assert _zombie_children() - before == {other.pid}
+        assert other.wait() == 0
+    finally:
+        _subreaper(False)
