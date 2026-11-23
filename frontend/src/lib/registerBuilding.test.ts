@@ -53,12 +53,18 @@ describe('registerFacts', () => {
 
   it('names every protection the register lists, under a row that names no kind', () => {
     const b = { ...BUILDING, protection: [{ code: 18, label: 'první' }, { code: 99, label: null }] };
-    expect(row('Ochrana', { has_lift: null }, b).value).toBe('první, kód 99');
+    expect(row('Ochrana', { has_lift: null }, b).value).toBe('první; kód 99');
   });
 
-  it('shows no protection row, and does not throw, on an answer from an API that serves no list yet', () => {
+  it('keeps two protections two when a label holds a comma', () => {
+    const b = { ...BUILDING, protection: [
+      { code: 17, label: 'pam. zóna - budova, pozemek v památkové zóně' }, { code: 18, label: 'nemovitá kulturní památka' }] };
+    expect(row('Ochrana', { has_lift: null }, b).value!.split('; ')).toHaveLength(2);
+  });
+
+  it('shows a gap, and does not throw, on an answer from an API that serves no list yet', () => {
     const { protection: _, ...older } = BUILDING;
-    expect(registerFacts(older as RegisterBuilding, { has_lift: null }).some((f) => f.label === 'Ochrana')).toBe(false);
+    expect(row('Ochrana', { has_lift: null }, older)).toEqual({ label: 'Ochrana', value: null });
   });
 
   it('says the register states none, which is not a gap in what it knows', () => {
