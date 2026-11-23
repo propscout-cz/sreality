@@ -83,7 +83,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from api import cadastre_price_report, cuzk_login, wsdp_client
+from api import cadastre_deed_matches, cadastre_price_report, cuzk_login, wsdp_client
 from api.building_scope import holds_no_building_ad
 
 LOG = logging.getLogger(__name__)
@@ -400,7 +400,8 @@ select id, status, cost_czk, object_count, requested_at, finished_at,
 # The deeds shown are those of the newest purchase that HAS deeds: a later purchase that read none must not hide
 # what an earlier one bought.
 _DEEDS_SQL = """
-select d.proceeding, d.kind, d.price, d.currency, d.signed_on, d.effective_on, d.entered_on, d.properties
+select d.id, d.purchase_id, d.proceeding, d.kind, d.price, d.currency, d.signed_on, d.effective_on, d.entered_on,
+       d.properties
   from cadastre_deeds d
  where d.account_id = %s
    and d.purchase_id = (select p.id from cadastre_price_purchases p
@@ -413,12 +414,14 @@ select d.proceeding, d.kind, d.price, d.currency, d.signed_on, d.effective_on, d
 
 def state(conn: psycopg.Connection, account_id: uuid.UUID, building_code: int) -> dict[str, Any]:
     """The account's newest purchase of the building that did not end uncharged, the deeds it holds for the
-    building, and whether a request of the account is live right now. A read: it calls nothing at ČÚZK."""
+    building (each with what we hold of the same sale, `cadastre_deed_matches`), and whether a request of the account
+    is live right now. A read: it calls nothing at ČÚZK."""
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(_STATE_SQL, (account_id, building_code))
         purchase = cur.fetchone()
         cur.execute(_DEEDS_SQL, (account_id, account_id, building_code))
         deeds = cur.fetchall()
+    matched = cadastre_deed_matches.matches(conn, account_id, deeds[0]["purchase_id"], building_code) if deeds else {}
     if purchase is not None:
         purchase = {**purchase, "requested_at": purchase["requested_at"].isoformat(),
                     "finished_at": purchase["finished_at"].isoformat() if purchase["finished_at"] else None}
@@ -426,8 +429,10 @@ def state(conn: psycopg.Connection, account_id: uuid.UUID, building_code: int) -
         "price_czk": PRICE_CZK,
         "running": cuzk_login.run_live(conn, account_id),
         "purchase": purchase,
-        "deeds": [{**d, "price": float(d["price"]) if d["price"] is not None else None,
-                   **{k: d[k].isoformat() if d[k] else None for k in ("signed_on", "effective_on", "entered_on")}}
+        "deeds": [{**{k: v for k, v in d.items() if k not in ("id", "purchase_id")},
+                   "price": float(d["price"]) if d["price"] is not None else None,
+                   **{k: d[k].isoformat() if d[k] else None for k in ("signed_on", "effective_on", "entered_on")},
+                   "match": matched.get(d["id"])}
                   for d in deeds],
     }
 

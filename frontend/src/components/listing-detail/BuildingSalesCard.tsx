@@ -8,6 +8,7 @@ import {
 } from '@/lib/api';
 import { saleRows, type SaleRow } from '@/lib/buildingSales';
 import { fmtArea, fmtCzk, fmtDateSlash, fmtMeasuredPricePerM2 } from '@/lib/format';
+import { propertyPath } from '@/lib/listingUrl';
 import { ppm2BasisFromToken } from '@/lib/measure';
 import { advertLink } from '@/lib/portals';
 
@@ -217,8 +218,9 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
       )}
       {rows.some((r) => r.source === 'katastr') ? (
         <p className="text-xs text-[var(--color-ink-3)]">
-          Cena z katastru je za celou listinu a katastr neuvádí plochu, proto je bez ceny za m². Ceny z katastru vidí jen
-          váš účet. Zdroj: ČÚZK.
+          Cena z katastru je za celou listinu a katastr neuvádí plochu. Kde inzerát v tomto domě žádal přesně stejnou
+          cenu, je plocha a dispozice převzatá z něj (odkaz „inzerát“); jinak je řádek bez ceny za m². Ceny z katastru
+          vidí jen váš účet. Zdroj: ČÚZK.
         </p>
       ) : null}
     </Panel>
@@ -226,6 +228,7 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
 }
 
 const CELL = 'px-2.5 py-2 whitespace-nowrap';
+const LINK = 'underline decoration-[var(--color-rule-strong)] underline-offset-2 hover:text-[var(--color-copper)]';
 const NUM = `${CELL} text-right font-mono text-[13px] tabular-nums`;
 
 function SaleRowView({ row }: { row: SaleRow }) {
@@ -241,18 +244,30 @@ function SaleRowView({ row }: { row: SaleRow }) {
         {row.also ? <span className="ml-1.5 font-sans text-xs text-[var(--color-ink-3)]">{row.also}</span> : null}
       </td>
       <td className={CELL}>{row.disposition ?? '—'}</td>
-      <td className={NUM}>{fmtArea(row.area_m2)}</td>
+      <td className={NUM}>
+        {fmtArea(row.area_m2)}
+        {row.area_property_id != null ? (
+          <a href={propertyPath(row.area_property_id)} title="Plocha a dispozice podle inzerátu se stejnou cenou"
+            className={`ml-1.5 font-sans text-xs ${LINK}`}>
+            inzerát
+          </a>
+        ) : null}
+      </td>
       <td className={NUM}>{price}</td>
       <td className={NUM}>{fmtMeasuredPricePerM2(row.price_per_m2, ppm2BasisFromToken(row.price_per_m2_basis))}</td>
       <td className={`${CELL} text-[var(--color-ink-2)]`}>
         {row.source === 'katastr' ? (
           <span title={row.proceeding ?? undefined}>Katastr <span className="font-mono text-xs text-[var(--color-ink-3)]">{row.proceeding}</span></span>
         ) : link ? (
-          <a href={link} target="_blank" rel="noreferrer"
-            className="underline decoration-[var(--color-rule-strong)] underline-offset-2 hover:text-[var(--color-copper)]">
+          <a href={link} target="_blank" rel="noreferrer" className={LINK}>
             Reas
           </a>
         ) : 'Reas'}
+        {row.source === 'reas' && row.proceeding ? (
+          <span className="ml-1.5" title="Stejný prodej je i ve vaší sestavě z katastru">
+            + katastr <span className="font-mono text-xs text-[var(--color-ink-3)]">{row.proceeding}</span>
+          </span>
+        ) : null}
       </td>
     </tr>
   );

@@ -20,7 +20,35 @@ describe('saleRows', () => {
       ['katastr', '565/14', '2025-03-04'], ['reas', '565/54', '2023-09-12']]);
   });
 
-  it('never gives a deed an area or a per-m² figure', () => {
+  it('shows a deed matched to a held sale as that sale, once, with the proceeding beside it', () => {
+    const rows = saleRows([SALE], [deed({ match: {
+      source: 'reas', source_record_id: SALE.source_record_id, property_id: null, area_m2: null, disposition: null,
+      price_per_m2: null, price_per_m2_basis: null } })]);
+    expect(rows.map((r) => [r.source, r.unit, r.proceeding, r.area_m2])).toEqual([['reas', '565/54', 'V-1/2025-101', 61]]);
+  });
+
+  it('keeps a deed whose matched sale is not in the list', () => {
+    const rows = saleRows([], [deed({ match: {
+      source: 'reas', source_record_id: 'gone', property_id: null, area_m2: null, disposition: null,
+      price_per_m2: null, price_per_m2_basis: null } })]);
+    expect(rows.map((r) => r.source)).toEqual(['katastr']);
+  });
+
+  it('lends a deed the area of the advertisement that asked its price, and names the property', () => {
+    const [row] = saleRows([], [deed({ match: {
+      source: 'ad', source_record_id: null, property_id: 71257, area_m2: 18, disposition: '1+kk',
+      price_per_m2: 358333, price_per_m2_basis: 'sale_capital_czk_m2' } })]);
+    expect([row.area_m2, row.disposition, row.price_per_m2, row.price_per_m2_basis, row.area_property_id])
+      .toEqual([18, '1+kk', 358333, 'sale_capital_czk_m2', 71257]);
+  });
+
+  it('names a deed over many units as one price for all of them', () => {
+    const properties = [1, 2, 3, 4].map((n) => ({ kind: 'jednotka' as const, iskn_id: n, label: `597/${n}` }));
+    const [row] = saleRows([], [deed({ properties })]);
+    expect([row.unit, row.scope]).toEqual([null, '4 jednotky za jednu cenu']);
+  });
+
+  it('gives an unmatched deed no area and no per-m² figure', () => {
     const [row] = saleRows([], [deed({})]);
     expect([row.area_m2, row.price_per_m2, row.price_per_m2_basis]).toEqual([null, null, null]);
   });
