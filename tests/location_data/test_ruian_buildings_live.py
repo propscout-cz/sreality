@@ -304,3 +304,32 @@ def test_a_vanished_building_under_a_superseded_unit_row_is_still_closed(conn, w
         cur.execute("select obec_unit_id from ruian_building_objects where code = %s and valid_to is null",
                     (other.code,))
         assert cur.fetchall() == [(renamed,)]
+
+
+def test_the_card_read_names_each_protection_and_keeps_a_code_the_list_does_not_hold(conn, world):
+    from api.property_building import load_building
+
+    listed = dataclasses.replace(BUILDING, protection_codes=(16, 18, 999))
+    plain = dataclasses.replace(BUILDING, code=77000002, protection_codes=())
+    _load(conn, world, [listed, plain, ruian_vfr.AddressLink(ADM, listed.code),
+                        ruian_vfr.AddressLink(OTHER_ADM, plain.code)])
+    properties = []
+    with conn.cursor() as cur:
+        for native, door in (("766-a", ADM), ("766-b", OTHER_ADM)):
+            cur.execute(
+                "insert into listings (source, source_id_native, raw_json, category_main, category_type) "
+                "values ('bazos', %s, '{}'::jsonb, 'byt', 'prodej') returning id", (native,))
+            listing = int(cur.fetchone()[0])
+            cur.execute(
+                "insert into listing_location (listing_id, match_confidence, granularity, uncertainty_radius_m, "
+                "country_status, resolver_version, claim_set_hash, registry_version, kraj_kod, okres_kod, obec_kod, "
+                "ruian_adm_kod) values (%s, 'exact', 'building', 5, 'cz', 'test', '\\x00'::bytea, 'test', 99, 9991, "
+                "%s, %s)", (listing, OBEC, door))
+            cur.execute("insert into properties (status, location_listing_ref_id, repr_listing_ref_id) "
+                        "values ('active', %s, %s) returning id", (listing, listing))
+            properties.append(int(cur.fetchone()[0]))
+    assert load_building(conn, properties[0])["protection"] == [
+        {"code": 16, "label": "pam. rezervace - budova, pozemek v památkové rezervaci"},
+        {"code": 18, "label": "nemovitá kulturní památka"},
+        {"code": 999, "label": None}]
+    assert load_building(conn, properties[1])["protection"] == []

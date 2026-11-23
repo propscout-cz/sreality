@@ -701,6 +701,9 @@ export interface RegisterBuilding {
   water: RegisterCode | null;
   sewer: RegisterCode | null;
   gas: RegisterCode | null;
+  /* The zones and regimes the register lists for the building (heritage, nature, water source…); empty = none
+   * stated. A null label is a code our list does not hold. */
+  protection: { code: number; label: string | null }[];
 }
 export const fetchPropertyBuilding = (propertyId: number): Promise<{ building: RegisterBuilding | null }> =>
   request<{ building: RegisterBuilding | null }>(`/properties/${propertyId}/building`);

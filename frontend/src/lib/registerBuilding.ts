@@ -62,6 +62,12 @@ export function registerFacts(b: RegisterBuilding, ad: AdFacts): RegisterFact[] 
     { label: 'Plyn', value: coded(b.gas) },
     { label: 'Zastavěná plocha', value: area(b.built_up_area_m2) },
     { label: 'Podlahová plocha', value: area(b.floor_area_m2) },
+    /* Not only heritage: the list holds nature and water-source zones too, so the row names no kind. An empty
+     * list is the register stating none, which is not the same as not knowing. */
+    {
+      label: 'Ochrana',
+      value: b.protection.length ? b.protection.map((p) => p.label ?? `kód ${p.code}`).join(', ') : 'registr žádnou neuvádí',
+    },
   ];
 }
 
