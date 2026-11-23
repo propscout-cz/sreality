@@ -41,6 +41,9 @@ VIEWS: tuple[str, ...] = ("table", "line", "bar", "box")
 # The pivot RPC's refusals and the cohort status facts (migration 626), in the one place that names them.
 REFUSALS: tuple[str, ...] = ("empty", "mixed_category", "mixed_status", "too_many_cells", "bad_spec")
 STATUSES: tuple[str, ...] = ("active", "inactive", "mixed")
+# The sample lens "sold market"'s time on market, (min, max) days inclusive (operator 2026-10-22): the twin of
+# frontend/src/lib/stats.ts SOLD_MARKET_DAYS, pinned by tests/api/test_market_evidence.py.
+SOLD_MARKET_DAYS: tuple[int, int] = (2, 60)
 
 
 @dataclass(frozen=True)

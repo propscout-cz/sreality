@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from tests._live_property import REQUIRED_DB, _account, cur  # noqa: F401 -- `cur` is the fixture
+from tests._live_property import REQUIRED_DB, _account
 
 pytestmark = REQUIRED_DB
 

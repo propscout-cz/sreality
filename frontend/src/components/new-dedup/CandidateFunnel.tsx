@@ -7,11 +7,9 @@
  * the two pages disagree about how many listings the program can even see.
  *
  * W16 — IT IS ALSO ONE VOCABULARY. The chain comes from `stats.waterfall`: rows
- * the lane stamped with the SHARED step keys (location_data/location_steps.py),
- * the same keys, kinds and columns `location_audit_waterfall` writes hourly for
- * `/new-dedup/pin-audit`. The step names and the sentences under them come from
- * `lib/locationSteps.ts`, which is where a step is worded for both languages and
- * both pages at once. Nothing is spelled here.
+ * the lane stamped with the SHARED step keys (location_data/location_steps.py).
+ * The step names and the sentences under them come from `lib/locationSteps.ts`,
+ * which is where a step is worded. Nothing is spelled here.
  *
  * THIS COMPONENT DOES NO ARITHMETIC. Counts, losses and shares are computed once
  * by the lane; a browser that re-derived a step would be a second definition of
@@ -24,11 +22,8 @@
  * "has a location", printed indented under it and never as a drop. The town
  * step's loss is exactly those two rows.
  *
- * TWO HONEST DIFFERENCES FROM THE AUDIT PAGE, both printed rather than hidden:
- * a run can be scoped to active listings only, and a run's numbers are frozen at
- * the moment it counted them while the audit page refreshes hourly. That is the
- * reading that was missing when two identical predicates looked like a
- * contradiction.
+ * PRINTED RATHER THAN HIDDEN: a run can be scoped to active listings only, and a
+ * run's numbers are frozen at the moment it counted them.
  *
  * A RUN THAT PREDATES W16 carries no `waterfall`, so the chain renders as one
  * line saying so — a gap, never a zero.
@@ -57,21 +52,14 @@ const SCOPE_TEXT: Record<string, string> = {
   active: 'only listings active today',
 };
 
-/* The one line that makes this chain comparable with the hourly audit page:
- * WHICH listings the run looked at, and WHEN it counted them. */
+/* WHICH listings the run looked at, and WHEN it counted them. */
 function AsOf({ stats }: { stats: NewDedupCandidateStats }) {
   const scope = stats.scope ? (SCOPE_TEXT[stats.scope] ?? stats.scope) : null;
   if (!scope && !stats.computed_at) return null;
   return (
     <p className="mb-3 text-[0.72rem] leading-relaxed text-[var(--color-ink-3)]">
       {scope ? <>Scope: {scope}. </> : null}
-      {stats.computed_at ? (
-        <>
-          Counted {fmtAbsolute(stats.computed_at)} and frozen with the run — the location
-          audit page asks the same questions of the live database every hour, so the two
-          differ by time as well as by scope.
-        </>
-      ) : null}
+      {stats.computed_at ? <>Counted {fmtAbsolute(stats.computed_at)} and frozen with the run.</> : null}
     </p>
   );
 }

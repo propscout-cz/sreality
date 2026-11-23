@@ -12,7 +12,6 @@ import Shell from '@/components/Shell';
 import * as api from '@/lib/api';
 import { ApiError } from '@/lib/api';
 import * as auth from '@/lib/auth';
-import * as pinAudit from '@/lib/pinAudit';
 import { PHONE_SHELL_QUERY } from '@/lib/phoneShell';
 import { SERVER_KEY_B64, installPushFakes, type PushFakes } from '@/test/pushFakes';
 
@@ -26,10 +25,6 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   getPushKey: vi.fn(),
   putPushSubscription: vi.fn(),
   deletePushSubscription: vi.fn(),
-}));
-vi.mock('@/lib/pinAudit', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/pinAudit')>()),
-  fetchPinAuditTotal: vi.fn(),
 }));
 vi.mock('@/lib/supabase', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/supabase')>()),
@@ -65,7 +60,6 @@ beforeEach(() => {
     dispatchEvent: () => false,
   })) as unknown as typeof window.matchMedia;
   vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 0 });
-  vi.mocked(pinAudit.fetchPinAuditTotal).mockResolvedValue(0);
   vi.mocked(api.getPushKey).mockResolvedValue({ public_key: SERVER_KEY_B64 });
   vi.mocked(api.putPushSubscription).mockImplementation(async () => {
     fakes.log.push('PUT');

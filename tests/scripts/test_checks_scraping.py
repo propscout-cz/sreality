@@ -19,9 +19,9 @@ from scraper.db import QUEUE_PRIORITY_NEW, nominable_predicate
 from scraper.portal_runner import DECLARED_TOTAL_KEY
 from scripts.checks import common
 from scripts.checks import scraping as sc
-from scripts.checks.common import wilson_lower
 from tests.scripts.test_checks_platform import _Conn
 from tests.scripts.test_checks_platform_replay import _incidents, _told
+from toolkit.measures import wilson_lower
 
 _UTC = _dt.timezone.utc
 _NOW = _dt.datetime(2026, 10, 19, 6, 0, tzinfo=_UTC)

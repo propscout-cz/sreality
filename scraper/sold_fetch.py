@@ -9,7 +9,7 @@ returns a status; the one thing it cannot do is raise into the worker lane, beca
 a cell that failed silently is indistinguishable from a cell that holds no sales.
 The one attempt that writes nothing — an obec with no boundary polygon, which has no
 box to key the row on — is unreachable from the lane by construction: the work-list
-joins `admin_boundaries`, so an unboxable cell is never offered as work. It stays
+joins `ruian_unit_render`, so an unboxable cell is never offered as work. It stays
 reachable from the CLI, where the operator names the obec.
 
 AND AN `ok` ROW SAYS WHAT IT COVERED. A walk the page cap or a non-advancing
@@ -35,7 +35,7 @@ from typing import Any
 
 import psycopg
 
-from scraper import sold_db
+from scraper import sold_db, stop
 from scraper.rate_ledger import RateBudgetUnavailable
 # `build_client` and `SOURCE` are re-exported: the worker lane opens its client and
 # names its ledger through this module, so shared code never imports a source's own.
@@ -121,16 +121,16 @@ def fetch_cell(
     *,
     max_pages: int = MAX_PAGES,
 ) -> dict[str, Any]:
-    """Fetch, store and record one obec cell. Raises only RateBudgetUnavailable: the
-    shared ledger refused the run, which is not this cell's failure, so it records
-    nothing and the caller stops."""
+    """Fetch, store and record one obec cell. Raises only RateBudgetUnavailable (the
+    shared ledger refused the run) or StopRequested (a stop signal): neither is this
+    cell's failure, so it records nothing and the caller stops."""
     started = time.monotonic()
     box: sold_db.CellBox | None = None
     try:
         box = sold_db.obec_cell_box(conn, obec_kod)
         if box is None:
             # No polygon, so no cell and no box to key a ledger row on. The lane
-            # cannot get here (its work-list joins `admin_boundaries`); the CLI can,
+            # cannot get here (its work-list joins `ruian_unit_render`); the CLI can,
             # because there the operator names the obec.
             return _result(obec_kod, "skipped", started,
                            error="obec has no boundary polygon")
@@ -146,7 +146,7 @@ def fetch_cell(
             record_count=stored, source_total=walk.source_total, pages=walk.pages,
             error=truncated,
         )
-    except RateBudgetUnavailable:
+    except (RateBudgetUnavailable, stop.StopRequested):
         raise
     except Exception as exc:  # noqa: BLE001 - a cell failure is a ledger row
         error = f"{type(exc).__name__}: {exc}"[:_ERROR_MAX]

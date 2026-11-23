@@ -1,0 +1,52 @@
+/* The user's appearance on the shadow roots the extension mounts and on the side
+ * panel's own page. Each takes the app's tokens.css, whose `:host(…)` / `:root`
+ * selectors read `data-scheme` and `data-theme` off the HOST (the page's: <html>),
+ * so ONE call, themeHost, stamps it by the app's paint rule (lib/appearance). The
+ * pick is the profile's, served by get_auth_state from the session token: asked at
+ * start and whenever the stored session changes (a sign-in or sign-out, or the
+ * refresh that carries a new pick); `system` follows the OS while the page is open. */
+
+import { DEFAULT_APPEARANCE, followSystemDark, paintAppearance, type Appearance } from '../../frontend/src/lib/appearance';
+import { SESSION_KEY, onStoredChange } from './session';
+import type { Store } from './store';
+import type { AuthState } from './types';
+
+type Pin = 'light' | undefined;
+/* Weak, so a host the page or a surface has removed is collected, not kept
+ * here; its dead ref goes at the next themeHost or repaint. */
+const hosts = new Map<WeakRef<Element>, Pin>();
+let current: Appearance = DEFAULT_APPEARANCE;
+const systemDark = followSystemDark(() => { if (current.theme === 'system') repaint(); });
+
+const paint = (host: Element, pin: Pin): void =>
+  paintAppearance(host, pin ? { ...current, theme: pin } : current, systemDark);
+
+function repaint(): void {
+  for (const [ref, pin] of hosts) {
+    const host = ref.deref();
+    if (host == null) hosts.delete(ref);
+    else paint(host, pin);
+  }
+}
+
+/* `pin` keeps the user's scheme on its light side whatever their theme: for
+ * paint laid over a photo, whose white type needs the light tones under it. */
+export function themeHost(host: Element, pin?: 'light'): void {
+  for (const ref of hosts.keys()) if (ref.deref() == null) hosts.delete(ref);
+  hosts.set(new WeakRef(host), pin);
+  paint(host, pin);
+}
+
+/* The profile's pick, asked through the context's store, on every host themed here. */
+export function followAppearance(store: Pick<Store, 'call'>): void {
+  const ask = (): void => {
+    void store.call<AuthState>({ type: 'get_auth_state' }).then((auth) => {
+      const next = auth.ok ? auth.data.appearance : null;
+      if (next == null || (next.scheme === current.scheme && next.theme === current.theme)) return;
+      current = next;
+      repaint();
+    });
+  };
+  ask();
+  onStoredChange(SESSION_KEY, ask);
+}

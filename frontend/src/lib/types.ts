@@ -1,7 +1,7 @@
 /* Wire shapes mirroring the public views from migration 008. Only the columns
  * the UI actually reads are typed here; expand as Parts B–E need more. */
 
-import type { DistrictChip, ListingFilters, MapBounds, PresetSpec } from './filters';
+import type { DistrictChip, ListingFilters, MapBounds, MapCircle, PresetSpec } from './filters';
 import type { ReferenceRent } from './mfReference';
 
 /* The whole Czech grammar, 1 through 9 — the same span
@@ -151,9 +151,6 @@ export interface ImagePublic {
   clip_fine_tag: string | null;
   clip_logical_tag: string | null;
   clip_confidence: number | null;
-  /* CLIP render-vs-photo score 0..1 (migration 239): >= ~0.65 is a 3D render /
-   * visualization (excluded from the byt merge signal). NULL until scored. */
-  clip_render_score: number | null;
   /* 64-bit dHash perceptual hash (migration 308), as Postgres's signed bigint —
    * a display value for image-audit surfaces. NULL until hashed. */
   phash: number | null;
@@ -162,11 +159,11 @@ export interface ImagePublic {
    * cover); NULL when the active model has not scored the photo. */
   tag_head_scores?: Record<string, number> | null;
 }
-/* A photo for the shared lightbox without an image row's CLIP/pHash facts (its badges self-guard on null):
+/* A photo for the shared lightbox without an image row's CLIP/pHash facts (its tag badge self-guards on null):
  * a stored copy by `storage_path`, or an outside photo by its own URL. */
 export const bareImage = (id: number, storage_path: string | null, sreality_url = ''): ImagePublic => ({
   id, sreality_id: 0, sequence: null, sreality_url, storage_path,
-  clip_fine_tag: null, clip_logical_tag: null, clip_confidence: null, clip_render_score: null, phash: null,
+  clip_fine_tag: null, clip_logical_tag: null, clip_confidence: null, phash: null,
 });
 
 /* -------------------------------------------------------------------------- */
@@ -521,7 +518,7 @@ export interface EstimationListResponse {
 /* -------------------------------------------------------------------------- */
 
 /* Mirrors the 024 CHECK constraint + api/schemas.TagColor. Adding a new
- * colour requires a migration + a globals.css token + a bump here. */
+ * colour requires a migration + a tokens.css token + a bump here. */
 export type TagColor =
   | 'copper' | 'sage' | 'brick' | 'ochre'
   | 'slate'  | 'plum' | 'teal'  | 'sand';
@@ -538,9 +535,9 @@ export interface Collection {
   created_at: string;
   updated_at: string;
   listing_count: number;
-  /* Monitored collections raise change alerts on their member properties
-   * (price moves, delisting). `is_system` marks the protected default
-   * "monitoring" collection (can't be renamed or deleted). */
+  /* Monitored collections raise change alerts on their member properties,
+   * of the kinds in `notify_kinds` (migration 735). `is_system` marks the
+   * protected default "monitoring" collection (can't be renamed or deleted). */
   monitoring_enabled: boolean;
   is_system: boolean;
   /* Sharing (migration 610). `owner_email` is null exactly when the caller owns
@@ -550,6 +547,8 @@ export interface Collection {
   /* The owner sees every recipient; a recipient sees only its own grant, with
    * `email: null` (= you) — that account_id is the key to leave. */
   shared_with: CollectionShare[];
+  /* The property events it tells while monitored; all five by default. */
+  notify_kinds: CollectionKind[];
 }
 
 export interface CollectionShare {
@@ -611,6 +610,9 @@ export interface Attachment {
 }
 
 
+/* The stage roles migration 734 allows; one stage per role per account. */
+export type PipelineStageRole = 'viewing';
+
 /* The kanban columns (pipeline_stages_public, operator-curated). */
 export interface PipelineStage {
   id: number;
@@ -623,6 +625,9 @@ export interface PipelineStage {
   /* Short operator-owned badge shown inside the funnel (migration 377). NULL =
    * fall back to the stage's 1-based ordinal among live stages. */
   code: string | null;
+  /* What the stage means to the app, whatever its label (migration 734): `viewing`
+   * = where a property waits for its viewing. NULL or absent = no role. */
+  role?: PipelineStageRole | null;
   /* The stage's latest delegated edit (migration 641's view columns; null when
    * none). Only the view read carries them — the API's stage writes do not. */
   edited_by_account_id?: string | null;
@@ -693,9 +698,7 @@ export interface PipelineBoardCard {
   price_change_count: number | null;
   /* The five RÚIAN codes the ONE place predicate tests (lib/districtCodes) —
    * the board filters its cards in the browser, so it carries the same codes
-   * the server-side predicate uses. `obec_id` doubles as the join key to the
-   * curated-city index strip (= curated_cities.admin_boundary_id; see
-   * lib/useCityQuality). */
+   * the server-side predicate uses. */
   obec_id: number | null;
   cast_obce_id: number | null;
   ulice_id: number | null;
@@ -920,12 +923,12 @@ export interface WatchdogFilterSpec {
   // Portal-agnostic property sub-type (multi-select; matches any).
   subtype: string[] | null;
   dispositions: string[] | null;
-  /* The map box (rule 16): the ONE spatial shape, what Browse filters on — its
-   * viewport, or the square around a centre+radius pick (filters.effectiveBbox)
-   * — so a watchdog saved from Browse watches the rows Browse showed. The
-   * matcher renders it as the same lat/lng band (api/location_filter
-   * .bounds_where). Null = no map area. */
+  /* The map area (rule 16): a box (Browse's viewport) or a true circle (its
+   * centre + radius), never both — what Browse filters on, so a watchdog saved
+   * from Browse watches the rows Browse showed. The matcher tests it with the
+   * same predicate (api/location_filter.area_where, `in_map_area`). Null = none. */
   bounds: MapBounds | null;
+  circle: MapCircle | null;
   /* Place, as chips. Each chip is a LEVEL plus a RÚIAN CODE — the one
    * predicate Browse, Stats, the map and the watchdog matcher share
    * (rule 16, lib/districtCodes + api/location_filter). `context` is
@@ -1020,6 +1023,7 @@ export const DEFAULT_WATCHDOG_FILTER_SPEC: WatchdogFilterSpec = {
   subtype: null,
   dispositions: null,
   bounds: null,
+  circle: null,
   districts: null,
   min_price_czk: null,
   max_price_czk: null,
@@ -1075,6 +1079,8 @@ export interface WatchdogSubscription {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  /* The property events this watchdog tells, once each in KIND_ORDER (migration 735). */
+  notify_kinds: WatchdogKind[];
   dispatch_count: number;
 }
 
@@ -1132,6 +1138,9 @@ export interface SavedDashboard {
    * 664); always false on a dashboard shared with the caller. Optional while an API without
    * it may answer (a deploy skew reads as "none"). */
   property_card?: boolean;
+  /* The "Malé vzorky" switch saved with the dashboard (migration 681): cells under the
+   * minimum show min, průměr, medián, max. Optional while an API without it may answer. */
+  show_small?: boolean;
 }
 
 export type NotificationSourceKind =
@@ -1155,6 +1164,26 @@ export type DispatchChangeKind =
   | 'shared_dashboard'
   | 'shared_pipeline';
 
+/* The property events a watchdog can tell (api/notifications.WatchdogKind). */
+export type WatchdogKind = Extract<
+  DispatchChangeKind,
+  'new' | 'price_drop' | 'price_rise' | 'inactive' | 'reactivated' | 'new_source'
+>;
+
+/* The ones a watched collection can tell: all but New match, as a property it holds is never new
+ * to it (api/notifications.CollectionKind). */
+export type CollectionKind = Extract<
+  DispatchChangeKind,
+  'price_drop' | 'price_rise' | 'inactive' | 'reactivated' | 'new_source'
+>;
+
+/* Any kind a watchdog or a collection can be set to tell. */
+export type NotifyKind = WatchdogKind | CollectionKind;
+
+/* Why a New match entered its watchdog's slice (api/notifications.MATCH_REASONS, migration 735);
+ * null on every other kind, and on a New match told before 735 (each newly listed). */
+export type MatchReason = 'listed' | 'back' | 'price' | 'portal' | 'changed' | 'other';
+
 export interface WatchdogDispatch {
   id: string;
   /* Unified event model (migration 206). `source_kind` says which producer
@@ -1170,6 +1199,9 @@ export interface WatchdogDispatch {
    * fired ('new' = newly matched the filter, 'price_drop' = a recent price
    * decrease). */
   property_id: number | null;
+  /* The ad the event fired on (listings.id), whose cover the feed row shows;
+   * null on a share. */
+  listing_id: number | null;
   change_kind: DispatchChangeKind;
   /* What a `share` row shares: the kind (the API reads it off change_kind,
    * migration 652), and its id off the row's own columns — the collection id, the
@@ -1190,6 +1222,8 @@ export interface WatchdogDispatch {
    * latest-wins: the new and the previous price. */
   trigger_price_czk: number | null;
   prev_price_czk: number | null;
+  /* A New match's why (a price reason carries both prices above). */
+  match_reason: MatchReason | null;
   /* Listing-side fields joined via the matcher's LEFT JOIN. Null when
    * the listing has been hard-deleted (shouldn't happen — architectural
    * rule #3 forbids deletes — but render defensively). */

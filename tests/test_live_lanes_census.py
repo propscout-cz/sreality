@@ -1,0 +1,114 @@
+"""Every test module that needs a database is named by a migrations.yml step that hands it one.
+
+test.yml runs pytest with no database, so a module that reads TEST_DATABASE_URL only ever skips
+there; until a schema-and-sql step that sets TEST_DATABASE_URL names it, it has never run.
+A module needs a database when it holds the "TEST_DATABASE_URL" literal, imports a tests/ helper
+that does (tests._live_property, tests._tenant_scope, or any helper importing one of them), or asks
+for the shared rollback-always `cur` fixture without defining its own; a docstring that merely
+mentions the name does not count.
+"""
+
+from __future__ import annotations
+
+import ast
+import functools
+import re
+from pathlib import Path
+
+import yaml
+
+SELF = Path(__file__).resolve()
+ROOT = SELF.parents[1]
+WORKFLOW = ROOT / ".github" / "workflows" / "migrations.yml"
+_URL = "TEST_DATABASE_URL"
+_CUR = re.compile(r"\bcur\b")
+
+
+def _test(path: Path) -> bool:
+    return path.name.startswith("test_")
+
+
+def _module(path: Path) -> str:
+    return ".".join(path.relative_to(ROOT).with_suffix("").parts)
+
+
+def _reads_url(tree: ast.Module) -> bool:
+    return any(isinstance(n, ast.Constant) and n.value == _URL for n in ast.walk(tree))
+
+
+def _requests_cur(tree: ast.Module) -> bool:
+    fns = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    return not any(f.name == "cur" for f in fns) and any(
+        (f.name.startswith("test_") or any("fixture" in ast.unparse(d) for d in f.decorator_list))
+        and any(a.arg == "cur" for a in f.args.args)
+        for f in fns
+    )
+
+
+def _imports(path: Path, tree: ast.Module) -> set[str]:
+    """Every dotted name an import statement could bind, `from a import b` giving both a and a.b."""
+    names: set[str] = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            names.update(a.name for a in n.names)
+        elif isinstance(n, ast.ImportFrom):
+            base = n.module or ""
+            if n.level:
+                package = _module(path).split(".")[: -n.level]
+                base = ".".join([*package, base] if base else package)
+            names.add(base)
+            names.update(f"{base}.{a.name}" for a in n.names)
+    return names
+
+
+@functools.cache
+def _needs_database() -> frozenset[str]:
+    # Parsing all of tests/ costs ~5 s; a file can hold the literal, import a helper or ask for `cur`
+    # only if its text names the literal, the helper's last dotted part or `cur`, so only those are parsed.
+    texts = {p: p.read_text(encoding="utf-8") for p in (ROOT / "tests").rglob("*.py")}
+    trees: dict[Path, ast.Module] = {}
+    helpers: set[str] = set()
+    marks = {_URL}
+    while True:
+        trees.update(
+            (p, ast.parse(text)) for p, text in texts.items()
+            if p not in trees and (any(m in text for m in marks) or _test(p) and _CUR.search(text))
+        )
+        needs = {
+            p for p, t in trees.items()
+            if _reads_url(t) or _imports(p, t) & helpers or _test(p) and _requests_cur(t)
+        }
+        more = {_module(p) for p in needs if not _test(p)} - helpers
+        if not more:
+            break
+        helpers |= more
+        marks |= {m.rsplit(".", 1)[-1] for m in more}
+    return frozenset(p.relative_to(ROOT).as_posix() for p in needs if _test(p) and p != SELF)
+
+
+def _laned() -> set[str]:
+    steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["schema-and-sql"]["steps"]
+    return {
+        token
+        for step in steps
+        if _URL in (step.get("env") or {}) and "pytest" in step.get("run", "")
+        for token in step["run"].split()
+        if token.endswith(".py")
+    }
+
+
+def test_every_database_module_is_named_by_a_migrations_step() -> None:
+    missing = sorted(_needs_database() - _laned())
+    assert not missing, (
+        f"these modules need a database but no schema-and-sql step that sets {_URL} names them, "
+        f"so they only ever skip: {missing}. Add a step to .github/workflows/migrations.yml beside "
+        f"its neighbours (env {_URL} + DB_RAILS_REQUIRED: \"1\", `pytest <module> -q`)."
+    )
+
+
+def test_the_census_sees_every_kind_of_database_module() -> None:
+    needed = _needs_database()
+    assert "tests/test_sql_schema_prepare.py" in needed, "the literal arm went blind"
+    assert "tests/test_property_carriers_live.py" in needed, "the helper-import arm went blind"
+    assert _requests_cur(ast.parse("def test_x(cur): pass")), "the cur-fixture arm went blind"
+    assert not _requests_cur(ast.parse("def cur(): pass\ndef test_x(cur): pass")), "an own `cur` is no database"

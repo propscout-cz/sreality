@@ -13,7 +13,7 @@
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Link, MemoryRouter, useLocation } from 'react-router-dom';
 
@@ -85,13 +85,30 @@ describe('<NewEstimationModal>', () => {
     await renderModals();
     expect(screen.getByRole('dialog')).toHaveAccessibleName('Estimate this property');
     expect(screen.queryByRole('textbox', { name: 'Listing URL' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('radio', { name: /Building/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Building/ })).not.toBeInTheDocument();
   });
 
   it('seeds the selectors from the ad', async () => {
     await renderModals();
-    expect(screen.getByRole('radio', { name: 'House' })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByRole('radio', { name: 'Sale' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('button', { name: 'House' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Sale' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  /* A pick-one is the ONE joined bar (operator ruling 2026-10-27): the chosen segment
+   * filled copper, never the old paper tile whose bold label shifted the width. */
+  it('draws Property type and Estimate as joined bars, the chosen segment filled copper', async () => {
+    await renderModals();
+    for (const [name, lit, idle] of [
+      ['Property category', 'House', 'Apartment'],
+      ['Estimate rent or sale price', 'Sale', 'Rent'],
+    ]) {
+      const bar = screen.getByRole('group', { name });
+      expect(bar.firstElementChild).toHaveClass('inline-flex', 'border', 'bg-[var(--color-paper-2)]');
+      expect(within(bar).getByRole('button', { name: lit })).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+      expect(within(bar).getByRole('button', { name: lit })).not.toHaveStyle({ fontWeight: '600' });
+      expect(within(bar).getByRole('button', { name: idle })).toHaveAttribute('aria-pressed', 'false');
+    }
+    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
   });
 
   it('names the operator-context textareas', async () => {
@@ -105,7 +122,7 @@ describe('<NewEstimationModal>', () => {
       id: 88, status: 'pending', subject_source: 'idnes', subject_source_id_native: 'abc123',
     });
     await renderModals();
-    fireEvent.click(screen.getByRole('radio', { name: 'Rent' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Rent' }));
     fireEvent.click(screen.getByRole('button', { name: 'Estimate' }));
 
     await waitFor(() => expect(createEstimation).toHaveBeenCalledTimes(1));
@@ -191,6 +208,13 @@ describe('<NewEstimationModal> in-flight guard', () => {
     fireEvent.keyDown(document.activeElement ?? document, { key: 'Escape' });
     expect(dialog).toBeInTheDocument();
     expect(document.body.style.overflow).toBe('hidden');
+  });
+
+  it('locks both selectors while a submit is in flight', async () => {
+    await submitAndHang();
+    for (const name of ['Apartment', 'House', 'Commercial', 'Rent', 'Sale']) {
+      expect(screen.getByRole('button', { name })).toBeDisabled();
+    }
   });
 
   it('ignores the close glyph while a submit is in flight', async () => {

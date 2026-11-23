@@ -857,7 +857,7 @@ def test_r2_3_a_mix_made_in_two_steps_is_recognised() -> None:
     db.prop(300, ct=None)
     db.listing(3, 300, ct="pronajem")
     db.location[3] = IN_TOWN
-    g = db.merged(100, 200, 300)
+    db.merged(100, 200, 300)
     (group,) = L.read_groups(db, L.read_area(db, TRIAL), SALES)
     assert group.mixed and group.outcome == "to_retire:mixed_deal_type"
 

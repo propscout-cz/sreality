@@ -1,13 +1,16 @@
-/* The account sheet's push switch, "Oznámení na tomto iPhonu" (notifications
- * push program § 3.6, W5b). Mounted when the sheet opens, which is when it does
- * its reading: the worker is asked for an update, the server's key is fetched
- * and this device's subscription read, so that a tap has nothing left to wait
- * for but the permission prompt.
+/* The push switch's logic (notifications push program § 3.6, W5b): behind the
+ * account sheet's row and the feed's notice (components/phone/PushSwitch,
+ * PushNotice). It mounts when its surface does, which is when it does its
+ * reading: the worker is asked for an update, the server's key is fetched and
+ * this device's subscription is re-synced (lib/push `resyncPush`, which also
+ * subscribes wherever notifications are already allowed: push is on by
+ * default), so that a tap has nothing left to wait for but the permission
+ * prompt.
  *
  * APPLE'S RULE: the permission prompt and `subscribe` belong to the tap. So
  * `enable` calls `Notification.requestPermission()` synchronously inside the
  * click handler, and between that and `subscribe` it awaits only the answer;
- * the registration and the key were read when the sheet opened.
+ * the registration and the key were read when the surface mounted.
  *
  * The state is read, never assumed: "on" means a subscription exists on this
  * device, re-read after every action. A key the server cannot give (503: push
@@ -17,15 +20,17 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { ApiError, deletePushSubscription, getPushKey, putPushSubscription } from './api';
+import { ApiError, deletePushSubscription } from './api';
 import { useAuth } from './auth';
 import {
-  decodePushKey,
-  pushSubscriptionBody,
-  samePushKey,
+  activeRegistration,
+  pushPlatformGate,
+  readServerKey,
+  resyncPush,
+  subscribePushHere,
+  writePushOff,
   writePushOwner,
 } from './push';
-import { isInstalledApp } from './serviceWorker';
 
 export type PushState =
   /* Not an Apple device, or an installed app whose engine has no Web Push
@@ -37,6 +42,8 @@ export type PushState =
   | 'denied'
   /* The server gave no key (push not configured, or offline). */
   | 'unavailable'
+  /* Allowed here and not subscribed: switched off by this account, or the
+   * permission prompt not yet answered. */
   | 'off'
   | 'on'
   | 'busy';
@@ -49,45 +56,10 @@ export interface PushSwitch {
   disable: () => void;
 }
 
-/* An iPhone or iPad: by its UA, or by `navigator.standalone`, which only
- * Apple's mobile WebKit has (iPadOS Safari reports a Mac UA). The server takes
- * Apple's push service only, so nothing else is ever asked for permission. */
-function isAppleMobile(): boolean {
-  return /iPhone|iPad|iPod/.test(navigator.userAgent) || 'standalone' in navigator;
-}
-
-/* What the platform allows before anything is read. Another platform first
- * (an Android phone is never prompted), then "not installed": an iPhone's
- * Safari tab has no PushManager at all, and must hear "install the app", not
- * "unsupported". */
-function platformGate(): PushState | null {
-  if (!isAppleMobile()) return 'unsupported';
-  if (!isInstalledApp()) return 'not_installed';
-  if (
-    !('serviceWorker' in navigator) ||
-    typeof window.PushManager === 'undefined' ||
-    typeof window.Notification === 'undefined'
-  ) {
-    return 'unsupported';
-  }
-  return null;
-}
-
 function settledState(subscription: PushSubscription | null, key: Uint8Array | null): PushState {
   if (Notification.permission === 'denied') return 'denied';
   if (subscription) return 'on';
   return key ? 'off' : 'unavailable';
-}
-
-/* The worker, once active (`subscribe` needs one); null where none is
- * registered, so a dev server reads "unsupported" instead of waiting forever. */
-async function activeRegistration(): Promise<ServiceWorkerRegistration | null> {
-  try {
-    if (!(await navigator.serviceWorker.getRegistration())) return null;
-    return await navigator.serviceWorker.ready;
-  } catch {
-    return null;
-  }
 }
 
 const ENABLE_FAILED = 'Oznámení se nepodařilo zapnout. Zkuste to znovu.';
@@ -102,7 +74,7 @@ function enableFailure(err: unknown): string {
 export function usePush(): PushSwitch {
   const { user } = useAuth();
   const userId = user?.id ?? null;
-  const [state, setState] = useState<PushState>(() => platformGate() ?? 'busy');
+  const [state, setState] = useState<PushState>(() => pushPlatformGate() ?? 'busy');
   const [error, setError] = useState<string | null>(null);
   const registration = useRef<ServiceWorkerRegistration | null>(null);
   const key = useRef<Uint8Array<ArrayBuffer> | null>(null);
@@ -116,7 +88,7 @@ export function usePush(): PushSwitch {
 
   useEffect(() => {
     live.current = true;
-    if (platformGate()) return;
+    if (pushPlatformGate()) return;
     void (async () => {
       const active = await activeRegistration();
       if (!live.current) return;
@@ -126,14 +98,8 @@ export function usePush(): PushSwitch {
       }
       registration.current = active;
       active.update().catch(() => {});
-      key.current = await getPushKey()
-        .then((r) => decodePushKey(r.public_key))
-        .catch(() => null);
-      const subscription = await active.pushManager.getSubscription().catch(() => null);
-      if (subscription && key.current && !samePushKey(subscription, key.current)) {
-        await subscription.unsubscribe().catch(() => false);
-        writePushOwner(null);
-      }
+      key.current = await readServerKey();
+      await resyncPush({ key: key.current });
       await settle();
     })();
     return () => {
@@ -152,20 +118,10 @@ export function usePush(): PushSwitch {
     void (async () => {
       try {
         if ((await permission) !== 'granted') return;
-        const subscription = await active.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: serverKey,
-        });
-        try {
-          await putPushSubscription(pushSubscriptionBody(subscription));
-          writePushOwner(userId);
-        } catch (err) {
-          /* Not registered with the server: no subscription stays behind. */
-          await subscription.unsubscribe().catch(() => false);
-          if (live.current) setError(enableFailure(err));
-        }
-      } catch {
-        if (live.current) setError(ENABLE_FAILED);
+        writePushOff(null);
+        await subscribePushHere(active, serverKey, userId);
+      } catch (err) {
+        if (live.current) setError(enableFailure(err));
       } finally {
         await settle();
       }
@@ -187,13 +143,15 @@ export function usePush(): PushSwitch {
           deletePushSubscription({ endpoint, reason: 'switched_off' }).catch(() => {});
         }
         writePushOwner(null);
+        /* Off holds for this account against the default (lib/push resync). */
+        writePushOff(userId);
       } catch {
         if (live.current) setError(DISABLE_FAILED);
       } finally {
         await settle();
       }
     })();
-  }, [settle]);
+  }, [settle, userId]);
 
   return { state, error, enable, disable };
 }

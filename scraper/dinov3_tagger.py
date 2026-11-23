@@ -36,10 +36,14 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from scraper.cpus import job_cpus
 from scraper.dinov3_config import load_dinov3_config, validate_config
+
+if TYPE_CHECKING:
+    import torch
+    from PIL import Image
 
 # Geometry arms of the bake-off (ENCODER-DECISION §3.2). All three are implemented
 # now so the code is ready the moment one is picked — none is a default.
@@ -65,19 +69,19 @@ _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _DOC = "docs/design/new-dedup/ENCODER-DECISION.md"
 
 
-def _resample():
+def _resample() -> Image.Resampling:
     from PIL import Image  # base dep
 
     return Image.Resampling.BICUBIC
 
 
-def square_squash(image, resolution: int):
+def square_squash(image: Image.Image, resolution: int) -> Image.Image:
     """Resize to resolution x resolution, ignoring aspect ratio. The HF image
     processor's own geometry — every pixel survives, distorted."""
     return image.resize((resolution, resolution), _resample())
 
 
-def resize_center_crop(image, resolution: int):
+def resize_center_crop(image: Image.Image, resolution: int) -> Image.Image:
     """Shortest side -> resolution (aspect preserved), then a centre crop.
 
     Note what this throws away: on a ~4:3 portal photo it discards the left and right
@@ -92,7 +96,7 @@ def resize_center_crop(image, resolution: int):
     return resized.crop((left, top, left + resolution, top + resolution))
 
 
-def letterbox_pad(image, resolution: int):
+def letterbox_pad(image: Image.Image, resolution: int) -> Image.Image:
     """Longest side -> resolution (aspect preserved), padded to a square. Keeps the
     full frame including the edge bands, at the cost of spending pixels on padding."""
     from PIL import Image
@@ -116,7 +120,7 @@ _TRANSFORMS = {
 }
 
 
-def apply_preprocessing(image, preprocessing: str, resolution: int):
+def apply_preprocessing(image: Image.Image, preprocessing: str, resolution: int) -> Image.Image:
     """Config's `preprocessing` string -> the transform, as an RGB resolution-square."""
     transform = _TRANSFORMS.get(preprocessing)
     if transform is None:
@@ -130,7 +134,7 @@ def apply_preprocessing(image, preprocessing: str, resolution: int):
     return transform(image, int(resolution))
 
 
-def resolve_torch_dtype(dtype: str):
+def resolve_torch_dtype(dtype: str) -> torch.dtype | None:
     """`bf16` -> torch.bfloat16, `fp32` -> None (the library default). Anything else
     raises — notably fp16, which NaNs on this family."""
     if dtype not in DTYPES:
@@ -170,7 +174,9 @@ def check_supported(identity: dict[str, Any]) -> None:
     resolve_torch_dtype(identity["dtype"])  # raises on fp16 / anything unknown
 
 
-def _load_model_and_processor(model_id: str, revision: str, torch_dtype, threads: int = 0):
+def _load_model_and_processor(
+    model_id: str, revision: str, torch_dtype: torch.dtype | None, threads: int = 0,
+) -> tuple[Any, Any]:
     """AutoModel + AutoImageProcessor at a PINNED revision, with the same
     retry-on-transient-hub-error loop clip_tagger.py uses (a sharded backfill's
     concurrent downloads of the weights occasionally 503 / time out).
@@ -224,7 +230,7 @@ def _load_model_and_processor(model_id: str, revision: str, torch_dtype, threads
     return model, processor
 
 
-def _loaded_revision(model, pinned: str) -> str:
+def _loaded_revision(model: Any, pinned: str) -> str:
     """The sha the weights actually came from, not the one we asked for.
 
     transformers stamps the resolved hub commit onto the config as `_commit_hash`.
@@ -243,8 +249,8 @@ def _loaded_revision(model, pinned: str) -> str:
 class Dinov3Tagger:
     """A loaded, eval-mode DINOv3 encoder plus the six facts that identify its output."""
 
-    def __init__(self, model, processor, identity: dict[str, Any], torch_dtype=None,
-                 device: str = "cpu") -> None:
+    def __init__(self, model: Any, processor: Any, identity: dict[str, Any],
+                 torch_dtype: torch.dtype | None = None, device: str = "cpu") -> None:
         self._model = model
         self._processor = processor
         self._torch_dtype = torch_dtype
@@ -286,7 +292,7 @@ class Dinov3Tagger:
             device=device,
         )
 
-    def _pool(self, outputs):
+    def _pool(self, outputs: Any) -> torch.Tensor:
         """Pooling dispatch. One arm today; adding another is a new branch here plus a
         new value in POOLING_MODES, not a rewrite."""
         if self.pooling != "cls":
@@ -300,7 +306,7 @@ class Dinov3Tagger:
             )
         return pooled
 
-    def embed(self, images: list, batch_size: int = 32):
+    def embed(self, images: list, batch_size: int = 32) -> torch.Tensor | None:
         """L2-normalized 768-d embeddings, one row per image, in input order."""
         import torch
 

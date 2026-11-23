@@ -22,9 +22,11 @@ import { bareImage } from '@/lib/types';
 import Spinner from '@/components/Spinner';
 import ErrorBanner from '@/components/ErrorBanner';
 import ImageSizeToggle from '@/components/ImageSizeToggle';
+import { SegmentedBar } from '@/components/controls';
 import { pushToast } from '@/lib/toast';
 import { trainingSetKeys } from '@/lib/newDedupKeys';
-import { cachePatch, useOptimisticWrite, type CachePatch } from '@/lib/useOptimisticWrite';
+import { cachePatch, type CachePatch } from '@/lib/revalidate';
+import { useOptimisticWrite } from '@/lib/useOptimisticWrite';
 
 /* NEW DEDUP · Training set — a head's labels, in four trays.
  *
@@ -130,6 +132,7 @@ const REVIEW_MARK: Record<ReviewState, string> = {
 
 const PAGE_SIZES = [50, 100, 500, 2000, 10000] as const;
 type PageSize = (typeof PAGE_SIZES)[number];
+const PAGE_OPTIONS = PAGE_SIZES.map((n) => ({ value: n, label: String(n) }));
 const DEFAULT_PAGE: PageSize = 50;
 const BULK_CAP = 200;
 
@@ -220,7 +223,8 @@ export default function NewDedupTrainingSet() {
   /* COUNTS MOVE ON THE CLICK, in tray terms. A mark change moves a row between
    * trays; the reserve is only ever entered or left by an explicit move. The
    * updaters are pure so the optimistic writes below hand them to
-   * useOptimisticWrite, which holds and snapshots the same keys it patches. */
+   * useOptimisticWrite, which holds the same keys it patches and can take a
+   * failed write's patch back out of them (lib/revalidate's ledger). */
   type HeadsData = typeof headsQ.data;
   type RowsData = typeof rowsQ.data;
   const withTrays = (deltas: Partial<Record<Tray, number>>) => (old: HeadsData): HeadsData =>
@@ -322,8 +326,8 @@ export default function NewDedupTrainingSet() {
    * same one the listing gallery and the labeling grids open, so arrow-key
    * walking, Escape layering, the focus trap and the scroll lock behave here
    * exactly as they do there. It takes ImagePublic rows; a training row already
-   * carries the only two fields imageSrc reads, and the badges the viewer draws
-   * self-guard on null, so the row is widened rather than re-fetched — at
+   * carries the only two fields imageSrc reads, and the tag badge the viewer
+   * draws self-guards on null, so the row is widened rather than re-fetched — at
    * 10,000 tiles a page, fetching a full image row per tile would be the
    * expensive way to show the same photo. `sreality_id` and `sequence` are not
    * on a training row and nothing here reads them. */
@@ -667,26 +671,21 @@ export default function NewDedupTrainingSet() {
             </span>
           )}
 
-          <span className="flex gap-1" role="group" aria-label="tray">
-            {TRAYS.map((t) => (
-              <button key={t} type="button" title={TRAY_TITLE[t]} aria-pressed={tray === t}
-                onClick={() => patch({ set: t, offset: null })}
-                className={`px-2.5 py-1 text-xs rounded-[var(--radius-sm)] border ${
-                  tray === t ? 'border-[var(--color-sage)] text-[var(--color-ink)]'
-                    : 'border-[var(--color-rule)] text-[var(--color-ink-3)] hover:text-[var(--color-ink)]'}`}>
-                {TRAY_LABEL[t]}
-                {/* EVERY chip is a count of what is in that tray. The sample chip
-                  * showed `decided/drawn`, and 35/1000 read as "35 drawn" — the
-                  * operator reported exactly that. Progress belongs in the line
-                  * below, which has room to name which number is which. */}
-                {activeHead && (
-                  <span data-testid={`tray-count-${t}`} className="ml-1 text-[var(--color-ink-4)] tabular-nums">
-                    {activeHead[t]}
-                  </span>
-                )}
-              </button>
-            ))}
-          </span>
+          {/* EVERY segment is a count of what is in that tray. The sample chip
+            * showed `decided/drawn`, and 35/1000 read as "35 drawn" — the operator
+            * reported exactly that. Progress belongs in the line below, which has
+            * room to name which number is which. */}
+          <SegmentedBar
+            hug
+            label="tray"
+            options={TRAYS.map((t) => ({
+              value: t,
+              label: activeHead ? `${TRAY_LABEL[t]} ${activeHead[t]}` : TRAY_LABEL[t],
+              title: TRAY_TITLE[t],
+            }))}
+            value={tray}
+            onChange={(t) => patch({ set: t, offset: null })}
+          />
         </div>
 
         {activeHead && (
@@ -844,14 +843,15 @@ export default function NewDedupTrainingSet() {
             </div>
           )}
           <div className="mt-4 flex items-center justify-center gap-3 text-xs flex-wrap">
-            <span className="flex items-center gap-1" role="group" aria-label="per page">
+            <span className="flex items-center gap-1">
               <span className="text-[0.65rem] tracking-[0.1em] uppercase text-[var(--color-ink-4)] mr-0.5">per page</span>
-              {PAGE_SIZES.map((n) => (
-                <button key={n} type="button" aria-pressed={pageSize === n} onClick={() => patch({ n: String(n), offset: null })}
-                  className={`px-2 py-1 rounded-[var(--radius-sm)] border ${pageSize === n ? 'border-[var(--color-ink-2)] text-[var(--color-ink)]' : 'border-[var(--color-rule)] text-[var(--color-ink-3)] hover:text-[var(--color-ink)]'}`}>
-                  {n}
-                </button>
-              ))}
+              <SegmentedBar
+                hug
+                label="per page"
+                options={PAGE_OPTIONS}
+                value={pageSize}
+                onChange={(n) => patch({ n: String(n), offset: null })}
+              />
             </span>
             <button type="button" disabled={offset === 0} onClick={() => patch({ offset: String(Math.max(0, offset - pageSize)) })}
               className="px-3 py-1 rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink-3)] disabled:opacity-40">

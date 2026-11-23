@@ -14,7 +14,6 @@ use here).
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import os
@@ -89,6 +88,7 @@ class OpenAICompatibleProvider:
         model: str,
         max_tokens: int = 4096,
         tool_choice: str | None = None,
+        timeout_s: float | None = None,
     ) -> Completion:
         if not self._api_key:
             raise ProviderError(
@@ -107,7 +107,7 @@ class OpenAICompatibleProvider:
                     "Content-Type": "application/json",
                 },
                 json=body,
-                timeout=_TIMEOUT_S,
+                timeout=_TIMEOUT_S if timeout_s is None else timeout_s,
             )
         except requests.RequestException as exc:
             raise ProviderError(f"{self.name} call failed: {exc}") from exc
@@ -118,7 +118,8 @@ class OpenAICompatibleProvider:
             # exhausted quota apart from a real model miss, and they need
             # "429" / "401" / etc. to actually appear here.
             raise ProviderError(
-                f"{self.name} call failed: HTTP {resp.status_code} {resp.text[:500]}"
+                f"{self.name} call failed: HTTP {resp.status_code} {resp.text[:500]}",
+                status=resp.status_code,
             )
         return _completion_from_raw(resp.json(), model=model)
 
@@ -256,10 +257,11 @@ def _completion_from_raw(raw: dict[str, Any], *, model: str) -> Completion:
         cache_write_tokens=0,
     )
     finish_reason = str(choices[0].get("finish_reason") or "")
-    if tool_calls:
-        stop_reason = "tool_use"
-    elif finish_reason == "length":
+    # A reply cut at its limit says so even when it carries calls: their arguments may be half-written.
+    if finish_reason == "length":
         stop_reason = "max_tokens"
+    elif tool_calls:
+        stop_reason = "tool_use"
     else:
         stop_reason = "end_turn"
 

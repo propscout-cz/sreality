@@ -420,8 +420,8 @@ const samplesFor = (f: FilterDef): Array<{ input: unknown; value: unknown; singl
 
 describe('sql_kind agreement', () => {
   /* ...and the filters a property-grain relation spells in its own shape whatever their
-   * kind (MS19's portal rule: the Watchdog's PROPERTIES_GRAIN.clauses, pytest-pinned to
-   * the same list, and applyPortalRule here). */
+   * kind (MS19's portal rule: the property grains' own `portals` hook in
+   * toolkit/filter_compiler, pytest-pinned to the same list, and applyPortalRule here). */
   it('the hand-coded browse set is exactly the kinds Browse does not auto-dispatch', () => {
     for (const f of FILTER_REGISTRY.filters) {
       if (!f.agendas.includes('browse') || f.pg_column == null) continue;

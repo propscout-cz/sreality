@@ -1,57 +1,50 @@
-/* What you pick is what you filter.
+/* What you pick is what you filter, on own place search (#2453).
  *
- * A pick becomes ONE RÚIAN unit at the level it was picked at: a street chip is
- * its street (badged ULICE, named by the register), never its town. Identity is
- * the resolved unit, so two streets of one town are two chips and the same
- * street picked twice is one. A pick the register cannot bind, a country, or a
- * resolve that fails adds NO chip and says why under the input — the map still
- * flies. Picks resolve asynchronously, so every edit lands on the latest chips.
- */
+ * Every row the route answers is already a chip: a pick adds it at once, with no
+ * second call. A městská část adds its quarters and says so; an address adds its
+ * street; an address with no street adds nothing and says why. The map flies for
+ * every pick that has a point. When the route is unavailable the box says so, the
+ * chips keep filtering and nothing else is asked. */
 import { useState } from 'react';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LocationTypeahead } from './LocationTypeahead';
 import type { DistrictChip } from '@/lib/filters';
-import { SUGGEST_NOT_CONFIGURED, type LocationResolution, type MapySuggestion } from '@/lib/maps';
+import type { PlaceRow } from '@/lib/places';
 
-const fetchSuggest = vi.hoisted(() => vi.fn());
-const resolveSuggestion = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/maps', async (importActual) => ({
-  ...(await importActual<typeof import('@/lib/maps')>()),
-  fetchSuggest,
-  resolveSuggestion,
+const fetchPlaces = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/places', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/places')>()),
+  fetchPlaces,
 }));
 
-const PARDUBICE = 'Pardubice';
-
-const street = (name: string): MapySuggestion => ({
-  name,
-  label: 'Ulice',
-  type: 'regional.street',
-  location: 'Pardubice, Pardubický kraj',
-  position: { lon: 15.77, lat: 50.03 },
-  regionalStructure: [
-    { name, type: 'regional.street' },
-    { name: PARDUBICE, type: 'regional.municipality' },
-  ],
-});
-
-/* The server's answers, in its one shape (api/maps.resolve). */
-const ulice = (name: string, id: number): LocationResolution => ({
-  level: 'ulice', id, name, context: PARDUBICE,
-});
-/* A street the register cannot bind inside the town it lies in: the level it
- * was picked at and the town, no code and no unit name. */
-const UNBOUND: LocationResolution = { level: 'ulice', id: null, name: null, context: PARDUBICE };
-
-const RYBNICKY: DistrictChip = {
-  name: 'Na Rybníčkách', context: PARDUBICE, level: 'ulice', id: 666742,
+const BRNO = 582786;
+const BRNO_ROW: PlaceRow = { level: 'obec', id: BRNO, name: 'Brno', context: 'Brno-město', point: { lat: 49.19, lng: 16.61 } };
+const BRNO_OKRES_ROW: PlaceRow = {
+  level: 'okres', id: 3702, name: 'Brno-město', context: 'Jihomoravský kraj', point: { lat: 49.2, lng: 16.6 },
 };
-const NADRAZNI: DistrictChip = {
-  name: 'Nádražní', context: PARDUBICE, level: 'ulice', id: 666001,
+const BRNO_CHIP: DistrictChip = { name: 'Brno', context: 'Brno-město', level: 'obec', id: BRNO };
+
+const VOKOVICE: DistrictChip = { name: 'Vokovice', context: 'Praha', level: 'cast_obce', id: 490067 };
+const DEJVICE: DistrictChip = { name: 'Dejvice', context: 'Praha', level: 'cast_obce', id: 400301 };
+const PRAHA_6_ROW: PlaceRow = {
+  level: 'momc', id: 500178, name: 'Praha 6', context: 'Praha', point: { lat: 50.1, lng: 14.38 },
+  places: [
+    { level: 'cast_obce', id: 400301, name: 'Dejvice', context: 'Praha' },
+    { level: 'cast_obce', id: 490067, name: 'Vokovice', context: 'Praha' },
+  ],
+};
+const KOUNICOVA: DistrictChip = { name: 'Kounicova', context: 'Brno', level: 'ulice', id: 391891 };
+const KOUNICOVA_10_ROW: PlaceRow = {
+  level: 'adresni_misto', id: 19173318, name: 'Kounicova 10, Brno', context: 'Brno-město',
+  point: { lat: 49.205, lng: 16.6 }, street: { level: 'ulice', id: 391891, name: 'Kounicova', context: 'Brno' },
+};
+const KRHANICE_25_ROW: PlaceRow = {
+  level: 'adresni_misto', id: 3012841, name: 'Krhanice č.p. 25', context: 'Benešov',
+  point: { lat: 49.85, lng: 14.55 }, street: null,
 };
 
 let onChange: ReturnType<typeof vi.fn>;
@@ -83,244 +76,144 @@ const renderHost = (initial: DistrictChip[] | null = null) => {
 };
 
 const input = () => screen.getByRole('textbox', { name: 'Lokalita' });
+const lastValue = (): DistrictChip[] | null => onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] ?? null;
+const notice = () => screen.getByRole('status');
 
-/* Type a query, wait for the dropdown, click the one suggestion. */
-const pick = async (
-  user: ReturnType<typeof userEvent.setup>,
-  query: string,
-  suggestion: MapySuggestion,
-) => {
-  fetchSuggest.mockResolvedValue([suggestion]);
+/* Type a query, wait for the list, click the row named `name`. */
+const pick = async (user: ReturnType<typeof userEvent.setup>, query: string, rows: PlaceRow[], name: string) => {
+  fetchPlaces.mockResolvedValue(rows);
   await user.type(input(), query);
   const listbox = await screen.findByRole('listbox');
-  await user.click(within(listbox).getByRole('button'));
+  const row = within(listbox).getAllByRole('button').find((b) => b.firstElementChild?.firstElementChild?.textContent === name);
+  await user.click(row!);
 };
-
-const deferred = <T,>() => {
-  let resolve!: (v: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-};
-
-const lastValue = (): DistrictChip[] | null =>
-  onChange.mock.calls[onChange.mock.calls.length - 1]?.[0] ?? null;
-
-const notice = () => screen.getByRole('status');
-const busy = () => input().closest('[aria-busy]');
 
 beforeEach(() => {
-  fetchSuggest.mockReset();
-  resolveSuggestion.mockReset();
+  fetchPlaces.mockReset();
   onChange = vi.fn();
   onPick = vi.fn();
 });
 
-describe('<LocationTypeahead> street picks', () => {
-  it('badges the dropdown entry and the chip as a street, with the register name', async () => {
+describe('<LocationTypeahead> on own place search', () => {
+  it('lists the route\'s "Brno" town row first, and picking it adds {obec, Brno} at once', async () => {
     const user = renderHost();
-    fetchSuggest.mockResolvedValue([street('Na Rybnickach')]);
-    await user.type(input(), 'Na Ryb');
+    fetchPlaces.mockResolvedValue([BRNO_ROW, BRNO_OKRES_ROW]);
+    await user.type(input(), 'Brno');
     const listbox = await screen.findByRole('listbox');
-    expect(within(listbox).getByText('Ulice')).toBeInTheDocument();
+    const [first] = within(listbox).getAllByRole('button');
+    expect(first).toHaveTextContent('Brno');
 
-    /* Mapy spells it one way, the register another: the chip carries ONLY the
-       register's name and its town as display-only context. */
-    resolveSuggestion.mockResolvedValue(ulice('Na Rybníčkách', 666742));
-    await user.click(within(listbox).getByRole('button'));
-
-    await waitFor(() => expect(lastValue()).toEqual([RYBNICKY]));
-    const chip = screen.getByRole('button', { name: 'Remove Na Rybníčkách · Pardubice (Ulice)' })
-      .closest('li')!;
-    expect(within(chip).getByText('Ulice')).toBeInTheDocument();
-    expect(within(chip).queryByText('Obec')).not.toBeInTheDocument();
-    expect(onPick).toHaveBeenCalledTimes(1);
-  });
-
-  it('gives two streets of one town two chips, and × removes only one', async () => {
-    const user = renderHost();
-    resolveSuggestion.mockResolvedValueOnce(ulice('Na Rybníčkách', 666742));
-    await pick(user, 'Na Ryb', street('Na Rybníčkách'));
-    await waitFor(() => expect(lastValue()).toHaveLength(1));
-
-    resolveSuggestion.mockResolvedValueOnce(ulice('Nádražní', 666001));
-    await pick(user, 'Nádra', street('Nádražní'));
-    await waitFor(() => expect(lastValue()).toHaveLength(2));
-
-    await user.click(screen.getByRole('button', { name: 'Remove Na Rybníčkách · Pardubice (Ulice)' }));
-    expect(lastValue()).toEqual([NADRAZNI]);
+    await user.click(first);
+    expect(lastValue()).toEqual([BRNO_CHIP]);
+    expect(fetchPlaces).toHaveBeenLastCalledWith('Brno', expect.anything());
+    expect(onPick).toHaveBeenCalledWith(BRNO_ROW);
   });
 });
 
-describe('<LocationTypeahead> a pick that makes no chip says why', () => {
+describe('<LocationTypeahead> rows read as places', () => {
+  it('shows each row\'s name, context and level label, and no country badge', async () => {
+    const user = renderHost();
+    fetchPlaces.mockResolvedValue([BRNO_ROW, PRAHA_6_ROW, KOUNICOVA_10_ROW]);
+    await user.type(input(), 'Br');
+    const rows = within(await screen.findByRole('listbox')).getAllByRole('button');
+    expect(rows.map((r) => r.textContent)).toEqual([
+      'BrnoBrno-městoObec', 'Praha 6PrahaMěstská část', 'Kounicova 10, BrnoBrno-městoAdresa']);
+    expect(screen.queryByText('Stát')).not.toBeInTheDocument();
+  });
+});
+
+describe('<LocationTypeahead> a městská část adds its quarters (ruling 2026-11-02, #2380)', () => {
+  it('adds one ordinary část chip per quarter and says what it did', async () => {
+    const user = renderHost();
+    await pick(user, 'Praha 6', [PRAHA_6_ROW], 'Praha 6');
+    expect(lastValue()).toEqual([DEJVICE, VOKOVICE]);
+    expect(notice()).toHaveTextContent('Praha 6 added as its 2 parts');
+  });
+
+  it('keeps a quarter already chosen as it is: an excluded one stays excluded', async () => {
+    const user = renderHost([{ ...VOKOVICE, excluded: true }]);
+    await pick(user, 'Praha 6', [PRAHA_6_ROW], 'Praha 6');
+    expect(lastValue()).toEqual([{ ...VOKOVICE, excluded: true }, DEJVICE]);
+  });
+
+  it('a second pick of the same městská část changes nothing', async () => {
+    const user = renderHost([DEJVICE, VOKOVICE]);
+    await pick(user, 'Praha 6', [PRAHA_6_ROW], 'Praha 6');
+    expect(onChange).not.toHaveBeenCalled();
+    expect(notice()).toHaveTextContent('Already selected');
+  });
+});
+
+describe('<LocationTypeahead> an address filters its street', () => {
+  it('adds the street\'s chip and hands the door to the map', async () => {
+    const user = renderHost();
+    await pick(user, 'Kounicova 10', [KOUNICOVA_10_ROW], 'Kounicova 10, Brno');
+    expect(lastValue()).toEqual([KOUNICOVA]);
+    expect(onPick).toHaveBeenCalledWith(KOUNICOVA_10_ROW);
+  });
+
+  it('adds nothing for an address with no street, says why, and the map still flies (ruling 2026-11-22)', async () => {
+    const user = renderHost([BRNO_CHIP]);
+    await pick(user, 'Krhanice 25', [KRHANICE_25_ROW], 'Krhanice č.p. 25');
+    expect(onChange).not.toHaveBeenCalled();
+    expect(notice()).toHaveTextContent("Krhanice č.p. 25 can't be used as a filter — nothing was added");
+    expect(onPick).toHaveBeenCalledWith(KRHANICE_25_ROW);
+  });
+});
+
+describe('<LocationTypeahead> chips', () => {
   it('says "Already selected" on a re-pick, and leaves an excluded chip excluded', async () => {
-    const user = renderHost([{ ...RYBNICKY, excluded: true }]);
-    /* An address on the same street resolves to the same unit. */
-    resolveSuggestion.mockResolvedValue(ulice('Na Rybníčkách', 666742));
-    await pick(user, 'Na Rybníčkách 12', { ...street('Na Rybníčkách 12'), type: 'regional.address' });
-
-    await waitFor(() => expect(notice()).toHaveTextContent('Already selected'));
+    const user = renderHost([{ ...BRNO_CHIP, excluded: true }]);
+    await pick(user, 'Brno', [BRNO_ROW], 'Brno');
     expect(onChange).not.toHaveBeenCalled();
-    expect(screen.getAllByRole('button', { name: /^Remove / })).toHaveLength(1);
-    expect(
-      screen.getByRole('button', { name: 'Include Na Rybníčkách · Pardubice (Ulice)' }),
-    ).toBeInTheDocument();
-  });
-
-  it('adds nothing for a place the server cannot bind — and the map still flies', async () => {
-    const user = renderHost();
-    resolveSuggestion.mockResolvedValue(UNBOUND);
-    await pick(user, 'Nádra', street('Nádražní'));
-
-    await waitFor(() =>
-      expect(notice()).toHaveTextContent("Nádražní can't be used as a filter — nothing was added"),
-    );
-    expect(onChange).not.toHaveBeenCalled();
-    expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
-    expect(onPick).toHaveBeenCalledTimes(1);
-  });
-
-  it('adds nothing for a country', async () => {
-    const user = renderHost();
-    resolveSuggestion.mockResolvedValue({ level: null, id: null, name: null, context: null });
-    await pick(user, 'Česko', {
-      name: 'Česko', label: 'Stát', type: 'regional.country', position: { lon: 15.3, lat: 49.8 },
-    });
-
-    await waitFor(() =>
-      expect(notice()).toHaveTextContent("A country can't be used as a filter"),
-    );
-    expect(onChange).not.toHaveBeenCalled();
-    expect(onPick).toHaveBeenCalledTimes(1);
-  });
-
-  it('adds nothing when the resolve call fails, and stores no Mapy string', async () => {
-    const user = renderHost();
-    resolveSuggestion.mockImplementation(() => Promise.reject(new Error('HTTP 422')));
-    await pick(user, 'Na Ryb', street('Na Rybnickach'));
-
-    await waitFor(() =>
-      expect(notice()).toHaveTextContent("Couldn't verify this place — try again"),
-    );
-    expect(onChange).not.toHaveBeenCalled();
-    expect(screen.queryByText(/Na Rybnickach/)).not.toBeInTheDocument();
+    expect(notice()).toHaveTextContent('Already selected');
   });
 
   it('clears the notice on the next keystroke', async () => {
-    const user = renderHost();
-    resolveSuggestion.mockResolvedValue(UNBOUND);
-    await pick(user, 'Nádra', street('Nádražní'));
-    await waitFor(() => expect(notice()).toHaveTextContent(/nothing was added/));
-
+    const user = renderHost([BRNO_CHIP]);
+    await pick(user, 'Brno', [BRNO_ROW], 'Brno');
+    expect(notice()).toHaveTextContent('Already selected');
     await user.type(input(), 'x');
     expect(notice()).toHaveTextContent('');
   });
 
-  it('clears the notice on the next pick', async () => {
+  it('tells an okres chip from the obec chip of the same name, and × removes only one', async () => {
     const user = renderHost();
-    const unbound = deferred<LocationResolution>();
-    resolveSuggestion.mockReturnValueOnce(unbound.promise);
-    await pick(user, 'Nádra', street('Nádražní'));
-
-    /* The next suggestion list is open when the first pick's answer lands. */
-    fetchSuggest.mockResolvedValue([street('Na Rybníčkách')]);
-    await user.type(input(), 'Na Ryb');
-    const listbox = await screen.findByRole('listbox');
-    await act(async () => unbound.resolve(UNBOUND));
-    expect(notice()).toHaveTextContent("Nádražní can't be used as a filter — nothing was added");
-
-    resolveSuggestion.mockResolvedValueOnce(ulice('Na Rybníčkách', 666742));
-    await user.click(within(listbox).getByRole('button'));
-    expect(notice()).toHaveTextContent('');
-    await waitFor(() => expect(lastValue()).toEqual([RYBNICKY]));
-  });
-
-  it('says place search is unavailable when the server has no geocoder', async () => {
-    const user = renderHost([RYBNICKY]);
-    fetchSuggest.mockImplementation(() => Promise.reject(new Error(SUGGEST_NOT_CONFIGURED)));
-    await user.type(input(), 'Na');
-    expect(await screen.findByText(/Place search is unavailable/)).toBeInTheDocument();
-    expect(input()).toBeDisabled();
-    expect(screen.getByRole('button', { name: /^Remove Na Rybníčkách/ })).toBeInTheDocument();
+    await pick(user, 'Brno', [BRNO_ROW, BRNO_OKRES_ROW], 'Brno-město');
+    await pick(user, 'Brno', [BRNO_ROW, BRNO_OKRES_ROW], 'Brno');
+    expect(lastValue()).toEqual([{ name: 'Brno-město', context: 'Jihomoravský kraj', level: 'okres', id: 3702 }, BRNO_CHIP]);
+    await user.click(screen.getByRole('button', { name: 'Remove Brno-město · Jihomoravský kraj (Okres)' }));
+    expect(lastValue()).toEqual([BRNO_CHIP]);
   });
 });
 
-describe('<LocationTypeahead> picks resolve against the latest chips', () => {
-  it('keeps BOTH of two fast picks, whichever resolves first, and is busy meanwhile', async () => {
+describe('<LocationTypeahead> when own search is unavailable', () => {
+  it('says so, keeps the chips and the box, and asks nothing else', async () => {
+    const user = renderHost([BRNO_CHIP]);
+    fetchPlaces.mockRejectedValue(new Error('HTTP 503'));
+    await user.type(input(), 'Br');
+    expect(await screen.findByText(/Place search is unavailable right now/)).toBeInTheDocument();
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    expect(input()).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Remove Brno · Brno-město (Obec)' })).toBeInTheDocument();
+    expect(fetchPlaces).toHaveBeenCalledWith('Br', expect.anything());
+  });
+
+  it('says so for a failure that is no 503 too, as a lost connection', async () => {
     const user = renderHost();
-    const first = deferred<LocationResolution>();
-    const second = deferred<LocationResolution>();
-    resolveSuggestion.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
-
-    await pick(user, 'Na Ryb', street('Na Rybníčkách'));
-    await pick(user, 'Nádra', street('Nádražní'));
-    expect(busy()).toHaveAttribute('aria-busy', 'true');
-
-    await act(async () => second.resolve(ulice('Nádražní', 666001)));
-    expect(busy()).toHaveAttribute('aria-busy', 'true');
-    await act(async () => first.resolve(ulice('Na Rybníčkách', 666742)));
-
-    expect(lastValue()).toEqual([NADRAZNI, RYBNICKY]);
-    expect(busy()).toHaveAttribute('aria-busy', 'false');
+    fetchPlaces.mockRejectedValue(new TypeError('Failed to fetch'));
+    await user.type(input(), 'Br');
+    expect(await screen.findByText(/Place search is unavailable right now/)).toBeInTheDocument();
   });
 
-  it('does not undo a remove made while a pick is resolving', async () => {
-    const user = renderHost([NADRAZNI]);
-    const pending = deferred<LocationResolution>();
-    resolveSuggestion.mockReturnValueOnce(pending.promise);
-    await pick(user, 'Na Ryb', street('Na Rybníčkách'));
-
-    await user.click(screen.getByRole('button', { name: 'Remove Nádražní · Pardubice (Ulice)' }));
-    expect(lastValue()).toBeNull();
-
-    await act(async () => pending.resolve(ulice('Na Rybníčkách', 666742)));
-    expect(lastValue()).toEqual([RYBNICKY]);
-  });
-
-  it('does not undo an exclude toggled while a pick is resolving', async () => {
-    const user = renderHost([NADRAZNI]);
-    const pending = deferred<LocationResolution>();
-    resolveSuggestion.mockReturnValueOnce(pending.promise);
-    await pick(user, 'Na Ryb', street('Na Rybníčkách'));
-
-    await user.click(screen.getByRole('button', { name: 'Exclude Nádražní · Pardubice (Ulice)' }));
-    await act(async () => pending.resolve(ulice('Na Rybníčkách', 666742)));
-    expect(lastValue()).toEqual([{ ...NADRAZNI, excluded: true }, RYBNICKY]);
-  });
-});
-
-describe('<LocationTypeahead> unmounted while a pick resolves', () => {
-  it('emits nothing and throws nothing when the answer lands', async () => {
-    const pending = deferred<LocationResolution>();
-    resolveSuggestion.mockReturnValueOnce(pending.promise);
-    fetchSuggest.mockResolvedValue([street('Na Rybníčkách')]);
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const { unmount } = render(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <LocationTypeahead label="Lokalita" value={null} onChange={onChange} />
-      </QueryClientProvider>,
-    );
-    const user = userEvent.setup();
-    await user.type(input(), 'Na Ryb');
-    await user.click(within(await screen.findByRole('listbox')).getByRole('button'));
-
-    unmount();
-    await act(async () => pending.resolve(ulice('Na Rybníčkách', 666742)));
-    expect(onChange).not.toHaveBeenCalled();
-    expect(error).not.toHaveBeenCalled();
-    error.mockRestore();
-  });
-});
-
-describe('<LocationTypeahead> chip controls name their level', () => {
-  it('tells an okres chip from the obec chip of the same name', () => {
-    renderHost([
-      { name: 'Jihlava', context: null, level: 'okres', id: 3707 },
-      { name: 'Jihlava', context: null, level: 'obec', id: 586846 },
-    ]);
-    expect(screen.getByRole('button', { name: 'Remove Jihlava (Okres)' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Remove Jihlava (Obec)' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Exclude Jihlava (Okres)' })).toBeInTheDocument();
+  it('answers again on the next keystroke once the route is back', async () => {
+    const user = renderHost();
+    fetchPlaces.mockRejectedValueOnce(new Error('HTTP 503'));
+    await user.type(input(), 'Br');
+    await screen.findByText(/Place search is unavailable right now/);
+    fetchPlaces.mockResolvedValue([BRNO_ROW]);
+    await user.type(input(), 'no');
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeInTheDocument());
+    expect(screen.queryByText(/Place search is unavailable/)).not.toBeInTheDocument();
   });
 });

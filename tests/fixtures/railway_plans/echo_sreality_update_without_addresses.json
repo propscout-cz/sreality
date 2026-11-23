@@ -1,0 +1,29 @@
+{
+ "_provenance": "synthetic: shaped by railway CLI v5.71.0 (src/iac/change_set.rs change objects, saved_plan.rs SavedPlan) and the SDK's job-runner node; #2025 B4 replaces it with the trimmed real --out change list (names only)",
+ "kind": "railway.config.plan",
+ "version": 1,
+ "cliVersion": "5.71.0",
+ "sourceTree": "0000000000000000000000000000000000000000",
+ "environmentId": "00000000-0000-0000-0000-000000000000",
+ "configEtag": "synthetic",
+ "changeSetHash": "sha256:synthetic",
+ "changeSet": {
+  "version": 1,
+  "changes": [
+   {
+    "kind": "resource.update",
+    "summary": "Update sreality deploy",
+    "details": [
+     "deploy.startCommand (… → python -m scraper.job_runner run on job-runner)"
+    ],
+    "severity": "safe"
+   }
+  ],
+  "diagnostics": [],
+  "declared": [
+   "service.sreality",
+   "service.job-runner"
+  ]
+ },
+ "destructive": false
+}

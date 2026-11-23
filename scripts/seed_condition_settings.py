@@ -25,6 +25,11 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import psycopg
+    from psycopg.types.json import Jsonb
 
 LOG = logging.getLogger("seed_condition_settings")
 
@@ -116,10 +121,10 @@ def _load_json(path: Path) -> dict | None:
 
 
 def _update_setting(
-    conn,
+    conn: psycopg.Connection,
     *,
     key: str,
-    value,
+    value: Jsonb,
     description_when_seed: str,
 ) -> None:
     sql = (

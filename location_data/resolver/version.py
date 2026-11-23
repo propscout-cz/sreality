@@ -90,4 +90,45 @@ from __future__ import annotations
 #      the part; "X u Y" retries as X kept to Y; a street line naming a part is that part; of two
 #      accent-folded twins, the one with a door in the one bound part, else the one a claim with
 #      diacritics spells, binds; abbreviations fold (ČSA, nám., tř. …); a PSČ yields to the street.
-RESOLVER_VERSION = "resolver:v5.7"
+# v5.8 = the fallback point (operator ruling 2026-10-25). A row no pin and no street placed,
+#      bound to a část obce, stands at the centroid of that část's own doors (`part_point`,
+#      which also answers its KÚ — `part_katastr_kod` folded into it), not on its town's point:
+#      23,618 active quarter-level ads stood on a town point, Prague's in Vinohrady. A FILL
+#      placement's radius is never below the placed-on entity's reach — the část's farthest
+#      door, the polygon's `containment_radius_m` (Praha 17.6 km where `obec` said 1 km).
+#      The bump re-queues the corpus.
+# v5.9 = the words decide (operator ruling 2026-10-30). A pin the portal DECLARES blurred that
+#      lies outside the obec the claims bound is not the position: `bind.place` leaves the row
+#      unplaced and FILL stands it at the named entity's own point (a bound část's doors, else
+#      the obec's point), its radius floored by that entity's reach (v5.8's rule). Every
+#      blur-declared label counts (bazos approximate_location, idnes no_exact_address, sreality
+#      street/ward/quarter/municipality/not_address, mmreality regional, maxima Circle/LineString,
+#      realitymix estimated); a blurred pin outside every Czech obec is set aside the same way,
+#      and CHECK then records `pin_outside_cz` or `country_conflict`. bazos stamps every pin
+#      "Přibližná lokalita" and places it on a postal-area point — one Kolín pin carried 143
+#      active ads from 34 obce — so 12,543 active bazos rows said one town and drew another,
+#      8.8 km off at r = 1 km (listing 19509113: Jestřabí Lhota, drawn in Kolín); ~2.9k of them
+#      bound a část and now publish the quarter grain the bind always had. The pin stays
+#      evidence (`pin_outside_obec` is still recorded); an exact or undeclared pin outside the
+#      town keeps the position as before. The bump re-queues the corpus.
+# v5.9.1 = location W3, one claim per fact (#2223). The read returns at most ONE claim per
+#      listing and claim type, the operator's ahead of the portal's (migration 699 keys the
+#      store), so BIND's seven tie rules go: no pin election by declared rank and id, no
+#      first-PSČ / first-street / last-address-point idiom, no blur OR'd across a type's
+#      claims, no two-street pooling, and no operator bypass of the register (an operator
+#      value outranks at the read and binds like any claim). A house-number claim outranks the
+#      number in the street line. A point release: W5 takes v5.10. The bump re-resolves the
+#      corpus through W2's reconcile.
+# v5.10 = location W5 (rulings Q1, Q2, Q3). ONE TRUTH: where the words bound the row, a pin is
+#      its position only inside the bound town's polygon and never when the portal declares it an
+#      area marker (bazos approximate_location); without words it names its town (R7/R8) as
+#      before. v5.9's declared-blurred exception and CHECK's coarsening go: 1,353 pins outside
+#      their town and 23,297 bazos postal pins move to the bound entity's point at its reach. The
+#      quarter is a část only: MOMC is a match key that anchors its town; správní obvod and ZSJ
+#      are no level (2,834 MOMC codes and 200 SO ties re-bind). A part claim matches like a town
+#      name (a KÚ binds the část it spells), and a street keeps the claimed část where it has
+#      doors. A street line naming two části of its town now reads as a place too, so R3 skips it
+#      (no such row known as of 2026-10-31; the count's SELECT: the W5 design, As built). The
+#      grain is the row's finest key. An address point without coordinates takes its část's KÚ.
+#      The bump re-resolves the corpus through W2's reconcile.
+RESOLVER_VERSION = "resolver:v5.10"

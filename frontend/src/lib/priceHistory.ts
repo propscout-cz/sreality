@@ -2,9 +2,9 @@
  * price snapshots as one chart track each (MS9), and the dated price moves
  * (MS10). Kept side-effect-free (now injected, never Date.now()) so the
  * transforms are unit-testable. */
-import { fmtDateSlash } from '@/lib/format';
-import { portalBadge } from '@/lib/portals';
-import type { ListingSnapshotPublic } from '@/lib/types';
+import { fmtDateSlash } from './format';
+import { portalBadge } from './portals';
+import type { ListingSnapshotPublic } from './types';
 
 /* One advert of the property. A price step never spans two adverts, so each is
  * its own track; together the tracks are the property's time on the market. */
@@ -24,6 +24,13 @@ export interface PriceSeries {
   label: string;
   points: { t: number; price: number }[];
   endT: number;
+}
+
+/* The property's adverts in chart order: the canonical advert first (it owns the
+ * accent), the rest as given. The property page and the extension's side panel. */
+export function canonicalFirst<T extends { id: number }>(adverts: readonly T[], canonicalId: number | null): T[] {
+  const canonical = adverts.find((a) => a.id === canonicalId);
+  return canonical == null ? [...adverts] : [canonical, ...adverts.filter((a) => a !== canonical)];
 }
 
 /* One step-line per advert that has a price, in the order given (the canonical
@@ -185,4 +192,12 @@ export function priceChangeEvents(series: PriceSeries[]): PriceChangeEvent[] {
     }
   }
   return events.sort((a, b) => b.t - a.t);
+}
+
+/* Each track's last move in percent, by track id: the newest event of its own
+ * line, so a pill beside one advert's price never describes another advert's. */
+export function lastMoveByTrack(series: PriceSeries[]): Map<number, number> {
+  const byTrack = new Map<number, number>();
+  for (const c of priceChangeEvents(series)) if (!byTrack.has(c.seriesId)) byTrack.set(c.seriesId, c.pct);
+  return byTrack;
 }

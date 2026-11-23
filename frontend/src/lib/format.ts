@@ -66,38 +66,35 @@ export const fmtArea = (
     ? '—'
     : `${czNumber.format(Math.round(n))}${NBSP}m²${areaKind === 'plot' ? `${NBSP}pozemku` : ''}`;
 
-/* THE storey, in Czech, and the only place the app says which convention it means.
+/* THE storey label, and the only place the app turns the stored scale into words.
  *
- * `listings.floor` is ground = 0 on every portal since W8 (přízemí 0, 1. patro 1,
- * suterén −1). Before that it was a ~50/50 mix of two conventions printed as a bare
- * number, so one flat read "3" from its idnes row and "4" from its sreality row in the
- * same list and nothing on screen said which scale either was on. A bare integer cannot
- * carry that fact; the Czech word can, which is why this is the one renderer for every
- * surface that shows `listings.floor` or an estimation subject's storey. The one place
- * still printing a bare number is BuildingDetail's unit table, whose `floor` is the
- * operator-curated building decomposition, not this column.
+ * `listings.floor` is stored ground = 0 on every portal (`scraper/floor.py`). The label
+ * is the storey ORDINAL the Czech portals print (ruling 2026-11-17, #2552): the ground
+ * storey is "1. podlaží", so the number reads straight against `total_floors`, an
+ * above-ground podlaží count: "7. podlaží z 7" is the top storey. The earlier wording
+ * put a patro number beside that count ("6. patro z 7 podlaží") and the top storey
+ * read as one below it.
  *
- * `total_floors` is a PODLAŽÍ count (the ground storey included), so it is spelled out
- * rather than printed as "2/5": under ground = 0 the top storey is total − 1, and the
- * slash form invited reading the 5 as a patro. A null floor renders null, leaving each
- * surface to say what an absent storey looks like on it.
- *
- * Below ground the MAGNITUDE is kept (−2 is "2. podzemní podlaží", not "suterén"):
- * AttrDiffTable diffs the rendered strings, so collapsing every basement to one word
- * would have made −1 and −2 read as agreeing on the one screen asked to show the
- * difference. 109 rows corpus-wide sit below −1. */
+ * Below ground the ordinal counts down from the ground ("2. podzemní podlaží"), the
+ * magnitude kept: AttrDiffTable diffs the rendered strings. A null floor renders null,
+ * leaving each surface to say what an absent storey looks like on it.
+ * `storey_label` in `scraper/floor.py` is its Python face (the PDF sheet); both read
+ * `tests/fixtures/storey_labels.json`. */
 export const fmtFloor = (
   floor: number | null | undefined,
   totalFloors?: number | null,
 ): string | null => {
   if (floor == null) return null;
-  const storey =
-    floor === 0 ? 'přízemí'
-    : floor === -1 ? 'suterén'
-    : floor < 0 ? `${-floor}. podzemní podlaží`
-    : `${floor}. patro`;
-  return totalFloors == null ? storey : `${storey} z ${totalFloors} podlaží`;
+  const storey = floor < 0 ? `${-floor}. podzemní podlaží` : `${floor + 1}. podlaží`;
+  return totalFloors == null ? storey : `${storey} z ${totalFloors}`;
 };
+
+/* The same scale for a typed storey: the ordinal a person enters ("7", "-1") and the
+ * stored ground = 0 value. There is no storey 0 on this scale. */
+export const storeyOrdinal = (floor: number | null | undefined): number | null =>
+  floor == null ? null : floor < 0 ? floor : floor + 1;
+export const storeyFromOrdinal = (ordinal: number | null | undefined): number | null =>
+  ordinal == null || ordinal === 0 ? null : ordinal < 0 ? ordinal : ordinal - 1;
 
 /* Distance from a subject point. Metres under a kilometre — the difference
  * between 80 m and 900 m is the difference between the same street and a
@@ -173,19 +170,38 @@ export const fmtMeasuredPricePerM2 = (
 
 const SEC = 1, MIN = 60, HOUR = 3600, DAY = 86400;
 
-export const fmtRelative = (iso: string | null | undefined): string => {
-  if (!iso) return '—';
+/* How long ago, in the one unit each surface rounds to — shared by the English and
+ * the Czech wording so the two never round differently. Null for no time. */
+function relativeBucket(iso: string | null | undefined): [number, Intl.RelativeTimeFormatUnit] | null {
+  if (!iso) return null;
   const t = new Date(iso).getTime();
-  if (isNaN(t)) return '—';
+  if (isNaN(t)) return null;
   const diff = Math.max(0, (Date.now() - t) / 1000);
-  if (diff < MIN)  return `${Math.round(diff / SEC)}${THIN_SPACE}s ago`;
-  if (diff < HOUR) return `${Math.round(diff / MIN)}${THIN_SPACE}min ago`;
-  if (diff < DAY)  return `${Math.round(diff / HOUR)}${THIN_SPACE}h ago`;
+  if (diff < MIN)  return [Math.round(diff / SEC), 'second'];
+  if (diff < HOUR) return [Math.round(diff / MIN), 'minute'];
+  if (diff < DAY)  return [Math.round(diff / HOUR), 'hour'];
   const days = Math.round(diff / DAY);
-  if (days < 14) return `${days}${THIN_SPACE}days ago`;
-  if (days < 60) return `${Math.round(days / 7)}${THIN_SPACE}weeks ago`;
-  if (days < 365) return `${Math.round(days / 30)}${THIN_SPACE}months ago`;
-  return `${Math.round(days / 365)}${THIN_SPACE}yr ago`;
+  if (days < 14) return [days, 'day'];
+  if (days < 60) return [Math.round(days / 7), 'week'];
+  if (days < 365) return [Math.round(days / 30), 'month'];
+  return [Math.round(days / 365), 'year'];
+}
+
+const AGO_EN: Partial<Record<Intl.RelativeTimeFormatUnit, string>> = {
+  second: 's', minute: 'min', hour: 'h', day: 'days', week: 'weeks', month: 'months', year: 'yr',
+};
+
+export const fmtRelative = (iso: string | null | undefined): string => {
+  const b = relativeBucket(iso);
+  return b ? `${b[0]}${THIN_SPACE}${AGO_EN[b[1]]} ago` : '—';
+};
+
+const CS_RELATIVE = new Intl.RelativeTimeFormat('cs', { style: 'short', numeric: 'always' });
+
+/* fmtRelative in Czech, for a Czech surface (the map popup): "před 2 h", "před 3 dny". */
+export const fmtRelativeCs = (iso: string | null | undefined): string => {
+  const b = relativeBucket(iso);
+  return b ? CS_RELATIVE.format(-b[0], b[1]) : '—';
 };
 
 export const fmtParkingLots = (n: number | null | undefined): string =>

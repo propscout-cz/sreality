@@ -11,7 +11,6 @@ import type { LlmCostDailyRow, LlmCostHourlyRow } from './llmCosts';
 import {
   type ListingFilters,
   buildingMaterialToValues,
-  effectiveBbox,
   isoNDaysAgo,
   priceChangeCountColumn,
   UNKNOWN_FILTER_VALUE,
@@ -40,6 +39,7 @@ import type {
   SoldCoverage,
 } from './types';
 import type { BorderCase } from './api';
+import type { ClockRow } from './curationSync';
 
 export const CARD_PAGE_SIZE = 24;
 
@@ -69,13 +69,12 @@ export const CARD_PAGE_SIZE = 24;
  * renders it. */
 /* W3: `district` came OUT and `display_label` went in -- one string per pin, from
  * listing_location through the projection, so the popup no longer names the okres
- * when it knows the street. The two that joined it are what the PIN PRECISION
- * reads, and they are the only two columns on this list that ListingMap draws
- * rather than prints: a pin resolved below building level is drawn as an open
- * ring, the clicked one with a circle of `uncertainty_radius_m` metres around it,
- * and `granularity_rank` is the INT form of the rung (migration 380), because
- * granularity is compared by rank and never by enum text. */
-const MAP_COLS = 'listing_id,property_id,lat,lng,price_czk,price_per_m2,price_per_m2_basis,category_main,disposition,area_m2,display_label,uncertainty_radius_m,granularity_rank,last_seen_at,is_active';
+ * when it knows the street. `granularity_rank` is what the PIN PRECISION reads
+ * (lib/pinPrecision): a pin at building level or better wears a black contour,
+ * and the popup says exact or approximate. It is the INT form of the rung
+ * (migration 380), because granularity is compared by rank and never by enum
+ * text. */
+const MAP_COLS = 'listing_id,property_id,lat,lng,price_czk,price_per_m2,price_per_m2_basis,category_main,disposition,area_m2,display_label,granularity_rank,last_seen_at,is_active';
 const CARD_COLS =
   'listing_id,property_id,sreality_id,source,source_id_native,display_label,disposition,subtype,area_m2,price_czk,first_seen_at,last_seen_at,is_active,tom_days,' +
   /* The point of the property (its location ad) — the hovered card hands it to the map. */
@@ -104,7 +103,8 @@ const CARD_COLS =
   /* The lot the card names after the floor area and the Lot area sort orders by:
    * THE plot measure (migration 534) and never the bare estate_area column. */
   'plot_area_m2,' +
-  /* The portal badge (MS19, migration 590): the portals with an active ad, else every portal. */
+  /* The portals with an active ad, else every portal (MS19, migration 590): the portal chips
+   * of the phone feed. The Browse card names no portal (ruling P01, 2026-10-27). */
   'all_sources,active_sources,' +
   /* The ad-count badge (migration 590): how many ads the property holds, active or not. */
   'source_count';
@@ -199,9 +199,23 @@ interface CountOption {
 const selectFrom = (relation: string, columns: string, opts?: CountOption) =>
   supabase.from(relation).select(columns, opts);
 
+/* The map area as the readers' parameters (migration 694): a box or a circle, tested
+ * in the database by its one spatial predicate, `in_map_area`. Only the set side is sent. */
+export const areaArgs = (f: ListingFilters): Record<string, number> => {
+  if (f.circle) {
+    return { circle_lat: f.circle.lat, circle_lng: f.circle.lng, circle_radius_m: f.circle.radius_m };
+  }
+  if (f.bounds) {
+    const { west, south, east, north } = f.bounds;
+    return { bbox_west: west, bbox_south: south, bbox_east: east, bbox_north: north };
+  }
+  return {};
+};
+
 /* THE start of every Browse cohort read, so the list, its count, the map pins
- * and the no-price hint cannot disagree about which properties are hidden. Only
- * the active scope sides are sent (lib/setScope.scopeArgs). */
+ * and the no-price hint cannot disagree about which properties are hidden or
+ * where they lie. Only the active scope sides and the set map area are sent
+ * (lib/setScope.scopeArgs, areaArgs). */
 const readSource = (
   fn: string,
   f: ListingFilters,
@@ -209,7 +223,7 @@ const readSource = (
   opts: CountOption = {},
 ): ReturnType<typeof selectFrom> =>
   supabase
-    .rpc(fn, { hide_dismissed: !f.showDismissed, ...scopeArgs(f) }, { get: true, ...opts })
+    .rpc(fn, { hide_dismissed: !f.showDismissed, ...scopeArgs(f), ...areaArgs(f) }, { get: true, ...opts })
     .select(columns) as unknown as ReturnType<typeof selectFrom>;
 
 const listSource = (f: ListingFilters, columns: string, opts?: CountOption) =>
@@ -348,13 +362,6 @@ const applyFilters = <T>(q: T, f: ListingFilters): T => {
       ? r.lte('total_price_change_pct', f.totalPriceChangePct)
       : r.gte('total_price_change_pct', f.totalPriceChangePct);
   }
-  const bbox = effectiveBbox(f);
-  if (bbox) {
-    r = r.gte('lng', bbox.west)
-         .lte('lng', bbox.east)
-         .gte('lat', bbox.south)
-         .lte('lat', bbox.north);
-  }
   return r as unknown as T;
 };
 
@@ -377,13 +384,10 @@ export interface MapRow {
   /* The one server-composed place string (migration 503) -- what the popup
    * prints. */
   display_label: string | null;
-  /* The two the pin-precision rules read (lib/uncertaintyCircle). `granularity_rank`
-   * is the INT rung from location_granularity_rank (migration 380): compare it,
-   * never the enum text. A pin at BUILDING or better gets a black outer contour, and the pin
-   * whose popup is open gets a circle of `uncertainty_radius_m` metres -- see
-   * ListingMap. Both are NULL for an unresolved row, which draws no circle rather
-   * than a circle of unknown size. */
-  uncertainty_radius_m: number | null;
+  /* What the pin-precision rules read (lib/pinPrecision): the INT rung from
+   * location_granularity_rank (migration 380). Compare it, never the enum text.
+   * A pin at BUILDING or better gets a black outer contour -- see ListingMap.
+   * NULL for an unresolved row, which reads as precision unknown. */
   granularity_rank: number | null;
   last_seen_at: string;
   is_active: boolean;
@@ -778,7 +782,7 @@ export interface CardRow {
   total_price_change_pct: number | null;
   price_change_count: number | null;
   /* Every portal with an ad, and those with an active ad (MS19; never NULL: the
-   * projection coalesces them). The portal badge reads them. */
+   * projection coalesces them). The phone feed's portal chips read them. */
   all_sources: string[];
   active_sources: string[];
   /* How many ads the property holds, active or not (migration 590, the
@@ -906,7 +910,6 @@ export const buildBrowseStatsArgs = (
     ? [...buildingMaterialToValues(f.buildingMaterial)]
     : null;
 
-  const effBbox = effectiveBbox(f);
   const portals = adPortals(f);
 
   return {
@@ -972,10 +975,13 @@ export const buildBrowseStatsArgs = (
     subtype_filter:          f.subtype.length ? f.subtype : null,
     building_type_filter:    buildingTypeArray,
     condition_match_filter:  f.conditionMatch.length ? f.conditionMatch : null,
-    bbox_west:               effBbox?.west  ?? null,
-    bbox_south:              effBbox?.south ?? null,
-    bbox_east:               effBbox?.east  ?? null,
-    bbox_north:              effBbox?.north ?? null,
+    bbox_west:               f.bounds?.west  ?? null,
+    bbox_south:              f.bounds?.south ?? null,
+    bbox_east:               f.bounds?.east  ?? null,
+    bbox_north:              f.bounds?.north ?? null,
+    circle_lat:              f.circle?.lat ?? null,
+    circle_lng:              f.circle?.lng ?? null,
+    circle_radius_m:         f.circle?.radius_m ?? null,
     city_pop_min:            f.minCityPopulation,
     city_pop_max:            f.maxCityPopulation,
     /* Migration 142/143 — fast polygon-edge proximity precomputed columns. */
@@ -1033,8 +1039,7 @@ const DETAIL_COLS =
   'description,source_url';
 
 /* THE PROPERTY as its Browse card shows it (decision 11): the `properties_public`
- * row, whose every advert field is its canonical advert's and every physical fact
- * the first non-empty in the same order (migration 561). Selected in the
+ * row, every field at its MS11 grain (docs/design/merge-sprint/PROGRAM.md). Selected in the
  * ListingPublic shape the detail components render, `id` being the canonical
  * advert (`listing_id`); the price-change pair is the canonical advert's own
  * series, as Browse filters on it. The row carries no portal URL: each advert's
@@ -1051,10 +1056,13 @@ const PROPERTY_COLS =
   /* MF is property-grain: the page renders `mf_reference_rent` by shape
    * (lib/mfReference) and pairs a value with the property yield. */
   'description,mf_gross_yield_pct,mf_reference_rent,' +
-  'price_change_count,total_price_change_pct';
+  'price_change_count,total_price_change_pct,' +
+  /* The RÚIAN code of the town: the city-index card on Přehled (P19, lib/useCityQuality). */
+  'obec_id';
 
 export interface PropertyPublic extends ListingPublic {
   property_id: number;
+  obec_id: number | null;
   mf_gross_yield_pct: number | null;
   mf_reference_rent: ReferenceRent | null;
   price_change_count: number | null;
@@ -1130,7 +1138,8 @@ export const fetchAdvertProperty = async (
 const PROPERTY_SOURCE_COLS =
   'id,property_id,source,source_url,source_id_native,ad_reference,is_active,price_czk,first_seen_at,last_seen_at';
 
-/* Every advert of one property, oldest first — the merged-adverts section's rows. */
+/* Every advert of one property, oldest first (id breaks a tie, as the API's
+ * price-history read does) — the merged-adverts section's rows. */
 export const fetchPropertySources = async (
   propertyId: number,
   { signal }: PgReadOptions = {},
@@ -1140,7 +1149,8 @@ export const fetchPropertySources = async (
       .from('property_sources_public')
       .select(PROPERTY_SOURCE_COLS)
       .eq('property_id', propertyId)
-      .order('first_seen_at', { ascending: true }),
+      .order('first_seen_at', { ascending: true })
+      .order('id', { ascending: true }),
     { signal },
   );
   return data ?? [];
@@ -1229,10 +1239,11 @@ export const fetchListingsForListingIds = async (
   return out;
 };
 
-/* A card's storey, for the Browse card's title. browse_list carries no floor
- * column (and the card read model is not widened for one attribute), so the
- * visible cards' canonical ads are read here, keyed on listings_public.id, three
- * columns wide. The scale is listings.floor's: ground = 0, below ground < 0. */
+/* The storey of each visible card. browse_list carries no floor column (and the
+ * card read model is not widened for one attribute), so the property rows are read
+ * here from properties_public, keyed on the canonical ad id the card holds, three
+ * columns wide. The value is the property one: the storey most of its ads state
+ * (migration 751), ground = 0, below ground < 0. */
 export type ListingFloor = Pick<ListingPublic, 'floor' | 'total_floors'>;
 
 export const fetchListingFloors = async (
@@ -1241,7 +1252,7 @@ export const fetchListingFloors = async (
 ): Promise<Map<number, ListingFloor>> => {
   if (ids.length === 0) return new Map();
   const { data } = await pgRead<Array<ListingFloor & { id: number }> | null>(
-    supabase.from('listings_public').select('id,floor,total_floors').in('id', ids as number[]),
+    supabase.from('properties_public').select('id:listing_id,floor,total_floors').in('listing_id', ids as number[]),
     { signal },
   );
   const out = new Map<number, ListingFloor>();
@@ -1258,7 +1269,7 @@ export const fetchListingFloors = async (
  * (clip_fine_tag / clip_logical_tag / clip_confidence, migration 236) so every
  * photo surface can render its bottom-left tag badge from the same read. */
 const IMAGE_PUBLIC_COLS =
-  'id,sreality_id,sequence,sreality_url,storage_path,clip_fine_tag,clip_logical_tag,clip_confidence,clip_render_score,phash';
+  'id,sreality_id,sequence,sreality_url,storage_path,clip_fine_tag,clip_logical_tag,clip_confidence,phash';
 
 /* Batch image fetch keyed on `sreality_id` — kept for the callers whose upstream
  * read model is still sreality-keyed and carries no surrogate id. These
@@ -1522,19 +1533,13 @@ export interface CuratedCity {
   city_id: number;
   name: string;
   kraj_name: string;
-  lat: number;
-  lng: number;
-  default_radius_m: number;
+  /* The latest ČSÚ year of obec_population for obec_kod (migration 726). */
   population: number | null;
   population_as_of_year: number | null;
-  /* The RÚIAN obec this curated city was matched to (migration 081), or null
-   * when the name match failed. The view has always exposed it and
-   * fetchCuratedCities has always `select('*')`-ed it — it was simply absent
-   * from this type. It is the join key that lets a property carry its city's
-   * indexes without a PostGIS round-trip: `properties.obec_id =
-   * curated_cities.admin_boundary_id`. All 206 curated cities have one, so the
-   * centroid+radius fallback arm in the SQL predicates is currently dead. */
-  admin_boundary_id: number | null;
+  /* The RÚIAN town code of the city (curated_cities.obec_kod, migration 726;
+   * never null). It is the join key that lets a property carry the indexes of
+   * its city without a PostGIS round-trip: `properties.obec_id = obec_kod`. */
+  obec_kod: number;
 }
 
 export interface CityIndexDefinition {
@@ -1557,7 +1562,7 @@ export interface CityIndexValue {
 
 /* Query keys for the three operator-static city-quality datasets. They were
  * inline string literals in BrowseExperience; anything else wanting the same
- * cached rows (the pipeline board's index strip) has to spell them identically
+ * cached rows (Datasets, the index-rule picker) has to spell them identically
  * or it silently refetches into a parallel cache entry. */
 export const cityQualityKeys = {
   cities: ['curated_cities'] as const,
@@ -1624,7 +1629,8 @@ export interface CityPolygon {
 export const fetchCuratedCityPolygons = async (
   { signal }: PgReadOptions = {},
 ): Promise<CityPolygon[]> => {
-  /* One simplified municipality boundary per curated city (205 rows).
+  /* One simplified municipality boundary per curated city (206 rows), the
+   * RÚIAN render polygon of its town (migration 726).
    * `geojson` is the raw ST_AsGeoJSON string the map JSON.parses into a
    * Feature geometry. Fetched once and cached (staleTime: Infinity), and only
    * when the map tab is active. */
@@ -1811,6 +1817,8 @@ export const notificationKeys = {
   all: ['notifications'] as const,
   feed: (params: Record<string, unknown>) =>
     ['notifications', 'feed', params] as const,
+  /* Prefix of every filter's feed: a mark-seen paints the row in each of them. */
+  anyFeed: ['notifications', 'feed'] as const,
   unreadCount: ['notifications', 'unread-count'] as const,
 };
 
@@ -1821,6 +1829,8 @@ export const filterPresetKeys = {
 export const curationKeys = {
   collections: ['curation', 'collections'] as const,
   collection: (id: number) => ['curation', 'collection', id] as const,
+  /* Prefix of every collection page read above (lib/curationSync). */
+  anyCollection: ['curation', 'collection'] as const,
   tags: ['curation', 'tags'] as const,
   propertyTagMembers: ['curation', 'property-tag-members'] as const,
   propertyCollectionMembers: ['curation', 'property-collection-members'] as const,
@@ -1856,10 +1866,33 @@ export const pipelineKeys = {
   members: ['pipeline', 'members'] as const,
 };
 
+/* What a gesture over the board's cards holds while it lasts (lib/revalidate
+ * holdReads): the cards and the per-card marks. The kanban drag adds the stages,
+ * its droppable columns (pages/Pipeline); the phone pager does not, so it follows
+ * a stage archived elsewhere (components/phone/PhonePipeline). */
+export const BOARD_GESTURE_HELD = [pipelineKeys.board, pipelineKeys.members] as const;
+
 /* Both of the caller's pipeline-share lists (GET /pipeline/shares). Never
  * acting-prefixed: sharing is always the caller's own (lib/acting). */
 export const pipelineShareKeys = {
   all: ['pipeline-shares'] as const,
+};
+
+/* The curation clock (migration 696): one row per (account, family) the caller
+ * follows, read by lib/curationSyncOwner. Exactly the ClockRow columns, pinned to
+ * the view by tests/test_curation_clock_read_contract.py, which reads the quotes
+ * below: no apostrophes in this comment or the list. */
+const CURATION_CLOCK_COLS = 'account_id,family,counter,mine,age_ms';
+
+/* NEVER acting: who follows whom is stated once, in the view (its audience
+ * function), and an x-act-as header would narrow it to the rows of the caller
+ * alone (docs/design/curation-sync.md § 3.4). */
+export const fetchCurationClock = async ({ signal }: { signal?: AbortSignal } = {}): Promise<ClockRow[]> => {
+  const { data } = await pgRead<ClockRow[] | null>(
+    supabase.from('curation_clock_public').select(CURATION_CLOCK_COLS),
+    { signal },
+  );
+  return data ?? [];
 };
 
 export const dismissalKeys = {
@@ -1989,7 +2022,9 @@ export const fetchPipelineStages = async (
       .select(
         'id, key, label, position, color, is_terminal, is_entry, code, ' +
           /* The stage's delegated stamp (migration 641), for the stage editor. */
-          'edited_by_account_id, edited_at',
+          'edited_by_account_id, edited_at, ' +
+          /* The stage role (migration 734): the viewing stage a viewing date offers. */
+          'role',
       )
       .order('position'),
     { signal, actAs },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_FILTERS, effectiveBbox } from './filters';
+import { DEFAULT_FILTERS } from './filters';
 import { DEFAULT_SCOPE, isPropertyCard, neighbourhoodFilters } from './neighbourhood';
 import { marketSample } from './stats';
 
@@ -25,12 +25,9 @@ describe('neighbourhoodFilters — one neighbourhood for the tile and the explor
       buildingMaterial: [],
       conditionMatch: [],
       bounds: null,
-      locationMode: 'center_radius',
-      centerRadius: { lat: 50.1, lng: 14.45, radius_m: 500 },
+      // The true circle every Browse reader filters on (in_map_area, migration 694).
+      circle: { lat: 50.1, lng: 14.45, radius_m: 500 },
     });
-    // The box every Browse reader filters on: ±500 m around the point.
-    const box = effectiveBbox(filters)!;
-    expect((box.north - box.south) * 111.32).toBeCloseTo(1, 1);
   });
 
   it('leaves an attribute the property does not state unset, and names it', () => {
@@ -44,7 +41,7 @@ describe('neighbourhoodFilters — one neighbourhood for the tile and the explor
     const { filters } = neighbourhoodFilters(FLAT, {
       ...DEFAULT_SCOPE, radiusM: 2000, buildingMaterial: ['cihla'], conditionMatch: ['velmi_dobry'],
     })!;
-    expect(filters.centerRadius?.radius_m).toBe(2000);
+    expect(filters.circle?.radius_m).toBe(2000);
     expect(filters.buildingMaterial).toEqual(['cihla']);
     expect(filters.conditionMatch).toEqual(['velmi_dobry']);
   });

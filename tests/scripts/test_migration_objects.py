@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scripts.migration_objects import load_migrations, parse_objects
+from scripts.migration_objects import load_migrations, parse_dropped, parse_objects
 
 _MIGRATIONS = Path(__file__).resolve().parents[2] / "migrations"
 
@@ -92,10 +92,8 @@ def test_ignores_ddl_inside_a_string_literal():
     assert _idents(sql) == {"column:listings.real_two"}
 
 
-def test_drops_and_grants_yield_nothing_rather_than_guessing():
-    """A migration that only drops or grants declares no object to probe. It must
-    fall into the reported `unverifiable` bucket, never into a false pass or a
-    false alarm."""
+def test_drops_and_grants_create_nothing():
+    """A drop is not a create: it reaches the probe through its own list, `Migration.dropped`."""
     assert _idents("DROP TABLE IF EXISTS public.gone; REVOKE ALL ON public.x FROM anon;") == set()
 
 
@@ -148,13 +146,68 @@ def test_a_file_that_drops_and_recreates_keeps_declaring(tmp_path):
     assert _declared(tmp_path) == [["relation:v"], ["relation:v"]]
 
 
+def _expected_absent(root: Path) -> list[list[str]]:
+    return [[str(o) for o in m.dropped] for m in load_migrations(root, newest=0)]
+
+
+def test_the_shapes_a_file_drops_are_expected_absent_but_a_function(tmp_path):
+    (tmp_path / "001_a.sql").write_text(
+        "drop table if exists public.t1, t2 cascade;\n"
+        "drop view v1; drop materialized view if exists mv1;\n"
+        "drop index concurrently if exists i1;\n"
+        "drop sequence if exists s1;\n"
+        "alter table public.t3 drop column if exists c1, drop column c2;\n"
+        "alter table agent.t4 drop column c3;\n"
+        "drop policy if exists p1 on public.t3;\n"
+        "drop function if exists f1(int);\n"
+        "-- drop table prose;\n")
+    assert sorted(_expected_absent(tmp_path)[0]) == [
+        "column:agent.t4.c3", "column:t3.c1", "column:t3.c2", "policy:t3.p1",
+        "relation:i1", "relation:mv1", "relation:s1", "relation:t1", "relation:t2", "relation:v1"]
+
+
+def test_a_recreation_in_the_same_or_a_later_file_is_not_expected_absent(tmp_path):
+    (tmp_path / "001_a.sql").write_text("drop table if exists back; drop table if exists gone;")
+    (tmp_path / "002_b.sql").write_text("drop policy p on t; create policy p on public.t using (true);"
+                                        "create table if not exists public.back (id int);")
+    assert _expected_absent(tmp_path) == [["relation:gone"], []]
+
+
+def test_a_later_file_recreating_does_not_excuse_a_newer_drop(tmp_path):
+    (tmp_path / "001_a.sql").write_text("drop view v;")
+    (tmp_path / "002_b.sql").write_text("create view v as select 1;")
+    (tmp_path / "003_c.sql").write_text("drop view v;")
+    assert _expected_absent(tmp_path) == [[], [], ["relation:v"]]
+
+
+def test_every_clause_of_a_many_clause_alter_counts():
+    """590 re-adds 561's dropped columns as the 2nd and 3rd clauses of one ALTER, behind a drop."""
+    sql = ("alter table public.browse_list drop column if exists asset_id, add column if not exists all_sources text[],"
+           " add column active_sources text[]; alter table t add column a int, drop column b;")
+    assert _idents(sql) == {"column:browse_list.all_sources", "column:browse_list.active_sources", "column:t.a"}
+    assert [str(o) for o in parse_dropped(sql)] == ["column:browse_list.asset_id", "column:t.b"]
+    expected_absent = {m.filename: {str(o) for o in m.dropped} for m in load_migrations(_MIGRATIONS, newest=0)}
+    assert "column:browse_list.active_sources" not in expected_absent["561_one_property_view.sql"]
+
+
+def test_the_one_file_reader_sees_only_its_own_creates():
+    assert [str(o) for o in parse_dropped("drop table a; drop table b; create table b (id int);")] == ["relation:a"]
+
+
+def test_real_drops_are_expected_absent_and_rebuilds_are_not():
+    by_name = {m.filename: {str(o) for o in m.dropped} for m in load_migrations(_MIGRATIONS, newest=0)}
+    assert by_name["688_drop_filter_visibility.sql"] == {"relation:filter_visibility"}
+    assert "policy:building_runs.building_runs_tenant_insert" in by_name["679_run_tables_browser_write_close.sql"]
+    assert "policy:property_notes.property_notes_shared_read" not in by_name["613_shared_notes_reach_later_shares.sql"]
+
+
 def test_every_recent_migration_is_either_probeable_or_openly_unverifiable():
     """A parser that silently returns nothing for most files would render the
     whole check green while proving nothing. Hold the line: most recent
-    migrations must declare at least one probeable object.
+    migrations must declare at least one probeable object, created or dropped.
 
     The floor is a TRIPWIRE on the parser, not a rule about how migrations are
-    written — a migration that only drops, only seeds a policy row or only
+    written — a migration that only drops functions, only seeds a policy row or only
     rebuilds a read model declares nothing to probe, and says so. It moved 28 ->
     24 when the location simplification sprint's deletion wave (502, 511, 512,
     513) entered the window alongside the six field-policy seeds already in it,
@@ -162,8 +215,9 @@ def test_every_recent_migration_is_either_probeable_or_openly_unverifiable():
     572: app_settings updates, nothing to probe) entered it in September 2026.
     A broken parser reads ZERO here, nowhere near the floor."""
     migs = load_migrations(_MIGRATIONS, newest=40)
-    probeable = [m for m in migs if m.objects]
-    assert len(probeable) >= 21, [m.filename for m in migs if not m.objects]
+    probeable = [m for m in migs if m.objects or m.dropped]
+    assert len(probeable) >= 21, [m.filename for m in migs if not m.objects and not m.dropped]
+    assert sum(1 for m in migs if m.dropped and not m.objects) >= 2, "a drop-only file counts as probeable"
 
 
 def test_an_object_a_later_migration_drops_is_not_probed_on_the_earlier_one():

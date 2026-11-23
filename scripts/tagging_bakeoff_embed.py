@@ -58,11 +58,14 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from scraper import dinov3_tagger, image_storage
 from scripts import pod_bootstrap
 from scripts import tagging_bakeoff_arms as arms_mod
+
+if TYPE_CHECKING:
+    import torch
 
 LOG = logging.getLogger("tagging_bakeoff_embed")
 
@@ -204,8 +207,9 @@ class SimpleEncoder:
     else.
     """
 
-    def __init__(self, model, processor, *, pooling: str, resolution: int,
-                 preprocessing: str, torch_dtype, device: str, revision: str) -> None:
+    def __init__(self, model: Any, processor: Any, *, pooling: str, resolution: int,
+                 preprocessing: str, torch_dtype: torch.dtype | None, device: str,
+                 revision: str) -> None:
         self._model = model
         self._processor = processor
         self._torch_dtype = torch_dtype
@@ -239,7 +243,7 @@ class SimpleEncoder:
                    preprocessing=preprocessing, torch_dtype=torch_dtype, device=device,
                    revision=revision)
 
-    def _pool(self, outputs):
+    def _pool(self, outputs: Any) -> torch.Tensor:
         if self.pooling == "attention_pool":
             # SigLIP2 has no CLS token; `pooler_output` here IS the learned attention
             # head's output, a different mechanism from the DINO arms' post-LN CLS that
@@ -256,7 +260,7 @@ class SimpleEncoder:
                 f"model output has no usable tensor for pooling={self.pooling!r}")
         return pooled
 
-    def _process(self, batch: list):
+    def _process(self, batch: list) -> Any:
         """Normalize + tensorize, with the processor's OWN geometry switched off.
 
         The geometry is already ours (`apply_preprocessing` produced a
@@ -277,7 +281,7 @@ class SimpleEncoder:
                 continue
         raise RuntimeError("image processor rejected every call form")
 
-    def embed(self, images: list, batch_size: int = 32):
+    def embed(self, images: list, batch_size: int = 32) -> torch.Tensor | None:
         import torch
 
         chunks = []
@@ -303,7 +307,8 @@ class SimpleEncoder:
         return torch.cat(chunks) if chunks else None
 
 
-def load_encoder(arm: dict[str, Any], *, revision: str, device: str):
+def load_encoder(arm: dict[str, Any], *, revision: str,
+                 device: str) -> dinov3_tagger.Dinov3Tagger | SimpleEncoder:
     """The right loader for this arm's family, pinned to `revision`."""
     if arm["pooling"] in dinov3_tagger.POOLING_MODES:
         return dinov3_tagger.Dinov3Tagger.load(
@@ -405,7 +410,7 @@ def _decode(paths: Sequence[tuple[int, str]]) -> list[tuple[int, Any]]:
     return decoded
 
 
-def _vec_str(row) -> str:
+def _vec_str(row: torch.Tensor) -> str:
     return "[" + ",".join(f"{x:.6f}" for x in row.tolist()) + "]"
 
 

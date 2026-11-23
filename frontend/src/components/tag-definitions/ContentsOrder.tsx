@@ -1,3 +1,4 @@
+import { SegmentedBar } from '@/components/controls';
 import type { TagContentsOrder, TagPositiveImage } from '@/lib/api';
 
 export type ContentsOrder = TagContentsOrder;
@@ -21,7 +22,7 @@ export function orderPositives(
 }
 
 const OUTLIER_OPTION = {
-  key: 'outlier_first' as ContentsOrder,
+  value: 'outlier_first' as ContentsOrder,
   label: 'Least like the rest',
   title:
     "Farthest first from this tag's own centre in CLIP space — where an image that does not belong tends to sit. A rank inside this tag only.",
@@ -39,12 +40,12 @@ const OUTLIER_OPTION = {
 const recentOption = (windowed: boolean, limit: number) =>
   windowed
     ? {
-        key: 'recent' as ContentsOrder,
+        value: 'recent' as ContentsOrder,
         label: `Newest of these ${limit}`,
         title: `Most recently labeled among the ${limit} fetched. This tag holds more than ${limit} positives and these ${limit} were selected by DISTANCE, so they are not the tag's ${limit} newest.`,
       }
     : {
-        key: 'recent' as ContentsOrder,
+        value: 'recent' as ContentsOrder,
         label: 'Newest first',
         title: 'Most recently labeled first — what moved since the last sitting.',
       };
@@ -73,36 +74,14 @@ export default function ContentsOrderControl({
   truncated: boolean;
   limit: number;
 }) {
-  const options = [OUTLIER_OPTION, recentOption(truncated && outlierApplied, limit)];
+  const options = [
+    { ...OUTLIER_OPTION, disabled: !outlierApplied },
+    recentOption(truncated && outlierApplied, limit),
+  ];
   return (
     <>
-      <div
-        role="group"
-        aria-label="Order this tag's images"
-        className="ml-auto flex items-center gap-1"
-      >
-        {options.map((o) => {
-          const active = order === o.key;
-          const disabled = o.key === 'outlier_first' && !outlierApplied;
-          return (
-            <button
-              key={o.key}
-              type="button"
-              aria-pressed={active}
-              disabled={disabled}
-              title={o.title}
-              onClick={() => onOrderChange(o.key)}
-              className={[
-                'px-1.5 py-0.5 text-[0.68rem] rounded-[var(--radius-xs)] border transition-colors disabled:opacity-40',
-                active
-                  ? 'border-[var(--color-copper)] text-[var(--color-copper)]'
-                  : 'border-[var(--color-rule)] text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
-              ].join(' ')}
-            >
-              {o.label}
-            </button>
-          );
-        })}
+      <div className="ml-auto">
+        <SegmentedBar label="Order this tag's images" options={options} value={order} onChange={onOrderChange} />
       </div>
       {/* WHAT the order rests on, on screen whichever side of the floor the tag
           sits. Above it, because a centroid over 5 images and one over 200 are

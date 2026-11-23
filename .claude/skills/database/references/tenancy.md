@@ -15,6 +15,17 @@ shape for each grain.
 - `current_account_ids()` — `LANGUAGE sql STABLE SECURITY DEFINER`, returns the caller's
   `account_members.account_id` set keyed off `auth.jwt() ->> 'sub'`.
 - `is_platform_admin()` — same shape against `admins`.
+- **An agent run's identity (migration 704, #2070).** The JWT-claims GUC of a run carries `run_account_id` beside
+  `sub`, set only by `api/agents/claims.caller_for`. It narrows: `current_account_ids()` and `acting_account_ids()`
+  intersect with that one account, `acting_account_ids()` ignores `x-act-as`, `is_platform_admin()` answers false. It
+  can only remove power: an account the `sub` is not a member of yields no account, and an empty claim raises. Without
+  it all three answer as 286, 641 and 330 did (`tests/test_agent_runs_live.py` compares them over a grid of claims,
+  headers, methods and roles). A browser user cannot set it: a Supabase JWT is signed, what a user can edit lands
+  under `user_metadata`, which no identity function reads, and no RPC of ours wraps `set_config` for a caller's value.
+  A custom access token hook would be the one way to add a top-level claim; the repo configures none (the dashboard
+  is not in git), and even that could only narrow. Hence a run started by an admin has no admin arm, and a
+  two-membership user's run reads one account; a removed membership empties the next tool call. The SYSTEM arm of
+  291's policies is every account's, a run's included.
 - Grants follow the skill body's "Default privileges" recipe: `handle_new_user()`
   (trigger-only) is executable by no client role; the other two grant `authenticated`
   EXECUTE, since RLS policies invoke them under the querying role.
@@ -41,12 +52,19 @@ by partial unique index: `PUT /stats/dashboard` upserts it under the account `re
 row's KEY; `GET /stats/dashboard` reads it by RLS alone, shape 1, and under `X-Act-As` that is the caller's own,
 the table being identity-scoped). The column was added nullable (the tables
 already held rows); it is NOT NULL on four of the five since `notification_subscriptions` 364,
-`filter_presets` 595 and `collections` / `tags` 608. `property_notes` waits on the operator's ruling
-about the split preview's bare-note case (PR #1829 attributes its one pre-tenancy NULL row).
+`filter_presets` 595 and `collections` / `tags` 608. `property_notes.account_id` is still nullable in the schema,
+but production holds no NULL row (0 on 2026-10-31, `docs/design/curation-sync.md` § 2; PR #1829 attributed the one
+pre-tenancy row); a NULL row would reach no tenant and bump no curation clock (§ Curation clock).
 
 **Migration 291 — estimation/building tables**: `estimation_runs`, `building_runs`.
 `account_id` is **NULLABLE**, `DEFAULT` the SYSTEM account — these can be written by
-service-role paths (the estimation agent, ClickUp) that don't carry a tenant JWT.
+service-role paths (the estimation agent, ClickUp) that don't carry a tenant JWT. **Writes-by-grant
+since migration 679** (rule 12): `authenticated` holds SELECT and `UPDATE (scenario)` on
+`estimation_runs` (the scenario PATCH, the one tenant-connection write) and SELECT alone on
+`building_runs`; 679 dropped both INSERT policies and `building_runs_tenant_update`. Every run is
+created and finished by the API on the service role. The column list is `BROWSER_WRITE_COLUMNS` in
+`tests/_tenant_registry.py`, held by both tenancy gates (offline over every migration from 679 on,
+live over the replayed schema's effective grants).
 
 **Migration 292 — child-grain tables**, `account_id` **derived by a `BEFORE INSERT OR
 UPDATE` trigger** from the owning parent row (a plain `DEFAULT` can't see a sibling
@@ -71,15 +89,15 @@ on `notification_dispatches`, and no admin arm reads or updates another account'
 `property_pipeline_events`, plus the signup trigger:
 - **Signup** (`handle_new_user` on `auth.users`, one path since migration 612): it creates the
   account, the owner membership, the default board (`seed_default_pipeline`: 10 stages with
-  codes from the label numbers, a dated snapshot of the operator's board), the `monitoring` collection and the 7-day
+  codes from the label numbers, "3. For Visit" as the viewing stage since 734, a dated snapshot of the operator's board), the `monitoring` collection and the 7-day
   free trial. A new default is a new migration replacing that function's literal; this prints
   one from a live board (keys as `api/pipeline.py` `_slugify` mints them from an ASCII label; the code
   from the label number, the ruled default; drop the comma on the last row):
   ```sql
-  select format('(target_account_id, %L, %L, %s, %L, %L, %s, %s),',
+  select format('(target_account_id, %L, %L, %s, %L, %L, %s, %s, %L),',
            trim(both '_' from lower(regexp_replace(label, '[^A-Za-z0-9]+', '_', 'g'))), label,
            row_number() over (order by position, id), color,
-           coalesce(substring(label from '^\s*([0-9]{1,3})'), code), is_entry::text, is_terminal::text)
+           coalesce(substring(label from '^\s*([0-9]{1,3})'), code), is_entry::text, is_terminal::text, role)
     from pipeline_stages
    where account_id = '<account uuid>' and archived_at is null
    order by position, id;
@@ -139,7 +157,9 @@ there (`docs/design/pipeline-sharing.md` §3.7; pinned offline by
   owner to the caller exists — `edit` on any method and table; `read` on `GET`/`HEAD` only and on the
   three pipeline tables only (`for_board`; ruling 2: a read share sees the board, never the owner's
   notes, files, tags, collections, dismissals or links; a missing method counts as a write) — and
-  **nothing** otherwise. The API runs a GET/HEAD that acts `READ ONLY`, as PostgREST does.
+  **nothing** otherwise. The API runs every GET/HEAD tenant transaction `READ ONLY` under `authenticated`'s 8 s
+  `statement_timeout` (`tenant_pool.bound_read`), acting or not, as PostgREST runs the SPA's own. It sets the
+  timeout itself because `SET ROLE` applies no role setting.
 - **Replace, never union.** While acting, the eleven tables show the owner's rows and none of the
   caller's own, so the card map, the entry stage, the dismissal rule and Browse's curated scope stay
   single-account. The child triggers (292's shape) read the owner's parent under the acting identity
@@ -182,6 +202,124 @@ there (`docs/design/pipeline-sharing.md` §3.7; pinned offline by
   RLS-only route that reaches the service role or mixes curation with other writes declares one.
 - **Tests** scope through ONE helper, `tests/_tenant_scope.scoped(sub, act_as=, method=, cur=)`; the
   four-tenant lane is `tests/test_pipeline_shares_live.py`.
+
+## Curation clock (migration 696)
+
+`docs/design/curation-sync.md` § 3.2-3.4 and § 3.9; ADR-0008. One counter per (account, family) that only the
+database advances, on a committed change, so every open SPA window can learn THAT its curation changed and re-read
+(the family → reads map is `frontend/src/lib/curationSync.ts` `SYNC_TABLES`). A signal, never state: not history,
+never reset, never rendered.
+
+- **A tenant table no browser writes.** `curation_clock(account_id, family, counter, changed_at)`, PK
+  `(account_id, family)`, families `board`, `dismissals`, `collections`, `tags`, `notes`, `links`, `shares`. It is in
+  `TENANT_TABLES` with `BROWSER_WRITE_COLUMNS['curation_clock'] = frozenset()` (the `building_runs` precedent), so
+  both tenancy gates check its `account_id`, its policy, no anon access and no browser write. `service_role` reads,
+  never writes: SELECT on the table (701, the Backend rule that the service role reads anything), no INSERT,
+  UPDATE, DELETE or TRUNCATE. The view `curation_clock_public` is the browser's read, not the service role's: its
+  audience reads the caller's accounts from the JWT and only `authenticated` may execute it. The 696 seed gave every
+  account then present all seven families at 1; a later account gains a family's row on its first bump (signup
+  bumps `board` and `collections`).
+- **The idiom: one definer writer on deferred row triggers.** `bump_curation_clock()` (`SECURITY DEFINER`,
+  `search_path = ''`) runs on fourteen `<table>_curation_clock` constraint triggers (696's twelve, 715's two on the
+  notification tables, family `notifications`, own-only), `AFTER INSERT OR UPDATE OR DELETE
+  … DEFERRABLE INITIALLY DEFERRED FOR EACH ROW`, the family as the trigger argument (`tests/_tenant_registry.py`
+  `CLOCKED_TABLES`; every other tenant table is in `NOT_CLOCKED` with its reason). At COMMIT it skips a no-op UPDATE,
+  bumps every account the row names (`account_id`, and on the two share tables `recipient_account_id`: both parties),
+  joins `accounts` so an account whose deletion cascades the row skips itself, and bumps each (family, account) once
+  per transaction through the transaction-local GUC `curation_clock.bumped`. That string grows ~45 B per (family,
+  account) bumped and `strpos` scans it once per row, so a bulk write costs O(rows × accounts it touches): O(rows)
+  for one account's 10⁴-row heal, never O(rows²) on one hot counter row. A
+  rollback, a savepoint rollback or a 0-row statement moves nothing; the API, the merge carriers (service role, any
+  account), signup (definer) and FK cascades all move it. A new curation table gets a trigger line in a forward
+  migration, a `CLOCKED_TABLES` entry and a `SYNC_TABLES` row together (census a).
+- **Follow, never act** — the sanctioned union of own and owner accounts, beside § Delegation's "replace, never
+  union". `curation_clock_audience()` (`current_account_ids()`, NEVER `acting_account_ids()`) says once who
+  follows whom: the caller's own accounts follow every family (`mine`); an owner who shared their pipeline is
+  followed for `board` by a read share and for `board` + the five curation families by an edit share (`edit`);
+  nobody follows another account's `shares`. The one policy, `curation_clock_audience_read` (FOR SELECT), restates
+  641's ruling 2 in family terms, and `tests/test_curation_sync_census.py` (i) pins its CASE (own / edit share /
+  read share → families) to `_BOARD_POLICIES` / `_ACTING_POLICIES`. The read is `curation_clock_public` (invoker;
+  `_TENANT_VIEWS`). A clock read sends no `x-act-as`; one sent anyway hides the share rows (the definer audience's
+  own `not public.acting()`; `pipeline_shares_party … and not acting()` until 709), so it fails closed to the
+  caller's own rows, never an error.
+- **Two audience evaluations per read, never more** (migration 708, F16 #2308; ruling 2026-11-01). The policy is
+  ONE `(account_id, family) in (select … from curation_clock_audience() a cross join lateral unnest(case when a.mine
+  … when a.edit … else array['board'] end) …)`, a single hashed SubPlan; the view keeps 696's join on the audience,
+  which maps `mine`. WHY: 696's three OR arms plus the view's join evaluated the audience four times per read. That
+  cost 4.9 ms mean in production against gate #2203's 2.5 ms, each evaluation then being about five definer
+  `current_account_ids()` calls (one since 709, below), whatever the table sizes. WHY NOT ONE: a policy's subquery never becomes a join, so
+  only the view's join probes `curation_clock_pkey` per followed account; without it the read scans the whole clock,
+  O(clock rows), and at 2,000 accounts costs more than 696's read (`docs/design/curation-sync.md` § 3.8). Never name
+  the audience twice in the policy, never drop the view's join; the live lane asserts two audience nodes per read and
+  the key at 2,000 accounts. The join limits the accounts, not the families, so never turn the clock's row security
+  off (708's `$post$` refuses it). The audience is never inlined (its `SET search_path`), so it is one Function Scan
+  wherever it appears.
+- **Each evaluation is cheap: planned once per backend, `current_account_ids()` once** (migration 709, F17 #2311). The
+  read pays for two evaluations, so their cost is the read's. The audience is `plpgsql` (RETURN QUERY's plan is
+  prepared once per backend; a SQL body is re-planned at every call), `SECURITY DEFINER` (`pipeline_shares` read as
+  its owner, so its row policy, two more `current_account_ids()` calls and `acting()`, is neither planned nor run) and
+  reads `current_account_ids()` once, in a CTE. WHY: under 708 production read the clock at 2.63 ms mean against
+  gate #2203's 2.5 ms; warm, planning was most of each evaluation. Locally a warm read went from 0.93–1.08 ms and
+  11–18 buffers to 0.27–0.35 ms and 5–10 (`docs/design/curation-sync.md` § 3.8). THE TRADE: no row policy backs the
+  definer body, so it filters itself: the recipient is one of the caller's accounts, and no share row while acting
+  (`not public.acting()`, which `pipeline_shares_party` did for the invoker). Census (i) and 709's `$post$` hold a
+  definer body's `me` CTE and its whole WHERE verbatim (`DEFINER_AUDIENCE_FILTERS`), so a neutralised filter or a
+  dropped `not in` fails; `tests/_admin_gate_registry.py` UNGATED registers it `reachable`
+  (`/rpc/curation_clock_audience`; the live sweep's waiver is incidental, the catalog case checks it reads no
+  admin-only relation); 709's `$post$` requires its owner to bypass `pipeline_shares`' row security and an empty
+  answer without an identity. A backend's FIRST statement pays catalog warm-up (~300 execution + ~330 planning
+  buffers, the "first audience call ~270 buffers" of a fresh-connection EXPLAIN) whatever the shape: judge the read on
+  the pooled `pg_stat_statements` mean, not on one fresh EXPLAIN. Never put the audience back to `language sql` or add a
+  `current_account_ids()` call to it; the live lane pins two calls per read (the shape: 708's made 8–10) and the
+  rows each caller reads on one backend after another warmed its plan, and a caller in several accounts following
+  each as own; ≤ 40 buffers warm at both sizes is a ceiling against a scan of a full clock, not against 708 (~20).
+  Production after 709: 0.973 ms mean and 18.3 buffers over the first 30 reads (2026-11-01).
+  GRANTS ON A HOT FUNCTION (the skill's recipe, its one exception): 709's `CREATE OR REPLACE` keeps the ACL, so it
+  revokes from `public`, `anon` and `service_role` and grants `authenticated` without ever revoking from it. Under
+  statement autocommit a revoke-then-grant pair on a function every open window calls each 5 s would refuse every
+  clock read in between; the same holds for any function its callers reach that often.
+- **What a recipient learns** (accepted, R23): for each family it may follow, the owner's cumulative counter (change
+  volume, including changes before the share and changes that leave no readable trace) and the exact last-change
+  time (`age_ms`); the audience lists owner ids `pipeline_shares` already shows. No PII, no row ids. The base table
+  (`/curation_clock`) and `/rpc/curation_clock_audience` are directly readable, scoped exactly like the view.
+- **Never** write or reset the clock outside `bump_curation_clock()` (census h: no DML in `api/`, `toolkit/`,
+  `scraper/`, `scripts/`, `autodedup/` or a migration after 696), set or read `curation_clock.bumped` anywhere else
+  in code or migrations (census g; a test may clear it to isolate a case), or silence a clock trigger without a
+  `-- ci-allow-clock-disable: <reason>` line in that migration (census e: `DISABLE` or `ENABLE REPLICA` of a clock
+  trigger, `ALL` or `USER` or a `format()` placeholder, `session_replication_role`, a TRUNCATE of a clocked table, or
+  redefining `bump_curation_clock()` after 696). Dropping
+  a clock trigger, its table or the function, or renaming either, leaves the trigger set census (a) compares. A heal
+  of a curation table needs no disable: the dedupe already makes it one bump per account and family.
+- **Never TRUNCATE a clocked table; delete instead.** Row triggers never fire on TRUNCATE, so it moves no counter and
+  every open window keeps the rows it showed. Census (e) flags a TRUNCATE of a clocked table in code or in a
+  migration after 696 without the annotation (a TRUNCATE … CASCADE of a table they reference is its named blind
+  spot).
+- **Commit-time failures are visible.** The bump locks its counter row at COMMIT, so a lock it cannot take (a
+  `lock_timeout`, the residual deadlock between two multi-family writers that bump in opposite orders) fails the
+  commit itself; the tenant pool commits before the response (`TenantConn`, W0), so the caller gets `503 db_busy`,
+  never a 200 for a lost write.
+- **Kill switches** (forward migrations, non-destructive; `docs/design/curation-sync.md` § 3.9 Decision 19).
+  *Reader* (the clock reads' load): `revoke select on public.curation_clock_public, public.curation_clock from
+  authenticated; revoke execute on function public.curation_clock_audience() from authenticated;` — windows fall
+  to permanent-error mode (≤ 1 read per 60 s each) and the app behaves as before sync, bar curation's reconnect
+  refetch; the live tenancy cases that read the view go red until that PR also takes the view out of `_TENANT_VIEWS`. Re-enable with a migration that
+  re-grants. *Writer* (a bump bug that fails curation commits): one migration carrying
+  `-- ci-allow-clock-disable: <reason>` and `alter table public.<t> disable trigger <t>_curation_clock;` for the
+  fourteen; the `curation_sync` health alarm's `triggers` cell reads Problem while it is in force, by intent; census
+  (a) and (d) do not read the enabled state and stay green. Re-enable with a forward migration's `enable trigger`.
+- **Rails.** The migration's `$post$` (twelve enabled deferred triggers, fourteen since 715's own `$post$`, definer bump, invoker audience until 709, the grants,
+  the seed; under the apply's statement autocommit it rolls nothing back: a failed assert fails the apply and leaves
+  the objects live, so the apply's exit status, the census and the health alarm are the gates);
+  `tests/test_curation_sync_census.py` (a)-(k), each shown to bite, its blind spots named in its header; the live lane
+  `tests/test_curation_clock_live.py` (every writer, the audience matrix with and without `x-act-as`, a forced
+  commit-time failure, two audience evaluations per read and `curation_clock_pkey` at 2,000 accounts); 708's
+  `$post$` (row security on, one policy naming the audience once, the view's five columns and its one join on the
+  audience, 701's grants); 709's `$pre$` (an owner the share policy would hold is refused before the function
+  changes) and `$post$` (plpgsql definer audience, ROWS 4, `search_path = ''`, the restated
+  filters, the owner's bypass, EXECUTE for `authenticated` only, no rows without an identity); the health alarm
+  `curation_sync` (`triggers`, `board_bumps`; W4's `reads` and `load`
+  watch the browsers' read in `pg_stat_statements`); the SPA's read-contract test
+  `tests/test_curation_clock_read_contract.py` (the owner's select list against the view, never acting).
 
 ## Composite PK: `property_pipeline` (migration 295)
 
@@ -227,6 +365,19 @@ stores it only in Railway as part of `TENANT_POOL_DB_URL`.
 `database` skill body's connection-modes section for the request-transaction mechanics
 (`SET LOCAL ROLE` + `set_config('request.jwt.claims', ...)`, bind param not string
 interpolation).
+
+**Routes take `TenantConn`, never `Depends(tenant_conn)` (curation sync W0, 2026-10-31).** The one alias
+`tenant_pool.TenantConn = Annotated[psycopg.Connection, Depends(tenant_conn, scope="function")]` is how every
+route and both helpers (`require_account_id`, `require_acting_account_id`) take the connection. Function scope
+closes the dependency, and so COMMITs, after the handler and the response's serialization but BEFORE the bytes are
+sent: a COMMIT that fails (deadlock, lock timeout, an FK race, any future commit-time trigger) reaches
+`api.main`'s exception handler as a 503 `db_busy` or a 500, and the client never holds a 200 for a write that rolled
+back. The default request scope committed after `await response(...)`. ONE alias, because FastAPI's dependency
+cache keys on the scope: a bare `Depends(tenant_conn)` beside it is a second cache entry, so a second connection
+and transaction in the same request, its reads blind to the other's uncommitted writes. An `Annotated` `Depends`
+takes no default, so the parameter goes before any defaulted one. Tests keep overriding
+`dependency_overrides[tenant_pool.tenant_conn]` (keyed by callable). `tenant_transaction` (the context manager) is
+unchanged. The census: `tests/api/test_tenant_conn_scope.py` (below).
 
 **The legacy-caller bypass is gone (2026-09-11).** `tenant_conn` and `resolve_account_id`
 used to branch on a `claims.get("legacy")` key and route static-`API_TOKEN` callers onto
@@ -291,7 +442,8 @@ routing inside `detach_listings`, whose carry-row identity, twins and conflicts 
 merge's receipt (`api/property_merge.merge_receipt`: the caller's account's own carry rows), the split's preview
 and receipt (`toolkit/property_split`: the caller's account's own items only, nothing of another's), `api/estimation_runs.py`
 (service-role child runs from `building_runs`), the Stripe webhook (no caller identity at
-all — the HMAC over the raw body is the auth), and both Valuo routes (`api/routes/valuo.py` →
+all — the HMAC over the raw body is the auth), the agent executor (`api/agents/executor.py`: `submit` and `cancel`
+take the account the route resolved, and every run row names it), and both Valuo routes (`api/routes/valuo.py` →
 `api/valuo.py`; `valuo_valuations` is RLS-on with zero policies): the account is
 `require_account_id(conn, claims, None)` called on the service-role connection — the one no-account 400,
 with no tenant transaction left open across the POST's two paid calls (`market-value`, then
@@ -308,6 +460,30 @@ silently NULL `locality_display` on a tenant connection. So it scopes with an ex
 and that list mirrors migration 291's three-arm policy (own account OR SYSTEM OR platform
 admin) rather than inventing a second tenancy definition. It never widens and never returns
 empty: an unresolvable account narrows to `[SYSTEM]`, a missing or bad credential raises.
+
+`tests/api/test_tenant_caller_census.py` pins who calls `tenant_transaction` directly: `tenant_conn`, and each named
+exception below. A new caller argues its case here and joins the pinned set there. The same census pins the one place
+a caller gets claims, `api/agents/claims.caller_for`, so there is one claims shape: the executor hands the registry that
+caller and opens no transaction of its own.
+
+**Named exception — the tool registry (`api/capabilities/registry._connection`, #2062).** A TENANT tool runs
+inside `tenant_pool.tenant_transaction(claims, act_as=None, method=...)`: the caller's claims (a run's, from the
+builder), never acting
+as anyone (MVP: no act-as on runs), method `GET` for a READ tool and `POST` otherwise, so a READ tool is bounded as
+every GET is. The handler, the envelope check and the result's fit all run inside it, so any refusal rolls a write
+back. It is the only place a tool's connection is opened (an AST census); market tools take the service connection
+the transport hands in, each call in a transaction of its own under the same bound (`tenant_pool.bound_read`). A TENANT
+COSTLY tool (`valuo_valuation`) reads its run's narrowed account in a short `GET` transaction, closes it, and runs shape 3 on the
+service connection, as the Valuo routes do: no tenant transaction across a paid call.
+
+**Named exception — `tenant_pool.own_account_id_released` (`PUT /account/cuzk-login`, #2601; `POST /properties/{id}/building/prices`, #2595): the caller's own
+account from a transaction of its own, closed before the handler waits on an outside service.** The dependency
+`require_account_id` holds the request's tenant transaction until the handler returns; this handler then waits
+on ČÚZK for up to 25 s, which would pin a pooled backend and a worker for that long. The helper gives the same
+answer and the same refusals (403 under X-Act-As, 400 with no account) and returns with nothing open. It reads
+one row and writes none, so there is no second transaction to split a route's reads and writes across. A route
+that touches tenant rows takes the dependency, never this. Both callers then write on the service connection, every
+statement naming the account; the two are pinned in `tests/api/test_cuzk_login.py`.
 
 **Named exception — `POST /estimations/{run_id}/feedback`: a short tenant transaction, then
 admin-only service-role work.** The route does not take `tenant_conn`; it opens
@@ -346,18 +522,50 @@ connection even opens (`deps.open_background_conn` in the handler, never a depen
 `test_the_share_route_opens_the_service_role_only_after_its_gate`); the email resolves on the
 service role (`tenant_pool.account_for_email`); the share and its dispatch are one service-role
 transaction; the response is re-read on the tenant connection. Unlike the feedback route it keeps
-the request-long `tenant_conn`: its service-role work is two fast INSERTs, not an LLM call. The gate's row lock (`FOR NO KEY UPDATE`) does not block the share's FK check
+the handler-long `TenantConn` (committed before the response): its service-role work is two fast INSERTs, not an LLM call. The gate's row lock (`FOR NO KEY UPDATE`) does not block the share's FK check
 (`FOR KEY SHARE`), so holding it across the service-role write cannot self-deadlock.
 
 **Third instance — the push device routes (`api/routes/push.py`, migration 654): the caller's own account, then the
 service role.** `push_subscriptions` and `notification_deliveries` are RLS-on with NO policy and no browser grant, registered in
-both `_ADMIN_ONLY_RELATIONS` lists (not tenant tables: no browser DML). `PUT`/`DELETE /push/subscription` and `POST
+`tests/_admin_gate_registry.py` `ADMIN_ONLY_RELATIONS` (not tenant tables: no browser DML). `PUT`/`DELETE /push/subscription` and `POST
 /push/opened` declare `require_account_id` (in `_NEVER_ACTS`: a device belongs to the signed-in user, so a delegate's phone gets
 only the delegate's alerts and nobody registers a device for an account they act for), then `deps.open_background_conn` in the
 handler (pinned beside the share routes by `test_the_share_routes_open_the_service_role_only_after_their_gate`); every
 statement names that account (shape 3), and `opened` reaches the account through the delivery's event. `GET /push/key` is
 `require_token` with no connection (the public key derives from `VAPID_PRIVATE_KEY`). The worker's push lane routes by ONE
 join, `ps.account_id = d.account_id AND ps.ended_at IS NULL`: recipients come from the event's account at send time.
+
+The ČÚZK login routes (`api/routes/cuzk_login.py`, migration 759) are the same shape over `account_cuzk_logins`:
+GET and DELETE take `require_account_id` (in `_NEVER_ACTS`: the account that pays is never handed over with a board);
+PUT, which waits on ČÚZK, resolves the same account through `own_account_id_released` (the Named exception below; its
+callers are pinned in `tests/api/test_cuzk_login.py`). Then `deps.open_background_conn`, every statement naming the
+account; the password column is encrypted by the API. A save's check against ČÚZK is budgeted first
+(`cuzk_login.admit_check`, ledger `account_cuzk_login_checks`, migration 762; the three budgets and ČÚZK's lock rule
+they answer are stated at the top of `api/cuzk_login.py`): past one, a 429 and nothing is sent. A cadastre price purchase
+(`api/cadastre_prices.py`, migration 763; `GET`/`POST /properties/{id}/building/prices`, both in `_NEVER_ACTS`) spends
+money on the account's ČÚZK login, so ONE run per account uses that login at a time: the purchase lease on the login's
+own row (`cuzk_login.lease`/`renew`/`release`), renewed before every call. Its states, who may move each and on what
+guard head the module; its rows (`cadastre_price_purchases`, `cadastre_deeds`, `cadastre_unit_facts`) are the buyer's
+alone, every statement naming the account. A second kind on the same machine (migration 767,
+`POST /properties/{id}/building/units/{iskn_id}`): one unit's information, whose kept file never holds the owners. One ledger row per run, admitted before its first call.
+
+**Fourth instance — the run routes (`api/routes/agent_runs.py`, #2071).** `require_account_id` on the router (all in
+`_NEVER_ACTS`), so a start lands on the user's oldest membership, with no picker. Reads take `TenantConn` and name no account
+(shape 1), so a second membership reads both accounts' runs. A start and a cancel then open the service role in the handler
+(`deps.open_background_conn`, after the gate) and write through `api/agents/executor.py`, every statement naming the account
+(shape 3): a start's from the gate, a cancel's read off the run under RLS, so a member may stop what they can read and
+another account's id is a 404 before the service role opens. Apply and Undo (`/runs/{id}/proposals/{i}/*`, #2072) stay on the
+`TenantConn` for everything: the curation write under its own RLS, naming the RUN's account (shape 3's explicit predicate, not the
+oldest membership), and the marker in `agent_proposal_applies` (`authenticated` SELECT only, the `curation_clock` idiom) through
+migration 712's definers, each refusing any `session_user` but `tenant_pool`, so PostgREST's `authenticator` cannot call them. `agent_account_limits` (713, a tenant table: `SELECT` under RLS, no
+browser write) follows: `PUT /runs/limit` takes the gate's account (the body names none) and writes on the service role after the
+route has judged the value. Today's spend reads on the caller's own connection through `agent_account_spent_today`, a registered
+definer because `llm_calls` has no browser grant: a member reads their account, the service role or a platform admin any, anyone else NULL. Its row
+cascades with the account; the account's `llm_calls` rows stay (704: no foreign key) and count only towards the platform ceiling.
+A run's files (`GET /runs/{id}/files/{file}`, #2073) read `agent_artifacts` on the tenant connection, and only that row's key
+reaches the store: a foreign id and a missing one are the same 404, and no path is an input. The bucket `agent-files` is private
+with no policy on `storage.objects`, so no browser role, the owner's included, reads an object at Storage (714). An account's
+deletion cascades the rows; the worker's hourly `agent_files.sweep` then removes every object older than an hour that no row names.
 
 **The only `auth.users` touchpoints:** `account_email(uuid)` (migration 610; EXECUTE revoked
 from every browser role), called by `share_party_emails()` (SECURITY DEFINER, the caller's
@@ -390,6 +598,10 @@ an assertion, and outlived the behaviour it described. A comment is not a rail.
   `verify_jwt` on the service-role connection (`/brokers/*`, `POST /estimations`) are excluded
   structurally, not enumerated, and so is the named exception above. It has its own
   non-vacuity sentinel.
+- `tests/api/test_tenant_conn_scope.py` — the COMMIT-BEFORE-RESPONSE CENSUS. An AST pass finds no
+  `Depends(tenant_conn)` in `api/` outside the `TenantConn` alias in `api/tenant_pool.py`; a walk of the live app finds every route reaching
+  `tenant_conn` only function-scoped (with a mount sentinel); a commit patched to deadlock answers 503 `db_busy` on a
+  card move and 5xx on a GET; an acting write resolves its account and writes on ONE connection.
 - `tests/api/test_account_scope_census.py` — the ACCOUNT-SCOPE CENSUS, one layer down: no
   `account_id`/`account_ids` parameter in `api/` defaults to `None`, and every hand-rolled
   `resolve_account_id` call is enumerated with a reason. Both arms declare their blind spots.

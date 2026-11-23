@@ -34,7 +34,7 @@ import { MissingPhotoTile } from '@/components/autodedup/ListingMini';
 import SplitPanel from '@/components/autodedup/SplitPanel';
 import { priceLabel } from '@/components/autodedup/SplitPlanLines';
 import { UnitSelect, type UnitMap } from '@/components/autodedup/UnitSplit';
-import { SectionLabel } from '@/components/section';
+import Panel from '@/components/Panel';
 import { fetchPropertyOrigins, type AdvertOrigin, type Letters } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import type { ListingBroker } from '@/lib/brokers';
@@ -46,8 +46,8 @@ import {
 } from '@/lib/hydration/useCardHydration';
 import { imageSrc } from '@/lib/imageUrl';
 import { areaKindOf } from '@/lib/measure';
-import { inzeratu, mergeOriginLabel, mergedAdvertsKeys, splitPlan } from '@/lib/mergedAdverts';
-import { portalBadge } from '@/lib/portals';
+import { mergeOriginLabel, mergedAdvertsKeys, splitPlan } from '@/lib/mergedAdverts';
+import { advertLink, portalBadge } from '@/lib/portals';
 import { fetchListingsForListingIds } from '@/lib/queries';
 import { ROUTES, withQuery } from '@/lib/routes';
 import type { ImagePublic, ListingPublic, PropertySource } from '@/lib/types';
@@ -168,16 +168,19 @@ export default function MergedAdvertsSection({
       ? 'Nepřišel sloučením — při rozdělení zůstanou v této nemovitosti inzeráty písmena, které má nejvíc vlastních inzerátů.'
       : 'Nepřišel sloučením — inzeráty s jeho písmenem při rozdělení zůstanou v této nemovitosti.';
 
+  /* A section card (C1–C10): the adverts are its count, the portals its note; the
+     advert rows stay list items, each its own frame. */
   return (
-    <section aria-label="Sloučené inzeráty">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <SectionLabel>{sources.length > 1 ? 'Sloučené inzeráty' : 'Inzerát'}</SectionLabel>
-        <p className="text-[0.7rem] tracking-wide text-[var(--color-ink-4)] font-mono tabular-nums">
-          {fmtCount(sources.length)} {inzeratu(sources.length)} · {fmtCount(portals)}{' '}
-          {portals === 1 ? 'portál' : portals <= 4 ? 'portály' : 'portálů'}
-        </p>
-      </div>
-      <p className="mt-1 text-[0.75rem] text-[var(--color-ink-3)]">
+    <Panel
+      title={sources.length > 1 ? 'Sloučené inzeráty' : 'Inzerát'}
+      count={fmtCount(sources.length)}
+      note={
+        <span className="font-mono tabular-nums">
+          {fmtCount(portals)} {portals === 1 ? 'portál' : portals <= 4 ? 'portály' : 'portálů'}
+        </span>
+      }
+    >
+      <p className="text-[0.75rem] text-[var(--color-ink-3)]">
         Inzeráty, které tvoří tuto nemovitost. Rozbalte řádek pro popis, všechny
         fotky a makléře.
         {canSplit &&
@@ -195,7 +198,7 @@ export default function MergedAdvertsSection({
         )}
       </p>
       {detailsQ.isError && (
-        <p className="mt-2 text-[0.75rem] text-[var(--color-brick)]">
+        <p className="text-[0.75rem] text-[var(--color-brick)]">
           Údaje inzerátů se nepodařilo načíst: {detailsQ.error.message}
         </p>
       )}
@@ -210,7 +213,7 @@ export default function MergedAdvertsSection({
           onCancel={reset}
         />
       )}
-      <ul className="mt-4 space-y-2">
+      <ul className="space-y-2">
         {sources.map((s) => (
           <MergedAdvertRow
             key={s.id}
@@ -247,7 +250,7 @@ export default function MergedAdvertsSection({
           />
         ))}
       </ul>
-    </section>
+    </Panel>
   );
 }
 
@@ -281,6 +284,7 @@ function MergedAdvertRow({
   }, [opened]);
   const panelId = `merged-advert-${source.id}`;
   const portal = portalBadge(source.source, source.source_url, 'long');
+  const link = advertLink(source);
   const facts = [
     detail?.area_m2 != null ? fmtArea(detail.area_m2, areaKindOf(detail.category_main)) : null,
     detail?.disposition ?? null,
@@ -290,7 +294,7 @@ function MergedAdvertRow({
     <li
       ref={rowRef}
       className={[
-        'scroll-mt-6 rounded-[var(--radius-sm)] border bg-[var(--color-paper-2)]',
+        'scroll-mt-28 rounded-[var(--radius-sm)] border bg-[var(--color-paper-2)]',
         isCanonical ? 'border-[var(--color-rule-strong)]' : 'border-[var(--color-rule-soft)]',
       ].join(' ')}
     >
@@ -348,9 +352,9 @@ function MergedAdvertRow({
               </span>
             </span>
           </button>
-          {source.source_url && (
+          {link && (
             <a
-              href={source.source_url}
+              href={link}
               target="_blank"
               rel="noopener noreferrer"
               aria-label={`Na portálu ${portal}`}
@@ -409,7 +413,7 @@ function MergedAdvertRow({
                   detail ? fmtArea(detail.area_m2, areaKindOf(detail.category_main)) : '—',
                 ],
                 ['Dispozice', detail?.disposition ?? '—'],
-                ['Patro', fmtFloor(detail?.floor, detail?.total_floors) ?? '—'],
+                ['Podlaží', fmtFloor(detail?.floor, detail?.total_floors) ?? '—'],
               ].map(([label, value]) => (
                 <div key={label} className="flex items-baseline justify-between gap-2">
                   <dt className="text-[var(--color-ink-4)]">{label}</dt>
@@ -426,7 +430,7 @@ function MergedAdvertRow({
             )}
             <BrokerLine read={brokerRead} />
             {originRead && <OriginLine read={originRead} />}
-            {!source.source_url && (
+            {!link && (
               <p className="text-[0.75rem] text-[var(--color-ink-4)]">Odkaz na portál chybí</p>
             )}
           </div>

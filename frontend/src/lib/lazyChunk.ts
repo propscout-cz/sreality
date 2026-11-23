@@ -120,10 +120,10 @@ export interface ChunkEvent {
   path: string;
 }
 
-/* Observability tier 1: there is no client telemetry in this app and no backend
- * endpoint that accepts browser events, so a shipped fix cannot be verified
- * from server-side data. A capped ring in localStorage at least lets the
- * operator answer "is this still happening, and how often" from the console:
+/* Observability tier 1: no backend endpoint accepts browser events, so a
+ * shipped fix cannot be verified from server-side data. A capped ring in
+ * localStorage at least lets the operator answer "is this still happening,
+ * and how often" from the console:
  *   JSON.parse(localStorage.getItem('limen:chunkEvents'))
  * Deliberately per-browser and best-effort. If this ever needs to be real
  * telemetry, this function is the single place a beacon would go. */

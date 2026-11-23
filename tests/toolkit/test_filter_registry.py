@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.toolkit._parked_levels import _PARKED_CONDITION_LEVELS
 from toolkit import filter_compiler
 from toolkit import filter_registry as fr
 
@@ -173,6 +174,14 @@ def _agenda_ids(*agendas: fr.Agenda) -> set[str]:
     return {f.id for a in agendas for f in fr.filters_for_agenda(a)}
 
 
+def test_no_two_agendas_declare_the_same_filters() -> None:
+    """An agenda is a surface with its own filter set; one that repeats another is a second name for it."""
+    by_filters: dict[frozenset[str], list[str]] = {}
+    for agenda in fr.Agenda:
+        by_filters.setdefault(frozenset(_agenda_ids(agenda)), []).append(str(agenda))
+    assert [names for names in by_filters.values() if len(names) > 1] == []
+
+
 def test_comparable_filters_fields_equal_the_cohort_agendas() -> None:
     """ComparableFilters carries exactly the filters the cohort agendas declare, both
     ways: a field no agenda declares would raise at compile, and a declared filter
@@ -180,7 +189,7 @@ def test_comparable_filters_fields_equal_the_cohort_agendas() -> None:
     from toolkit.comparables import ComparableFilters
 
     fields = {f.name for f in dc_fields(ComparableFilters)}
-    declared = _agenda_ids(fr.Agenda.COMPARABLES, fr.Agenda.ESTIMATION, fr.Agenda.VELOCITY)
+    declared = _agenda_ids(fr.Agenda.COMPARABLES, fr.Agenda.VELOCITY)
     assert fields == declared, (
         f"declared but not on ComparableFilters: {sorted(declared - fields)}; "
         f"on ComparableFilters but not declared: {sorted(fields - declared)}"
@@ -203,14 +212,14 @@ def test_watchdog_filter_spec_fields_equal_the_watchdog_agenda() -> None:
     A declared filter missing from the spec is not an error anywhere else: pydantic's
     extra='ignore' drops the key on save, and the watchdog silently matches wider than
     the Browse view it was made from (merge f2d7b359 lost three filters that way).
-    `bounds` (the map box) is the sub-field of the composite `location` filter;
+    `bounds` and `circle` (the map area) are the sub-fields of the composite `location` filter;
     the chips are their own FilterDef.
     """
     from api.notifications import WatchdogFilterSpec
 
     declared = _agenda_ids(fr.Agenda.WATCHDOG)
     assert "location" in declared
-    spec = (set(WatchdogFilterSpec.model_fields) - {"bounds"}
+    spec = (set(WatchdogFilterSpec.model_fields) - {"bounds", "circle"}
             - _RETIRED_BUT_DESERIALISABLE)
     declared -= {"location"}
     assert spec == declared, (
@@ -237,6 +246,14 @@ def test_every_filter_with_a_pg_column_is_visible_in_some_user_agenda() -> None:
 # --- JSON serialisation ---------------------------------------------------
 
 
+def test_every_filter_category_is_one_a_grouped_form_draws() -> None:
+    """A grouped `<FilterForm>` (the Watchdog editor) draws only the listed categories, so a filter whose
+    category is missing from the list never renders there."""
+    drawn = fr.registry_to_json()["categories"]
+    assert len(drawn) == len(set(drawn))
+    assert {f.category for f in fr.REGISTRY.values()} <= set(drawn)
+
+
 def test_registry_to_json_roundtrip_is_stable() -> None:
     """Calling twice produces identical output (no nondeterministic
     ordering)."""
@@ -249,16 +266,6 @@ def test_registry_to_json_includes_every_filter() -> None:
     payload = fr.registry_to_json()
     ids_in_json = {f["id"] for f in payload["filters"]}
     assert ids_in_json == set(fr.REGISTRY.keys())
-
-
-def test_visibility_argument_attaches_per_filter_visibility() -> None:
-    payload = fr.registry_to_json(
-        visibility={("browse", "min_price_czk"): False},
-    )
-    by_id = {f["id"]: f for f in payload["filters"]}
-    assert by_id["min_price_czk"]["visibility"]["browse"] is False
-    # Other agendas for the same filter stay enabled (the default).
-    assert by_id["min_price_czk"]["visibility"]["watchdog"] is True
 
 
 # --- min/max pair invariants ---------------------------------------------
@@ -348,7 +355,7 @@ def test_to_jsonschema_property_list_filter_has_items() -> None:
     assert "1+kk" in prop["items"]["enum"]
 
 
-def test_to_jsonschema_properties_returns_visible_filters_for_agenda() -> None:
+def test_to_jsonschema_properties_returns_every_filter_of_the_agenda() -> None:
     props = fr.to_jsonschema_properties(fr.Agenda.COMPARABLES)
     # Every COMPARABLES filter appears, except the composite LOCATION.
     for fid in [
@@ -367,12 +374,6 @@ def test_agent_find_comparables_relaxed_descriptions_come_from_registry() -> Non
     schema = tools["find_comparables_relaxed"].input_schema
     for fid in ("min_price_czk", "has_balcony", "category_main", "ownership"):
         assert schema["properties"][fid]["description"] == fr.description(fid)
-
-
-_PARKED_CONDITION_LEVELS = frozenset({
-    "building_condition_level_min", "building_condition_level_max",
-    "apartment_condition_level_min", "apartment_condition_level_max",
-})
 
 
 def test_the_parked_condition_levels_reach_no_surface() -> None:
@@ -397,8 +398,7 @@ def test_the_parked_condition_levels_reach_no_surface() -> None:
         assert not _PARKED_CONDITION_LEVELS & set(tool.input_schema.get("properties", {})), name
     assert not _PARKED_CONDITION_LEVELS & {name for name, _ in _FCR_OVERRIDE_FIELDS}
     assert not _PARKED_CONDITION_LEVELS & {f.name for f in dataclass_fields(ComparableFilters)}
-    for model in (schemas.FindComparablesIn, schemas.ComputeMarketVelocityIn,
-                  schemas.CreateEstimationIn, schemas.EstimateYieldIn):
+    for model in (schemas.FindComparablesIn, schemas.CreateEstimationIn):
         assert not _PARKED_CONDITION_LEVELS & set(model.model_fields), model.__name__
     spa = Path(__file__).resolve().parents[2] / "frontend" / "src"
     for rel in ("lib/filterRegistry.generated.ts", "lib/filters.ts", "lib/queries.ts",
@@ -453,7 +453,6 @@ def test_mf_gross_yield_filter_registered():
         assert f.ui_control == fr.UiControl.RANGE_SLIDER
         assert f.agendas == frozenset({fr.Agenda.BROWSE, fr.Agenda.WATCHDOG})
         assert fr.Agenda.COMPARABLES not in f.agendas
-        assert fr.Agenda.ESTIMATION not in f.agendas
 
 
 def test_category_main_multiselect_split():
@@ -482,7 +481,6 @@ def test_category_main_multiselect_split():
     assert fr.Agenda.BROWSE not in scalar.agendas
     assert fr.Agenda.WATCHDOG not in scalar.agendas
     assert fr.Agenda.COMPARABLES in scalar.agendas
-    assert fr.Agenda.ESTIMATION in scalar.agendas
     # The two never co-occupy an agenda.
     assert scalar.agendas.isdisjoint(multi.agendas)
 
@@ -644,7 +642,7 @@ def test_every_pg_backed_numeric_filter_declares_a_unit() -> None:
     with no declaration, i.e. the restriction was load-bearing for green rather
     than principled. It would also have exempted the case that matters most:
     a derived per-m² bound served from an RPC rather than a column, which would
-    reach `GET /admin/filter-schema` with no unit and no basis at all.
+    reach the generated SPA registry with no unit and no basis at all.
     """
     numeric = [
         f
@@ -710,8 +708,8 @@ def test_per_m2_filters_declare_a_basis() -> None:
 
 
 def test_basis_reaches_the_generated_payload() -> None:
-    """The SPA and `GET /admin/filter-schema` read the serialised registry, so a
-    field that stops at the dataclass boundary labels nothing."""
+    """The SPA reads the serialised registry (the generated TS), so a field that
+    stops at the dataclass boundary labels nothing."""
     payload = fr.registry_to_json()
     by_id = {f["id"]: f for f in payload["filters"]}
     assert by_id["min_price_per_m2"]["basis"] == fr.BASIS_DEPENDS_ON_CATEGORY

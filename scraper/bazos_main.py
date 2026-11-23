@@ -80,6 +80,8 @@ class BazosPortal(portal_runner.PortalDefaults):
     section never suppresses another's nomination."""
 
     source = SOURCE
+    walk_every_s = 6 * 3600
+    walk_timeout_s = 130 * 60
     price_change_min_pct = 0.0
     index_rate = 0.7
 
@@ -467,7 +469,7 @@ def main(argv: list[str] | None = None) -> int:
     portal.index_rate = limits.index_rate
     portal.shared_rate_limiter = limits.shared_rate_limiter
     portal.price_change_min_pct = limits.price_change_min_pct
-    portal.narrowed = bool(args.sale_type or args.category)
+    portal.narrowed = bool(args.sale_type or args.category or args.locality or args.radius_km is not None)
 
     # Resolve operational limits: CLI override > per-portal DB config > default.
     workers = args.workers if args.workers is not None else limits.detail_workers

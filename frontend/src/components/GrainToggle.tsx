@@ -1,8 +1,14 @@
+import { SegmentedBar } from '@/components/controls';
+
 export type Grain = 'hour' | 'day';
 
+const GRAINS = [
+  { value: 'hour' as const, label: 'Hour' },
+  { value: 'day' as const, label: 'Day' },
+];
+
 /* The Hour/Day granularity switch used by the Costs spend chart (and any
- * future time-series panel, so they read identically). Civic-archive: a small segmented
- * control, active segment in copper. */
+ * future time-series panel, so they read identically): the compact joined bar. */
 export default function GrainToggle({
   grain,
   onChange,
@@ -10,23 +16,5 @@ export default function GrainToggle({
   grain: Grain;
   onChange: (g: Grain) => void;
 }) {
-  return (
-    <span className="inline-flex rounded-[var(--radius-sm)] border border-[var(--color-rule)] overflow-hidden normal-case tracking-normal">
-      {(['hour', 'day'] as const).map((g) => (
-        <button
-          key={g}
-          type="button"
-          onClick={() => onChange(g)}
-          className="px-1.5 py-0.5 text-[0.6rem] font-medium transition-colors"
-          style={
-            grain === g
-              ? { background: 'var(--color-copper)', color: 'var(--color-paper-3)' }
-              : { color: 'var(--color-ink-3)' }
-          }
-        >
-          {g === 'hour' ? 'Hour' : 'Day'}
-        </button>
-      ))}
-    </span>
-  );
+  return <SegmentedBar label="Granularity" options={GRAINS} value={grain} onChange={onChange} />;
 }

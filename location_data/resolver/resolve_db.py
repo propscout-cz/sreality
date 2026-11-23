@@ -52,87 +52,38 @@ from typing import Any
 
 import psycopg
 
+from location_data.claims_common import Claim as IntakeClaim
+from location_data.claims_common import wkt_point
 from location_data.resolver import composite
 from location_data.resolver.types import (
     AddressPoint,
     AdminUnit,
     Claim,
+    PartPoint,
     Street,
     StreetPoint,
 )
 
 _CURRENT_REGISTRY_SQL = "SELECT id, label FROM registry_versions WHERE is_current LIMIT 1"
 
-# THE LICENCE RAIL LIVES HERE (W2-a). Migration 384 enforced it with three CHECK constraints
-# on the stores of record — a `position_licence_class` column on each projection and on the
-# resolution, each constrained `<> 'ephemeral_display_only'`. `listing_location` has no such
-# column, because the guard moved one step upstream and became stronger: a Mapy-class
-# coordinate is not refused at write time, it is never READ.
-_ADMISSIBLE_LICENCE_CLASSES = "('portal', 'operator')"
+ADMISSIBLE_LICENCE_CLASSES: tuple[str, ...] = ("portal", "operator")
 
-# AND SO DOES THE CONTRACT-VERSION RAIL — BUT A BUMP MUST NEVER BLACK A LISTING OUT (W11),
-# AND A HALF-FINISHED RE-MINE MUST NEVER BLANK ONE (W18-b).
-# `location_claims` is append-only and its fingerprint hashes `extractor_version`, so a
-# contract BUMP does not supersede the old version's rows — it inserts new ones beside them.
-# The superseded row has the LOWER id, so it would win every "first admissible claim of this
-# type" tie in BIND and FILL: the version rail is what stops the retired contract's answer
-# being served forever.
-#
-# W1-c spelled that rail `pc.is_active`, and on 2026-09-14 that spelling cost the corpus its
-# location. W9 bumped eight contracts at 05:58Z and a full-resolve sweep ran at 06:42Z, hours
-# before the intake lanes had re-mined the pages under the new versions: 595,816 listings were
-# re-judged with NO admissible claim at all and came out `unknown/undetermined/low`, and under
-# W5 (consumers serve only resolved locations) Browse fell from ~350 k rows to 45,810.
-#
-# So the rail reads a listing's NEWEST EVIDENCE instead of only the newest CONTRACT: the
-# resolver takes the claims of the highest contract version present that is `<= the active
-# version` — the active version's claims the moment they exist, the most recent earlier
-# version's until then. A bump is then what it always should have been: invisible until the
-# evidence arrives.
-#
-# W11 SPELLED "NEWEST EVIDENCE" PER (LISTING, PORTAL), AND ON 2026-09-17 THAT COST 29,545
-# LISTINGS THEIR LOCATION (W18-b). W18 bumped the bazos contract 6 -> 7 for ONE payload-lane
-# entry (`street_name` off `raw_json` /title). The payload lane re-mined that entry across
-# all 147 k bazos listings in a single hop, while the same run's BODIES pass — which re-mines
-# the four PAGE entries (`obec_name`, `psc`, `precision_declaration`, `coordinate`) — is
-# bounded and reached 56,905 of ~155 k bodies before the chain yielded. For ~90 k listings
-# the newest version present was therefore 7 and carried the STREET alone: the per-portal
-# partition read that one claim and hid the town, the PSČ and the pin, which were sitting
-# right there at version 6. 29,545 of 50,598 live bazos listings went `undetermined` with no
-# geom, 61,396 rows to granularity `unknown`.
-#
-# So the rail is PER CLAIM TYPE (v5.3): for each claim type the portal's ACTIVE contract
-# declares an entry for, the listing's claims come from the newest version `<= active` that
-# carries a claim OF THAT TYPE. A partial re-mine now costs a listing nothing — each type
-# keeps its best evidence and the new version's types upgrade one at a time — while the
-# supersession the version rail exists for is unchanged: a type re-mined under the new
-# version never reads the old version's answer beside it.
-#
-# A claim type the ACTIVE contract no longer declares is not read AT ALL (the `EXISTS` over
-# the active contract's entries): a deliberately dropped entry stops being evidence the
-# moment it is dropped, instead of lingering forever at its last version, and
-# `scripts/location_claims_retire.py` stays the only thing that DELETES those rows. It is an
-# `EXISTS` and not a join because the active contract may declare the same claim type on
-# several surfaces, and a join would then multiply the claim rows.
-#
-# `contract_version` is NULL for an operator claim (no entry by construction), which `max()`
-# ignores and the outer filter keeps — operator corrections are unchanged.
-#
-# Operator claims carry NO contract entry
-# (`location_data/operator_corrections.py` writes `contract_entry_id NULL` +
-# `licence_class 'operator'`), so they are named explicitly rather than let through by the
-# LEFT JOIN — a portal claim that somehow lost its entry id must NOT be admitted.
-_ADMISSIBLE_CONTRACT = """
-       (c.contract_entry_id IS NULL AND c.licence_class = 'operator'
-        OR pc.id IS NOT NULL AND pc.version <= act.version
-           AND EXISTS (SELECT 1 FROM portal_contract_entries ace
-                        WHERE ace.contract_id = act.id
-                          AND ace.claim_type = c.claim_type))"""
-
-# ONE projection, ONE admissibility predicate — the row unpacking in `_claim` is positional,
-# so a second hand-written column list is a silent mis-mapping waiting to happen
+# THE ONE READ (location W3). The store holds one claim per listing, claim type and author
+# (`location_claims_key`, migration 699), so the resolver sees AT MOST ONE claim per type: the
+# operator's when there is one (it outranks the portal, ruling Q5), else the portal's.
+#  * THE LICENCE RAIL (W2-a): only `ADMISSIBLE_LICENCE_CLASSES` are read. A Mapy-class
+#    coordinate is not refused at write time, it is never READ.
+#  * A portal claim (every admissible class but the operator's) of a type its portal's ACTIVE
+#    contract no longer declares is not read: a
+#    deliberately dropped entry stops being evidence the moment it is dropped. An `EXISTS`, not
+#    a join: the active contract may declare one type on several surfaces.
+#  * No version filter. `contract_entry_id` is provenance (the entry that first stated the
+#    value), so the claims of a retired version stay readable until a re-mine changes them: a
+#    bump can never black a listing out (W11) nor a partial re-mine blank one (W18-b).
+# ONE projection: the row unpacking in `claim_from_row` is positional, so a second hand-written column
+# list is a silent mis-mapping waiting to happen
 # (`test_resolver_jobs.test_the_claims_select_maps_onto_claim_positionally` pins it).
-_CLAIM_COLUMNS = """id, listing_id, source, claim_type::text, surface::text,
+CLAIM_COLUMNS = """id, listing_id, source, claim_type::text, surface::text,
        extraction_method::text, licence_class::text, first_observed_at, value_text,
        value_num,
        CASE WHEN value_geom IS NULL THEN NULL ELSE ST_Y(value_geom) END,
@@ -142,33 +93,22 @@ _CLAIM_COLUMNS = """id, listing_id, source, claim_type::text, surface::text,
 
 
 def _claims_sql(listing_filter: str, order_by: str) -> str:
-    """The claim read, with the caller's listing filter INSIDE the window's scope.
-
-    The filter cannot be appended to a finished statement any more: `max(pc.version) OVER
-    (PARTITION BY ...)` would then be computed over the whole table before the listing was
-    picked. Measured on prod over a 250-listing slice, the shape below is 11 ms / 1.2 k
-    buffers against 152 ms / 75 k for the same rule written as a correlated anti-join.
-
-    The partition carries `c.claim_type` (W18-b): the newest version is asked PER TYPE, so a
-    re-mine that has reached one entry and not the others upgrades that entry alone instead
-    of blanking every type the new version has not reached yet.
-    """
+    """The claim read: one claim per (listing, claim type), the operator's first, then the
+    newest observation (the id only breaks a tie in time)."""
+    admissible = ", ".join(f"'{licence}'" for licence in ADMISSIBLE_LICENCE_CLASSES)
     return f"""
-WITH evidence AS (
-SELECT c.*, pc.version AS contract_version,
-       max(pc.version) OVER (PARTITION BY c.listing_id, c.source, c.claim_type)
-         AS newest_version
-  FROM location_claims c
-  LEFT JOIN portal_contract_entries pce ON pce.id = c.contract_entry_id
-  LEFT JOIN portal_contracts pc ON pc.id = pce.contract_id
-  LEFT JOIN portal_contracts act ON act.source = pc.source AND act.is_active
- WHERE c.licence_class IN {_ADMISSIBLE_LICENCE_CLASSES}
-   AND{_ADMISSIBLE_CONTRACT}
-   AND {listing_filter}
-)
-SELECT {_CLAIM_COLUMNS}
-  FROM evidence
- WHERE contract_version IS NULL OR contract_version = newest_version
+SELECT {CLAIM_COLUMNS}
+  FROM (SELECT DISTINCT ON (c.listing_id, c.claim_type) c.*
+          FROM location_claims c
+         WHERE {listing_filter}
+           AND c.licence_class IN ({admissible})
+           AND (c.licence_class = 'operator' OR EXISTS (
+                SELECT 1 FROM portal_contract_entries ace
+                  JOIN portal_contracts act ON act.id = ace.contract_id AND act.is_active
+                 WHERE act.source = c.source AND ace.claim_type = c.claim_type))
+         ORDER BY c.listing_id, c.claim_type, (c.licence_class = 'operator') DESC,
+                  c.first_observed_at DESC, c.id DESC
+       ) c
  ORDER BY {order_by}
 """
 
@@ -314,34 +254,37 @@ SELECT ST_Y(c.g), ST_X(c.g),
  GROUP BY 1, 2
 """
 
-# A část obce's KÚ by the same door rule. `ruian_ap_cast_obce (cast_obce_unit_id)` is its
-# index. Asked lazily, for a row bound to a část in a multi-KÚ obec only.
-_PART_KATASTR_SQL = f"""
+# WHERE A ČÁST OBCE IS (v5.8): the street's derivation over the část's doors — RÚIAN draws no
+# polygon for one — and its KÚ by the same door rule, in the one round trip.
+# `ruian_ap_cast_obce (cast_obce_unit_id)` is its index. Asked lazily: for a row bound to a
+# část that no pin placed, or whose obec spans several KÚ; the run cache makes it one per část.
+_PART_POINT_SQL = f"""
 WITH p AS (
     SELECT ap.kod_adm, ap.geom
       FROM ruian_address_points ap
      WHERE ap.cast_obce_unit_id = %s AND ap.valid_to IS NULL AND ap.geom IS NOT NULL
+), c AS (
+    SELECT ST_Centroid(ST_Collect(p.geom)) AS g FROM p
 )
-{_doors_katastr("p")}
+SELECT ST_Y(c.g), ST_X(c.g),
+       MAX(ST_Distance(c.g::geography, p.geom::geography)),
+       count(*),
+       ({_doors_katastr("p")})
+  FROM p, c
+ GROUP BY 1, 2
 """
 
 # The unit column list `_admin_unit` unpacks positionally, over ONE point expression: the
 # unit's own position is the last two columns of the projection, and only where the query
 # can answer it.
-def _admin_columns(point: str) -> str:
-    return f"""
-       u.id, u.level::text, u.code, u.name, u.name_norm, u.path::text, u.parent_id,
-       CASE WHEN {point} IS NULL THEN NULL ELSE ST_Y({point}) END,
-       CASE WHEN {point} IS NULL THEN NULL ELSE ST_X({point}) END"""
+_ADMIN_UNIT_COLUMNS = """
+       u.id, u.level::text, u.code, u.name, u.name_norm, u.path::text, u.parent_id"""
 
-
-_ADMIN_COLUMNS = _admin_columns("u.definition_point")
+_ADMIN_COLUMNS = f"{_ADMIN_UNIT_COLUMNS}, NULL::float8, NULL::float8"
 
 # The CHAIN also answers "where is this unit?" (W2-a3), because FILL places a row with no
 # admissible pin at the finest bound unit's point and the chain is the read it already
-# makes. `definition_point` is RÚIAN's own definiční bod and would be the better answer, but
-# `ruian_load` has never written that column — every unit point in the mirror is the
-# polygon's, so the coalesce is a preference, not a fallback that fires.
+# makes. Every unit point in the mirror is the polygon's.
 #
 # `representative_point` is the boundary loader's stored ST_MaximumInscribedCircle CENTRE:
 # always INSIDE the polygon, which `ST_Centroid` is not for a concave unit (a C-shaped obec
@@ -349,7 +292,7 @@ _ADMIN_COLUMNS = _admin_columns("u.definition_point")
 # of `ST_PointOnSurface`, better centred and — the reason it is read instead of computed —
 # free of the multipolygon detoast that made the containment query 194 ms before it was
 # split.
-_ADMIN_CHAIN_COLUMNS = _admin_columns("coalesce(u.definition_point, gp.pt)")
+_ADMIN_CHAIN_COLUMNS = f"{_ADMIN_UNIT_COLUMNS}, ST_Y(gp.pt), ST_X(gp.pt)"
 
 _ADMIN_BY_NAME_SQL = f"""
 SELECT {_ADMIN_COLUMNS}, n.psc_set
@@ -374,19 +317,18 @@ SELECT {_ADMIN_COLUMNS}, n.psc_set
 #
 # It runs for EVERY chain row rather than for the bound unit alone because the two levels a
 # listing most often binds, `cast_obce` and `momc`, have no polygon in RÚIAN at all — the
-# loader's layer list (`ruian_boundaries.LAYERS`) is stát → kraj → okres → ORP → POU → obec
-# → KÚ — so FILL walks up to the first ancestor that HAS a point, and it can only walk what
+# loader's layer list (`ruian_boundaries.LAYERS`) is stát → kraj → okres → obec → KÚ — so FILL walks up to the first ancestor that HAS a point, and it can only walk what
 # this answer carries.
 #
 # An OBEC row also answers its one KÚ child (PR-B): every entity inside a one-KÚ obec lies in
 # that KÚ by the hierarchy alone, so FILL needs no geometry for 3,942 of the 6,258 obce. An
 # index read on `ruian_admin_units_parent`, in the round trip FILL already makes.
 _ADMIN_CHAIN_TAIL = f"""
-SELECT {_ADMIN_CHAIN_COLUMNS}, NULL::char(5)[], ks.code
+SELECT {_ADMIN_CHAIN_COLUMNS}, NULL::char(5)[], ks.code, gp.r
   FROM chain c
   JOIN ruian_admin_units u ON u.id = c.id
   LEFT JOIN LATERAL (
-    SELECT g.representative_point AS pt
+    SELECT g.representative_point AS pt, g.containment_radius_m AS r
       FROM ruian_admin_unit_geometries g
      WHERE g.unit_id = u.id
        AND g.registry_version_id = %s
@@ -442,14 +384,13 @@ SELECT DISTINCT obec_kod FROM ruian_address_points
 _PT = "ST_SetSRID(ST_MakePoint(p.lon, p.lat), 4326)"
 _POINTS = "unnest(%s::int[], %s::double precision[], %s::double precision[]) AS p(idx, lat, lon)"
 
-# THE ONE CONTAINING-OBEC STATEMENT. `api/maps.py` runs this same text for a Mapy pick and
-# for an estimation subject that has no stored location, so a chip, a listing and an
-# estimation can never disagree about which town a point is in.
+# THE ONE CONTAINING-OBEC STATEMENT, so a listing and an estimation can never disagree
+# about which town a point is in.
 #
 # `purpose = 'pip'` is what lets `ruian_aug_pip_gist (geom) WHERE purpose = 'pip'` serve it:
 # the subdivided pieces are small, so ST_Covers never detoasts a raw obec polygon (194 ms and
 # 1,225 buffers when an IN-list forced exactly that). Measured: 0.24 ms/point. The
-# authoritative fallback branch it used to carry (and the copy in `api/maps.py`) is gone: it
+# authoritative fallback branch it used to carry is gone: it
 # was reachable only for a version loaded with `--allow-missing-pip`, and pip = authoritative
 # for every unit of every loaded version (checked 2026-09-26).
 CONTAINING_OBEC_SQL = f"""
@@ -564,7 +505,8 @@ def current_registry_version(conn: psycopg.Connection) -> tuple[int, str]:
     return int(row[0]), str(row[1])
 
 
-def _claim(row: Sequence[Any]) -> Claim:
+def claim_from_row(row: Sequence[Any]) -> Claim:
+    """A `CLAIM_COLUMNS` row as the resolver's `Claim` (positional: the test pins the order)."""
     return Claim(
         id=row[0], listing_id=row[1], source=row[2], claim_type=row[3], surface=row[4],
         extraction_method=row[5], licence_class=row[6],
@@ -578,10 +520,26 @@ def _claim(row: Sequence[Any]) -> Claim:
     )
 
 
+def claim_from_intake(claim: IntakeClaim, claim_id: int) -> Claim:
+    """An intake claim as `claim_from_row` would read its stored row back (the wave shadow's re-mine)."""
+    lat, lon = wkt_point(claim.value_geom_wkt) if claim.value_geom_wkt else (None, None)
+    return Claim(
+        id=claim_id, listing_id=claim.listing_id, source=claim.source,
+        claim_type=claim.claim_type, surface=claim.surface,
+        extraction_method=claim.extraction_method, licence_class=claim.licence_class,
+        observed_at=claim.first_observed_at, value_text=claim.value_text,
+        value_num=None if claim.value_num is None else float(claim.value_num),
+        lat=lat, lon=lon, value_jsonb=claim.value_jsonb or {},
+        declared_precision_label=claim.declared_precision_label,
+        declared_radius_m=None if claim.declared_radius_m is None
+        else float(claim.declared_radius_m),
+        blur_evidence=claim.blur_evidence, subject_scoped=claim.subject_scoped)
+
+
 def load_claims(conn: psycopg.Connection, listing_id: int) -> list[Claim]:
     with conn.cursor() as cur:
         cur.execute(_CLAIMS_SQL, (listing_id,))
-        return [_claim(row) for row in cur.fetchall()]
+        return [claim_from_row(row) for row in cur.fetchall()]
 
 
 def load_claims_bulk(
@@ -595,7 +553,7 @@ def load_claims_bulk(
     with conn.cursor() as cur:
         cur.execute(_CLAIMS_BULK_SQL, (list(listing_ids),))
         for row in cur.fetchall():
-            out.setdefault(int(row[1]), []).append(_claim(row))
+            out.setdefault(int(row[1]), []).append(claim_from_row(row))
     return out
 
 
@@ -609,7 +567,9 @@ def sources_bulk(conn: psycopg.Connection, listing_ids: Sequence[int]) -> dict[i
         return {int(r[0]): str(r[1]) for r in cur.fetchall()}
 
 
-def _admin_unit(row: Sequence[Any], *, sole_katastr_kod: int | None = None) -> AdminUnit:
+def _admin_unit(
+    row: Sequence[Any], *, sole_katastr_kod: int | None = None, extent_m: Any = None,
+) -> AdminUnit:
     path = str(row[5] or "")
     return AdminUnit(
         unit_id=int(row[0]), level=str(row[1]), code=int(row[2]), name=str(row[3]),
@@ -619,12 +579,14 @@ def _admin_unit(row: Sequence[Any], *, sole_katastr_kod: int | None = None) -> A
         psc_set=tuple(str(p).strip() for p in (row[9] or ())),
         obec_kod=_path_code(path, "b"), okres_kod=_path_code(path, "o"),
         kraj_kod=_path_code(path, "k"), sole_katastr_kod=sole_katastr_kod,
+        extent_m=None if extent_m is None else float(extent_m),
     )
 
 
 def _chain_unit(row: Sequence[Any]) -> AdminUnit:
-    """A chain row: the unit columns, then the obec's one KÚ child (NULL off an obec row)."""
-    return _admin_unit(row[:10], sole_katastr_kod=row[10])
+    """A chain row: the unit columns, the obec's one KÚ child (NULL off an obec row), then how
+    far the unit's polygon reaches from its point (NULL where RÚIAN draws none)."""
+    return _admin_unit(row[:10], sole_katastr_kod=row[10], extent_m=row[11])
 
 
 def _path_code(path: str, prefix: str) -> int | None:
@@ -740,11 +702,17 @@ class SqlRegistryView:
             katastr_kod=rows[0][4], part_unit_ids=tuple(rows[0][5] or ()),
         )
 
-    def part_katastr_kod(self, unit_id: int) -> int | None:
+    def part_point(self, unit_id: int) -> PartPoint | None:
         rows = self._rows(
-            "part_katastr_kod", _PART_KATASTR_SQL, (unit_id, self._version, self._version)
+            "part_point", _PART_POINT_SQL, (unit_id, self._version, self._version)
         )
-        return int(rows[0][0]) if rows else None
+        if not rows or rows[0][0] is None or rows[0][1] is None:
+            return None
+        return PartPoint(
+            lat=float(rows[0][0]), lon=float(rows[0][1]), extent_m=float(rows[0][2] or 0.0),
+            point_count=int(rows[0][3] or 0),
+            katastr_kod=None if rows[0][4] is None else int(rows[0][4]),
+        )
 
     def admin_units_by_name(self, name_norm: str, *, levels: Sequence[str] = ()) -> list[AdminUnit]:
         wanted = list(levels)
@@ -975,10 +943,8 @@ class CachedRegistryView:
             lambda: composite.build_street_index(self.streets_in_obec(obec_kod)),
         )
 
-    def part_katastr_kod(self, unit_id: int) -> int | None:
-        return self._cache.get(
-            ("part_katastr_kod", unit_id), lambda: self._inner.part_katastr_kod(unit_id)
-        )
+    def part_point(self, unit_id: int) -> PartPoint | None:
+        return self._cache.get(("part_point", unit_id), lambda: self._inner.part_point(unit_id))
 
     def admin_units_by_name(
         self, name_norm: str, *, levels: Sequence[str] = ()

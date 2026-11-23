@@ -1,8 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ROUTES } from '@/lib/routes';
+import { brokerBoardPath } from '@/lib/browseState';
+import { useNewTabProps } from '@/lib/linkGestures';
 import { useQuery } from '@tanstack/react-query';
 import {
+  BROKER_LISTINGS_LIMIT,
   fetchBrokerDossier,
   fetchBrokerListings,
   type BrokerListing,
@@ -10,9 +12,11 @@ import {
   type BrokerMembership,
 } from '../lib/brokers';
 import { fmtCount, fmtCzk, fmtArea, fmtRelative } from '../lib/format';
-import { portalBadge } from '../lib/portals';
-import { PickButton } from '../components/controls';
+import { advertLink, portalBadge } from '../lib/portals';
+import { SegmentedBar } from '../components/controls';
 import BrokerContactCard from '@/components/BrokerContactCard';
+import { brokerContact } from '@/lib/brokerContact';
+import Panel, { PanelEmpty } from '@/components/Panel';
 import { useExploreBrokerModal } from '@/components/ExploreBrokerModal';
 import { advertPath, propertyPath } from '@/lib/listingUrl';
 import { categoryMainLabel, categoryTypeLabel, listingKindLabel } from '@/lib/enums';
@@ -24,8 +28,8 @@ import { lazyChunk } from '@/lib/lazyChunk';
 const PhoneBrokerDetail = lazyChunk(() => import('./phone/PhoneBrokerDetail'));
 
 
-// Mirror the Žebříček (leaderboard) filter chips, but the broker's own inventory
-// defaults to Vše/Vše so nothing is hidden on load.
+// The broker's own inventory filter chips, defaulting to Vše/Vše so nothing is
+// hidden on load.
 const CATEGORY_OPTIONS: ReadonlyArray<{ value: string | null; label: string }> = [
   { value: null, label: 'Vše' },
   { value: 'byt', label: 'Byty' },
@@ -81,7 +85,7 @@ function BrokerDetailDesktop() {
   return (
     <div className="px-6 py-8 max-w-5xl mx-auto text-[var(--color-ink)]">
       <Link
-        to={ROUTES.brokers.build()}
+        to={brokerBoardPath()}
         className="text-xs tracking-[0.12em] uppercase text-[var(--color-ink-3)] hover:text-[var(--color-copper)] transition-colors"
       >
         ← Žebříček makléřů
@@ -134,42 +138,47 @@ function BrokerDetailDesktop() {
                 <span>Explore this broker's listings</span>
               </button>
             </div>
-            <BrokerContactCard broker={b} />
+            <BrokerContactCard
+              broker={b}
+              saveAs={brokerContact({
+                brokerId: b.broker_id,
+                name: b.display_name,
+                firm: b.firm_name ?? b.firm_domain,
+                phone: b.primary_phone,
+                email: b.primary_email,
+              })}
+            />
           </header>
 
           {/* Stats strip */}
-          <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 border border-[var(--color-rule)] rounded-[var(--radius-md)] divide-x divide-[var(--color-rule-soft)] bg-[var(--color-paper-2)]">
+          <div className="mt-6 grid grid-cols-3 border border-[var(--color-rule)] rounded-[var(--radius-md)] divide-x divide-[var(--color-rule-soft)] bg-[var(--color-paper-2)]">
             <Stat
               label="Nemovitosti"
-              value={b.active_property_count}
-              total={b.property_count}
-              hint="aktivní / celkem"
-            />
-            <Stat
-              label="Inzeráty"
-              value={b.active_listing_count}
-              total={b.listing_count}
+              value={b.active_properties}
+              total={b.properties}
               hint="aktivní / celkem"
             />
             <Stat label="Kanceláře" value={dossier.memberships.length} hint="historicky" />
             <Stat label="Regiony" value={dossier.region_shares.length} hint="kde inzeruje" />
           </div>
 
-          <div className="mt-7 grid gap-7 md:grid-cols-2">
-            <Footprint shares={dossier.region_shares} />
-            <Firms rows={dossier.memberships} />
-          </div>
+          {/* Section cards, 16 px apart (system.md § Section cards). */}
+          <div className="mt-4 space-y-4">
+            <div className="grid gap-4 md:grid-cols-2 items-start">
+              <Footprint shares={dossier.region_shares} />
+              <Firms rows={dossier.memberships} />
+            </div>
 
-          <Inventory
-            rows={listingsQ.data ?? []}
-            loading={listingsQ.isLoading}
-            error={listingsQ.isError ? (listingsQ.error as Error) : null}
-            total={b.listing_count}
-            categoryMain={categoryMain}
-            categoryType={categoryType}
-            onCategoryMainChange={setCategoryMain}
-            onCategoryTypeChange={setCategoryType}
-          />
+            <Inventory
+              rows={listingsQ.data ?? []}
+              loading={listingsQ.isLoading}
+              error={listingsQ.isError ? (listingsQ.error as Error) : null}
+              categoryMain={categoryMain}
+              categoryType={categoryType}
+              onCategoryMainChange={setCategoryMain}
+              onCategoryTypeChange={setCategoryType}
+            />
+          </div>
         </>
       )}
     </div>
@@ -183,7 +192,9 @@ function BrokerDetailDesktop() {
  * a row can genuinely have nowhere to go. This used to pass `property_id ?? 0`,
  * which built `/listing?property=0` — a link that type-checked and 404'd. The
  * Portál column still carries `source_url`, so the operator is never stranded. */
+/* A broker's ads are a list worked through: each opens in a new tab. */
 function LocalityCell({ l }: { l: BrokerListing }) {
+  const newTab = useNewTabProps();
   const label = l.display_label ?? '—';
   const dot = !l.is_active && (
     <span
@@ -206,7 +217,7 @@ function LocalityCell({ l }: { l: BrokerListing }) {
   }
 
   return (
-    <Link to={path} className="flex items-center gap-2 hover:text-[var(--color-copper-2)]">
+    <Link to={path} {...newTab} className="flex items-center gap-2 hover:text-[var(--color-copper-2)]">
       {dot}
       <span className="truncate font-[family-name:var(--font-sans)]">{label}</span>
     </Link>
@@ -240,72 +251,57 @@ function Stat({
 }
 
 function Footprint({ shares }: { shares: BrokerRegionShare[] }) {
-  const max = shares.reduce((m, s) => Math.max(m, s.active_property_count), 0) || 1;
+  const max = shares.reduce((m, s) => Math.max(m, s.active_properties), 0) || 1;
   return (
-    <section>
-      <h2 className="text-xs tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
-        Kde inzeruje
-      </h2>
-      <div className="mt-3 border border-[var(--color-rule)] rounded-[var(--radius-md)] bg-[var(--color-paper-2)] px-4 py-3">
-        {shares.length === 0 ? (
-          <p className="text-sm text-[var(--color-ink-4)]">Bez aktivního regionu.</p>
-        ) : (
-          <ul className="space-y-2">
-            {shares.slice(0, 8).map((s) => (
-              <li key={s.geo_id} className="flex items-center gap-3">
-                <span className="w-40 shrink-0 truncate text-sm text-[var(--color-ink-2)]">
-                  {s.name ?? '—'}
-                </span>
-                <span className="flex-1 h-1.5 rounded-full bg-[var(--color-inset)] overflow-hidden">
-                  <span
-                    className="block h-full bg-[var(--color-copper)]"
-                    style={{ width: `${Math.max(4, (s.active_property_count / max) * 100)}%` }}
-                  />
-                </span>
-                <span className="w-10 shrink-0 text-right text-xs font-[family-name:var(--font-mono)] tabular-nums text-[var(--color-ink)]">
-                  {fmtCount(s.active_property_count)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </section>
+    <Panel title="Kde inzeruje" count={shares.length}>
+      {shares.length === 0 ? (
+        <PanelEmpty>Bez aktivního regionu.</PanelEmpty>
+      ) : (
+        <ul className="space-y-2">
+          {shares.slice(0, 8).map((s) => (
+            <li key={s.geo_id} className="flex items-center gap-3">
+              <span className="w-40 shrink-0 truncate text-sm text-[var(--color-ink-2)]">
+                {s.name ?? '—'}
+              </span>
+              <span className="flex-1 h-1.5 rounded-full bg-[var(--color-inset)] overflow-hidden">
+                <span
+                  className="block h-full bg-[var(--color-copper)]"
+                  style={{ width: `${Math.max(4, (s.active_properties / max) * 100)}%` }}
+                />
+              </span>
+              <span className="w-10 shrink-0 text-right text-xs font-[family-name:var(--font-mono)] tabular-nums text-[var(--color-ink)]">
+                {fmtCount(s.active_properties)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
   );
 }
 
 function Firms({ rows }: { rows: BrokerMembership[] }) {
   return (
-    <section>
-      <h2 className="text-xs tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
-        Kanceláře
-      </h2>
-      <div className="mt-3 border border-[var(--color-rule)] rounded-[var(--radius-md)] bg-[var(--color-paper-2)] px-4 py-3">
-        {rows.length === 0 ? (
-          <p className="text-sm text-[var(--color-ink-4)]">Žádná kancelář (nezávislý).</p>
-        ) : (
-          <ul className="space-y-2">
-            {rows.map((m) => (
-              <li key={m.firm_id} className="flex items-center justify-between gap-3">
-                <span className="min-w-0 truncate text-sm text-[var(--color-ink-2)]">
-                  {m.firm_name ?? m.firm_domain ?? '—'}
+    <Panel title="Kanceláře" count={rows.length}>
+      {rows.length === 0 ? (
+        <PanelEmpty>Žádná kancelář (nezávislý).</PanelEmpty>
+      ) : (
+        <ul className="space-y-2">
+          {rows.map((m) => (
+            <li key={m.firm_id} className="flex items-center justify-between gap-3">
+              <span className="min-w-0 truncate text-sm text-[var(--color-ink-2)]">
+                {m.firm_name ?? m.firm_domain ?? '—'}
+              </span>
+              {m.is_current && (
+                <span className="shrink-0 text-[0.55rem] tracking-[0.1em] uppercase px-1.5 py-0.5 rounded-[var(--radius-xs)] bg-[var(--color-sage-soft)] text-[var(--color-sage)]">
+                  aktuální
                 </span>
-                <span className="flex items-center gap-2 shrink-0">
-                  {m.is_current && (
-                    <span className="text-[0.55rem] tracking-[0.1em] uppercase px-1.5 py-0.5 rounded-[var(--radius-xs)] bg-[var(--color-sage-soft)] text-[var(--color-sage)]">
-                      aktuální
-                    </span>
-                  )}
-                  <span className="text-xs font-[family-name:var(--font-mono)] tabular-nums text-[var(--color-ink-3)]">
-                    {fmtCount(m.listing_count)}
-                  </span>
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </section>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
   );
 }
 
@@ -313,7 +309,6 @@ function Inventory({
   rows,
   loading,
   error,
-  total,
   categoryMain,
   categoryType,
   onCategoryMainChange,
@@ -322,12 +317,12 @@ function Inventory({
   rows: BrokerListing[];
   loading: boolean;
   error: Error | null;
-  total: number;
   categoryMain: string | null;
   categoryType: string | null;
   onCategoryMainChange: (v: string | null) => void;
   onCategoryTypeChange: (v: string | null) => void;
 }) {
+  const captionId = useId();
   const filtered = useMemo(
     () =>
       rows.filter(
@@ -338,49 +333,52 @@ function Inventory({
     [rows, categoryMain, categoryType],
   );
   const isFiltered = categoryMain !== null || categoryType !== null;
+  /* The count in the title bar: the ads the table shows, "z" the ads read when a
+   * filter narrows them, "+" on a full page (a cap); 0 once the read says empty. */
+  const read = `${fmtCount(rows.length)}${rows.length === BROKER_LISTINGS_LIMIT ? '+' : ''}`;
+  const count = loading || error
+    ? null
+    : isFiltered && rows.length > 0
+      ? `${fmtCount(filtered.length)} z ${read}`
+      : read;
 
   return (
-    <section className="mt-7">
-      <div className="flex items-baseline justify-between">
-        <h2 className="text-xs tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
-          Inventář
-        </h2>
-        {rows.length > 0 && (
-          <span className="text-[0.7rem] text-[var(--color-ink-4)] tabular-nums">
-            {isFiltered
-              ? `${fmtCount(filtered.length)} z ${fmtCount(rows.length)}`
-              : rows.length < total
-                ? `${fmtCount(rows.length)} z ${fmtCount(total)}`
-                : fmtCount(total)}
-          </span>
-        )}
-      </div>
-
+    <Panel title="Inventář" count={count}>
       {rows.length > 0 && (
-        <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
-          <InvSegment label="Typ" options={CATEGORY_OPTIONS} value={categoryMain} onChange={onCategoryMainChange} />
-          <InvSegment label="Nabídka" options={OFFER_OPTIONS} value={categoryType} onChange={onCategoryTypeChange} />
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          {([
+            ['Typ', CATEGORY_OPTIONS, categoryMain, onCategoryMainChange],
+            ['Nabídka', OFFER_OPTIONS, categoryType, onCategoryTypeChange],
+          ] as const).map(([label, options, value, onChange]) => (
+            <div key={label} className="flex items-center gap-2">
+              {/* L4 field label (SectionLabel's type, on a span that names the bar). */}
+              <span id={`${captionId}-${label}`} className="text-[11px] leading-[14px] font-semibold tracking-[0.08em] uppercase text-[var(--color-ink-3)]">
+                {label}
+              </span>
+              <SegmentedBar hug aria={{ 'aria-labelledby': `${captionId}-${label}` }} options={options} value={value}
+                onChange={onChange} />
+            </div>
+          ))}
         </div>
       )}
 
-      <div className="mt-3 overflow-x-auto border border-[var(--color-rule)] rounded-[var(--radius-md)]">
-        {loading ? (
-          <p className="px-4 py-6 text-sm text-[var(--color-ink-3)]">Načítám inzeráty…</p>
-        ) : error ? (
-          /* The stats strip above already asserts a listing count from the
-             dossier, which now succeeds independently — so a failed inventory
-             read rendered as "Žádné inzeráty." would make the page contradict
-             itself and read as a delisted broker. */
-          <p className="px-4 py-6 text-sm text-[var(--color-brick)]">
-            Inzeráty se nepodařilo načíst: {error.message}
-          </p>
-        ) : rows.length === 0 ? (
-          <p className="px-4 py-6 text-sm text-[var(--color-ink-4)]">Žádné inzeráty.</p>
-        ) : filtered.length === 0 ? (
-          <p className="px-4 py-6 text-sm text-[var(--color-ink-4)]">
-            Žádné inzeráty pro zvolený filtr.
-          </p>
-        ) : (
+      {loading ? (
+        <p className="text-sm text-[var(--color-ink-3)]">Načítám inzeráty…</p>
+      ) : error ? (
+        /* The stats strip above already asserts a listing count from the
+           dossier, which now succeeds independently — so a failed inventory
+           read rendered as "Žádné inzeráty." would make the page contradict
+           itself and read as a delisted broker. */
+        <p className="text-sm text-[var(--color-brick)]">
+          Inzeráty se nepodařilo načíst: {error.message}
+        </p>
+      ) : rows.length === 0 ? (
+        <PanelEmpty>Žádné inzeráty.</PanelEmpty>
+      ) : filtered.length === 0 ? (
+        <PanelEmpty>Žádné inzeráty pro zvolený filtr.</PanelEmpty>
+      ) : (
+        /* A table that scrolls keeps its own box (C9). */
+        <div className="overflow-x-auto border border-[var(--color-rule)] rounded-[var(--radius-md)]">
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="border-b border-[var(--color-rule)] bg-[var(--color-paper-2)] text-left">
@@ -395,54 +393,57 @@ function Inventory({
               </tr>
             </thead>
             <tbody className="font-[family-name:var(--font-mono)] text-[0.78rem]">
-              {filtered.map((l) => (
-                <tr
-                  key={l.listing_id}
-                  className="border-b border-[var(--color-rule-soft)] last:border-0 hover:bg-[var(--color-paper-2)]"
-                >
-                  <td className="px-3 py-1.5 max-w-[16rem]">
-                    <LocalityCell l={l} />
-                  </td>
-                  <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-2)] font-[family-name:var(--font-sans)]">
-                    {[
-                      // The specific kind (subtype for commercial/houses, else
-                      // disposition); the umbrella category word only when no
-                      // subtype is shown, to avoid "Ubytování · Komerční" doubling.
-                      listingKindLabel(l),
-                      l.subtype ? null : categoryMainLabel(l.category_main),
-                      l.category_type ? categoryTypeLabel(l.category_type).toLowerCase() : null,
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')}
-                  </td>
-                  <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-right text-[var(--color-ink-3)]">
-                    {fmtArea(l.area_m2)}
-                  </td>
-                  <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-right">
-                    {fmtCzk(l.price_czk)}
-                  </td>
-                  <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-3)] font-[family-name:var(--font-sans)]">
-                    {l.source_url ? (
-                      <a
-                        href={l.source_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="hover:text-[var(--color-copper)] transition-colors"
-                      >
-                        {portalBadge(l.source, l.source_url)}
-                      </a>
-                    ) : portalBadge(l.source)}
-                  </td>
-                  <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-4)] font-[family-name:var(--font-sans)]">
-                    {fmtRelative(l.last_seen_at)}
-                  </td>
-                </tr>
-              ))}
+              {filtered.map((l) => {
+                const link = advertLink(l);
+                return (
+                  <tr
+                    key={l.listing_id}
+                    className="border-b border-[var(--color-rule-soft)] last:border-0 hover:bg-[var(--color-paper-2)]"
+                  >
+                    <td className="px-3 py-1.5 max-w-[16rem]">
+                      <LocalityCell l={l} />
+                    </td>
+                    <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-2)] font-[family-name:var(--font-sans)]">
+                      {[
+                        // The specific kind (subtype for commercial/houses, else
+                        // disposition); the umbrella category word only when no
+                        // subtype is shown, to avoid "Ubytování · Komerční" doubling.
+                        listingKindLabel(l),
+                        l.subtype ? null : categoryMainLabel(l.category_main),
+                        l.category_type ? categoryTypeLabel(l.category_type).toLowerCase() : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </td>
+                    <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-right text-[var(--color-ink-3)]">
+                      {fmtArea(l.area_m2)}
+                    </td>
+                    <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-right">
+                      {fmtCzk(l.price_czk)}
+                    </td>
+                    <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-3)] font-[family-name:var(--font-sans)]">
+                      {link ? (
+                        <a
+                          href={link}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="hover:text-[var(--color-copper)] transition-colors"
+                        >
+                          {portalBadge(l.source, l.source_url)}
+                        </a>
+                      ) : portalBadge(l.source)}
+                    </td>
+                    <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-4)] font-[family-name:var(--font-sans)]">
+                      {fmtRelative(l.last_seen_at)}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
-        )}
-      </div>
-    </section>
+        </div>
+      )}
+    </Panel>
   );
 }
 
@@ -457,32 +458,5 @@ function MapPinGlyph() {
       />
       <circle cx="8" cy="6" r="1.6" stroke="currentColor" strokeWidth="1.2" />
     </svg>
-  );
-}
-
-function InvSegment({
-  label,
-  options,
-  value,
-  onChange,
-}: {
-  label: string;
-  options: ReadonlyArray<{ value: string | null; label: string }>;
-  value: string | null;
-  onChange: (v: string | null) => void;
-}) {
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-[0.62rem] tracking-[0.12em] uppercase text-[var(--color-ink-4)]">
-        {label}
-      </span>
-      <div className="flex flex-wrap gap-1">
-        {options.map((o) => (
-          <PickButton key={String(o.value)} on={o.value === value} onClick={() => onChange(o.value)}>
-            {o.label}
-          </PickButton>
-        ))}
-      </div>
-    </div>
   );
 }

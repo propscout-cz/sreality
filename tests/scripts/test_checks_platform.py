@@ -18,8 +18,9 @@ import pytest
 from psycopg import errors as pg_errors
 
 from autodedup.incremental_lane import LEASE_LOST, STOPPING
+from scraper import jobs
 from scripts.checks import platform as plat
-from scripts.checks.common import PREVIOUS_CELLS_SQL
+from scripts.checks.common import CLOCK_SQL, PREVIOUS_CELLS_SQL
 from scripts.migration_objects import SAFE_IDENT, load_migrations
 
 _UTC = _dt.timezone.utc
@@ -31,9 +32,8 @@ T: dict[str, Any] = {
     "jobs_gh_long_cycle_h": 24, "jobs_gh_streak_fail": 3, "jobs_gh_gap_p90_multiple": 3,
     "jobs_gh_gap_min_starts": 10, "jobs_poller_stale_h": 18, "jobs_cron_fail_of_3": 2,
     "jobs_cron_gap_multiple": 3, "jobs_cron_gap_min_starts": 5, "jobs_lane_floor_s": 900,
-    "jobs_lane_boot_grace_s": 900, "jobs_lane_inflight_warn_s": 1200,
-    "jobs_lane_inflight_fail_s": 1800, "jobs_lane_daily_interval_s": 3600,
-    "jobs_lane_flap_share": 0.5, "jobs_lane_flap_min_passes": 3,
+    "jobs_lane_boot_grace_s": 900, "jobs_lane_daily_interval_s": 3600,
+    "jobs_lane_flap_share": 0.5, "jobs_lane_flap_min_passes": 3, "jobs_runner_register_grace_s": 1800,
     "capacity_p50_warn_multiple": 3, "capacity_p50_warn_floor_s": 30,
     "capacity_p50_fail_multiple": 4, "capacity_p50_fail_floor_s": 60,
     "capacity_p95_interval_warn": 0.5, "capacity_p95_interval_fail": 0.8,
@@ -44,7 +44,8 @@ T: dict[str, Any] = {
     "CAPACITY_REFERENCE_FROM": _dt.date(2026, 10, 17), "llm_error_share_warn": 0.2,
     "llm_error_share_min_calls": 20, "llm_starved_min_attempts": 5,
     "llm_spend_24h_warn_usd": 130, "llm_spend_24h_fail_usd": 150, "llm_lookback_h": 72,
-    "migration_drift_window": 25, "GITHUB_DELIVERY_SLACK_S": 18 * 3600,
+    "migration_drift_window": 25, "GITHUB_DELIVERY_SLACK_S": 18 * 3600, "CURATION_CLOCK_TRIGGERS": 14,
+    "CURATION_CLOCK_QUIET_H": 24, "CURATION_CLOCK_LOAD_PCT": 5.0,
 }
 
 
@@ -60,7 +61,7 @@ class _Conn:
     """Answers by the SQL constant a statement carries; records each and whether it was armed."""
 
     def __init__(self, answers: dict[str, Any], now: _dt.datetime = _NOW) -> None:
-        self.answers = {plat._CLOCK_SQL: [(now,)], **answers}
+        self.answers = {CLOCK_SQL: [(now,)], **answers}
         self.sent: list[tuple[str, Any, bool]] = []
         self._in_transaction = self._armed = False
         self._rows: list[Any] = []
@@ -147,8 +148,8 @@ def _lane(**over: Any) -> dict[str, Any]:
 def _artifact(name: str = "browse_list", *, last_ok: _dt.datetime | None = None,
               stale: bool = False, never: bool = False) -> tuple[Any, ...]:
     """A _ARTIFACTS_SQL row: a pg_cron artifact, so no GitHub delivery slack."""
-    return (name, "rebuild_browse_list", "pg_cron", "*/15 * * * *",
-            None if never else (last_ok or _ago(minutes=10)), 41_000, 41_700, 2700.0, 0.0, True,
+    return (name, "rebuild_browse_list", "pg_cron", "45 * * * *",
+            None if never else (last_ok or _ago(minutes=10)), 41_000, 41_700, 7800.0, 0.0, True,
             True if never else stale)
 
 
@@ -156,10 +157,12 @@ def _jobs(*, workflows: list[Any] | None = None, cursor: Any = "fresh", cron: An
           lanes: dict[str, Any] | None = None, booted: _dt.datetime | None = None,
           beat_at: _dt.datetime | None = None, previous: list[dict[str, Any]] | None = None,
           previous_at: _dt.datetime | None = None, artifacts: list[Any] | None = None,
-          whole: bool = True) -> tuple[dict[str, Any], _Conn]:
+          whole: bool = True, registered: list[str] | None = None) -> tuple[dict[str, Any], _Conn]:
     """check_jobs over a healthy fleet, with the parts a test names replaced. The heartbeat carries
     every registered lane, as the worker's does from boot: those a test does not name are healthy
-    (`whole=False`: only the named ones, a beat from a worker older than this code)."""
+    (`whole=False`: only the named ones, a beat from a worker older than this code). The job runner
+    has registered every job this code puts on it (`registered`: these rows instead), so no verdict
+    here moves when a move PR hands a job to the runner."""
     if lanes is None:
         lanes = {"probe": _lane()}
     if whole:
@@ -173,6 +176,8 @@ def _jobs(*, workflows: list[Any] | None = None, cursor: Any = "fresh", cron: An
         PREVIOUS_CELLS_SQL: ([(previous_at or _ago(minutes=9), previous)]
                              if previous is not None else []),
         plat._ARTIFACTS_SQL: artifacts or [],
+        plat._REGISTERED_SQL: [(name,) for name in (
+            sorted(j.name for j in plat._runner_jobs()) if registered is None else registered)],
     })
     return plat.check_jobs(conn, T), conn
 
@@ -182,10 +187,10 @@ def test_jobs_returns_the_wave_one_result_shape_with_one_cell_per_job() -> None:
     assert out["check_key"] == "jobs" and out["status"] == "ok" and out["value"] == 0
     lanes = {f"lane/{lane}" for lane in plat.WORKER_LANES if lane != "heartbeat"}
     assert set(_cells(out)) == {"gh/poller", "gh/property_maintenance", "cron/browse-list-rebuild",
-                                "artifact/browse_list"} | lanes
+                                "artifact/browse_list", "job-runner/registry"} | lanes
     for cell in out["details"]["cells"]:
         assert set(cell) == {"subject", "portal", "status", "value", "unit", "message", "facts"}
-    assert out["message"].endswith(f"{4 + len(lanes)} OK.")
+    assert out["message"].endswith(f"{5 + len(lanes)} OK.")
 
 
 def test_every_jobs_statement_runs_on_the_checks_own_clock() -> None:
@@ -346,6 +351,8 @@ def test_the_watchers_own_job_is_a_cell_like_any_other() -> None:
 
 @pytest.mark.parametrize("answer, said", [
     (pg_errors.InsufficientPrivilege("permission denied for schema cron"), "unreadable"),
+    (pg_errors.InvalidSchemaName('schema "cron" does not exist'), "unreadable"),
+    (pg_errors.UndefinedTable('relation "cron.job_run_details" does not exist'), "unreadable"),
     ([], "returned no rows"),
 ])
 def test_unreadable_or_empty_cron_tables_are_not_measured_never_ok(answer: Any, said: str) -> None:
@@ -458,10 +465,25 @@ def test_a_daily_lanes_single_failure_is_a_problem_at_once() -> None:
     assert cell["status"] == "fail" and "pass exceeded 1800 s" in cell["message"]
 
 
-def test_a_pass_in_flight_is_watch_past_20_minutes_and_a_problem_past_30() -> None:
-    watch = _cells(_jobs(lanes={"autodedup": _lane(in_flight_s=1300.0)})[0])["lane/autodedup"]
-    problem = _cells(_jobs(lanes={"autodedup": _lane(in_flight_s=1900.0)})[0])["lane/autodedup"]
-    assert (watch["status"], problem["status"]) == ("warn", "fail")
+def test_a_pass_in_flight_is_watch_past_two_thirds_of_the_workers_budget_and_a_problem_past_it() -> None:
+    """The lines are the worker's own pass budget (no THRESHOLDS key since #2026), the messages as they were."""
+    budget, warn = plat.LANE_PASS_BUDGET_S, plat.LANE_INFLIGHT_WARN_S
+    assert (budget, warn) == (1800, 1200)
+
+    def in_flight(seconds: int) -> dict[str, Any]:
+        return _cells(_jobs(lanes={"autodedup": _lane(in_flight_s=float(seconds))})[0])["lane/autodedup"]
+
+    assert in_flight(budget * 2 // 3 - 1)["status"] == "ok"
+    watch, problem = in_flight(budget * 2 // 3 + 1), in_flight(budget + 1)
+    assert (watch["status"], watch["message"]) == ("warn", "one pass in flight for 20 min")
+    assert (problem["status"], problem["message"]) == ("fail", "one pass in flight for 30 min")
+
+
+def test_the_lane_budget_is_the_workers() -> None:
+    """The check mirrors scraper/realtime_worker.LANE_PASS_TIMEOUT_SECONDS (it never imports the worker)."""
+    from scraper import realtime_worker
+
+    assert plat.LANE_PASS_BUDGET_S == realtime_worker.LANE_PASS_TIMEOUT_SECONDS
 
 
 def test_one_cell_per_lane_carries_the_worst_with_every_reason() -> None:
@@ -555,6 +577,11 @@ def test_the_heartbeat_lane_is_the_watchers_and_the_health_lane_is_judged() -> N
     assert cells["lane/health"]["status"] == "fail"
 
 
+def test_the_beats_version_is_no_lane() -> None:
+    cells = _cells(_jobs(lanes={"version": "abc123", "health": _lane(interval_s=60.0, last_pass_at=_iso(minutes=1))})[0])
+    assert "lane/version" not in cells and "lane/health" in cells
+
+
 def test_the_checks_lane_list_is_the_workers() -> None:
     """The check mirrors scraper/realtime_worker.LANES (it never imports the worker): a lane added
     there without here would never be missed."""
@@ -600,10 +627,10 @@ def test_a_stale_heartbeat_leaves_the_lanes_to_the_watcher() -> None:
 
 
 def test_an_artifact_past_its_budget_is_a_problem_with_its_facts() -> None:
-    out, _ = _jobs(artifacts=[_artifact(last_ok=_ago(minutes=50), stale=True)])
+    out, _ = _jobs(artifacts=[_artifact(last_ok=_ago(minutes=140), stale=True)])
     cell = _cells(out)["artifact/browse_list"]
-    assert cell["status"] == "fail" and cell["value"] == 50
-    assert cell["message"] == ("stale: last succeeded 50 min ago, past its 45 min budget "
+    assert cell["status"] == "fail" and cell["value"] == 140
+    assert cell["message"] == ("stale: last succeeded 2.3 h ago, past its 2.2 h budget "
                                "(rebuild_browse_list, on pg_cron)")
     assert {"producer", "host", "cadence", "last_rows", "last_duration_ms", "budget_s",
             "slack_s", "is_serving"} <= set(cell["facts"])
@@ -646,6 +673,84 @@ def test_a_workflows_artifact_is_stale_only_past_its_budget_plus_githubs_deliver
     assert cells["artifact/browse_list"]["status"] == "fail", "pg_cron keeps the bare budget"
     sent = [params for sql, params, _ in conn.sent if sql == plat._ARTIFACTS_SQL]
     assert sent == [{"slack_s": 64_800.0}]
+
+
+# The job runner's registry (#2026, decision 21): a job this code puts on the runner with no live row has no
+# job/<name> cell in the watcher, so this census is its alarm.
+
+
+def _registry(declared: set[str], registered: list[str], *, up: _dt.timedelta | None = _dt.timedelta(hours=2),
+              previous: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any], _Conn]:
+    """_registry_cell on these rows: the worker booted `up` ago (None: no heartbeat row)."""
+    conn = _Conn({
+        plat._REGISTERED_SQL: [(name,) for name in registered],
+        plat._HEARTBEAT_SQL: [] if up is None else [(_ago(seconds=20), _NOW - up, {})],
+        PREVIOUS_CELLS_SQL: [(_ago(minutes=10), previous)] if previous is not None else [],
+    })
+    return plat._registry_cell(conn, T, _NOW, declared=declared), conn
+
+
+def _held_registry(*missing: str) -> list[dict[str, Any]]:
+    return [{"subject": "job-runner/registry", "status": "ok", "facts": {"missing": list(missing)}}]
+
+
+def test_a_declared_job_with_no_row_past_the_grace_is_a_problem_once_the_previous_measurement_read_it_too() -> None:
+    cell, conn = _registry({"x"}, [], previous=_held_registry("x"))
+    assert (cell["subject"], cell["status"], cell["value"], cell["unit"]) == ("job-runner/registry", "fail", 1, "jobs")
+    assert cell["message"] == (
+        "declared on the job runner in this code but not registered: x. The runner is not running this registry "
+        "(its deploy failed or was skipped, it refused the entry, or an older image booted and retired it); see "
+        "Railway's job-runner deployments")
+    assert cell["facts"] | {"conditions": None} == {
+        "declared": ["x"], "registered": [], "missing": ["x"], "undeclared": [], "worker_up_s": 7200.0,
+        "conditions": None}
+    assert [params for sql, params, _ in conn.sent if sql == plat._REGISTERED_SQL] == [{"runner": "job-runner"}]
+    # Read once, it is Watch: in a deploy overlap the one heartbeat row can be the predecessor's, booted long ago.
+    once, _ = _registry({"x"}, [], previous=_held_registry())
+    assert once["status"] == "warn" and once["message"] == (
+        "declared on the job runner in this code but not registered: x; a Problem if the next measurement reads it "
+        "missing too (one read can be a deploy overlap's, whose heartbeat is the predecessor's)")
+    assert _registry({"x"}, [], up=None, previous=_held_registry("x"))[0]["status"] == "fail", "no beat: past it"
+
+
+def test_inside_the_grace_a_declared_job_with_no_row_is_the_runners_deploy_in_progress() -> None:
+    cell, _ = _registry({"x"}, [], up=_dt.timedelta(minutes=10), previous=_held_registry("x"))
+    assert (cell["status"], cell["message"]) == ("ok", "waiting for the runner's deploy (worker up 10 min)")
+    assert cell["facts"]["missing"] == ["x"], "the next measurement past the grace reads it as held"
+
+
+def test_every_declared_job_registered_is_ok() -> None:
+    cell, _ = _registry({"x"}, ["x"])
+    assert (cell["status"], cell["message"], cell["value"]) == (
+        "ok", "1 jobs declared on the job runner, all registered", 0)
+
+
+def test_a_row_this_code_does_not_declare_is_watch_past_the_grace() -> None:
+    cell, _ = _registry(set(), ["x"])
+    assert (cell["status"], cell["message"]) == ("warn", "registered by a runner on other code than this worker's: x")
+    assert _registry(set(), ["x"], up=_dt.timedelta(minutes=10))[0]["status"] == "ok"
+
+
+def test_with_nothing_declared_or_registered_the_registry_cell_is_ok() -> None:
+    """Production before #2025 PR-2, when runner_jobs() was empty."""
+    cell, _ = _registry(set(), [])
+    assert (cell["status"], cell["message"]) == ("ok", "no job is declared on the job runner yet")
+
+
+def test_the_registry_cell_is_always_in_the_jobs_check_and_reads_the_code_the_worker_runs(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    cell = _cells(_jobs()[0])["job-runner/registry"]
+    assert cell["facts"]["declared"] == sorted(j.name for j in jobs.runner_jobs()) and cell["status"] == "ok"
+    monkeypatch.setattr(plat, "_runner_jobs", lambda: ())
+    assert _cells(_jobs()[0])["job-runner/registry"]["message"] == "no job is declared on the job runner yet"
+    monkeypatch.setattr(plat, "_runner_jobs", lambda: (_JobEntry("stale_images"),))
+    cell = _cells(_jobs(registered=[])[0])["job-runner/registry"]
+    assert cell["facts"]["declared"] == ["stale_images"] and cell["status"] == "warn"
+
+
+class _JobEntry:
+    def __init__(self, name: str) -> None:
+        self.name = name
 
 
 def test_a_check_that_measured_no_cell_is_unknown_and_says_why() -> None:
@@ -1011,9 +1116,39 @@ def test_migration_drift_reads_the_repository_checkout() -> None:
     assert (plat._MIGRATIONS_DIR / "620_health_liveness.sql").is_file()
 
 
+def _real_catalog(window: int, still_present: frozenset[str] = frozenset()) -> _Conn:
+    """A database that applied every real file: its creates exist, its drops are gone, bar the named."""
+    gone = {str(o) for m in load_migrations(plat._MIGRATIONS_DIR, newest=window) for o in m.dropped}
+    return _Conn({plat.MIGRATION_OBJECT_PROBE_SQL: lambda p: [
+        (k, i, f"{k}:{i}" not in gone or f"{k}:{i}" in still_present)
+        for k, i in zip(p["kinds"], p["idents"])]})
+
+
+@pytest.mark.parametrize(("subject", "still"), [
+    ("679_run_tables_browser_write_close.sql", "policy:building_runs.building_runs_tenant_insert"),
+    ("688_drop_filter_visibility.sql", "relation:filter_visibility"),
+    ("693_broker_count_book_drop.sql", "relation:broker_geo_options"),
+])
+def test_a_recent_drop_answered_still_present_is_a_watch_naming_it(subject: str, still: str) -> None:
+    """Window 0 reads the whole folder, so these files never slide out of the test as 444 once did."""
+    out = plat.check_migration_drift(_real_catalog(0, frozenset({still})), {"migration_drift_window": 0})
+    cells = _cells(out)
+    assert cells[subject]["status"] == "warn"
+    assert cells[subject]["message"].startswith("Drop not applied: 1 of ") and still in cells[subject]["message"]
+    assert [s for s, c in cells.items() if c["status"] not in ("ok", "unknown")] == [subject]
+
+
+def test_every_real_cell_is_ok_or_not_measured_when_the_drops_are_gone() -> None:
+    out = plat.check_migration_drift(_real_catalog(0), {"migration_drift_window": 0})
+    cells = _cells(out)
+    assert {c["status"] for c in cells.values()} == {"ok", "unknown"}
+    for measured in ("679_run_tables_browser_write_close.sql", "688_drop_filter_visibility.sql",
+                     "689_drop_portal_index_slices.sql", "707_location_w3_drop_fingerprint.sql"):
+        assert cells[measured]["status"] == "ok", "a drop-only file is measured now"
+
+
 def test_migration_drift_gives_every_file_of_the_checkouts_window_one_cell_on_its_own_clock() -> None:
-    conn = _Conn({plat.MIGRATION_OBJECT_PROBE_SQL: lambda p: [
-        (k, i, True) for k, i in zip(p["kinds"], p["idents"])]})
+    conn = _real_catalog(T["migration_drift_window"])
     out = plat.check_migration_drift(conn, T)
     window = load_migrations(plat._MIGRATIONS_DIR, newest=T["migration_drift_window"])
     assert out["check_key"] == "migration_drift" and out["status"] == "ok" and out["value"] == 0
@@ -1113,9 +1248,98 @@ def test_the_window_holds_the_newest_files_only(drift_dir: Path) -> None:
     assert list(_cells(out)) == ["703_w6_function.sql", "704_w6_quoted.sql"]
 
 
-def test_with_no_migration_files_the_check_is_not_measured_and_sends_nothing(
+def _catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, files: dict[str, str],
+             exists: frozenset[str] = frozenset()) -> tuple[dict[str, dict[str, Any]], _Conn]:
+    """The drift check's cells over `files`, in a database holding only the named idents."""
+    folder = tmp_path / "own_migrations"
+    folder.mkdir()
+    for name, sql in files.items():
+        (folder / name).write_text(sql, encoding="utf-8")
+    monkeypatch.setattr(plat, "_MIGRATIONS_DIR", folder)
+    conn = _Conn({plat.MIGRATION_OBJECT_PROBE_SQL: lambda p: [
+        (k, i, i in exists) for k, i in zip(p["kinds"], p["idents"])]})
+    return _cells(plat.check_migration_drift(conn, {"migration_drift_window": 25})), conn
+
+
+_THREE_DROPS = {"700_drop.sql": ("drop table if exists public.gone_a;\n"
+                                 "drop index if exists gone_a_idx;\n"
+                                 "alter table kept drop column if exists gone_c;\n")}
+
+
+def test_a_done_drop_is_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cell = _catalog(tmp_path, monkeypatch, _THREE_DROPS)[0]["700_drop.sql"]
+    assert cell["status"] == "ok" and cell["value"] == 0
+    assert "3 dropped objects are gone" in cell["message"]
+    assert cell["facts"] == {"objects": 0, "absent": 0, "dropped": 3, "still_present": 0}
+
+
+def test_a_still_present_drop_is_watch_with_the_counts_and_the_name(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cell = _catalog(tmp_path, monkeypatch, _THREE_DROPS, frozenset({"kept.gone_c"}))[0]["700_drop.sql"]
+    assert cell["status"] == "warn" and cell["value"] == 1
+    assert ("Drop not applied: 1 of 3 dropped objects still exist; "
+            "apply it once its last reader is live") in cell["message"]
+    assert "column:kept.gone_c" in cell["message"]
+    assert cell["facts"]["first_still_present"] == "column:kept.gone_c"
+
+
+_CREATE_AND_DROP = {"700_swap.sql": ("create table if not exists public.fresh (id int);\n"
+                                     "create index if not exists fresh_idx on public.fresh (id);\n"
+                                     "drop table if exists public.stale;\n")}
+
+
+def test_absent_creates_plus_a_still_present_drop_is_a_problem(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cell = _catalog(tmp_path, monkeypatch, _CREATE_AND_DROP, frozenset({"stale"}))[0]["700_swap.sql"]
+    assert cell["status"] == "fail" and cell["message"].startswith("Not applied")
+
+
+@pytest.mark.parametrize(("exists", "status", "says"), [
+    (frozenset({"public.fresh", "fresh_idx"}), "ok", "all 2 of its objects exist"),
+    (frozenset({"public.fresh", "fresh_idx", "stale"}), "warn", "Drop not applied: 1 of 1"),
+    (frozenset({"public.fresh"}), "warn", "Partly applied"),
+    (frozenset({"public.fresh", "stale"}), "warn", "Drop not applied: 1 of 1"),
+])
+def test_creates_and_drops_are_judged_together(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exists: frozenset[str], status: str, says: str) -> None:
+    cell = _catalog(tmp_path, monkeypatch, _CREATE_AND_DROP, exists)[0]["700_swap.sql"]
+    assert cell["status"] == status and says in cell["message"]
+
+
+def test_a_data_only_file_stays_not_measured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    cells, conn = _catalog(tmp_path, monkeypatch, {"700_data.sql": "update app_settings set value = 1;\n"})
+    assert cells["700_data.sql"]["status"] == "unknown" and conn.sent == []
+
+
+def test_a_policy_dropped_and_recreated_in_one_file_is_expected_present(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """613's shape: the rebuild leaves the policy there, so its presence alarms no one."""
+    files = {"700_rebuild.sql": ("drop policy if exists notes_read on notes;\n"
+                                 "create policy notes_read on notes for select using (true);\n")}
+    there = _catalog(tmp_path, monkeypatch, files, frozenset({"notes.notes_read"}))[0]["700_rebuild.sql"]
+    assert there["status"] == "ok" and there["facts"] == {"objects": 1, "absent": 0}
+
+
+def test_a_drop_recreated_by_a_later_file_expects_nothing_absent(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    files = {"001_drop.sql": "drop table if exists phoenix;\n", "002_make.sql": "create table phoenix (id int);\n"}
+    cells, _ = _catalog(tmp_path, monkeypatch, files, frozenset({"phoenix"}))
+    assert cells["001_drop.sql"]["status"] == "unknown"
+    assert cells["002_make.sql"]["status"] == "ok"
+
+
+def test_a_function_only_drop_gives_nothing_to_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The probe matches a function by name, so an overload left behind would read as a failed drop."""
+    cells, conn = _catalog(tmp_path, monkeypatch, {"700_fn.sql": "drop function if exists retired_fn(int);\n"})
+    assert cells["700_fn.sql"]["status"] == "unknown" and conn.sent == []
+
+
+@pytest.mark.parametrize("folder", ["missing", "empty"])
+def test_with_no_migration_files_the_check_is_not_measured_and_sends_nothing(
+        folder: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The worker image ships no migrations/ folder: zero files probed is zero verified."""
+    if folder == "empty":
+        (tmp_path / "migrations").mkdir()
     monkeypatch.setattr(plat, "_MIGRATIONS_DIR", tmp_path / "migrations")
     out, conn = _drift()
     assert out["status"] == "unknown" and out["value"] is None
@@ -1251,3 +1475,14 @@ def test_the_engines_shutdown_aborts_are_no_livelock_and_never_read(reason: str)
     for previous in (None, _held_abort("warn", "warn: its last pass aborted: pair_budget")):
         cell = _cells(_jobs(lanes=lanes, previous=previous)[0])["lane/autodedup"]
         assert (cell["status"], cell["facts"]["last_aborted"]) == ("ok", None)
+
+
+def test_a_stored_cells_facts_read_empty_when_the_cell_or_its_facts_are_missing() -> None:
+    stored = {"a": {"facts": {"missing": True}}, "b": {"facts": None}, "c": {}}
+    assert plat._stored_facts(stored, "a") == {"missing": True}
+    assert plat._stored_facts(stored, "b") == plat._stored_facts(stored, "c") == plat._stored_facts(stored, "z") == {}
+
+
+def test_pg_stat_statements_reads_unreadable_where_pg_cron_does_and_where_it_is_not_preloaded() -> None:
+    assert set(plat._STATEMENTS_UNREADABLE) - set(plat._EXTENSION_UNREADABLE) == {
+        pg_errors.ObjectNotInPrerequisiteState}

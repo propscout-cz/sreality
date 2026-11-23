@@ -12,7 +12,7 @@ describe('<PivotTable> without a column dimension', () => {
       cell([], 60, 55.25),
       cell(['2+kk'], 30, 60),
       cell(['1+kk'], 30, 40),
-      cell(['2+kk', 'spatny'], 4, null),
+      { ...cell(['2+kk', 'spatny'], 4, null), small: { min: 30, max: 48.5, mean: 39.13, median: 40 } },
       cell(['2+kk', 'novostavba'], 26, 62),
       cell(['1+kk', 'dobry'], 30, 40),
     ],
@@ -62,6 +62,31 @@ describe('<PivotTable> without a column dimension', () => {
       '60', '55,3', '55,3', '35,3', '45,3', '65,3', '75,3',
     ]);
   });
+
+  it('shows a cell under the minimum as min, průměr, medián, max on its own tinted row when asked; percentiles never', () => {
+    render(<PivotTable pivot={pivot} stats={['median']} showSmall />);
+    const row = screen.getByRole('rowheader', { name: 'Špatný' }).closest('tr')!;
+    expect(row).toHaveAttribute('data-small', 'true');
+    expect(row.className).toContain('ochre-soft');
+    const cells = within(row).getAllByRole('cell');
+    expect(cells[0]).toHaveTextContent('4');
+    expect(cells[1]).toHaveAttribute('colspan', '6');
+    expect(sp(cells[1].textContent)).toBe('malý vzorek min 30 průměr 39,1 medián 40 max 48,5');
+    expect(sp(cells[1].textContent)).not.toMatch(/p10|p25|p75|p90/);
+    const full = screen.getByRole('rowheader', { name: 'Celkem' }).closest('tr')!;
+    expect(full).not.toHaveAttribute('data-small');
+  });
+
+  it('keeps the dashed mark when the switch is on but the payload carries no summary (before migration 678)', () => {
+    const old = pivotOf({
+      spec: { rows: ['disposition'], cols: [], measure: 'area' },
+      cells: [cell([], 30, 50), cell(['1+kk'], 3, null)],
+    });
+    render(<PivotTable pivot={old} stats={['median']} showSmall />);
+    const row = screen.getByRole('rowheader', { name: '1+kk' }).closest('tr')!;
+    expect(row).not.toHaveAttribute('data-small');
+    expect(sp(within(row).getAllByRole('cell')[1].textContent)).toContain('pod 5');
+  });
 });
 
 describe('<PivotTable> with a column dimension', () => {
@@ -72,7 +97,7 @@ describe('<PivotTable> with a column dimension', () => {
       cell([], 30, 60, 'ano'),
       cell(['1+kk'], 40, 50, 'ne'),
       cell(['2+kk'], 30, 60, 'ano'),
-      cell(['1+kk'], 3, null, 'ano'),
+      { ...cell(['1+kk'], 3, null, 'ano'), small: { min: 30, max: 48.5, mean: 39.13, median: 40 } },
     ],
   });
 
@@ -106,6 +131,17 @@ describe('<PivotTable> with a column dimension', () => {
     const first = within(row).getAllByRole('cell')[0];
     expect(first).toHaveAttribute('colspan', '2');
     expect(sp(first.textContent)).toContain('pod 5');
+  });
+
+  it('with a column dimension tints only the small cell, never the row (its other column values are full)', () => {
+    render(<PivotTable pivot={pivot} stats={['median', 'p10']} showSmall />);
+    const row = screen.getByRole('rowheader', { name: '1+kk' }).closest('tr')!;
+    expect(row).not.toHaveAttribute('data-small');
+    const [small] = within(row).getAllByRole('cell');
+    expect(small).toHaveAttribute('colspan', '2');
+    expect(small.className).toContain('ochre-soft');
+    expect(sp(small.textContent)).toBe('malý vzorek min 30 průměr 39,1 medián 40 max 48,5');
+    expect(within(row).getAllByRole('cell').map((c) => sp(c.textContent)).slice(-3)).toEqual(['50', '30', '40']);
   });
 
   it('marks a combination with no property as empty, not as zero, across all its sub-columns', () => {

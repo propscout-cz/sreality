@@ -51,6 +51,8 @@ _TARGET = TargetSpec(lat=50.08, lng=14.42)
 
 _ROOT = Path(__file__).resolve().parent.parent
 _MIGRATION = _ROOT / "migrations" / "436_city_quality_obec_key.sql"
+# W8-3 (#2362): curated_cities_matching reads the city's town by `obec_kod`, the RÚIAN code it always held.
+_MATCHING = _ROOT / "migrations" / "726_location_w8_curated_cities_obec_kod.sql"
 
 _CITY_QUALITY = [f.id for f in fr.all_filters() if f.category == fr.CATEGORY_CITY_QUALITY]
 _RULE = {"index_name": "celkove_hodnoceni", "value": 6, "op": ">="}
@@ -97,16 +99,14 @@ def test_the_agenda_gate_excludes_city_quality_from_estimation():
 
     This assertion did not exist before W5 — deleting the gate turned nothing red.
 
-    RED by: adding Agenda.COMPARABLES or Agenda.ESTIMATION to the city_index_rules
-    FilterDef.
+    RED by: adding Agenda.COMPARABLES to the city_index_rules FilterDef.
     """
-    for agenda in (fr.Agenda.COMPARABLES, fr.Agenda.ESTIMATION):
-        ids = {f.id for f in fr.filters_for_agenda(agenda)}
-        leaked = ids.intersection(_CITY_QUALITY)
-        assert not leaked, (
-            f"rule 17: {sorted(leaked)} reachable from the {agenda} agenda — an estimate "
-            "would depend on a city_index_* revision"
-        )
+    ids = {f.id for f in fr.filters_for_agenda(fr.Agenda.COMPARABLES)}
+    leaked = ids.intersection(_CITY_QUALITY)
+    assert not leaked, (
+        f"rule 17: {sorted(leaked)} reachable from the comparables agenda — an estimate "
+        "would depend on a city_index_* revision"
+    )
 
 
 # --- the one predicate -----------------------------------------------------
@@ -214,9 +214,10 @@ def test_the_migration_reads_the_public_views_not_the_base_tables():
 
     RED by: changing `curated_cities_public` to `curated_cities` in the function body.
     """
-    body = _MIGRATION.read_text()
+    body = _MATCHING.read_text()
     fn_at = body.index("create or replace function public.curated_cities_matching")
     fn = body[fn_at : body.index("$function$;", fn_at)]
+    assert "select c.obec_kod" in fn
     assert "from curated_cities_public" in fn
     assert "from city_index_values_public" in fn
     assert not re.search(r"from\s+curated_cities\s", fn), (

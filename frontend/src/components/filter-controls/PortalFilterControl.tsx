@@ -4,7 +4,7 @@
  * editor render this one control; the phone Feed renders the same transition in
  * its own chip language. */
 
-import { PickButton } from '@/components/controls';
+import { PickButton, SegmentedBar } from '@/components/controls';
 import { filterById } from '@/lib/filterRegistry.generated';
 import { cyclePortal, type PortalChoice } from '@/lib/portals';
 
@@ -12,6 +12,12 @@ const OPTIONS = (filterById('portals')?.enum_values ?? []).map((o) => ({
   value: String(o.value),
   label: o.label_cs,
 }));
+
+/* Which of a property's ads count against an excluded portal: a pick-one, so the joined bar. */
+const EXCLUDE_BY = [
+  { value: false, label: 'any ad' },
+  { value: true, label: 'active ads only' },
+] as const;
 
 export function PortalFilterControl({
   value,
@@ -43,14 +49,15 @@ export function PortalFilterControl({
         })}
       </div>
       {value.portalsExcluded.length > 0 && (
-        <div role="group" aria-label="Which ads exclude a property" className="flex items-center gap-1">
-          <span className="mr-1 text-xs text-[var(--color-ink-2)]">Exclude by</span>
-          <PickButton on={!value.portalsExcludedActiveOnly} onClick={() => setActiveOnly(false)}>
-            any ad
-          </PickButton>
-          <PickButton on={value.portalsExcludedActiveOnly} onClick={() => setActiveOnly(true)}>
-            active ads only
-          </PickButton>
+        <div className="flex items-center gap-2">
+          <span className="shrink-0 text-xs text-[var(--color-ink-2)]">Exclude by</span>
+          <SegmentedBar
+            hug
+            label="Which ads exclude a property"
+            options={EXCLUDE_BY}
+            value={value.portalsExcludedActiveOnly}
+            onChange={setActiveOnly}
+          />
         </div>
       )}
     </div>

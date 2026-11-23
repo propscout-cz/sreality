@@ -5,7 +5,7 @@
  * so the swipe itself (scroll-snap, the rAF sync) is a browser check; what is
  * pinned here is the wiring. */
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -16,8 +16,9 @@ import * as auth from '@/lib/auth';
 import { createMutationCache } from '@/lib/mutationCache';
 import { PHONE_PIPELINE_STAGE_KEY } from '@/lib/phonePipeline';
 import { reloadActingStore, resetActiveBoard, setActiveBoard } from '@/lib/acting';
+import { revalidateTables, type SyncTable } from '@/lib/curationSync';
+import { districtChipsToCsvParams } from '@/lib/filters';
 import { PHONE_SHELL_QUERY } from '@/lib/phoneShell';
-import * as pinAudit from '@/lib/pinAudit';
 import * as queries from '@/lib/queries';
 import type { PipelineBoardCard, PipelineStage } from '@/lib/types';
 import Pipeline from '@/pages/Pipeline';
@@ -41,10 +42,6 @@ vi.mock('@/lib/queries', async (importOriginal) => ({
   fetchPipelineBoard: vi.fn(),
   fetchListingCovers: vi.fn(),
   fetchPropertyTagMemberSet: vi.fn(),
-}));
-vi.mock('@/lib/pinAudit', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/pinAudit')>()),
-  fetchPinAuditTotal: vi.fn(),
 }));
 vi.mock('@/lib/supabase', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/supabase')>()),
@@ -114,6 +111,8 @@ const CARDS: PipelineBoardCard[] = [
     entered_stage_at: '2026-10-09T09:00:00Z',
     display_label: 'Lesní 3, Beroun',
     obec: 'Beroun',
+    obec_id: 531057,
+    region_id: 27,
   },
 ];
 
@@ -141,7 +140,6 @@ beforeEach(() => {
   vi.mocked(api.listPipelineShares).mockResolvedValue({ shared_with: [], shared_with_me: [] });
   window.scrollTo = vi.fn() as unknown as typeof window.scrollTo;
   vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 0 });
-  vi.mocked(pinAudit.fetchPinAuditTotal).mockResolvedValue(0);
   vi.mocked(auth.useAuth).mockReturnValue({
     isAdmin: true,
     session: null,
@@ -171,14 +169,14 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function renderPipeline() {
+function renderPipeline(entry = '/pipeline') {
   const qc = new QueryClient({
     mutationCache: createMutationCache(),
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(
+  const view = render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={['/pipeline']}>
+      <MemoryRouter initialEntries={[entry]}>
         <Routes>
           <Route element={<Shell />}>
             <Route path="/pipeline" element={<Pipeline />} />
@@ -188,9 +186,20 @@ function renderPipeline() {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...view, qc };
 }
 
+/* A change made elsewhere, re-read as the curation clock re-reads it (lib/curationSync). */
+const changedElsewhere = (qc: QueryClient, table: SyncTable) =>
+  act(async () => {
+    await revalidateTables(qc, [table]);
+  });
+
 const panel = (name: RegExp) => screen.getByRole('tabpanel', { name });
+/* One finger on the screen as a touch event lists it: the element it came down on.
+   A finger's touchend and touchcancel go to that element, so a lift is fired there. */
+const finger = (target: Element) => ({ target });
+const added: PipelineBoardCard = { ...base, property_id: 46, listing_id: 444, display_label: 'Nová 1, Praha' };
 
 describe('phone pipeline', () => {
   it('draws the stage tabs in position order, the closed stages set apart, and no kanban', async () => {
@@ -234,7 +243,7 @@ describe('phone pipeline', () => {
     const card = link.closest('article')!;
     expect(within(card).getByText(/^−5\s%$/)).toBeInTheDocument();
     expect(within(card).getByText(/^11\sdní ve fázi$/)).toBeInTheDocument();
-    expect(within(card).getByText(/^MF 4,3\s%$/)).toBeInTheDocument();
+    expect(within(card).getByText(/^Výnos MF 4,3\s%$/)).toBeInTheDocument();
 
     /* A rent reads per month, a missing place says so, a delisted ad is marked. */
     const rent = within(interest).getByRole('link', { name: /^31\s000\sKč \/měs/ }).closest('article')!;
@@ -342,6 +351,292 @@ describe('phone pipeline', () => {
     const button = await screen.findByRole('link', { name: 'Artifact: claude.ai/artifact/abc123' });
     expect(button).toHaveAttribute('href', 'https://claude.ai/artifact/abc123');
     expect(button).toHaveAttribute('target', '_blank');
+  });
+});
+
+/* The pager follows changes made elsewhere without losing its place
+ * (docs/design/curation-sync.md Decision 10): the stage on screen is held by id,
+ * so is a tab tap's destination, and a gesture holds the board's reads. */
+describe('phone pipeline, changes made elsewhere', () => {
+  const tab = (name: RegExp) => screen.getByRole('tab', { name });
+
+  it('an archive of the viewed stage falls to its neighbour, not the mount-time stage', async () => {
+    localStorage.setItem(PHONE_PIPELINE_STAGE_KEY, '4');
+    const { qc } = renderPipeline();
+    expect(await screen.findByRole('tab', { name: /^Zamítnuto/ })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(tab(/^Prohlídka/));
+    expect(tab(/^Prohlídka/)).toHaveAttribute('aria-selected', 'true');
+
+    /* Prohlídka emptied and archived on the desktop. */
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES.filter((st) => st.id !== 2));
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue(CARDS.filter((c) => c.stage_id !== 2));
+    await changedElsewhere(qc, 'pipeline_stages');
+    await waitFor(() => expect(screen.queryByRole('tab', { name: /^Prohlídka/ })).toBeNull());
+    expect(tab(/^Koupeno/)).toHaveAttribute('aria-selected', 'true');
+    expect(tab(/^Zamítnuto/)).toHaveAttribute('aria-selected', 'false');
+    /* The neighbour is the stage on screen now, so it is the one remembered. */
+    expect(localStorage.getItem(PHONE_PIPELINE_STAGE_KEY)).toBe('3');
+  });
+
+  it('with no stage remembered, a stage added before the entry stage elsewhere leaves the entry stage on screen', async () => {
+    const { qc } = renderPipeline();
+    expect(await screen.findByRole('tab', { name: /^Zájem/ })).toHaveAttribute('aria-selected', 'true');
+
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue([
+      { id: 5, key: 'idea', label: 'Nápad', position: 0, color: 'sand', is_terminal: false, is_entry: false, code: null },
+      ...STAGES,
+    ]);
+    await changedElsewhere(qc, 'pipeline_stages');
+    await waitFor(() => expect(tab(/^Nápad/)).toBeInTheDocument());
+    expect(tab(/^Zájem/)).toHaveAttribute('aria-selected', 'true');
+    expect(tab(/^Nápad/)).toHaveAttribute('aria-selected', 'false');
+  });
+
+  describe('with the pages laid out', () => {
+    const scrollTo = Element.prototype.scrollTo;
+    let width: { mockRestore: () => void } | null = null;
+    beforeEach(() => {
+      width = vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(300);
+      /* The smooth scroll a tab tap starts: on its way, never arriving by itself. */
+      Element.prototype.scrollTo = vi.fn() as unknown as typeof Element.prototype.scrollTo;
+    });
+    afterEach(() => {
+      width?.mockRestore();
+      Element.prototype.scrollTo = scrollTo;
+    });
+
+    it('a reorder during a tab-tap scroll lands on the tapped stage', async () => {
+      const { qc } = renderPipeline();
+      const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
+      fireEvent.click(tab(/^Koupeno/));
+      expect(tab(/^Koupeno/)).toHaveAttribute('aria-selected', 'true');
+
+      /* Koupeno moved after Zamítnuto elsewhere: page 2 is now Zamítnuto. */
+      vi.mocked(queries.fetchPipelineStages).mockResolvedValue(
+        STAGES.map((st) => (st.id === 3 ? { ...st, position: 5 } : st)),
+      );
+      await changedElsewhere(qc, 'pipeline_stages');
+      await waitFor(() =>
+        expect(within(screen.getByRole('tablist', { name: 'Fáze' })).getAllByRole('tab').at(-1)).toBe(tab(/^Koupeno/)),
+      );
+      /* The re-aim: the pages land on the tapped stage's new page at once. */
+      expect(pager.scrollLeft).toBe(900);
+
+      /* A scroll event from the old aim — a smooth scroll the browser did not cut
+         short — arriving where the tap pointed before the reorder. */
+      pager.scrollLeft = 600;
+      fireEvent.scroll(pager);
+      await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+      expect(tab(/^Koupeno/)).toHaveAttribute('aria-selected', 'true');
+      expect(tab(/^Zamítnuto/)).toHaveAttribute('aria-selected', 'false');
+      expect(localStorage.getItem(PHONE_PIPELINE_STAGE_KEY)).toBe('3');
+    });
+
+    it('a re-aim after a reorder elsewhere is no gesture: the board is not held', async () => {
+      const { qc } = renderPipeline();
+      const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
+      expect(pager.scrollLeft).toBe(0);
+
+      /* Prohlídka moved before Zájem elsewhere: Zájem is page 1 now. */
+      vi.mocked(queries.fetchPipelineStages).mockResolvedValue(
+        STAGES.map((st) => (st.id === 2 ? { ...st, position: 0 } : st)),
+      );
+      await changedElsewhere(qc, 'pipeline_stages');
+      await waitFor(() => expect(pager.scrollLeft).toBe(300));
+      expect(tab(/^Zájem/)).toHaveAttribute('aria-selected', 'true');
+      /* The scroll event the browser sends for that landing. */
+      fireEvent.scroll(pager);
+
+      vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([
+        ...CARDS,
+        { ...base, property_id: 46, listing_id: 444, display_label: 'Nová 1, Praha' },
+      ]);
+      const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
+      await changedElsewhere(qc, 'property_pipeline');
+      expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before + 1);
+      await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
+    });
+  });
+
+  it('a remote add during a scroll waits for the pages to come to rest', async () => {
+    const { qc } = renderPipeline();
+    const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
+    pager.scrollLeft = 120;
+    fireEvent.scroll(pager);
+
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([
+      ...CARDS,
+      { ...base, property_id: 46, listing_id: 444, display_label: 'Nová 1, Praha' },
+    ]);
+    const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
+    await changedElsewhere(qc, 'property_pipeline');
+    expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
+    expect(tab(/^Zájem, 2\skarty$/)).toBeInTheDocument();
+    await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
+  });
+
+  it('a remote add waits for the last finger to lift', async () => {
+    const { qc } = renderPipeline();
+    const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
+    fireEvent.touchStart(pager, { touches: [finger(panel(/^Zájem/)), finger(panel(/^Zájem/))] });
+    fireEvent.touchEnd(panel(/^Zájem/), { touches: [finger(panel(/^Zájem/))] });
+
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([
+      ...CARDS,
+      { ...base, property_id: 46, listing_id: 444, display_label: 'Nová 1, Praha' },
+    ]);
+    const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
+    await changedElsewhere(qc, 'property_pipeline');
+    expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
+    expect(tab(/^Zájem, 2\skarty$/)).toBeInTheDocument();
+
+    fireEvent.touchEnd(panel(/^Zájem/), { touches: [] });
+    await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
+  });
+
+  it('a remote add during an active touch waits for the finger to lift', async () => {
+    const { qc } = renderPipeline();
+    const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
+    expect(tab(/^Zájem, 2\skarty$/)).toBeInTheDocument();
+    fireEvent.touchStart(pager, { touches: [finger(panel(/^Zájem/))] });
+
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([
+      ...CARDS,
+      { ...base, property_id: 46, listing_id: 444, display_label: 'Nová 1, Praha' },
+    ]);
+    const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
+    await changedElsewhere(qc, 'property_pipeline');
+    expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
+    expect(tab(/^Zájem, 2\skarty$/)).toBeInTheDocument();
+
+    fireEvent.touchEnd(panel(/^Zájem/), { touches: [] });
+    await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
+  });
+
+  /* A second finger rests on the strip, outside the pages: its touchend goes to the
+     strip, which the pager never hears, so it must not keep the pages' hold. */
+  it('a finger resting outside the pages does not keep the hold once the pages finger lifts', async () => {
+    const { qc } = renderPipeline();
+    const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
+    const strip = screen.getByRole('tablist', { name: 'Fáze' });
+    fireEvent.touchStart(pager, { touches: [finger(panel(/^Zájem/))] });
+    fireEvent.touchStart(strip, { touches: [finger(panel(/^Zájem/)), finger(strip)] });
+
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([...CARDS, added]);
+    const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
+    await changedElsewhere(qc, 'property_pipeline');
+    expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
+
+    fireEvent.touchEnd(panel(/^Zájem/), { touches: [finger(strip)] });
+    await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
+  });
+
+  /* The finger's page unmounted under it: its touchend goes to the removed node,
+     whose events never bubble to the pager. */
+  it('a finger on a page archived elsewhere holds the board until it lifts, heard on the removed page', async () => {
+    localStorage.setItem(PHONE_PIPELINE_STAGE_KEY, '2');
+    const { qc } = renderPipeline();
+    const pager = (await waitFor(() => panel(/^Prohlídka/))).parentElement!;
+    const page = panel(/^Prohlídka/);
+    fireEvent.touchStart(pager, { touches: [finger(page)] });
+
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES.filter((st) => st.id !== 2));
+    await changedElsewhere(qc, 'pipeline_stages');
+    await waitFor(() => expect(screen.queryByRole('tab', { name: /^Prohlídka/ })).toBeNull());
+    expect(page.isConnected).toBe(false);
+
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([...CARDS, added]);
+    const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
+    await changedElsewhere(qc, 'property_pipeline');
+    expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
+
+    fireEvent.touchEnd(page, { touches: [] });
+    await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
+  });
+
+  /* The chip is re-drawn by the card's own tag read, which re-renders no page:
+     the pager learns of the lift only from the removed chip itself. */
+  it('a finger on a tag chip re-drawn by its own read stops holding once it lifts', async () => {
+    const { qc } = renderPipeline();
+    const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
+    const chips = await screen.findByRole('button', { name: 'Štítky: k prohlídce, upravit' });
+    const chip = within(chips).getByText('k prohlídce');
+    fireEvent.touchStart(pager, { touches: [finger(chip)] });
+
+    vi.mocked(queries.fetchPropertyTagMemberSet).mockResolvedValue(new Map());
+    await changedElsewhere(qc, 'property_tags');
+    await waitFor(() => expect(chip.isConnected).toBe(false));
+
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([...CARDS, added]);
+    const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
+    await changedElsewhere(qc, 'property_pipeline');
+    expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
+
+    fireEvent.touchEnd(chip, { touches: [] });
+    await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
+  });
+
+  it('a touchcancel ends the hold of the fingers it cancelled, not of one still down', async () => {
+    const { qc } = renderPipeline();
+    const pager = (await waitFor(() => panel(/^Zájem/))).parentElement!;
+    const page = panel(/^Zájem/);
+    fireEvent.touchStart(pager, { touches: [finger(page), finger(page)] });
+    fireEvent.touchCancel(page, { touches: [finger(page)] });
+
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([...CARDS, added]);
+    const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
+    await changedElsewhere(qc, 'property_pipeline');
+    expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
+
+    fireEvent.touchCancel(page, { touches: [] });
+    await waitFor(() => expect(tab(/^Zájem, 3\skarty$/)).toBeInTheDocument());
+  });
+});
+
+/* Lokalita (the desktop bar's place filter): the same `districts` params and
+ * the same matchesDistricts rule, so a desktop link opens the same cards. */
+describe('phone pipeline, Lokalita', () => {
+  const BEROUN = { name: 'Beroun', context: null, level: 'obec' as const, id: 531057 };
+  const placeUrl = (chips: Array<typeof BEROUN & { excluded?: boolean }>) =>
+    `/pipeline?${new URLSearchParams(districtChipsToCsvParams(chips))}`;
+
+  it('offers the place chip unset, and every card', async () => {
+    renderPipeline();
+    expect(await screen.findByRole('button', { name: 'Lokalita: všechny' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^Zájem, 2\skarty$/ })).toBeInTheDocument();
+  });
+
+  it('keeps every stage and counts only the cards in the place', async () => {
+    renderPipeline(placeUrl([BEROUN]));
+    expect(await screen.findByRole('button', { name: 'Lokalita: Beroun' })).toBeInTheDocument();
+    const tabs = within(screen.getByRole('tablist', { name: 'Fáze' })).getAllByRole('tab');
+    expect(tabs.map((t) => t.getAttribute('aria-label')?.replace(/\u00a0/g, ' '))).toEqual([
+      'Zájem, 0 karet',
+      'Prohlídka, 1 karta',
+      'Koupeno, 0 karet',
+      'Zamítnuto, 0 karet',
+    ]);
+    expect(within(panel(/^Prohlídka/)).getByRole('link', { name: /Lesní 3, Beroun/ })).toBeInTheDocument();
+    expect(within(panel(/^Zájem/)).getByText('V této fázi v té lokalitě nic není.')).toBeInTheDocument();
+    const header = screen.getByRole('banner');
+    expect(await within(header).findByText('1 z 3 karet')).toBeInTheDocument();
+  });
+
+  it('drops an excluded place, as the desktop board does', async () => {
+    renderPipeline(placeUrl([{ ...BEROUN, excluded: true }]));
+    expect(await screen.findByRole('button', { name: 'Lokalita: Celá ČR − Beroun' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^Zájem, 2\skarty$/ })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^Prohlídka, 0\skaret$/ })).toBeInTheDocument();
+  });
+
+  it('opens the place typeahead in a sheet, and clearing it shows every card again', async () => {
+    renderPipeline(placeUrl([BEROUN]));
+    fireEvent.click(await screen.findByRole('button', { name: 'Lokalita: Beroun' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Lokalita' });
+    expect(within(sheet).getByRole('textbox', { name: 'Lokalita' })).toBeInTheDocument();
+    fireEvent.click(within(sheet).getByRole('button', { name: /^Remove Beroun/ }));
+    await waitFor(() => expect(screen.getByRole('tab', { name: /^Zájem, 2\skarty$/ })).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Lokalita: všechny' })).toBeInTheDocument();
   });
 });
 

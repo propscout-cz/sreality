@@ -24,9 +24,8 @@ import { distinctUnits, unitOf, type UnitMap } from '@/components/autodedup/Unit
 
 import { invalidateBrowseQueries } from '@/lib/browseInvalidation';
 import { ROUTES, withQuery, type RoutePath } from '@/lib/routes';
-import { revalidateCollections } from '@/lib/collectionCache';
+import { revalidateTables, type SyncTable } from '@/lib/curationSync';
 import { czPlural } from '@/lib/format';
-import { revalidatePipeline } from '@/lib/pipelineCache';
 import { autodedupKeys } from '@/lib/autodedupKeys';
 import { dismissToast, pushToast } from '@/lib/toast';
 
@@ -274,18 +273,30 @@ export function splitPlan(
   };
 }
 
+/* The curation a merge or split moves between properties: the tables
+ * PROPERTY_CARRIERS carries (toolkit/property_carriers.py), notifications aside;
+ * tests/test_carried_tables_read_contract.py pins the two equal. */
+const CARRIED_TABLES: readonly SyncTable[] = [
+  'collection_properties',
+  'property_tags',
+  'property_attachments',
+  'property_notes',
+  'property_artifact_links',
+  'property_pipeline',
+  'property_dismissals',
+];
+
 /* Read-your-writes after a split or a merge, for the property page, the
  * proposals page, the category review AND every Browse surface. The property
  * page is keyed on the property, so a plain invalidation re-reads the property
  * (a separated canonical advert hands the header to the next one) and its advert
- * list; `curation` re-reads notes, tags and their counts, which both move;
+ * list; the carried curation re-reads through lib/curationSync's map;
  * `mergedAdvertsKeys.all` drops both previews. */
 export function refreshAfterSplit(qc: QueryClient): void {
   for (const key of [
     ['property'],
     ['property-sources'],
     ['snapshots'],
-    ['curation'],
     mergedAdvertsKeys.all,
     autodedupKeys.proposedSplits,
     autodedupKeys.categorySplits,
@@ -293,6 +304,5 @@ export function refreshAfterSplit(qc: QueryClient): void {
     qc.invalidateQueries({ queryKey: key });
   }
   invalidateBrowseQueries(qc);
-  revalidateCollections(qc);
-  revalidatePipeline(qc);
+  void revalidateTables(qc, CARRIED_TABLES);
 }

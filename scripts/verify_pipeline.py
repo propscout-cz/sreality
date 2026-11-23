@@ -53,6 +53,7 @@ from scripts.checks.delisting import check_delisting
 from scripts.checks.notifications import check_notifications
 from scripts.checks.platform import (
     check_capacity,
+    check_curation_sync,
     check_jobs,
     check_llm,
     check_migration_drift,
@@ -96,16 +97,16 @@ THRESHOLDS: dict[str, Any] = {
     "jobs_lane_floor_s": 900,
     # 15 min of worker uptime before a lane that has not woken or passed can be judged.
     "jobs_lane_boot_grace_s": 900,
-    # Eight portals at up to 120 s each make ~16 min an honest drain pass (the old stall warn).
-    "jobs_lane_inflight_warn_s": 1200,
-    # LANE_PASS_TIMEOUT_SECONDS: past it the worker abandons the pass (a wedge sat nine hours).
-    "jobs_lane_inflight_fail_s": 1800,
     # Hourly-or-slower lanes pass about once per boot, so any failing_since there is a Problem.
     "jobs_lane_daily_interval_s": 3600,
     # Half the passes since the previous result failed: autodedup's failed_passes 6 on 10-02.
     "jobs_lane_flap_share": 0.5,
     # ...over at least 3 passes, so one failure in two passes is not a flap.
     "jobs_lane_flap_min_passes": 3,
+    # A merge restarts the worker at once and the job runner after its image build and 250 s drain (2025-plan
+    # decision 4): past this a job the code declares on the runner with no live row is no deploy in progress. The
+    # build took 94 s in CI and 86 s create-to-live on Railway (2026-10-31), so this is the floor; never under 1800.
+    "jobs_runner_register_grace_s": 1800,
     # --- capacity (platform alarm): is the database, and the worker's memory, keeping up ----
     # browse-list-rebuild ran 15-28 x its ~9.9 s reference from 08-17: Watch at 3 x and 30 s.
     "capacity_p50_warn_multiple": 3,
@@ -209,6 +210,15 @@ THRESHOLDS: dict[str, Any] = {
     # Problem past 8 h: the 08-20 outage held dirty rows for 6 d; 09-15's 165 h was the sweep's age (the
     # dirty queue stayed under 1 h that day), so the dirty arm alone would have missed it: jobs' sweep cell has it.
     "publishing_dirty_fail_h": 8,
+    # Photo tags (#2032): a stored photo is late when CLIP stamped and vectored it over 45 min after storage, or not
+    # yet; the line #2032's gate holds as a 7-day p90 (GitHub's 7 days to 10-27: p90 298 min).
+    "publishing_tag_late_min": 45,
+    # Watch when the Wilson LB of the late share is past 5 %: the replay of 10-20..26 reads 1.1 % at 3 img/s.
+    "publishing_tag_late_warn": 0.05,
+    # Problem past 10 %: the day's p90 is then over the line the ticket promises.
+    "publishing_tag_late_fail": 0.10,
+    # Under 500 photos in the cohort (under 10 min of weekday inflow, 82k-92k a day) the tag line is Not measured.
+    "publishing_tag_min_n": 500,
     # --- delisting (portal alarm): are gone ads made inactive, on time and correctly ------
     # Outflow: Problem under 20 % of the quietest 24 h within ±3 h of this hour 7/14/21/28 d back
     # (10-10: 0 against 400-1,900).
@@ -274,6 +284,11 @@ THRESHOLDS: dict[str, Any] = {
     "dedup_lag_fail": 0.10,
     # Under 20 ads in that cohort the arm is Not measured (about 400 arrive in scope a day).
     "dedup_lag_min_n": 20,
+    # The oldest in-scope ad first seen 1-24 h ago with no engine row: Problem past 2 h, brake or
+    # not (ruling 2026-11-17: its property is unpublished until read). The 11-16 brake held 10 h.
+    "dedup_unread_fail_h": 2,
+    # Active properties unpublished past 24 h (held by an unread ad): Watch at 1, Problem over 25.
+    "dedup_held_fail": 25,
     # Problem past expiry by more than the lane's interval + 10 min, counted from the later of the
     # expiry, the last brake lift and the build end: 8-10 strands, each re-taken in ~1 min.
     "dedup_lease_fail_past_expiry_min": 10,
@@ -363,12 +378,44 @@ THRESHOLDS: dict[str, Any] = {
     "data_quality_measure_gap_warn": 0.95,
     # ...over at least 200 active ads.
     "data_quality_measure_gap_min_n": 200,
-    # --- location_town_coverage (quality gauge): every active Czech ad has a town (rule 25) ---
+    # --- location_town_coverage (quality gauge): the ONE location scorecard (W1, migration 698) -
+    # Fixed lines from day one (ruling Q7). The town, KÚ and outside cells are Problem above zero
+    # and page-withheld Watch above zero (ruling Q6, Q3): invariants, no threshold here.
     # A current RÚIAN version older than 40 d is a Problem (monthly loads; 19 d old on 10-19)...
     "location_registry_max_age_days": 40,
     # ...as is a newer one staged 24 h without becoming current: a superseded load is cancelled,
     # not failed, so the jobs check never sees it stall.
     "location_registry_max_staged_hours": 24,
+    # Street share, (address + street) / Czech ads with a town by the rank table, judged on its Wilson
+    # UPPER bound against the portal's floor, 0.9x its share on 10-31 rounded down (a 10 % relative
+    # drop on n >= 5k is far past sampling noise, SE ~0.2 pp: a parser or contract regression).
+    # Fixed; ratcheted only by an explicit edit (W4 for remax). web: no floor. Problem under it
+    # (ruling W1-b, 2026-11-01).
+    "location_street_floor": {
+        "bezrealitky": 0.62,   # 69.5 % on 10-31
+        "sreality": 0.57,      # 64.1 %
+        "realitymix": 0.52,    # 58.0 %
+        "idnes": 0.45,         # 50.5 %
+        "maxima": 0.45,        # 50.0 %
+        "ceskereality": 0.38,  # 43.2 %
+        "mmreality": 0.35,     # 39.9 %
+        "bazos": 0.28,         # 31.3 %
+        "remax": 0.04,         # 5.0 %
+    },
+    # ...over at least 200 Czech ads with a town (maxima had 280 on 10-31).
+    "location_street_floor_min_n": 200,
+    # The served properties' fleet street share, the same rule: 0.9x 49.0 % on 10-31.
+    "location_served_street_floor": 0.44,
+    # Pin accuracy, Watch only until W6 ships the calibrated table: the Wilson LB of the sampled
+    # below-address ads whose address point lies inside their own radius under 90 % (W6 targets
+    # >= 93 %; sreality 87.9 % of 116 and bazos 57.1 % of 373 read Watch on 10-31)...
+    "location_radius_cover_watch": 0.90,
+    # ...over at least 30 sampled ads (bezrealitky had 7 and maxima 11 on 10-31).
+    "location_accuracy_min_n": 30,
+    # The oldest evidence change (a new claim, an operator edit) waiting for its resolve past 60 min
+    # is a Problem: 4x W2's 15-min target, red only when evidence starves behind a sweep (v5.8
+    # measured up to 3.4 h mid-sweep).
+    "location_evidence_backlog_max_min": 60,
     # --- text_extraction (quality gauge): are new ads' descriptions read promptly -------------
     # Flow: Wilson LB of in-scope ads arrived in 24 h and not read yet, Watch past 5 % (0 of 707
     # on 10-19)...
@@ -389,6 +436,15 @@ THRESHOLDS: dict[str, Any] = {
     "notifications_recall_grace_min": 5,
     # Problem at 3 terminal failures in 24 h (a single BadDeviceToken is one device's churn).
     "notifications_failures_fail": 3,
+    # --- curation_sync (platform alarm, on the worker): does every curation change move the clock --
+    # Migration 696 creates one deferred trigger per clocked table (tests/_tenant_registry.py CLOCKED_TABLES, pinned
+    # equal by tests/test_curation_sync_census.py): exactly this many enabled and initially deferred, else Problem.
+    "CURATION_CLOCK_TRIGGERS": 14,
+    # The browsers' clock read (W4): Watch when its pg_stat_statements calls stand still this long (a signed-in visible
+    # window reads every 5-15 s), and when it takes this share of all statement time between two measurements (the
+    # re-costing trigger of docs/design/curation-sync.md § 3.8; 0.2 % expected at today's load).
+    "CURATION_CLOCK_QUIET_H": 24,
+    "CURATION_CLOCK_LOAD_PCT": 5.0,
     # --- migration_drift (platform alarm, on GitHub): is every merged migration applied -------
     # The newest 25 files span several weeks of this repo's cadence, so a drift is caught long
     # before the window rolls past it, with a few hundred catalog lookups.
@@ -431,14 +487,31 @@ _STALE_CADENCES = 3
 # its budget is declared beside its HEAD loop, which stops itself at it (nothing outside can
 # preempt a request).
 _OUTBOUND_BUDGET_S = PROBE_BUDGET_S
-# Parsing reads the active stock several ways: the measure view it shares with data_quality
-# through the pass memo (~12 s cold, 3.45 s warm on 10-19), the field matrix (~12 s cold, 3.7 s
-# warm) and the payload, churn and baseline reads (about 5 s together cold on 10-19: 2.1 s,
-# 2.8 s and 29 ms). Four default budgets.
-_PARSING_BUDGET_S = 4 * _CHECK_BUDGET_S
-# The push ledger's four reads touch a few hundred rows (the 24 h event window, the live devices), so 5 s; it is
-# also what keeps every worker alarm due at once inside the 500 s pass (7 x 45 + 180 + 5).
+# The operator runs the database on the Large compute (8 GB) when it is quiet and on 2XL (32 GB)
+# under load. On Large the hot tables leave memory, and on 2026-11-04 these checks ran out of the
+# budgets sized on 2XL; each is now sized for Large. Parsing reads the active stock several ways:
+# the measure view it shares with data_quality through the pass memo (~12 s cold, 3.45 s warm on
+# 10-19), the field matrix (~12 s cold, 3.7 s warm) and the payload, churn and baseline reads
+# (about 5 s together cold on 10-19). It was four default budgets, and spent all 180 s on Large.
+_PARSING_BUDGET_S = 300.0
+# Scraping's inflow arm counts five weeks of ads by first_seen_at, one heap visit an ad (95k
+# buffers, 11-05). Coverage's residual and unnominated arms each count the active stock (8 of its
+# 31 runs on 11-04 spent their 45 s). Neither can be index-only: every walk's sighting rewrites the
+# rows it touches, which clears their pages from the visibility map.
+_SCRAPING_BUDGET_S = 90.0
+_COVERAGE_BUDGET_S = 150.0
+# Publishing and delisting spent their 45 s in 74 % and 29 % of runs on Large (11-11 to 11-13) and
+# judge lines of 3 h or more or a day's share, so they run every 30 min with 75 s. Description
+# reading's stock read alone took 41-44 s on Large when it finished, and its flows read 24 h windows,
+# so it runs every 6 h with 120 s (#2512).
+_PORTAL_TRAIL_BUDGET_S = 75.0
+_TEXT_EXTRACTION_BUDGET_S = 120.0
+# The location scorecard's two statements: ~12 s warm on 10-31 (2XL), past 45 s on Large (11-04).
+_LOCATION_COVERAGE_BUDGET_S = 120.0
+# The push ledger's four reads touch a few hundred rows (the 24 h event window, the live devices), so 5 s.
 _NOTIFICATIONS_BUDGET_S = 5.0
+# The curation clock's two reads: fourteen catalog rows and the board ledger's last day (~10 events), so 5 s.
+_CURATION_SYNC_BUDGET_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -476,15 +549,13 @@ class Check:
 # reads late and the outbound probe last. The page's `sort` is the position here.
 CHECKS: tuple[Check, ...] = (
     # FIRST of the gauges: 2026-09-11 21:02 lost the last seven checks to the budget, this
-    # one among them, and the invariant the location programme is measured by reads in 3.1 s
-    # with the served predicate's hidden count on 10-19 (0.62 s without it; 6.5 s whole-corpus
-    # before).
+    # one among them. Since W1 (migration 698) it reads the location scorecard in two statements.
     Check("location_town_coverage", check_location_town_coverage, "data_quality", "gauge",
-          _WORKER, _SIX_HOURLY, "Location coverage", unit="cells",
-          owner_path="/location-quality"),
-    # The worker's health lane measures these thirteen (scripts/checks/: platform, the portal checks,
-    # dedup, push notifications, then parsing and the quality gauges). GitHub keeps what needs it: migration_drift
-    # reads a checkout, the outbound probe an address that is not the scrapers'.
+          _WORKER, _SIX_HOURLY, "Location quality", unit="cells",
+          owner_path="/location-quality", budget_s=_LOCATION_COVERAGE_BUDGET_S),
+    # The worker's health lane measures these fourteen (scripts/checks/: platform, the portal checks,
+    # dedup, push notifications, curation sync, then parsing and the quality gauges). GitHub keeps what
+    # needs it: migration_drift reads a checkout, the outbound probe an address that is not the scrapers'.
     Check("jobs", check_jobs, "platform", "alarm", _WORKER, _TEN_MINUTES, "Jobs",
           unit="cells", owner_path="/settings"),  # Settings › GitHub Actions
     Check("capacity", check_capacity, "platform", "alarm", _WORKER, _HALF_HOURLY, "Capacity",
@@ -493,19 +564,22 @@ CHECKS: tuple[Check, ...] = (
           unit="cells", owner_path="/costs"),
     # Domain "portals" is the page's portal matrix: one column per check, one row per portal.
     Check("scraping", check_scraping, "portals", "alarm", _WORKER, _TEN_MINUTES, "Scraping",
-          unit="cells", owner_path="/scrapers"),
-    Check("publishing", check_publishing, "portals", "alarm", _WORKER, _TEN_MINUTES,
-          "Publishing", unit="cells", owner_path="/scrapers"),
-    Check("delisting", check_delisting, "portals", "alarm", _WORKER, _TEN_MINUTES,
-          "Delisting", unit="cells", owner_path="/scrapers"),
+          unit="cells", owner_path="/scrapers", budget_s=_SCRAPING_BUDGET_S),
+    Check("publishing", check_publishing, "portals", "alarm", _WORKER, _HALF_HOURLY,
+          "Publishing", unit="cells", owner_path="/scrapers", budget_s=_PORTAL_TRAIL_BUDGET_S),
+    Check("delisting", check_delisting, "portals", "alarm", _WORKER, _HALF_HOURLY,
+          "Delisting", unit="cells", owner_path="/scrapers", budget_s=_PORTAL_TRAIL_BUDGET_S),
     Check("coverage", check_coverage, "portals", "gauge", _WORKER, _HOURLY, "Coverage",
-          unit="cells", owner_path="/scrapers"),
+          unit="cells", owner_path="/scrapers", budget_s=_COVERAGE_BUDGET_S),
     Check("dedup", check_dedup, "dedup", "alarm", _WORKER, _TEN_MINUTES, "Engine",
           unit="cells", owner_path="/autodedup/progress"),
     # The push ledger (notifications push W4): stall, recall, failures, and the brake shown.
     Check("notifications", check_notifications, "platform", "alarm", _WORKER, _TEN_MINUTES,
           "Push notifications", unit="cells", owner_path="/notifications",
           budget_s=_NOTIFICATIONS_BUDGET_S),
+    # Curation sync (migration 696): the clock's triggers and the board's bumps, its reads and their load; no owner page.
+    Check("curation_sync", check_curation_sync, "platform", "alarm", _WORKER, _HOURLY, "Curation sync",
+          unit="cells", budget_s=_CURATION_SYNC_BUDGET_S),
     # LAST of the worker's alarms: the expensive reads. data_quality shares its measure read
     # through the pass memo whenever both are due in one pass.
     Check("parsing", check_parsing, "portals", "alarm", _WORKER, _SIX_HOURLY, "Parsing",
@@ -513,8 +587,8 @@ CHECKS: tuple[Check, ...] = (
     # Owner: the per-portal page (value quality is a portal parser's debt; no page renders it).
     Check("data_quality", check_data_quality, "data_quality", "gauge", _WORKER, _SIX_HOURLY,
           "Data quality", unit="cells", owner_path="/scrapers"),
-    Check("text_extraction", check_text_extraction, "data_quality", "gauge", _WORKER, _HOURLY,
-          "Description reading", unit="cells", owner_path="/costs"),
+    Check("text_extraction", check_text_extraction, "data_quality", "gauge", _WORKER, _SIX_HOURLY,
+          "Description reading", unit="cells", owner_path="/costs", budget_s=_TEXT_EXTRACTION_BUDGET_S),
     Check("migration_drift", check_migration_drift, "platform", "alarm", _GITHUB, _HOURLY,
           "Migration drift", unit="files"),
     # LAST of the alarms: the check that leaves the database, so a lane that runs out of budget
@@ -677,6 +751,14 @@ def _uncelled_result(key: str, status: str) -> dict[str, Any]:
 def lane_budget_for(checks: Sequence[Check]) -> float:
     """A lane owes every check it runs that check's own budget, so none can starve another."""
     return float(sum(c.budget_s for c in checks))
+
+
+# What the worker's pass owes when every alarm it hosts falls due at once: the one figure the worker's pass budget
+# (scraper/realtime_worker.HEALTH_PASS_BUDGET_SECONDS), its test and the two docs that state it are weighed against.
+# 730 s since #2512: jobs, capacity, llm and dedup 4 x 45 = 180, publishing and delisting 2 x 75 = 150, scraping 90,
+# notifications and curation sync 2 x 5 = 10, parsing 300. Past the 500 s pass, so the last alarm (parsing) defers one
+# 60 s tick when every alarm is due at once, the tested `defer_unfit` path; the other nine (430 s) always fit.
+WORKER_ALARMS_DUE_AT_ONCE_S = lane_budget_for([c for c in CHECKS if c.host == _WORKER and c.cls == "alarm"])
 
 
 # A check fits the pass while its budget is at most what the pass has left plus this slack. The

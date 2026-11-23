@@ -79,74 +79,14 @@ select set_config('idle_in_transaction_session_timeout', %(idle_timeout_ms)s::te
 
 # ------------------------------------------------------------------ mutual exclusion
 #
-# Lease-row CAS, never pg_advisory_lock: a session lock strands over the transaction pooler.
-# The update is the claim — one statement, no read-then-write race — and a lease is taken only
-# when the current one has expired.
-RT_LEASE_TAKE_SQL = """
-insert into autodedup.rt_lease (name, holder, taken_at, expires_at)
-values (%(name)s::text, %(holder)s::text, now(), now() + make_interval(secs => %(ttl)s))
-on conflict (name) do update set
-    holder     = excluded.holder,
-    taken_at   = now(),
-    expires_at = excluded.expires_at
- where autodedup.rt_lease.expires_at < now()
-returning holder
-"""
-
-RT_LEASE_RELEASE_SQL = """
-update autodedup.rt_lease
-   set expires_at = now()
- where name = %(name)s::text
-   and holder = %(holder)s::text
-"""
-
-# The pass's FENCE (E941), its transaction's last statement before the commit: this holder's
-# lease row, still live by the CLOCK (`now()` is the transaction's start, which a release the
-# worker's shutdown wrote mid-pass is later than), locked until the commit. A release that
-# landed first leaves no row and the pass rolls back; one that comes after waits for the commit.
-RT_LEASE_HOLD_SQL = """
-select holder
-  from autodedup.rt_lease
- where name = %(name)s::text
-   and holder = %(holder)s::text
-   and expires_at > clock_timestamp()
-   for update
-"""
-
-# Who holds it, for a refusal that names the holder (`autodedup/rt_lease.py`).
+# The lane's lease row (`scraper/job_lease.py` writes it; `autodedup/rt_lease.py` adapts it), for a
+# refusal that names the holder and the Health cell. A row never taken has no lease to read.
 RT_LEASE_READ_SQL = """
-select l.holder, l.taken_at, l.expires_at, l.expires_at > now() as live
-  from autodedup.rt_lease l
- where l.name = %(name)s::text
+select j.lease_holder, j.last_started_at, j.lease_expires_at, j.lease_expires_at > now() as live
+  from scheduled_jobs j
+ where j.job_name = %(name)s::text
+   and j.lease_expires_at is not null
 """
-
-# E948: the LIVE lease a dead predecessor of this container left. A worker pass's holder is
-# `<hostname>:<pid>:<the second its pass started>` (`incremental_lane.pass_holder`). One worker
-# process runs per container, and a restart in place keeps the hostname and, under the same
-# entrypoint, the pid (1 on Railway), so a live row naming THIS hostname and pid and a second
-# before this process booted belongs to a process that is gone; a second worker on one host has
-# a pid of its own and never ends the first one's lease. Only that three-field shape can match
-# — `rt_seed:<host>:<pid>:<second>` and `dispatch:<run>` never do — the pid is compared as text,
-# and the CASE keeps the cast off every other shape. An expired row is no predecessor's death: a
-# pass that ended released its lease. ONE predicate, two statements: the release, and the read
-# that names the lease a pass at the claim cap's floor leaves to its TTL.
-_RT_LEASE_PREDECESSOR_WHERE = """
- where name = %(name)s::text
-   and expires_at > now()
-   and case when holder ~ '^[^:]+:[0-9]+:[0-9]{1,18}$'
-            then split_part(holder, ':', 1) = %(host)s::text
-                 and split_part(holder, ':', 2) = %(pid)s::text
-                 and split_part(holder, ':', 3)::bigint < %(booted)s::bigint
-            else false
-       end
-"""
-RT_LEASE_RELEASE_PREDECESSOR_SQL = ("""
-update autodedup.rt_lease
-   set expires_at = now()""" + _RT_LEASE_PREDECESSOR_WHERE + """returning holder
-""")
-RT_LEASE_PREDECESSOR_SQL = ("""
-select holder
-  from autodedup.rt_lease""" + _RT_LEASE_PREDECESSOR_WHERE)
 
 # ------------------------------------------------------------------ the watermark feeds
 #
@@ -244,9 +184,17 @@ select w.id, w.first_seen_at
  limit %(limit)s
 """
 
+# A listing's first snapshot is its arrival, written in the transaction that inserts the row
+# (`listing_write.write_listings`), so the new feed already claims it: the changed feed skips it
+# (#2509) and claims only a snapshot that follows another. It stays in the window, so the cursor
+# still crosses it.
 RT_CHANGED_LISTINGS_SQL = """
 with win as (
-  select s.id as snapshot_id, s.listing_id as listing_id, s.scraped_at as scraped_at
+  select s.id as snapshot_id, s.listing_id as listing_id, s.scraped_at as scraped_at,
+         exists (select 1
+                   from public.listing_snapshots p
+                  where p.listing_id = s.listing_id
+                    and p.id < s.id)                      as follows
     from public.listing_snapshots s
    where s.id > %(after_id)s::bigint
      and s.listing_id is not null
@@ -258,13 +206,16 @@ with win as (
 select coalesce(max(w.snapshot_id), %(after_id)s::bigint) as window_max,
        count(*)                                           as window_size,
        coalesce(array_agg(w.listing_id order by w.snapshot_id)
-                filter (where %(all_scope)s::boolean or ll.listing_id is not null),
+                filter (where w.follows
+                          and (%(all_scope)s::boolean or ll.listing_id is not null)),
                 '{}'::bigint[])                           as ids,
        coalesce(array_agg(w.scraped_at order by w.snapshot_id)
-                filter (where %(all_scope)s::boolean or ll.listing_id is not null),
+                filter (where w.follows
+                          and (%(all_scope)s::boolean or ll.listing_id is not null)),
                 '{}'::timestamptz[])                      as stamps,
        coalesce(array_agg(w.snapshot_id order by w.snapshot_id)
-                filter (where %(all_scope)s::boolean or ll.listing_id is not null),
+                filter (where w.follows
+                          and (%(all_scope)s::boolean or ll.listing_id is not null)),
                 '{}'::bigint[])                           as cursors
   from win w
   left join public.listing_location ll
@@ -530,6 +481,22 @@ select s.listing_id, s.resolved_at
  limit %(limit)s
 """
 
+# E987: every unread advert of the snapshot, ONE scan a pass outside a build: the reconcile's
+# `RC_UNREAD_BLOCKS_SQL` with the rows kept, so the entrant feed orders them by block and the
+# reconcile reads its blocks from what the pass left (`SqlWork.unread_blocks_after`).
+RT_SCOPE_UNREAD_SQL = """
+select s.block_key, s.listing_id, s.resolved_at,
+       (s.resolved_at is null
+        or s.resolved_at <= now() - make_interval(secs => %(lag)s)) as settled,
+       extract(epoch from now() - s.resolved_at)::double precision as waited_s
+  from autodedup.rt_scope_ids s
+ where s.generation = %(generation)s::text
+   and not exists (select 1
+                     from autodedup.rt_fp f
+                    where f.generation = %(generation)s::text
+                      and f.listing_id = s.listing_id)
+"""
+
 # The same feed during a BUILD (E976): the LIVE adverts first, ids ascending within each half,
 # and an advert with no `listings` row last. A widening's backlog is mostly the scope's history —
 # Praha's on 2026-10-22: 37,910 unread of 200,625, 11,864 of them live, the live ones' median id
@@ -703,18 +670,23 @@ select coalesce(sum(pg_total_relation_size(c.oid)), 0)::bigint as bytes
    and c.relkind in ('r', 'p', 'm')
 """
 
-# What the generation holds, exactly. Cheap while the scope is small — which is the point of
-# having a scope — and replaced by the planner's estimate when `rt_scope = all`.
+# What the generation holds. `rt_fp` and `rt_block_cell` are counted exactly: they are small, and
+# the pass reads `rt_fp` as the scope's size. `fp_key` and `pairs` are only reported, so they are
+# the planner's whole-table estimate: an exact count of `pairs` (6.7 GB at four kraje) reads it from
+# disk on an instance whose memory cannot hold it and hit the pass's statement timeout on every
+# tick (2026-11-04, Large). The whole estimate replaces this when `rt_scope = all`.
 RT_ROW_CENSUS_SQL = """
-select 'fp_key' as table_name, count(*) as n
-  from autodedup.fp_key where generation = %(generation)s::text
-union all
-select 'rt_fp', count(*) from autodedup.rt_fp where generation = %(generation)s::text
-union all
-select 'pairs', count(*) from autodedup.pairs where generation = %(generation)s::text
+select 'rt_fp' as table_name, count(*) as n
+  from autodedup.rt_fp where generation = %(generation)s::text
 union all
 select 'rt_block_cell', count(*)
   from autodedup.rt_block_cell where generation = %(generation)s::text
+union all
+select c.relname, greatest(c.reltuples, 0)::bigint
+  from pg_class c
+  join pg_namespace n on n.oid = c.relnamespace
+ where n.nspname = 'autodedup'
+   and c.relname in ('fp_key', 'pairs')
 """
 
 RT_ROW_ESTIMATE_SQL = """
@@ -914,10 +886,6 @@ on conflict (phash) do update set
  where autodedup.phash_pop.n_listings is distinct from excluded.n_listings
 """
 
-RT_PHASH_POP_COUNT_SQL = """
-select count(*) as n from autodedup.phash_pop
-"""
-
 # ------------------------------------------------------------------ probe postings
 #
 # One statement per PASS rather than per probe key (E74): a listing carries 17.3 index keys and
@@ -1078,6 +1046,29 @@ select f.listing_id, f.ev_images, f.ev_phash, f.ev_clip, f.ev_tags
         or f.first_decided_at is null
         or f.first_decided_at > now() - make_interval(hours => %(horizon_hours)s::int))
  order by f.listing_id
+ limit %(limit)s
+"""
+
+# E980: the round-robin above is fair to every candidate and fast to none. A widening fills it
+# with every listing it read in the last 48 h (90,984 candidates on 2026-10-26, 87,481 of them
+# only young), so one cycle of 400 a pass took ~50 h, longer than the horizon, and an ACTIVE
+# arrival decided before its CLIP vector waited it out (1,014 such on 2026-10-26). This arm
+# hands the newest active rows still marked incomplete to the probe on EVERY pass, ahead of
+# the round-robin. `ev_complete = false` is `autodedup_rt_fp_evidence_idx`'s own predicate, so
+# the arm reads the partial index (6,183 rows), not the table; a NULL row (before migration
+# 540) is left to the round-robin, which re-decides it once. A row written inside the last
+# `recheck_minutes` is skipped: the probe counts `clip_tagged_at` stamps and the decision counts
+# vectors, so an image the CLIP job stamped as undecodable (`clip_tag_backfill`'s terminal
+# rows) reads as moved for ever, and without the gate it would be re-decided on every pass,
+# ahead of every real arrival (0 such among the arm's 1,000 on 2026-10-26).
+RT_EVIDENCE_ACTIVE_SQL = """
+select f.listing_id, f.ev_images, f.ev_phash, f.ev_clip, f.ev_tags
+  from autodedup.rt_fp f
+ where f.generation = %(generation)s::text
+   and f.ev_complete = false
+   and f.is_active
+   and f.updated_at < now() - make_interval(mins => %(recheck_minutes)s::int)
+ order by f.first_decided_at desc nulls last, f.listing_id
  limit %(limit)s
 """
 
@@ -1658,16 +1649,6 @@ RT_FRESH_SETTINGS_SQL = """
 with gone as (
     delete from autodedup.settings
      where key = any(%(keys)s::text[])
- returning 1
-)
-select count(*)::bigint from gone
-"""
-
-RT_FRESH_LEASE_SQL = """
-with gone as (
-    delete from autodedup.rt_lease
-     where name = %(name)s::text
-       and holder is distinct from %(holder)s::text
  returning 1
 )
 select count(*)::bigint from gone

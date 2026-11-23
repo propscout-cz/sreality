@@ -18,7 +18,7 @@ from typing import Any, NamedTuple
 
 import pytest
 
-from tests._live_property import REQUIRED_DB, _property, cur  # noqa: F401
+from tests._live_property import REQUIRED_DB, _property
 from tests._tenant_scope import scoped
 
 pytestmark = REQUIRED_DB
@@ -71,7 +71,7 @@ def _one(cur: Any, sql: str, params: tuple[Any, ...] = ()) -> Any:
 
 
 @pytest.fixture
-def world(cur: Any) -> _World:  # noqa: F811
+def world(cur: Any) -> _World:
     a, b, c, d = (_signup(cur, k) for k in "abcd")
     card, spare, loose, dismissed = (_property(cur) for _ in range(4))
     entry = _one(cur, "SELECT id FROM pipeline_stages WHERE account_id = %s AND is_entry", (a.acc,))
@@ -170,7 +170,7 @@ def _owned(cur: Any, table: str, acc: uuid.UUID) -> int:
     return _one(cur, f"SELECT count(*) FROM {table} WHERE account_id = %s", (acc,))
 
 
-def test_without_the_header_acting_is_identity(cur: Any, world: _World) -> None:  # noqa: F811
+def test_without_the_header_acting_is_identity(cur: Any, world: _World) -> None:
     both = (
         "SELECT (SELECT array_agg(a.account_id ORDER BY a.account_id) FROM acting_account_ids() a), "
         "       (SELECT array_agg(c.id ORDER BY c.id) FROM current_account_ids() c(id)), acting()"
@@ -195,7 +195,7 @@ def test_without_the_header_acting_is_identity(cur: Any, world: _World) -> None:
 
 
 def test_a_read_recipient_reads_the_owners_board_only_and_nothing_of_its_own(
-    cur: Any, world: _World,  # noqa: F811
+    cur: Any, world: _World,
 ) -> None:
     a, b = world.a, world.b
     for table in CURATION:
@@ -224,7 +224,7 @@ def test_a_read_recipient_reads_the_owners_board_only_and_nothing_of_its_own(
     ]
 
 
-def test_a_read_recipient_writes_nothing(cur: Any, world: _World) -> None:  # noqa: F811
+def test_a_read_recipient_writes_nothing(cur: Any, world: _World) -> None:
     a, b = world.a, world.b
     for method in WRITES:
         assert _touched(cur, b, "UPDATE property_pipeline SET stage_id = %s WHERE property_id = %s",
@@ -244,7 +244,7 @@ def test_a_read_recipient_writes_nothing(cur: Any, world: _World) -> None:  # no
 
 
 def test_an_edit_recipient_writes_as_the_owner_and_every_write_is_stamped(
-    cur: Any, world: _World,  # noqa: F811
+    cur: Any, world: _World,
 ) -> None:
     a, c = world.a, world.c
     acting = {"act_as": a.acc, "method": "POST"}
@@ -351,7 +351,7 @@ def test_an_edit_recipient_writes_as_the_owner_and_every_write_is_stamped(
 
 
 def test_acting_never_reaches_the_owners_identity_scoped_rows(
-    cur: Any, world: _World,  # noqa: F811
+    cur: Any, world: _World,
 ) -> None:
     a, c, d = world.a, world.c, world.d
     d_coll = _one(
@@ -421,7 +421,7 @@ def test_acting_never_reaches_the_owners_identity_scoped_rows(
 
 
 def test_a_header_without_a_share_reads_nothing_not_the_callers_own(
-    cur: Any, world: _World,  # noqa: F811
+    cur: Any, world: _World,
 ) -> None:
     a, d = world.a, world.d
     assert _rows(cur, d, "SELECT count(*) FROM pipeline_stages")[0][0] > 0
@@ -433,7 +433,7 @@ def test_a_header_without_a_share_reads_nothing_not_the_callers_own(
         assert _rows(cur, d, "SELECT count(*) FROM acting_account_ids()", act_as=act_as) == [(0,)]
 
 
-def test_a_revoke_denies_on_the_next_statement(cur: Any, world: _World) -> None:  # noqa: F811
+def test_a_revoke_denies_on_the_next_statement(cur: Any, world: _World) -> None:
     a, c = world.a, world.c
     assert _rows(cur, c, "SELECT count(*) FROM pipeline_stages", act_as=a.acc) == [
         (_owned(cur, "pipeline_stages", a.acc),)
@@ -446,7 +446,7 @@ def test_a_revoke_denies_on_the_next_statement(cur: Any, world: _World) -> None:
                     (world.second, world.card), act_as=a.acc, method="PATCH") == 0
 
 
-def test_the_label_door_names_both_kinds_counterparties(cur: Any, world: _World) -> None:  # noqa: F811
+def test_the_label_door_names_both_kinds_counterparties(cur: Any, world: _World) -> None:
     a, b, c, d = world.a, world.b, world.c, world.d
     labels = "SELECT account_id, email FROM share_party_emails()"
     assert set(_rows(cur, a, labels)) == {(b.acc, b.email), (c.acc, c.email)}
@@ -465,7 +465,7 @@ def test_the_label_door_names_both_kinds_counterparties(cur: Any, world: _World)
 
 
 def test_the_board_views_read_under_every_tenant_with_and_without_the_header(
-    cur: Any, world: _World,  # noqa: F811
+    cur: Any, world: _World,
 ) -> None:
     for t in (world.a, world.b, world.c, world.d):
         for act_as in (None, world.a.acc):
@@ -478,7 +478,7 @@ def test_the_board_views_read_under_every_tenant_with_and_without_the_header(
 
 
 def test_only_the_api_creates_a_share_and_either_party_ends_it(
-    cur: Any, world: _World,  # noqa: F811
+    cur: Any, world: _World,
 ) -> None:
     a, b, c, d = world.a, world.b, world.c, world.d
     for t, owner, recipient in ((a, a, d), (b, a, b), (c, c, a), (d, a, d)):
@@ -496,7 +496,8 @@ def test_the_api_tenant_transaction_sets_the_guc_shape_acting_reads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The API path (api/tenant_pool.tenant_transaction) sets request.method and, only with an
-    X-Act-As, request.headers — the shape PostgREST sets and acting() / acting_account_ids() read.
+    X-Act-As, request.headers — the shape PostgREST sets and acting() / acting_account_ids() read —
+    and runs every GET as PostgREST does: READ ONLY under `authenticated`'s 8 s, acting or not.
     No seed: a header naming an account that shared nothing must act on an EMPTY identity."""
     from api import tenant_pool
     from tests._live_property import db_url
@@ -507,12 +508,21 @@ def test_the_api_tenant_transaction_sets_the_guc_shape_acting_reads(
         "SELECT current_setting('request.method', true), acting(), "
         "(SELECT count(*) FROM acting_account_ids())"
     )
+    bound = (
+        "SELECT current_setting('transaction_read_only'), current_setting('statement_timeout'), "
+        "(SELECT setting = reset_val FROM pg_settings WHERE name = 'statement_timeout')"
+    )
     with tenant_pool.tenant_transaction(claims, act_as=None, method="PATCH") as conn:
         with conn.cursor() as c:
             c.execute(probe)
             assert c.fetchone() == ("PATCH", False, 0)
-            c.execute("SHOW transaction_read_only")
-            assert c.fetchone()[0] == "off"
+            c.execute(bound)
+            read_only, _, session_default = c.fetchone()
+            assert (read_only, session_default) == ("off", True)
+    with tenant_pool.tenant_transaction(claims, act_as=None, method="GET") as conn:
+        with conn.cursor() as c:
+            c.execute(bound)
+            assert c.fetchone() == ("on", "8s", False)
     owner = uuid.uuid4()
     with tenant_pool.tenant_transaction(claims, act_as=owner, method="GET") as conn:
         with conn.cursor() as c:
@@ -520,6 +530,6 @@ def test_the_api_tenant_transaction_sets_the_guc_shape_acting_reads(
             assert c.fetchone() == ("GET", True, 0)
             c.execute("SELECT current_setting('request.headers', true)::json ->> 'x-act-as'")
             assert c.fetchone()[0] == str(owner)
-            # An acting GET is READ ONLY, as PostgREST runs it: a write there fails loudly.
-            c.execute("SHOW transaction_read_only")
-            assert c.fetchone()[0] == "on"
+            # A read share acts on GET alone, so a write there must fail loudly.
+            c.execute(bound)
+            assert c.fetchone() == ("on", "8s", False)

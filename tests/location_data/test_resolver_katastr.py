@@ -1,7 +1,8 @@
 """`katastr_kod` — FILL's one KÚ rule (MF program PR-B, resolver v5.4).
 
 **The single KÚ of the BOUND registry entity, else NULL.** Every case below is one bound
-entity kind: an address point (its own KÚ), a KÚ or ZSJ unit (the KÚ on its chain), an obec
+entity kind: an address point (its own KÚ; one with no coordinates, its část's), a KÚ unit (the
+KÚ on its chain), an obec
 (its one KÚ child, else nothing), a street or část obce (the KÚ holding every one of its
 RÚIAN doors — operator Q7, 2026-09-25). What is NOT an entity is a portal pin: 66,165 idnes
 `no_exact_address` and 13,176 sreality `not_address` pins read as "precise"
@@ -21,7 +22,7 @@ import pytest
 from location_data.resolver import bind as step_bind
 from location_data.resolver import core
 from location_data.resolver import fill as step_fill
-from location_data.resolver.types import AddressPoint, Binding, Street
+from location_data.resolver.types import AddressPoint, Binding, PartPoint, Street
 from location_data.resolver.version import RESOLVER_VERSION
 from tests.location_data import mini_mirror as mm
 
@@ -35,15 +36,13 @@ def _mirror() -> mm.MiniMirror:
     units = [
         *base.units,
         mm._unit(40, "katastralni_uzemi", VOKOVICE_KU, "Vokovice", "vokovice",
-                 "k19.o3100.b554782", parent=13),
+                 "k19.o9999.b554782", parent=13),
         mm._unit(41, "katastralni_uzemi", VELESLAVIN_KU, "Veleslavín", "veleslavin",
-                 "k19.o3100.b554782", parent=13),
-        mm._unit(42, "zsj", 1234501, "Vokovice-střed", "vokovice stred",
-                 "k19.o3100.b554782", parent=40),
+                 "k19.o9999.b554782", parent=13),
         mm._unit(43, "cast_obce", 490211, "Veleslavín", "veleslavin",
-                 "k19.o3100.b554782.c490211", parent=13),
+                 "k19.o9999.b554782.c490211", parent=13),
         mm._unit(44, "cast_obce", 490999, "Prázdná", "prazdna",
-                 "k19.o3100.b554782.c490999", parent=13),
+                 "k19.o9999.b554782.c490999", parent=13),
     ]
     points = [
         replace(p, katastr_kod=VOKOVICE_KU) if p.ulice_kod == 101 else p
@@ -88,14 +87,23 @@ def test_a_portal_registry_key_binds_the_same_ku():
     assert resolution.katastr_kod == VOKOVICE_KU
 
 
-@pytest.mark.parametrize(("unit_id", "expected"), [(40, VOKOVICE_KU), (42, VOKOVICE_KU)])
-def test_a_bound_ku_is_itself_and_a_zsj_is_the_ku_it_lies_in(unit_id, expected):
-    """BIND does not bind a KÚ by name today; FILL's rule is written for the entity, so a KÚ
-    unit (or a ZSJ, a child of exactly one KÚ) answers off its own chain."""
-    binding = Binding(target_kind="admin_unit", granularity="cast_obce_or_quarter", rung="R4",
-                      admin_unit_id=unit_id, obec_kod=554782)
+def test_a_bound_ku_is_itself():
+    """BIND binds no KÚ by name (a KÚ claim binds the část it spells, W5); FILL's rule is
+    written for the entity, so a KÚ unit answers off its own chain."""
+    binding = Binding(target_kind="admin_unit", rung="R4", admin_unit_id=40, obec_kod=554782)
     filled = step_fill.fill(binding, step_bind.Constraints(), _mirror())
-    assert filled.katastr_kod == expected
+    assert filled.katastr_kod == VOKOVICE_KU
+
+
+def test_an_address_point_without_coordinates_takes_its_parts_ku():
+    """W5: a point with no coordinates has no KÚ of its own (19405830), so its část's door
+    rule answers — Vokovice's every door lies in the Vokovice KÚ."""
+    mirror = _mirror()
+    mirror.points.append(AddressPoint(kod_adm=21690400, obec_unit_id=13, obec_kod=554782,
+                                      psc="16000", lat=None, lon=None, cislo_domovni=600,
+                                      cast_obce_unit_id=14, cast_obce_kod=490067))
+    resolution = _resolve([mm.claim(1, "address_point_id", value_text="21690400")], mirror)
+    assert (resolution.granularity, resolution.katastr_kod) == ("address_point", VOKOVICE_KU)
 
 
 def test_a_one_ku_obec_is_in_that_ku():
@@ -215,31 +223,35 @@ def test_a_disputed_row_keeps_its_bound_entitys_ku():
     assert resolution.katastr_kod == VOKOVICE_KU
 
 
-def test_the_part_question_is_asked_only_for_a_part_bind_in_a_multi_ku_town():
-    """The one round trip the rule adds, and only where nothing already read answers it."""
+def test_the_part_question_is_asked_only_for_a_part_bind():
+    """The one round trip the rule adds, and only where nothing already read answers it. A
+    part bind asks it for its KÚ (Praha spans several) and, unpinned, for its point (v5.8);
+    the run cache makes those one round trip."""
     asked: list[int] = []
     mirror = _mirror()
-    original = mirror.part_katastr_kod
+    original = mirror.part_point
 
-    def counting(unit_id: int) -> int | None:
+    def counting(unit_id: int) -> PartPoint | None:
         asked.append(unit_id)
         return original(unit_id)
 
-    mirror.part_katastr_kod = counting  # type: ignore[method-assign]
+    mirror.part_point = counting  # type: ignore[method-assign]
     _resolve([mm.claim(1, "obec_name", value_text="Praha"),
               mm.claim(2, "street_name", value_text="Nad Bořislavkou 487/40")], mirror)
     _resolve([mm.claim(1, "obec_name", value_text="Praha")], mirror)
     assert asked == []
     _resolve([mm.claim(1, "obec_name", value_text="Praha"),
               mm.claim(2, "cast_obce_name", value_text="Vokovice")], mirror)
-    assert asked == [14]
+    assert set(asked) == {14}
 
 
 def test_the_katastr_rule_carries_its_own_resolver_version():
     """A rule that changes an output moves `RESOLVER_VERSION`, or the sweep never re-queues
     the corpus and no existing row ever gets its KÚ (v5.4) — nor the W2 town rule (v5.5), nor
-    W4's parts and streets (v5.7)."""
-    assert RESOLVER_VERSION == "resolver:v5.7"
+    W4's parts and streets (v5.7), nor a část placed at its own doors (v5.8), nor one claim per
+    type read with no tie rule (v5.9.1, W3), nor a pin placing a row only inside the town the
+    words bound, the quarter a část and the grain the finest key (v5.10, W5)."""
+    assert RESOLVER_VERSION == "resolver:v5.10"
 
 
 # ------------------------------------------------------------------ the SQL side
@@ -258,7 +270,7 @@ def test_every_ku_answer_rides_a_read_fill_already_makes():
         (resolve_db._ADDRESS_POINT_SQL, 2),             # version, kod_adm
         (resolve_db._ADDRESS_POINTS_BY_NUMBER_SQL, 11),  # version + ten (v5.5: typ_so, part)
         (resolve_db._STREET_POINT_SQL, 3),              # street id, version x2
-        (resolve_db._PART_KATASTR_SQL, 3),              # unit id, version x2
+        (resolve_db._PART_POINT_SQL, 3),                # unit id, version x2
         (resolve_db._ADMIN_CHAIN_SQL, 2),               # unchanged: the sole KÚ binds none
     ):
         assert sql.count("%s") == placeholders, _flat(sql)
@@ -275,7 +287,7 @@ def test_the_ku_is_only_ever_asked_of_a_registry_geometry():
                 resolve_db._IN_CZ_SQL):
         assert "katastralni_uzemi" not in _flat(sql)
     for sql in (resolve_db._ADDRESS_POINT_SQL, resolve_db._STREET_POINT_SQL,
-                resolve_db._PART_KATASTR_SQL):
+                resolve_db._PART_POINT_SQL):
         assert "unnest(" not in _flat(sql)
 
 
@@ -285,7 +297,7 @@ def test_the_door_rule_reads_the_polygon_by_unit_and_version():
     purpose)` — 22 ms for a 9,193-door část where a probe per door took 1.7 s."""
     from location_data.resolver import resolve_db
 
-    for sql in (resolve_db._STREET_POINT_SQL, resolve_db._PART_KATASTR_SQL):
+    for sql in (resolve_db._STREET_POINT_SQL, resolve_db._PART_POINT_SQL):
         flat = _flat(sql)
         assert ("a.unit_id = k.id and a.registry_version_id = %s "
                 "and a.purpose = 'authoritative'") in flat

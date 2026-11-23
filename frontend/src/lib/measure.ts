@@ -167,6 +167,22 @@ export type AreaKind = 'usable' | 'plot';
 export const areaKindOf = (categoryMain: string | null | undefined): AreaKind =>
   categoryMain === 'pozemek' ? 'plot' : 'usable';
 
+/* What an area figure is the area OF — `scraper/area.py`'s vocabulary, which is
+ * stamped on every row it derives a headline area for. `unknown` gets no label
+ * on purpose: the source carried neither of the two areas, so the honest render
+ * is nothing at all rather than the word "unknown", which reads as if the
+ * measurement were missing. */
+const AREA_BASIS_LABELS: Record<string, string> = {
+  usable: 'užitná',
+  floor: 'podlahová',
+  total: 'celková',
+  plot: 'pozemek',
+};
+
+export function areaBasisLabel(basis: string | null | undefined): string | null {
+  return (basis && AREA_BASIS_LABELS[basis]) || null;
+}
+
 /* The lot a card names after the headline area: THE plot measure (`plot_area_m2`,
  * migration 534, server-resolved), except on a pozemek, whose headline area
  * already IS the plot — saying it twice would read as two parcels. */

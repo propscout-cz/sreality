@@ -1,13 +1,16 @@
-"""Shared setup for the live property-identity tests: a rollback-always connection, the
-`REQUIRED_DB` guard, and seed helpers for properties, adverts, accounts and the operator's
-property-anchored state. Every seed lands inside the test's transaction and rolls back."""
+"""Shared setup for the live property-identity tests: the `REQUIRED_DB` guard, `db_url()`, and seed
+helpers for properties, adverts, accounts and the operator's property-anchored state. Every seed lands
+inside the test's transaction (the rollback-always `cur` fixture in tests/conftest.py) and rolls back;
+only `signups` commits, and deletes what it made."""
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import os
 import uuid
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
@@ -34,38 +37,22 @@ def db_url() -> str:
     return DB_URL
 
 
-@pytest.fixture()
-def cur() -> Iterator[Any]:
-    import psycopg
-
-    conn = psycopg.connect(
-        db_url(),
-        options="-c statement_timeout=20000 -c lock_timeout=5000"
-        " -c idle_in_transaction_session_timeout=30000",
-    )
-    try:
-        with conn.cursor() as c:
-            yield c
-    finally:
-        conn.rollback()
-        conn.close()
-
-
 def _property(cur: Any) -> int:
     """Settled at birth: a seed is a published property, so browse_projection serves it (migration 669)."""
     cur.execute("INSERT INTO properties (settled_at) VALUES (now()) RETURNING id")
     return int(cur.fetchone()[0])
 
 
-def _advert(cur: Any, pid: int, *, source: str, price: int = 5_000_000, active: bool = True,
-            condition: str | None = None, levels: tuple[Any, Any] = (None, None)) -> int:
+def _advert(cur: Any, pid: int, *, source: str, price: int | None = 5_000_000, active: bool = True,
+            condition: str | None = None, levels: tuple[Any, Any] = (None, None), **facts: Any) -> int:
+    """A byt for sale, 70 m², unless `facts` (more `listings` columns) say otherwise."""
+    row = {"sreality_id": next(_SREALITY_IDS) if source == "sreality" else None, "source": source,
+           "source_id_native": f"lp-{uuid.uuid4()}", "category_main": "byt", "category_type": "prodej",
+           "price_czk": price, "area_m2": 70, "is_active": active, "property_id": pid, "condition": condition,
+           "building_condition_level": levels[0], "apartment_condition_level": levels[1], **facts}
     cur.execute(
-        "INSERT INTO listings (sreality_id, source, source_id_native, raw_json, "
-        "category_main, category_type, price_czk, area_m2, is_active, property_id, condition, "
-        "building_condition_level, apartment_condition_level) "
-        "VALUES (%s, %s, %s, '{}'::jsonb, 'byt', 'prodej', %s, 70, %s, %s, %s, %s, %s) RETURNING id",
-        (next(_SREALITY_IDS) if source == "sreality" else None, source,
-         f"lp-{uuid.uuid4()}", price, active, pid, condition, *levels),
+        f"INSERT INTO listings (raw_json, {', '.join(row)}) VALUES ('{{}}'::jsonb, {', '.join(['%s'] * len(row))}) "
+        "RETURNING id", list(row.values()),
     )
     return int(cur.fetchone()[0])
 
@@ -83,6 +70,36 @@ def _recompute(cur: Any, pid: int) -> None:
     from scripts.recompute_property_stats import _RECOMPUTE_SCOPED_SQL
 
     cur.execute(_RECOMPUTE_SCOPED_SQL, {"ids": [pid]})
+
+
+def _registry_version(cur: Any) -> int:
+    """The current RÚIAN registry version, made when the replay holds none (migration 381 allows one)."""
+    cur.execute("SELECT id FROM registry_versions WHERE is_current")
+    row = cur.fetchone()
+    if row is None:
+        cur.execute("INSERT INTO registry_versions (label, kind, source_date, artifact_urls, proj_version, proj_pipeline, "
+                    "  is_current) VALUES (%s, 'baseline', '2026-10-31', '{}', 'test', 'test', true) RETURNING id",
+                    (f"lp-{uuid.uuid4().hex}",))
+        row = cur.fetchone()
+    return int(row[0])
+
+
+def _mirror_unit(cur: Any, level: str, code: int, name: str, box: tuple[float, float, float, float], *,
+                 parent: int | None = None, version: int | None = None, valid_from: str = "2020-01-01") -> int:
+    """A RÚIAN unit drawn at `version` (the current one by default): its render polygon and one pip piece, both the
+    box (west, south, east, north). Returns the unit's row id."""
+    version = _registry_version(cur) if version is None else version
+    cur.execute("INSERT INTO ruian_admin_units (level, code, name, name_norm, parent_id, path, valid_from, "
+                "  first_version_id, last_version_id) VALUES (%s::ruian_level, %s, %s, lower(%s), %s, %s::ltree, "
+                "  %s, %s, %s) RETURNING id", (level, code, name, name, parent, f"x{code}", valid_from, version, version))
+    unit = int(cur.fetchone()[0])
+    cur.execute("INSERT INTO ruian_admin_unit_geometries (unit_id, registry_version_id, purpose, "
+                "  generalization_tolerance_m, geom, representative_point, inscribed_radius_m, centroid_point, "
+                "  containment_radius_m) "
+                "SELECT %s, %s, p, 0, g, ST_PointOnSurface(g), 0, ST_Centroid(g), 0 "
+                "  FROM (SELECT ST_Multi(ST_MakeEnvelope(%s, %s, %s, %s, 4326)) AS g) s, unnest(ARRAY['render', 'pip']) p",
+                (unit, version, *box))
+    return unit
 
 
 def _account(cur: Any) -> uuid.UUID:
@@ -118,3 +135,23 @@ def _tag(cur: Any, acc: uuid.UUID) -> int:
         (acc, f"lp-{uuid.uuid4().hex[:12]}"),
     )
     return int(cur.fetchone()[0])
+
+
+@contextlib.contextmanager
+def signups(svc: Any, prefix: str, *keys: str) -> Iterator[dict[str, Any]]:
+    """One user per key signed up through the real trigger (migration 612: the account, its owner membership, the
+    default board, the monitoring collection and the trial), committed on the autocommit `svc` so a connection of
+    its own sees them: `key` is the user, `key_acc` their account. Deleted on exit."""
+    users = {key: uuid.uuid4() for key in keys}
+    with svc.cursor() as cur:
+        for key, user in users.items():
+            cur.execute("INSERT INTO auth.users (id, email) VALUES (%s, %s)",
+                        (user, f"{prefix}-{key}-{user.hex[:8]}@test.local"))
+        cur.execute("SELECT user_id, account_id FROM account_members WHERE user_id = ANY(%s)", (list(users.values()),))
+        account = dict(cur.fetchall())
+    try:
+        yield {**users, **{f"{key}_acc": account[user] for key, user in users.items()}}
+    finally:
+        with svc.cursor() as cur:
+            cur.execute("DELETE FROM accounts WHERE id = ANY(%s)", (list(account.values()),))
+            cur.execute("DELETE FROM auth.users WHERE id = ANY(%s)", (list(users.values()),))

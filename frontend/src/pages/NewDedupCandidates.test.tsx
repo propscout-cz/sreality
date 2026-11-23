@@ -106,9 +106,7 @@ const GENERATION: NewDedupCandidateGeneration = {
  * these rows are the assertion: 800 listings → 700 judged → 630 with a location,
  * of which 600 are in a named town, 23 are ABROAD (an answer, printed as a split
  * and never as a loss) and 7 are a Czech point with no town. The town step's loss
- * is exactly 23 + 7 = 30. `located_town` is a CHAIN step here and a split on the
- * audit page — same key, same predicate, different role, declared in
- * location_data/location_steps.py. */
+ * is exactly 23 + 7 = 30, declared in location_data/location_steps.py. */
 const WATERFALL: waterfall.WaterfallRow[] = [
   { step_key: 'all_listings', step_no: 1, sub_no: 0, kind: 'chain', parent_key: null, n: 800, lost: 0, share_pct: 100 },
   { step_key: 'with_verdict', step_no: 2, sub_no: 0, kind: 'chain', parent_key: null, n: 700, lost: 100, share_pct: 87.5 },

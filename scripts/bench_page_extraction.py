@@ -76,7 +76,9 @@ def corpus(bodies: int) -> tuple[list[tuple[ListingRow, page_readers.ArchivedPay
     return tasks, entries, registers
 
 
-def measure(tasks, entries, registers, workers: int) -> tuple[float, int]:
+def measure(tasks: list[tuple[ListingRow, page_readers.ArchivedPayload]],
+            entries: dict[str, list[Entry]], registers: dict[str, ScopeRegister],
+            workers: int) -> tuple[float, int]:
     os.environ[cpus.JOB_CPUS_ENV] = str(workers)
     started = time.monotonic()
     outcomes = page_readers.extract_pages(

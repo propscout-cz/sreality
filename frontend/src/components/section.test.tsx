@@ -22,10 +22,10 @@ describe('<Hairline>', () => {
 });
 
 describe('<SectionLabel>', () => {
-  it('renders its text in the wide-tracked caption style', () => {
-    render(<SectionLabel>Curation</SectionLabel>);
-    expect(screen.getByText('Curation').getAttribute('class')).toBe(
-      'text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium',
+  it('is the L4 field label: small caps 11/14, weight 600, 0.08em, ink-3 (system.md § Section cards)', () => {
+    render(<SectionLabel>First seen</SectionLabel>);
+    expect(screen.getByText('First seen').getAttribute('class')).toBe(
+      'text-[11px] leading-[14px] font-semibold tracking-[0.08em] uppercase text-[var(--color-ink-3)]',
     );
   });
 });

@@ -1,49 +1,59 @@
-/* Location quality — the operator's read of `listing_location`, the location
- * program's one answer table (migration 501). Admin-only; every read goes
- * through the identity-gated `/location/*` API (the location tables are
- * service-role-only). Every precision panel states its grain — mixing listing-
- * and property-grain precision is a lie by aggregation (§5.5.4).
+/* Location quality — the `location_town_coverage` gauge's STORED cells (view
+ * location_quality_by_source, migration 698, judged by scripts/checks/quality.py), read through
+ * the Health page's own query (lib/healthChecks HEALTH_QUERY): the two pages show identical
+ * numbers by construction, and Acknowledge patches the one cache entry. Ruling Q7: nothing is
+ * measured twice and the page holds no threshold; every status is the check's, every value the
+ * count or share that colours it. Admin-only (the health view returns no row to anyone else).
+ * W3b moved corrections to the property page's address picker and deleted the inspector.
+ * W6-c (migration 733): the town cell's stored position grid replaced the grain bars, and every
+ * number in it opens its ads (components/location/PositionAudit); the portal and the open cell
+ * live in the URL (?portal=&kind=&grain=).
+ * Ruling Q18: the property waterfall, from served/town's stored `grains` and the served cells (one table pins gauge
+ * and page: tests/fixtures/property_waterfall.json); no portal pick, no arithmetic.
  *
- * W2-b deleted three panels with the columns under them: the pin-sharing
- * histogram and its collision-class list (the epoch that produced them is gone;
- * the shared-pin count is a read-time aggregate W3 computes in the browse_list
- * rebuild, where the map needs it), the position-source / admin-assignment
- * mixes, and the frozen labelled sample (two tables whose purpose was scoring
- * old-vs-new precision, and "new" is the only system now). What is left is the
- * two axes a consumer asks — granularity and match confidence — over a totals
- * row whose centre of gravity is rule 25's invariant: every active Czech
- * listing has a town.
- *
- * Visual note: enum mixes are single-hue horizontal bars — magnitude of one
- * measure, so one hue; identity color would be noise. */
+ * Visual note: a class mix is single-hue horizontal bars — magnitude of one measure, so one
+ * hue; identity color would be noise. */
 
-import { useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { Field } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
+import CheckRow, { fmtNumber, fmtValue, measuredLine } from '@/components/health/CheckRow';
+import { MatrixCell } from '@/components/health/PortalMatrix';
 import Panel from '@/components/Panel';
 import Skeleton from '@/components/Skeleton';
-import Stat from '@/components/Stat';
+import StatusDot from '@/components/StatusDot';
+import { HEALTH_QUERY, HealthEmptyError, tail, verdictOf, type HealthCell, type HealthRow } from '@/lib/healthChecks';
+import { portalShort } from '@/lib/portals';
+import { LOCATION_SOURCES } from '../lib/locationQuality';
+import { KindStrip, NoAnswerEntry, PositionList, PositionsGrid } from '@/components/location/PositionAudit';
 import {
-  fetchCorpusSummary, fetchInspector, fetchInspectorByNative, fetchSourceOverview,
-  submitCorrection,
-  LOCATION_SOURCES,
-  type CorrectionResult, type Inspector, type MixRow, type SourceOverview,
-} from '../lib/locationQuality';
-import { fmtCount, fmtRelative } from '../lib/format';
+  KIND_LABEL,
+  listFromParams,
+  paramsForList,
+  POSITION_GRAINS,
+  positionGrid,
+  type PositionCell,
+  type PositionListSpec,
+} from '@/lib/positionAudit';
 
-function BarList({ rows, total }: { rows: MixRow[]; total: number }) {
+const CHECK_KEY = 'location_town_coverage';
+
+/* Counts by class as bars, in the matrix's figures: a cell's `facts.disputed`, or the waterfall's steps. */
+function BarList({ rows }: { rows: [string, number][] }) {
+  const total = rows.reduce((a, [, n]) => a + n, 0);
   if (rows.length === 0) {
     return <p className="text-sm text-[var(--color-ink-3)]">No rows.</p>;
   }
   return (
-    <div className="space-y-1.5">
-      {rows.map((r) => {
-        const pct = total ? (100 * r.n) / total : 0;
+    <ul className="space-y-1.5">
+      {rows.map(([value, n]) => {
+        const pct = total ? (100 * n) / total : 0;
         return (
-          <div key={r.value ?? 'null'} className="flex items-center gap-2">
+          <li key={value} className="flex items-center gap-2">
             <span className="w-44 shrink-0 truncate text-sm text-[var(--color-ink-2)]">
-              {r.value ?? '∅'}
+              {value}
             </span>
             <span className="h-2 flex-1 rounded-full bg-[var(--color-rule-soft)]">
               <span
@@ -52,270 +62,211 @@ function BarList({ rows, total }: { rows: MixRow[]; total: number }) {
               />
             </span>
             <span className="text-right font-mono tabular-nums text-[0.78rem]">
-              {fmtCount(r.n)}
+              {fmtNumber(n)}
             </span>
-          </div>
+          </li>
         );
       })}
-    </div>
+    </ul>
   );
 }
 
-/* ---------- source overview panels ---------- */
+/* A cell fact's numeric entries, in stored order. */
+const numberEntries = (fact: unknown): [string, number][] =>
+  Object.entries(fact && typeof fact === 'object' ? fact : {}).filter((e): e is [string, number] => typeof e[1] === 'number');
 
-function OverviewPanels({ ov }: { ov: SourceOverview }) {
-  const t = ov.totals;
-  const pct = (n: number) => (t.active_rows ? `${((100 * n) / t.active_rows).toFixed(1)}%` : '—');
-  return (
-    <>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-        <Stat label="Active rows" value={fmtCount(t.active_rows)} />
-        <Stat label="With a town" value={pct(t.with_obec_kod)} hint={`${fmtCount(t.with_obec_kod)} rows`} />
-        <Stat label="≥ building" value={pct(t.building_or_better)} hint={`${fmtCount(t.building_or_better)} rows`} />
-        <Stat label="≥ street" value={pct(t.street_or_better)} hint={`${fmtCount(t.street_or_better)} rows`} />
-        <Stat label="kód ADM" value={pct(t.with_adm_kod)} hint={`${fmtCount(t.with_ulice_kod)} with a street code`} />
-        <Stat label="Disputed" value={fmtCount(t.disputed)} status={t.disputed ? 'fail' : undefined} />
-      </div>
+/* ---------- the property waterfall (ruling Q18) ---------- */
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <Panel title="Granularity × count (listing grain)">
-          <BarList rows={ov.mixes.granularity ?? []} total={t.active_rows} />
-        </Panel>
-        <Panel title="Match confidence">
-          <BarList rows={ov.mixes.match_confidence ?? []} total={t.active_rows} />
-        </Panel>
-      </div>
-
-      <div className="mt-4">
-        <Panel
-          title="Registry version"
-          accessory={ov.current_registry ? (
-            <span className="text-[0.7rem] text-[var(--color-ink-3)]">
-              current: <span className="font-mono">{ov.current_registry.label}</span>
-            </span>
-          ) : undefined}
-        >
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            <Stat
-              label="On an older registry"
-              value={pct(t.stale_registry)}
-              hint={`${fmtCount(t.stale_registry)} rows`}
-              status={t.active_rows > 0 && t.stale_registry > t.active_rows / 2 ? 'fail' : undefined}
-            />
-          </div>
-          <p className="mt-2 text-[0.7rem] text-[var(--color-ink-4)]">
-            Rows on an older registry version re-resolve on the next drain after a registry load —
-            a growing stale share means the drain is behind, not that data got worse.
-          </p>
-        </Panel>
-      </div>
-    </>
-  );
+/* Every published property once, at its location ad's finest level: the no-town steps are the served cells themselves
+ * (Health's figures, by their own names), then served/town's stored `grains` coarse to fine in the position grid's
+ * words. Only stored counts, never a remainder; null when the reading stored no complete waterfall. */
+function waterfall(fleet: HealthCell[]): { published: number; steps: [string, number][] } | null {
+  const town = fleet.find((c) => c.subject === 'served/town');
+  const withheld = fleet.find((c) => c.subject === 'served/town_withheld');
+  const grains = town?.facts.grains as Record<string, number> | undefined;
+  const { ads, foreign } = town?.facts ?? {};
+  if (!town || town.value == null || !withheld || withheld.value == null || !grains
+      || typeof ads !== 'number' || typeof foreign !== 'number') return null;
+  return {
+    published: ads,
+    steps: [
+      [KIND_LABEL.foreign.label, foreign],
+      [town.subject, town.value],
+      [withheld.subject, withheld.value],
+      ...POSITION_GRAINS.filter((g) => g.key in grains).reverse()
+        .map((g): [string, number] => [`ends at ${g.label}`, grains[g.key]]),
+    ],
+  };
 }
 
-/* ---------- inspector + corrections ---------- */
-
-const CORRECTABLE = [
-  'address_point_id', 'street_name', 'house_number_cp', 'house_number_co',
-  'psc', 'obec_name', 'cast_obce_name', 'okres_name',
-] as const;
-
-function InspectorSection({ source }: { source: string }) {
-  const [query, setQuery] = useState('');
-  const [submitted, setSubmitted] = useState<string | null>(null);
-  const inspector = useQuery({
-    queryKey: ['location', 'inspector', source, submitted],
-    queryFn: () =>
-      /^\d+$/.test(submitted!.trim())
-        ? fetchInspector(submitted!)
-        : fetchInspectorByNative(source, submitted!),
-    enabled: submitted != null && submitted.trim() !== '',
-  });
-  const ins = inspector.data?.data ?? null;
+function PropertyWaterfall({ fleet }: { fleet: HealthCell[] }) {
+  const shown = waterfall(fleet);
   return (
-    <Panel title="Listing inspector (read-your-writes)">
-      <form
-        className="flex items-end gap-2 max-w-md"
-        onSubmit={(e) => { e.preventDefault(); setSubmitted(query); }}
-      >
-        {/* The submit button stays OUTSIDE the Field: anything inside the
-          * <label> would join the input's accessible name and fire label
-          * activation. */}
-        <Field label="Listing or native id" as="control" className="flex-1">
-          <input
-            className="w-full rounded-[var(--radius-xs)] border border-[var(--color-rule)] bg-[var(--color-paper)] px-2 py-1.5 text-sm"
-            placeholder={`listing id, or ${source} native id`}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </Field>
-        <button
-          type="submit"
-          className="rounded-[var(--radius-xs)] border border-[var(--color-copper)] px-3 py-1.5 text-sm text-[var(--color-copper)] hover:bg-[var(--color-copper-soft)]"
-        >
-          Inspect
-        </button>
-      </form>
-      {inspector.error ? <ErrorBanner message={inspector.error.message} /> : null}
-      {ins ? <InspectorBody ins={ins} onCorrected={() => inspector.refetch()} /> : null}
+    <Panel
+      title="Property waterfall"
+      count={shown ? fmtNumber(shown.published) : null}
+      lede={
+        'Published properties, each counted once at its location ad’s finest level: published, not all active (a ' +
+        'young property counts once it is published). Browse also applies the consumer rule (rule 25), so its count ' +
+        'is not this total.'
+      }
+    >
+      {shown ? (
+        <BarList rows={shown.steps} />
+      ) : (
+        <p className="text-sm text-[var(--color-ink-3)]">The gauge has stored no waterfall in this reading.</p>
+      )}
     </Panel>
   );
 }
 
-function InspectorBody({ ins, onCorrected }: { ins: Inspector; onCorrected: () => void }) {
-  const p = ins.projection ?? {};
-  const axis = (k: string) => String(p[k] ?? '∅');
-  /* The answer table's four read axes. There is no stored display label: the
-   * row carries its parts and the reader composes them. */
-  const AXES: [string, string][] = [
-    ['granularity', 'granularity'], ['match_confidence', 'confidence'],
-    ['uncertainty_radius_m', 'radius m'], ['country_status', 'country'],
-    ['resolver_version', 'resolver'], ['registry_version', 'registry'],
-  ];
-  const label = [
-    [p.street_name, p.house_number_cp].filter(Boolean).join(' '),
-    p.obec_name,
-  ].filter(Boolean).join(', ');
+/* ---------- the scorecard ---------- */
+
+/* Rows = the portals the cells name, columns = their arms (Health's `tail`), both in the gauge's
+ * own order (no per-key table here). Fleet cells (portal null) are the strip. */
+function pivot(cells: HealthCell[]) {
+  const portals: string[] = [];
+  const columns: string[] = [];
+  const at: Record<string, Record<string, HealthCell>> = {};
+  const fleet: HealthCell[] = [];
+  for (const c of cells) {
+    if (c.portal == null) {
+      fleet.push(c);
+      continue;
+    }
+    const arm = tail(c.subject, c.portal);
+    if (!at[c.portal]) {
+      at[c.portal] = {};
+      portals.push(c.portal);
+    }
+    if (!columns.includes(arm)) columns.push(arm);
+    at[c.portal][arm] = c;
+  }
+  return { portals, columns, at, fleet };
+}
+
+function Scorecard({
+  row,
+  source,
+  list,
+  onSource,
+  onList,
+}: {
+  row: HealthRow;
+  source: string;
+  list: PositionListSpec | null;
+  onSource: (s: string) => void;
+  onList: (portal: string, list: PositionListSpec | null) => void;
+}) {
+  const cell = list?.mode === 'cell' ? list.cell : null;
+  const onCell = (portal: string, next: PositionCell) => onList(portal, { mode: 'cell', cell: next });
+  const { portals, columns, at, fleet } = useMemo(() => pivot(row.details?.cells ?? []), [row.details]);
+  /* Every verdict is Health's (`verdictOf`); a stale row's facts are history, withheld as on Health. */
+  const current = row.effective_status !== 'unknown';
+  const positions = current ? at[source]?.town?.facts.positions : undefined;
+  const disputed = current ? at[source]?.outside?.facts.disputed : undefined;
+  const grids = current
+    ? portals.map((p) => [p, positionGrid(at[p]?.town?.facts.positions)] as const)
+    : [];
   return (
-    <div className="mt-4 space-y-4">
-      <div>
-        <div className="text-sm">
-          <span className="font-mono text-[0.8rem]">#{ins.listing_id}</span>{' '}
-          <span className="text-[var(--color-ink-2)]">{label || '∅'}</span>
-          {p.disputed ? (
-            <span className="ml-2 text-[0.7rem] text-[var(--color-brick)]">
-              DISPUTED · {String(p.disputed)}
-            </span>
-          ) : null}
-        </div>
-        <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-          {AXES.map(([k, label_]) => <Stat key={k} label={label_} value={axis(k)} />)}
-        </div>
-        <div className="mt-1 text-[0.68rem] text-[var(--color-ink-4)]">
-          street {axis('street_name')} · čp {axis('house_number_cp')} · čo {axis('house_number_co')} ·
-          obec {axis('obec_name')} · PSČ {axis('psc')} · kód ADM {axis('ruian_adm_kod')} ·
-          resolved {axis('resolved_at')}
-        </div>
-      </div>
-
-      <CorrectionForm listingId={ins.listing_id} onDone={onCorrected} />
-
-      <details>
-        <summary className="cursor-pointer text-sm text-[var(--color-ink-2)]">
-          Claims ({ins.claims.length})
-        </summary>
-        <div className="mt-2 overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
+    <>
+      {current ? <PropertyWaterfall fleet={fleet} /> : null}
+      <Panel title="By portal">
+        <div className="overflow-x-auto">
+          <table className="block w-full border-collapse text-sm md:table">
+            <caption className="sr-only">Location quality by portal; a row picks the source of the panels below</caption>
+            <thead className="hidden md:table-header-group">
               <tr className="text-left text-[0.65rem] tracking-[0.1em] uppercase text-[var(--color-ink-3)]">
-                <th className="py-1 pr-3 font-medium">Claim</th>
-                <th className="py-1 pr-3 font-medium">Value</th>
-                <th className="py-1 pr-3 font-medium">Method</th>
-                <th className="py-1 pr-3 font-medium">Licence</th>
-                <th className="py-1 font-medium">Observed</th>
+                <th scope="col" className="py-1.5 pr-3 font-medium">Portal</th>
+                {columns.map((c) => (
+                  <th key={c} scope="col" className="py-1.5 pr-3 font-medium">{c}</th>
+                ))}
               </tr>
             </thead>
-            <tbody>
-              {ins.claims.map((c) => (
-                <tr key={c.id} className="border-t border-[var(--color-rule-soft)]">
-                  <td className="py-1 pr-3">{c.claim_type}</td>
-                  <td className="py-1 pr-3 font-mono text-[0.75rem]">{c.value_text ?? c.value_num ?? '—'}</td>
-                  <td className="py-1 pr-3 font-mono text-[0.75rem]">{c.extraction_method}</td>
-                  <td className="py-1 pr-3">{c.licence_class}</td>
-                  <td className="py-1 text-[var(--color-ink-3)]">{fmtRelative(c.first_observed_at)}</td>
+            <tbody className="block md:table-row-group">
+              {portals.map((p) => (
+                <tr
+                  key={p}
+                  data-testid={`location-matrix-${p}`}
+                  onClick={() => onSource(p)}
+                  className={`block md:table-row border-t border-[var(--color-rule-soft)] cursor-pointer hover:bg-[var(--color-copper-soft)] ${p === source ? 'bg-[var(--color-copper-soft)]' : ''}`}
+                >
+                  <th scope="row" className="block py-1.5 pr-3 text-left font-normal md:table-cell">
+                    {/* The keyboard path to the row's click: it bubbles there. */}
+                    <button type="button" aria-pressed={p === source} className="text-sm text-[var(--color-ink)]">
+                      {portalShort(p)}
+                    </button>
+                  </th>
+                  {columns.map((c) => (
+                    <MatrixCell key={c} label={c} portal={p} entry={verdictOf(row, at[p][c] ? [at[p][c]] : [])} />
+                  ))}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      </details>
-    </div>
-  );
-}
-
-function CorrectionForm({ listingId, onDone }: { listingId: number; onDone: () => void }) {
-  const [claimType, setClaimType] = useState<string>('street_name');
-  const [value, setValue] = useState('');
-  const [note, setNote] = useState('');
-  const [result, setResult] = useState<CorrectionResult | null>(null);
-  const mut = useMutation({
-    mutationFn: () =>
-      submitCorrection({ listing_id: listingId, claim_type: claimType, value_text: value, note: note || undefined }),
-    onSuccess: (res) => { setResult(res.data); setValue(''); onDone(); },
-  });
-  const input = 'rounded-[var(--radius-xs)] border border-[var(--color-rule)] bg-[var(--color-paper)] px-2 py-1.5 text-sm';
-  return (
-    <div className="rounded-[var(--radius-sm)] border border-[var(--color-rule-soft)] px-3 py-2.5">
-      <div className="text-[0.65rem] tracking-[0.1em] uppercase text-[var(--color-ink-3)] mb-2">
-        Operator correction (appends a claim, resolves immediately)
-      </div>
-      <form
-        className="flex flex-wrap items-end gap-2"
-        onSubmit={(e) => { e.preventDefault(); if (value.trim()) mut.mutate(); }}
-      >
-        <Field label="Claim type" as="control">
-          <select className={input} value={claimType} onChange={(e) => setClaimType(e.target.value)}>
-            {CORRECTABLE.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </Field>
-        <Field label="Corrected value" as="control" className="flex-1 min-w-40">
-          <input
-            className={`${input} w-full`}
-            placeholder={claimType === 'address_point_id' ? 'kód ADM (digits)' : 'corrected value'}
-            value={value} onChange={(e) => setValue(e.target.value)}
-          />
-        </Field>
-        <Field label="Note" as="control" className="min-w-32">
-          <input
-            className={`${input} w-full`} placeholder="note (optional)"
-            value={note} onChange={(e) => setNote(e.target.value)}
-          />
-        </Field>
-        <button
-          type="submit" disabled={mut.isPending || !value.trim()}
-          className="rounded-[var(--radius-xs)] bg-[var(--color-copper)] px-3 py-1.5 text-sm text-white hover:bg-[var(--color-copper-2)] disabled:opacity-50"
-        >
-          {mut.isPending ? 'Applying…' : 'Correct'}
-        </button>
-      </form>
-      {mut.error ? <ErrorBanner message={mut.error.message} /> : null}
-      {result ? (
-        <div className="mt-2 text-[0.75rem] text-[var(--color-ink-2)]">
-          {result.restatement ? 'Restated an existing claim' : 'Claim appended'} ·{' '}
-          {result.resolved ? 'resolved synchronously' : 'queued for the next drain (≤15 min)'}
-          {result.registry_echo ? (
-            <span> · registry: {String(result.registry_echo.street ?? '')} {String(result.registry_echo.cislo_domovni ?? '')}
-              {result.registry_echo.cislo_orientacni ? `/${result.registry_echo.cislo_orientacni}` : ''},{' '}
-              {String(result.registry_echo.obec ?? '')} {String(result.registry_echo.psc ?? '')}</span>
-          ) : null}
-          {result.projection ? (
-            <span> · now: {String(result.projection.granularity)} / {String(result.projection.street_name ?? '∅')}</span>
-          ) : null}
-        </div>
+        {fleet.length > 0 && (
+          <ul
+            data-testid="location-fleet"
+            className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5 border-t border-[var(--color-rule-soft)] pt-3 text-[0.78rem]"
+          >
+            {fleet.map((c) => {
+              const v = verdictOf(row, [c]);
+              const value = v.cell ? fmtValue(v.cell.value, v.cell.unit) : null;
+              return (
+                <li key={c.subject} title={v.cell?.message} className="flex items-baseline gap-x-2">
+                  <span className="font-mono text-[0.72rem] text-[var(--color-ink-2)]">{c.subject}</span>
+                  <StatusDot status={v.status} size="sm" />
+                  {value && <span className="font-mono tabular-nums text-[var(--color-ink)]">{value}</span>}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </Panel>
+      {current ? (
+        <PositionsGrid
+          portal={source}
+          grid={positions === undefined ? undefined : positionGrid(positions)}
+          chosen={cell}
+          onOpen={(c) => onCell(source, c)}
+        />
       ) : null}
-    </div>
+      {cell ? (
+        <PositionList key={`${source}|${cell.kind}|${cell.grain ?? ''}`} portal={source} spec={{ mode: 'cell', cell }}
+          readingAt={row.run_at} onClose={() => onList(source, null)} />
+      ) : null}
+      <KindStrip grids={grids} portal={source} chosen={cell} onOpen={onCell} />
+      <NoAnswerEntry open={list?.mode === 'answerless'}
+        onOpen={() => onList(source, list?.mode === 'answerless' ? null : { mode: 'answerless' })} />
+      {list?.mode === 'answerless' ? (
+        <PositionList key="answerless" portal={source} spec={list} readingAt={null} onClose={() => onList(source, null)} />
+      ) : null}
+      {disputed ? (
+        <Panel title={`Disputed classes · ${portalShort(source)}`}>
+          <BarList rows={numberEntries(disputed)} />
+        </Panel>
+      ) : null}
+    </>
   );
 }
 
 /* ---------- page ---------- */
 
 export default function LocationQuality() {
-  const [source, setSource] = useState<string>('bezrealitky');
-  const overview = useQuery({
-    queryKey: ['location', 'overview', source],
-    queryFn: () => fetchSourceOverview(source),
-    staleTime: 60_000,
+  /* The portal and the open cell are the URL's (?portal=&kind=&grain=), so a cell is a link. */
+  const [params, setParams] = useSearchParams();
+  const source = params.get('portal') ?? 'bezrealitky';
+  const list = listFromParams(params);
+  const openList = (portal: string, next: PositionListSpec | null) => setParams(paramsForList(portal, next));
+  const setSource = (portal: string) => openList(portal, null);
+  /* The Health page's own entry (same key, same poll): identical numbers by construction. */
+  const health = useQuery({
+    ...HEALTH_QUERY,
+    select: (rows: HealthRow[]) => rows.find((r) => r.check_key === CHECK_KEY) ?? null,
   });
-  const summary = useQuery({
-    queryKey: ['location', 'summary'],
-    queryFn: fetchCorpusSummary,
-    staleTime: 5 * 60_000,
-  });
-  const ov = overview.data?.data;
-  const summaryRows = summary.data?.data.sources ?? [];
-  const refreshedAt = overview.dataUpdatedAt
-    ? fmtRelative(new Date(overview.dataUpdatedAt).toISOString())
-    : null;
+  const row = health.data;
+  const when = row ? measuredLine(row) : null;
 
   return (
     <div className="px-6 pt-5 pb-8 max-w-screen-2xl mx-auto">
@@ -323,8 +274,8 @@ export default function LocationQuality() {
         <div>
           <h1 className="text-2xl leading-tight">Location quality</h1>
           <p className="text-sm text-[var(--color-ink-2)]">
-            Read entirely from <span className="font-mono">listing_location</span> (listing grain)
-            {refreshedAt ? <> · refreshed {refreshedAt}</> : null}
+            The stored cells of <span className="font-mono">{CHECK_KEY}</span>, as Health shows them
+            {when ? <> · <span title={when.title}>{when.text}</span></> : null}
           </p>
         </div>
         <Field label="Source" as="control">
@@ -339,63 +290,27 @@ export default function LocationQuality() {
       </header>
 
       <div className="mt-4 space-y-4">
-
-        {overview.error ? <ErrorBanner message={overview.error.message} /> : null}
-        {overview.isLoading && !ov ? (
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-              {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} height={64} />)}
-            </div>
-            <Skeleton height={280} />
-          </div>
-        ) : ov ? <OverviewPanels ov={ov} /> : null}
-
-        <InspectorSection source={source} />
-
-        <Panel title="All sources (active listings, listing grain)">
-          {summary.error ? <ErrorBanner message={summary.error.message} /> : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm max-w-3xl">
-                <thead>
-                  <tr className="text-left text-[0.65rem] tracking-[0.1em] uppercase text-[var(--color-ink-3)]">
-                    <th className="py-1.5 pr-3 font-medium">Source</th>
-                    <th className="py-1.5 pr-3 font-medium text-right">Active</th>
-                    <th className="py-1.5 pr-3 font-medium text-right">With a town</th>
-                    <th className="py-1.5 pr-3 font-medium text-right">≥ building</th>
-                    <th className="py-1.5 pr-3 font-medium text-right">≥ street</th>
-                    <th className="py-1.5 pr-3 font-medium text-right">kód ADM</th>
-                    <th className="py-1.5 font-medium text-right">Disputed</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {summaryRows.map((r) => (
-                    <tr
-                      key={r.source}
-                      className={`border-t border-[var(--color-rule-soft)] cursor-pointer hover:bg-[var(--color-copper-soft)] ${r.source === source ? 'bg-[var(--color-copper-soft)]' : ''}`}
-                      onClick={() => setSource(r.source)}
-                    >
-                      <td className="py-1.5 pr-3">{r.source}</td>
-                      <td className="py-1.5 pr-3 text-right font-mono tabular-nums">{fmtCount(r.active_rows)}</td>
-                      <td className="py-1.5 pr-3 text-right font-mono tabular-nums">
-                        {r.active_rows ? ((100 * r.with_obec_kod) / r.active_rows).toFixed(1) : '—'}%
-                      </td>
-                      <td className="py-1.5 pr-3 text-right font-mono tabular-nums">
-                        {r.active_rows ? ((100 * r.building_or_better) / r.active_rows).toFixed(1) : '—'}%
-                      </td>
-                      <td className="py-1.5 pr-3 text-right font-mono tabular-nums">
-                        {r.active_rows ? ((100 * r.street_or_better) / r.active_rows).toFixed(1) : '—'}%
-                      </td>
-                      <td className="py-1.5 pr-3 text-right font-mono tabular-nums">
-                        {r.active_rows ? ((100 * r.with_adm_kod) / r.active_rows).toFixed(1) : '—'}%
-                      </td>
-                      <td className="py-1.5 text-right font-mono tabular-nums">{fmtCount(r.disputed)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Panel>
+        {health.isPending ? (
+          <Skeleton height={280} />
+        ) : row === undefined ? (
+          <ErrorBanner
+            title={health.error instanceof HealthEmptyError ? 'Empty read:' : 'Failed to load:'}
+            message={health.error?.message ?? 'The health view did not answer.'}
+            onRetry={() => void health.refetch()}
+            retryLabel="Retry"
+          />
+        ) : row ? (
+          <>
+            <Scorecard row={row} source={source} list={list} onSource={setSource} onList={openList} />
+            <Panel title="As on Health">
+              <CheckRow row={{ ...row, owner_path: '' }} />
+            </Panel>
+          </>
+        ) : (
+          <p className="text-sm text-[var(--color-ink-3)]">
+            The health read holds no <span className="font-mono">{CHECK_KEY}</span> check.
+          </p>
+        )}
       </div>
     </div>
   );

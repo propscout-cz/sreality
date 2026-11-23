@@ -17,6 +17,7 @@ import { Link } from 'react-router-dom';
 import type { AutodedupMemberDetail } from '@/lib/api';
 import ImageCarousel from '@/components/ImageCarousel';
 import { imageSrc } from '@/lib/imageUrl';
+import { advertLink } from '@/lib/portals';
 import {
   MissingPhotoTile,
   memberAttrs,
@@ -48,14 +49,14 @@ export default function MemberRow({
   badge?: string;
 }) {
   /* The carousel wants render-ready urls; these photos carry no CLIP tag on
-   * this surface, so both decorations are explicitly null rather than faked. */
+   * this surface, so the tag is explicitly null rather than faked. */
   const images = member.images.map((img) => ({
     url: imageSrc(img),
     tag: null,
     confidence: null,
-    renderScore: null,
   }));
   const inApp = memberListingPath(member);
+  const link = advertLink(member);
   return (
     <li className="grid gap-3 sm:grid-cols-[18rem_1fr] items-start">
       <ImageCarousel
@@ -103,9 +104,9 @@ export default function MemberRow({
               Detail
             </Link>
           )}
-          {member.source_url && (
+          {link && (
             <a
-              href={member.source_url}
+              href={link}
               target="_blank"
               rel="noopener noreferrer"
               className="text-[var(--color-copper-2)] underline decoration-dotted underline-offset-2"

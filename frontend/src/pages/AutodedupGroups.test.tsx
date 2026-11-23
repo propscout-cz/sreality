@@ -30,7 +30,7 @@
  *   * no interactive control is nested inside another.
  */
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, onTestFinished } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -1218,6 +1218,15 @@ describe('<AutodedupGroups>', () => {
         conflicts: [],
         verdicts: [],
       },
+    });
+    /* jsdom lays nothing out: a member's text outgrows its six-line clamp when it is long. */
+    const tall = vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockImplementation(function (this: Element) {
+      return (this.textContent?.length ?? 0) > 360 ? 400 : 40;
+    });
+    const cut = vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(120);
+    onTestFinished(() => {
+      tall.mockRestore();
+      cut.mockRestore();
     });
     renderPage();
     const card = (await screen.findByText('#7')).closest('li')!;

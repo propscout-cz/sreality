@@ -13,7 +13,8 @@ import {
 
 /* Tier editor (Phase 1 increment 5): which agendas each plan can see, plus
  * per-account plan assignment (manual comps). Admin routes; the tenant nav
- * reads the same plans.agendas map via supabase RLS. */
+ * reads the same plans.agendas map via supabase RLS, except `agents`, which
+ * only the API reads (GET /runs/options). */
 
 const AGENDA_KEYS = [
   'browse',
@@ -23,6 +24,7 @@ const AGENDA_KEYS = [
   'notifications',
   'brokers',
   'collections',
+  'agents',
 ] as const;
 
 const AGENDA_LABELS: Record<string, string> = {
@@ -33,6 +35,7 @@ const AGENDA_LABELS: Record<string, string> = {
   notifications: 'Notifications',
   brokers: 'Brokers',
   collections: 'Collections',
+  agents: 'Agents',
 };
 
 const plansKey = ['admin', 'plans'] as const;
@@ -180,7 +183,7 @@ export default function TiersSection() {
       </form>
 
       <div>
-        <h4 className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)] mb-1.5">
+        <h4 className="mb-1.5 text-sm leading-5 font-semibold text-[var(--color-ink)]">
           Accounts
         </h4>
         <table className="w-full text-[0.8rem]">

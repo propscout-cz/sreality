@@ -17,13 +17,13 @@ import asyncio
 import gc
 import inspect
 import io
-import json
 import logging
 import os
 import re
 import socket
 import sys
 import threading
+import time
 import weakref
 from dataclasses import replace
 from datetime import timedelta
@@ -44,6 +44,8 @@ from autodedup.incremental_lane import (
 )
 from autodedup.incremental_sql import RT_STORE_PRESENT_SQL
 from scraper import realtime_worker as rw
+from scraper import stop as scraper_stop
+from tests._railway_iac import RAILWAY_IAC, iac_constant, iac_entry
 from tests.autodedup.fake_pg import FakePg
 from tests.autodedup.lane_world import seed_lane
 from tests.autodedup.lane_world import world as lane_world
@@ -237,10 +239,10 @@ def test_the_engines_deadline_sits_inside_every_bound_around_it() -> None:
     statement_timeout must end before the jobs check's lane cell warns of a pass in flight,
     before the lane abandons the pass, and before the lease expires — or a seed could take
     the lease mid-write."""
-    from scripts import verify_pipeline
+    from scripts.checks import platform as plat
 
     worst = PASS_DEADLINE_S + STATEMENT_TIMEOUT_MS / 1000.0
-    assert worst < verify_pipeline.THRESHOLDS["jobs_lane_inflight_warn_s"]
+    assert worst < plat.LANE_INFLIGHT_WARN_S
     assert worst < rw.LANE_PASS_TIMEOUT_SECONDS
     assert worst < LEASE_TTL_S
     assert PASS_BUDGET_S * 2 <= PASS_DEADLINE_S, "claims are sized well inside the deadline"
@@ -628,7 +630,7 @@ def test_one_worker_pass_is_the_engines_pass(world, tmp_path, monkeypatch) -> No
         assert world.lease[LANE_NAME]["expires_at"] <= world.now, "the lease was released"
         targets = _write_targets(world.statements[before:])
         assert targets, "the pass wrote nothing"
-        assert all(t.startswith("autodedup.") for t in targets), sorted(targets)
+        assert all(t.startswith("autodedup.") or t == "scheduled_jobs" for t in targets), sorted(targets)
         assert world.statements_in_tx, "the pass ran as the engine's one transaction"
 
 
@@ -672,10 +674,9 @@ def test_a_worker_pass_inside_a_seed_is_a_green_skip(world, tmp_path, monkeypatc
         return original(conn, *args, **kwargs)
 
     monkeypatch.setattr(incremental_lane, "cut_calibration", pass_mid_seed)
-    out = seed_lane(world, tmp_path / "again", fresh="true")
+    seed_lane(world, tmp_path / "again", fresh="true")
 
     assert during and (during[0]["skipped"], during[0]["reason"]) == (1, "leased")
-    assert out["reset"]["rt_lease"] == 0
     assert world.lease[LANE_NAME]["expires_at"] <= world.now, "the seed freed the lease"
     after = rw._autodedup_sync()
     assert after["ran"] is True and after["errors"] == 0, after
@@ -797,7 +798,7 @@ def _stranded_by_my_predecessor(world: FakePg) -> str:
 
 
 def _released_lines(caplog: pytest.LogCaptureFixture, dead: str) -> int:
-    return sum(f"a predecessor of this container died holding autodedup.rt_lease: {dead}; "
+    return sum(f"a predecessor of this container died holding rt_lease: {dead}; "
                "released" in record.getMessage() for record in caplog.records)
 
 
@@ -943,19 +944,37 @@ def test_the_heartbeat_counts_the_same_rulings_the_engine_cannot_honour(
 # ------------------------------------------------- E941: a deploy releases the lease at once
 
 
-RAILWAY_WORKER = Path(__file__).resolve().parents[2] / "railway.worker.json"
 # E949: `env` sets the arena cap and execs python, which stays the container's PID 1.
 WORKER_START_COMMAND = "env MALLOC_ARENA_MAX=2 python -m scraper.realtime_worker"
 
 
 def test_the_shutdown_signal_is_the_one_path_that_releases(monkeypatch) -> None:
-    """SIGTERM and SIGINT set the loop's stop event, as before, and start the release."""
+    """SIGTERM and SIGINT set the loop's stop event, as before, the process's stop (`scraper.stop`, #2438), and
+    start the release."""
     src = inspect.getsource(rw._amain)
     assert "loop.add_signal_handler(sig, _on_stop_signal, stop_event)" in src
     assert "signal.SIGTERM, signal.SIGINT" in src
     stop = asyncio.Event()
     rw._on_stop_signal(stop)
-    assert stop.is_set() and rw._AUTODEDUP_STOPPING.is_set()
+    assert stop.is_set() and rw._AUTODEDUP_STOPPING.is_set() and scraper_stop.requested()
+
+
+def test_the_worker_arms_the_process_stop_so_a_wait_in_flight_ends_at_once() -> None:
+    """#2438: the event loop owns SIGTERM and SIGINT, so the worker arms `scraper.stop` before it takes them, never
+    installs it, and a limiter's or a backoff's wait already running on a lane thread ends as the signal lands."""
+    src = inspect.getsource(rw._amain)
+    assert -1 < src.find("stop.arm()") < src.find("loop.add_signal_handler")
+    scraper_stop.arm()
+
+    async def deploy() -> tuple[bool, float]:
+        stop_event = asyncio.Event()
+        asyncio.get_running_loop().call_later(0.05, rw._on_stop_signal, stop_event)
+        started = time.monotonic()
+        stopped = await asyncio.to_thread(scraper_stop.wait, 30.0)
+        return stopped, time.monotonic() - started
+
+    stopped, waited = asyncio.run(deploy())
+    assert stopped and waited < 5.0
 
 
 def test_the_drain_window_fits_the_release_and_ends_before_the_watchdog() -> None:
@@ -963,8 +982,7 @@ def test_the_drain_window_fits_the_release_and_ends_before_the_watchdog() -> Non
     window holds the release's one bounded connect and statement, and stays under the
     watchdog's liveness bound, which a drain must never reach: the heartbeat lane stops at
     the signal like every lane."""
-    deploy = json.loads(RAILWAY_WORKER.read_text(encoding="utf-8"))["deploy"]
-    draining = deploy["drainingSeconds"]
+    draining = iac_constant("WORKER_DRAINING_SECONDS")
     attempts = rw.AUTODEDUP_RELEASE_CONNECT_ATTEMPTS
     worst = (rw.AUTODEDUP_CANCEL_TIMEOUT_SECONDS
              + attempts * rw.AUTODEDUP_RESCUE_CONNECT_TIMEOUT_SECONDS
@@ -972,7 +990,9 @@ def test_the_drain_window_fits_the_release_and_ends_before_the_watchdog() -> Non
     assert attempts >= 2, "one dropped handshake must not cost the release"
     assert worst < draining, "the cancel and both attempts fit the drain (one address)"
     assert draining < rw.LIVENESS_BOUND_SECONDS
-    assert deploy["startCommand"] == WORKER_START_COMMAND
+    assert iac_constant("WORKER_START") == WORKER_START_COMMAND
+    assert "start: WORKER_START" in iac_entry("worker")
+    assert "drainingSeconds: WORKER_DRAINING_SECONDS" in iac_entry("worker")
 
 
 def test_a_shutdown_releases_the_lease_of_the_pass_in_flight_on_a_fresh_connection(
@@ -1002,10 +1022,10 @@ def test_a_shutdown_releases_the_lease_of_the_pass_in_flight_on_a_fresh_connecti
 
 def test_the_shutdown_release_never_ends_another_writers_lease(monkeypatch) -> None:
     """A seed or dispatch may hold the row by the time the signal's release runs. The fake
-    reads the holder predicate from RT_LEASE_RELEASE_SQL itself, so dropping `and holder =`
+    reads the holder predicate from _END_LANE_SQL itself, so dropping `and holder =`
     from the statement fails this test: the seed's live row would be ended."""
     from autodedup import rt_lease
-    from autodedup.incremental_sql import RT_LEASE_RELEASE_SQL
+    from scraper.job_lease import _END_LANE_SQL
     from datetime import timedelta
 
     world = FakePg()
@@ -1014,7 +1034,7 @@ def test_the_shutdown_release_never_ends_another_writers_lease(monkeypatch) -> N
     monkeypatch.setattr(rw.db, "connect", lambda *a, **k: world.other_session())
 
     assert rw._autodedup_release_lease("host:1:1") is True
-    assert RT_LEASE_RELEASE_SQL in world.statements, "the release ran"
+    assert _END_LANE_SQL in world.statements, "the release ran"
     row = rt_lease.current(world)
     assert (row["holder"], row["live"]) == ("rt_seed:gh:7:7", True)
 
@@ -1043,7 +1063,7 @@ def test_the_shutdown_release_never_raises(monkeypatch, caplog) -> None:
     monkeypatch.setattr(rw.db, "connect", lambda *a, **k: broken)
     assert rw._autodedup_release_lease("host:1:1") is False
     assert broken.closed
-    assert sum("could not release autodedup.rt_lease" in r.getMessage()
+    assert sum("could not release rt_lease" in r.getMessage()
                for r in caplog.records) >= 1
 
 
@@ -1166,6 +1186,12 @@ class _CancellableSession:
     def transaction(self) -> Any:
         return self.world.transaction()
 
+    @property
+    def info(self) -> Any:
+        return self.world.info
+
+    autocommit = True
+
     def cancel_safe(self, *, timeout: float) -> None:
         self.cancelled = True
 
@@ -1199,6 +1225,9 @@ class _CancellableCursor:
 
     def fetchall(self) -> list[tuple]:
         return self.inner.fetchall()
+
+    def fetchone(self) -> tuple | None:
+        return self.inner.fetchone()
 
 
 def test_a_statement_running_at_the_signal_is_cancelled_and_the_pass_rolls_back(
@@ -1466,12 +1495,13 @@ def test_the_worker_starts_with_two_malloc_arenas_and_python_as_its_pid_1() -> N
     ...` would be taken for the program and the worker would never start: `env` sets the
     variable and execs python, which stays PID 1 for E941's SIGTERM handler. The API's image
     and its start are untouched."""
-    command = json.loads(RAILWAY_WORKER.read_text(encoding="utf-8"))["deploy"]["startCommand"]
+    command = iac_constant("WORKER_START")
     assert command == WORKER_START_COMMAND
     words = command.split()
     assert words[0] == "env" and words[1] == "MALLOC_ARENA_MAX=2"
     assert words[2:] == ["python", "-m", "scraper.realtime_worker"], "env execs python itself"
     assert not set(words) & {"sh", "bash", "-c", "&&", ";", "|"}, "no shell before python"
-    for name in ("railway.json", "Dockerfile"):
-        assert "MALLOC_ARENA_MAX" not in (RAILWAY_WORKER.parent / name).read_text(
-            encoding="utf-8"), name
+    dockerfile = (RAILWAY_IAC.parents[1] / "Dockerfile").read_text(encoding="utf-8")
+    assert "MALLOC_ARENA_MAX" not in dockerfile
+    assert "MALLOC_ARENA_MAX" not in iac_entry("api")
+    assert "WORKER_START" not in iac_entry("api"), "the TS file can name the constant without its text"

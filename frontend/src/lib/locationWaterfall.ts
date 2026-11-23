@@ -1,41 +1,23 @@
-/* The audit page's waterfall (`location_audit_waterfall`, migrations 523/524).
- *
- * The page used to state ONE number — the listings no consumer can see — with
- * nothing to read it against. This relation is the whole chain, from every
- * listing in the database down to that set, so "skryté" is read against the
- * database and not against itself.
+/* The row shape of a NEW DEDUP candidate run's `stats.waterfall`, as the
+ * candidates funnel reads it; a run's rows are as-of the run. The hourly audit
+ * relation that shared this shape was dropped in W1 (migration 719).
  *
  * NO ARITHMETIC HAPPENS HERE. Every count, every loss and every share is
- * computed in the store, in one statement, from the ONE rule Browse and the
- * resolver use (`SERVED_LOCATION_PREDICATE` in location_data/claims_common.py:
- * a listing is served once the store has a point for it, or has determined it is
- * abroad). A client that recomputed a step would be a second definition of the
- * same question, which is the one thing this wave exists to prevent — so this
- * module only fetches, orders and nests.
+ * computed by the lane, from the ONE rule Browse and the resolver use
+ * (`SERVED_LOCATION_PREDICATE` in location_data/claims_common.py: a listing is
+ * served once the store has a point for it, or has determined it is abroad). A
+ * client that recomputed a step would be a second definition of the same
+ * question — so this module only orders and nests.
  *
- * THREE KINDS OF ROW:
+ * TWO KINDS OF ROW:
  *   'chain'     the funnel itself — `lost` is the previous chain step's count
- *               minus this one's, written by the store, never derived here;
- *   'deduction' a set carved OUT of the chain (the hidden set: every listing
- *               that fails the rule) — it does not narrow the next step, so it
- *               carries no loss;
- *   'split'     a sub-row partitioning its parent (`parent_key`) exactly.
+ *               minus this one's, written by the lane, never derived here;
+ *   'split'     a sub-row of its parent (`parent_key`).
  *
- * ONE ROW SHAPE, TWO PRODUCERS (W16). The hourly audit relation writes these
- * rows; a NEW DEDUP candidate run stamps the SAME keys, kinds and columns into
- * its own `stats.waterfall`. So this is the type both readouts use, and the only
- * difference is `refreshed_at`, which only the hourly relation carries — a run's
- * rows are as-of the run. The WORDING of a step is in `lib/locationSteps.ts`;
- * `label_cs` left this table in migration 526 so a label could not differ by
- * surface.
+ * The WORDING of a step is in `lib/locationSteps.ts`.
  */
 
-import { supabase } from '@/lib/supabase';
-import { pgRead, type PgReadOptions } from '@/lib/pgRead';
-
-export const WATERFALL_RELATION = 'location_audit_waterfall';
-
-export type WaterfallKind = 'chain' | 'deduction' | 'split';
+export type WaterfallKind = 'chain' | 'split';
 
 export interface WaterfallRow {
   step_key: string;
@@ -43,37 +25,14 @@ export interface WaterfallRow {
   /* 0 = the step itself; 1..n = its sub-rows. */
   sub_no: number;
   kind: WaterfallKind;
-  /* The step a sub-row (or a deduction) belongs under; NULL on a chain step. */
+  /* The step a sub-row belongs under; NULL on a chain step. */
   parent_key: string | null;
   n: number;
   /* Chain rows only. NULL where "lost" is not a truthful word for the row. */
   lost: number | null;
-  /* Share of EVERY listing ever collected — the point of the wave. */
+  /* Share of every listing the run looked at. */
   share_pct: number;
-  /* The hourly relation only; a run's stamped rows are as-of that run. */
-  refreshed_at?: string;
 }
-
-const COLS = [
-  'step_key', 'step_no', 'sub_no', 'kind', 'parent_key',
-  'n', 'lost', 'share_pct', 'refreshed_at',
-].join(',');
-
-export const WATERFALL_KEY = ['location-waterfall'] as const;
-
-export const fetchLocationWaterfall = async (
-  { signal }: PgReadOptions = {},
-): Promise<WaterfallRow[]> => {
-  const { data } = await pgRead<WaterfallRow[] | null>(
-    supabase
-      .from(WATERFALL_RELATION)
-      .select(COLS)
-      .order('step_no', { ascending: true })
-      .order('sub_no', { ascending: true }),
-    { signal },
-  );
-  return data ?? [];
-};
 
 export interface WaterfallStep {
   row: WaterfallRow;
@@ -100,8 +59,3 @@ export const groupWaterfall = (
   for (const bucket of splits.values()) bucket.sort((a, b) => a.sub_no - b.sub_no);
   return steps.map((row) => ({ row, splits: splits.get(row.step_key) ?? [] }));
 };
-
-/* One value across the relation — the hourly refresh that wrote it. */
-export const waterfallRefreshedAt = (
-  rows: ReadonlyArray<WaterfallRow>,
-): string | null => rows.find((r) => r.refreshed_at != null)?.refreshed_at ?? null;

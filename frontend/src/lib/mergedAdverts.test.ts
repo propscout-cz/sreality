@@ -20,6 +20,8 @@ import {
   splitPlan,
   splitReceiptText,
 } from './mergedAdverts';
+import { curationKeys, dismissalKeys, pipelineKeys } from './queries';
+import { isOwed } from './revalidate';
 import * as toast from './toast';
 
 vi.mock('./toast', async (importOriginal) => {
@@ -284,7 +286,6 @@ describe('refreshAfterSplit', () => {
       ['property'],
       ['property-sources'],
       ['snapshots'],
-      ['curation'],
       ['merged-adverts'],
       ['autodedup', 'proposed-splits'],
       ['autodedup', 'category-splits'],
@@ -295,6 +296,31 @@ describe('refreshAfterSplit', () => {
     ]) {
       expect(invalidate).toHaveBeenCalledWith({ queryKey: key });
     }
+  });
+
+  /* The carriers move notes, files, tags, collection memberships, the link, the
+   * card and the dismissal between properties: every read of them is owed. */
+  it('owes every curation read the carriers move', () => {
+    const qc = new QueryClient();
+    const keys = [
+      curationKeys.propertyNotes(7),
+      curationKeys.propertyFiles(7),
+      curationKeys.noteCounts,
+      curationKeys.propertyTagMembers,
+      curationKeys.tags,
+      curationKeys.propertyCollectionMembers,
+      curationKeys.collections,
+      curationKeys.collection(3),
+      curationKeys.artifactLinks,
+      pipelineKeys.members,
+      pipelineKeys.board,
+      dismissalKeys.state(7),
+    ];
+    for (const key of keys) qc.setQueryData(key, 1);
+
+    refreshAfterSplit(qc);
+
+    for (const key of keys) expect(isOwed(qc, key), JSON.stringify(key)).toBe(true);
   });
 });
 

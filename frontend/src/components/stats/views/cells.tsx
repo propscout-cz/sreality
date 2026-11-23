@@ -1,6 +1,6 @@
-import type { ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import type { StatId } from '@/lib/statsRegistry.generated';
-import { rowsTitle, type PivotRow as Row, type StatsSpec } from '@/lib/stats';
+import { SMALL_LABEL, SMALL_STATS, rowsTitle, type PivotRow as Row, type SmallSample, type StatsSpec } from '@/lib/stats';
 
 /* The cells both pivot views (PivotTable, BoxTable) draw, defined once: the
  * numeric header and cell, a statistic's cell, the row-dimension header, one
@@ -19,9 +19,11 @@ export const statTd = (s: StatId): string =>
 /* "Dispozice › Stav" over the row headers; "Vzorek" for the whole sample. */
 export const rowDimsLabel = (spec: StatsSpec, basis: string | null): string => rowsTitle(spec, basis) || 'Vzorek';
 
-/* The whole-sample row of a nested table sits on the canvas tone. */
-const rowClass = (row: Row): string =>
-  `border-b border-[var(--color-rule-soft)] last:border-b-0${row.depth === 0 && row.rollup ? ' bg-[var(--color-paper)]' : ''}`;
+/* The whole-sample row of a nested table sits on the canvas tone; a row showing a
+ * small sample sits on ochre-soft, so its own labels read as a different set. */
+export const SMALL_BG = 'bg-[var(--color-ochre-soft)]';
+const rowClass = (row: Row, small: boolean): string =>
+  `border-b border-[var(--color-rule-soft)] last:border-b-0${small ? ` ${SMALL_BG}` : row.depth === 0 && row.rollup ? ' bg-[var(--color-paper)]' : ''}`;
 
 /* A row's own header, indented by depth. A rollup (a row with deeper rows under
  * it) reads in ink at medium weight, a leaf in ink-2 at normal weight: ONE
@@ -42,9 +44,9 @@ function RowHeader({ row }: { row: Row }) {
 }
 
 /* One pivot row: its indented header, then the view's cells. */
-export function PivotRow({ row, children }: { row: Row; children: ReactNode }) {
+export function PivotRow({ row, small = false, children }: { row: Row; small?: boolean; children: ReactNode }) {
   return (
-    <tr className={rowClass(row)}>
+    <tr className={rowClass(row, small)} data-small={small || undefined}>
       <RowHeader row={row} />
       {children}
     </tr>
@@ -59,6 +61,26 @@ export function TooFew({ minN }: { minN: number }) {
     <span className="inline-flex items-center rounded-[var(--radius-xs)] border border-dashed border-[var(--color-rule-strong)] px-1.5 py-px text-[0.65rem] leading-tight text-[var(--color-ink-3)] whitespace-nowrap">
       <span aria-hidden="true">pod {minN}</span>
       <span className="sr-only">méně než {minN} nemovitostí, bez statistik</span>
+    </span>
+  );
+}
+
+/* A cell under the minimum, shown on request: min, průměr, medián, max, each with
+ * its own label — the row's column headers name percentiles it never shows. */
+export function SmallStats({ small, fmt }: { small: SmallSample; fmt: (v: number) => string }) {
+  return (
+    <span className="inline-flex flex-wrap items-baseline justify-end gap-x-3 gap-y-0.5">
+      <span className="text-[0.62rem] uppercase tracking-[0.14em] text-[var(--color-ink-3)]">malý vzorek</span>
+      {/* The spaces between items are text for assistive tech; flex collapses them on screen. */}
+      {SMALL_STATS.map((s) => (
+        <Fragment key={s}>
+          {' '}
+          <span className="whitespace-nowrap">
+            <span className="text-[0.65rem] text-[var(--color-ink-3)]">{SMALL_LABEL[s]}</span>{' '}
+            <span className="font-mono tabular-nums text-[var(--color-ink)]">{fmt(small[s])}</span>
+          </span>
+        </Fragment>
+      ))}
     </span>
   );
 }

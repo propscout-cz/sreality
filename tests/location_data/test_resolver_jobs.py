@@ -21,6 +21,7 @@ from contextlib import contextmanager
 from dataclasses import fields
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import psycopg
@@ -55,6 +56,8 @@ class _FakeCursor:
             self._result = [(7, REGISTRY)]
         elif text.startswith("select coalesce(max(id), 0) from listings"):
             self._result = [(self.state.get("max_listing_id", 0),)]
+        elif text.startswith("select pc.source, string_agg"):
+            self._result = list(self.state.get("declared", []))
         else:
             self._result = []
 
@@ -66,6 +69,8 @@ class _FakeCursor:
 
 
 class _FakeConn:
+    info = SimpleNamespace(transaction_status=psycopg.pq.TransactionStatus.IDLE)  # an autocommit connection between calls
+
     def __init__(self, state: dict[str, Any]) -> None:
         self.state = state
 
@@ -85,12 +90,18 @@ def _state(max_listing_id: int = 0) -> dict[str, Any]:
 # ------------------------------------------------------------------ the drain's queue
 
 
-def test_the_queue_slice_has_a_unique_tiebreaker():
-    """A batch enqueue shares one `now()`, so a bare `ORDER BY enqueued_at` returns a
-    different order on every call and a poisonous row can be re-claimed forever while another
-    starves."""
+def test_the_queue_slice_claims_evidence_first_then_the_oldest_due_row_with_a_unique_tiebreaker():
+    """W2 (ruling Q9): a sweep row never outranks evidence, so a fresh ad's first resolution
+    cannot wait behind a corpus re-resolve. Within a class the oldest DUE row goes first —
+    `next_eligible_at` equals `enqueued_at` for a row that never failed, and a backoff row sits
+    where it becomes due, so a poisoned row is never at the head. A batch enqueue shares one
+    `now()`, so `listing_id` is the tiebreak that keeps the order stable. Migration 697's index
+    carries the same three keys, in this order."""
     flat = " ".join(drain._CLAIM_SLICE_SQL.split()).lower()
-    assert "order by enqueued_at, listing_id" in flat
+    assert "order by (reason = 'full_sweep'), next_eligible_at, listing_id" in flat
+    assert "where next_eligible_at <= now()" in flat
+    ddl = " ".join((MIGRATIONS / "697_location_w2_one_resolve_lane.sql").read_text().lower().split())
+    assert "on dirty_locations ((reason = 'full_sweep'), next_eligible_at, listing_id)" in ddl
 
 
 # ------------------------------------------------------------------- the one sweep
@@ -108,27 +119,33 @@ def test_the_sweep_compares_the_two_version_columns_on_the_new_answer_table():
     flat = " ".join(drain._SWEEP_SQL.split()).lower()
     assert "from listings l" in flat and "left join listing_location p" in flat
     assert "listing_location_current" not in flat and "property_location_current" not in flat
-    # W15: no cohort filter at all — the sweep walks every listing (rule 25).
-    assert "l.is_active" not in flat
+    # W15: no cohort FILTER — the sweep walks every listing (rule 25) — but W2 walks it in two
+    # passes, active listings first, so `is_active` is a bound parameter, never a predicate
+    # that leaves anything out.
+    assert "and l.is_active = %s" in flat
     assert "p.listing_id is null" in flat
     assert "p.resolver_version <> %s" in flat
     assert "p.registry_version <> %s" in flat
     assert "policy_version" not in flat and "registry_version_id" not in flat
     assert "location_claims" not in flat and "distinct" not in flat and "kraj_kod" not in flat
+    # W2: the red-line arm is gone — a row changes only on evidence, code or the register.
+    assert "obec_kod" not in flat and "country_status" not in flat
     # The offline placeholder guard and the schema-aware PREPARE sweep only see module-level
     # `*_SQL` constants, so the statement is whole and prepareable.
     assert re.sub(r"%\(\w+\)s|%s", "", flat).count("%") == 0
-    assert flat.count("%s") == 4
+    assert flat.count("%s") == 5
 
 
 def test_the_sweep_walks_listing_id_windows_each_in_its_own_transaction():
     """One bounded transaction per window means an interrupted sweep loses at most a window
     and re-running is idempotent; the upper bound is an index probe on `listings`' key."""
     state = _state(max_listing_id=600_000)
-    drain.enqueue_full_sweep(_FakeConn(state), window=250_000)
+    assert drain.enqueue_full_sweep(_FakeConn(state), window=250_000) == 0
     windows = _sweep_windows(state)
-    assert [(p[-2], p[-1]) for _, p in windows] == [
-        (0, 250_000), (250_000, 500_000), (500_000, 600_000),
+    # Two walks of the same windows (W2): every ACTIVE listing first, then the inactive ones.
+    assert [(p[-3], p[-2], p[-1]) for _, p in windows] == [
+        (True, 0, 250_000), (True, 250_000, 500_000), (True, 500_000, 600_000),
+        (False, 0, 250_000), (False, 250_000, 500_000), (False, 500_000, 600_000),
     ]
     assert all("l.id > %s and l.id <= %s" in t for t, _ in windows)
     assert all(p[0] == RESOLVER_VERSION and p[1] == REGISTRY for _, p in windows)
@@ -151,31 +168,115 @@ def test_the_sweep_skips_rows_already_queued_without_touching_their_locks():
     assert "do update" not in flat
 
 
-def test_the_sweep_revisits_every_czech_listing_without_a_town():
-    """Rule 2 / rule 25's invariant, made mechanical. A row resolved WITHOUT an `obec_kod` is
-    stamped at the current version tuple, so the three version arms see a fresh row and walk
-    past it for ever: on 2026-09-12 that left 384,365 rows red with nothing able to re-enqueue
-    them. The fourth arm re-resolves them nightly until each has a town or is determined
-    `foreign` — a determination, never a default, so `undetermined` stays in scope.
-
-    No new placeholder: `'foreign'` is a literal, and `enqueue_full_sweep` still binds exactly
-    (RESOLVER_VERSION, registry_label, after, hi)."""
-    flat = " ".join(drain._SWEEP_SQL.split()).lower()
-    assert "or (p.obec_kod is null and p.country_status <> 'foreign')" in flat
-    assert flat.count("%s") == 4
-    # ...and it is one arm of the SAME disjunction, not a second statement.
-    where = flat[flat.index("where ("):]
-    assert where.index("p.obec_kod is null") < where.index("and l.id > %s")
-    # Served by migration 501's index, so the arm costs the red count, not the corpus.
-    ddl = (MIGRATIONS / "501_location_w2a_listing_location.sql").read_text().lower()
-    assert "on listing_location (obec_kod, granularity)" in " ".join(ddl.split())
-
-
 def test_the_sweep_binds_its_placeholders_in_the_order_the_statement_reads_them():
     state = _state(max_listing_id=100_000)
     drain.enqueue_full_sweep(_FakeConn(state), window=250_000)
-    (_, params), = _sweep_windows(state)
-    assert params == (RESOLVER_VERSION, REGISTRY, 0, 100_000)
+    assert [p for _, p in _sweep_windows(state)] == [
+        (RESOLVER_VERSION, REGISTRY, True, 0, 100_000),
+        (RESOLVER_VERSION, REGISTRY, False, 0, 100_000),
+    ]
+
+
+def test_the_sweep_stops_at_the_lease_fence_and_reports_the_cut():
+    """W2: the sweep runs under the worker's lease and asks the fence between windows. A cut
+    sweep returns None — nothing is recorded, the next pass re-sweeps (idempotent: queued rows
+    are skipped by the NOT EXISTS, drained ones are stamped current)."""
+    state = _state(max_listing_id=600_000)
+
+    def fence() -> bool:
+        return len(_sweep_windows(state)) >= 2
+
+    assert drain.enqueue_full_sweep(_FakeConn(state), window=250_000, stop=fence) is None
+    assert len(_sweep_windows(state)) == 2
+
+
+def test_reconcile_sweeps_once_per_version_pair_and_retries_a_cut_sweep(monkeypatch):
+    """W2 (ruling Q9): the worker sweeps when ITS (resolver version, registry label) pair is not
+    the one this process last swept — a deploy, a registry publish — and otherwise does not.
+    A cut sweep leaves the pair unrecorded, so the next pass sweeps again."""
+    calls: list[tuple[str, Any]] = []
+    answers = iter([3, None, 5, 0])
+
+    def fake_sweep(conn, *, registry_label, stop):
+        calls.append((registry_label, stop))
+        return next(answers)
+
+    monkeypatch.setattr(drain, "enqueue_full_sweep", fake_sweep)
+    monkeypatch.setattr(drain, "_SWEPT_PAIR", None)
+    monkeypatch.setattr(drain.resolve_db, "current_registry_version", lambda conn: (7, "ruian:A"))
+    conn = _FakeConn(_state())
+
+    def never() -> bool:
+        return False
+
+    assert drain.reconcile(conn, stop=never) == {
+        "pair": [RESOLVER_VERSION, "ruian:A"], "rows": 3, "complete": True}
+    assert drain.reconcile(conn, stop=never) is None, "the same pair sweeps once"
+    monkeypatch.setattr(drain.resolve_db, "current_registry_version", lambda conn: (8, "ruian:B"))
+    assert drain.reconcile(conn, stop=never) == {
+        "pair": [RESOLVER_VERSION, "ruian:B"], "rows": None, "complete": False}
+    assert drain.reconcile(conn, stop=never)["rows"] == 5, "a cut sweep is retried on the next pass"
+    monkeypatch.setattr(drain, "RESOLVER_VERSION", "resolver:v-next")
+    assert drain.reconcile(conn, stop=never)["pair"] == ["resolver:v-next", "ruian:B"]
+    assert calls[0][0] == "ruian:A" and all(c[1] is never for c in calls)
+
+
+def test_reconcile_re_resolves_a_portal_whose_active_contract_declares_other_types(monkeypatch):
+    """W3 (ruling R4): the read asks the contracts one thing, which claim types each portal's
+    ACTIVE contract declares, so a change there is part of what reconcile compares. A portal
+    whose set moved has every listing re-resolved; a bump declaring the same types moves
+    nothing (its re-mine enqueues what it changes); a portal a retract left with no active
+    contract reads nothing and is never swept to blank — it is swept when a contract returns."""
+    portal_sweeps: list[list[str]] = []
+
+    def portal_sweep(conn, sources, *, stop):
+        portal_sweeps.append(list(sources))
+        return 9
+
+    monkeypatch.setattr(drain, "enqueue_full_sweep", lambda conn, **kw: 0)
+    monkeypatch.setattr(drain, "enqueue_portal_sweep", portal_sweep)
+    monkeypatch.setattr(drain, "_SWEPT_PAIR", None)
+    monkeypatch.setattr(drain, "_SWEPT_DECLARED", None)
+    monkeypatch.setattr(drain.resolve_db, "current_registry_version", lambda conn: (7, "ruian:A"))
+    state = _state()
+    conn = _FakeConn(state)
+    pair = [RESOLVER_VERSION, "ruian:A"]
+
+    def never() -> bool:
+        return False
+
+    def contracts(**declared: str) -> None:
+        state["declared"] = sorted(declared.items())
+
+    contracts(bazos="obec_name,psc", idnes="obec_name")
+    assert drain.reconcile(conn, stop=never) == {"pair": pair, "rows": 0, "complete": True}
+    assert drain.reconcile(conn, stop=never) is None            # a same-type bump: nothing
+    contracts(bazos="obec_name", idnes="obec_name")             # bazos stops declaring psc
+    assert drain.reconcile(conn, stop=never) == {
+        "pair": pair, "contracts": ["bazos"], "rows": 9, "complete": True}
+    contracts(idnes="obec_name")                                # bazos retracted, no contract
+    assert drain.reconcile(conn, stop=never) == {
+        "pair": pair, "contracts": [], "rows": 0, "complete": True}
+    contracts(bazos="obec_name", idnes="obec_name")             # a corrected bazos activated
+    assert drain.reconcile(conn, stop=never)["contracts"] == ["bazos"]
+    assert portal_sweeps == [["bazos"], ["bazos"]]
+    assert any(t.startswith("select pc.source, string_agg") for t, _ in state["executed"])
+
+
+def test_the_portal_sweep_is_the_sweeps_twin_for_named_portals():
+    """Every listing of the named portals, versions current or not, with the sweep's own
+    manners: an MVCC skip of a queued row, DO NOTHING, the backfill reason, two walks."""
+    flat = " ".join(drain._PORTAL_SWEEP_SQL.split()).lower()
+    assert "where l.source = any(%s::text[]) and l.is_active = %s and l.id > %s and l.id <= %s" in flat
+    assert "not exists (select 1 from dirty_locations d where d.listing_id = l.id)" in flat
+    assert "on conflict (listing_id) do nothing" in flat and "'full_sweep'" in flat
+    declared = " ".join(drain._DECLARED_TYPES_SQL.split()).lower()
+    assert "where pc.is_active" in declared and "group by pc.source" in declared
+    state = _state(max_listing_id=300_000)
+    assert drain.enqueue_portal_sweep(_FakeConn(state), ["bazos"], window=250_000) == 0
+    assert [p for _, p in _sweep_windows(state)] == [
+        (["bazos"], True, 0, 250_000), (["bazos"], True, 250_000, 300_000),
+        (["bazos"], False, 0, 250_000), (["bazos"], False, 250_000, 300_000)]
 
 
 def test_a_window_retries_a_lock_wait_then_gives_up_loudly(monkeypatch):
@@ -207,23 +308,6 @@ def test_a_window_retries_a_lock_wait_then_gives_up_loudly(monkeypatch):
         drain._execute_window(_Conn(), 10, "INSERT ...", ())
 
 
-def test_main_enqueues_the_sweep_before_the_drain_lease_is_even_attempted(monkeypatch):
-    """Run 34482389394 (2026-09-10): a corpus-wide full-resolve that finished in 20 s as
-    'DRAIN skipped' and enqueued NOTHING, because the enqueue sat inside the lease block and
-    the Railway lane holds that lease ~94% of the time. The default fake never grants the
-    lease (fetchone -> None), which is exactly the production condition."""
-    import contextlib as _cl
-    state = _state(max_listing_id=300_000)
-    monkeypatch.setattr(drain, "open_connection", lambda: _cl.nullcontext(_FakeConn(state)))
-    assert drain.main(["--full-sweep", "--max-seconds", "1"]) == 0
-    executed = [t for t, _ in state["executed"]]
-    inserts = [i for i, t in enumerate(executed) if t.startswith("insert into dirty_locations")]
-    acquires = [i for i, t in enumerate(executed) if "scheduled_jobs" in t and "lease" in t]
-    assert inserts, "the sweep did not enqueue"
-    assert acquires, "the drain never attempted its lease"
-    assert max(inserts) < min(acquires), "the enqueue must run BEFORE the lease is attempted"
-
-
 def test_an_empty_corpus_sweeps_nothing_and_a_non_positive_window_is_refused():
     state = _state(max_listing_id=0)
     assert drain.enqueue_full_sweep(_FakeConn(state)) == 0
@@ -233,22 +317,17 @@ def test_an_empty_corpus_sweeps_nothing_and_a_non_positive_window_is_refused():
         drain.enqueue_full_sweep(_FakeConn(_state(max_listing_id=5)), window=0)
 
 
-def test_the_cli_has_one_sweep_flag_and_no_policy_knob():
+def test_the_cli_is_the_dry_run_and_nothing_else():
+    """W2 (ruling Q9): the worker is the only runtime that writes; a drain or sweep run from a
+    laptop or a GitHub runner is a second runtime on a second code version. `--dry-run` stays,
+    the operator's pre-merge measurement, and it takes no lease and writes nothing."""
+    import pytest
     parser_source = inspect.getsource(drain.main)
-    assert "--full-sweep" in parser_source
-    for gone in ("--orphan-sweep", "--kraje", "--policy-version"):
-        assert gone not in parser_source
-
-
-def test_the_github_lane_keeps_one_connection():
-    """W2-a5 is a WORKER-LANE change. The CLI gets no `--workers` and `main` passes none, so
-    `location_resolve.yml` keeps draining on one connection: it is RTT-bound against a US
-    runner rather than IO-bound beside the instance, and N runner connections into the
-    session pooler is the wrong place to spend them."""
-    main_source = inspect.getsource(drain.main)
-    assert "--workers" not in main_source
-    assert "workers=" not in main_source
-    assert inspect.signature(drain.run).parameters["workers"].default == 1
+    assert "--dry-run" in parser_source and "dry_run(" in parser_source
+    for gone in ("--full-sweep", "--sweep-window", "--workers", "job_lease", "run("):
+        assert gone not in parser_source.replace("dry_run(", ""), gone
+    with pytest.raises(SystemExit):
+        drain.main([])
 
 
 # --------------------------------------------------------- the drain's round-trip budget
@@ -338,13 +417,13 @@ def test_the_per_listing_reads_are_prefetched_once_per_slice():
     state = _drained([[(101, 0), (102, 0), (103, 0)], [(104, 0), (105, 0)]])
     assert state["stats"].claimed == 5
     for needle in (
-        "from location_claims c left join portal_contract_entries pce",
+        "select distinct on (c.listing_id, c.claim_type) c.* from location_claims c",
         "select id, source from listings where id = any(",
     ):
         assert _count(state, needle) == 2, needle
-    assert _count(state, "and c.listing_id = any(") == 2
+    assert _count(state, "where c.listing_id = any(") == 2
     # ...and never the single-listing forms the prefetch replaced.
-    assert _count(state, "and c.listing_id = %s") == 0
+    assert _count(state, "where c.listing_id = %s") == 0
     for gone in (
         "location_contradictions_open", "location_resolutions",
         "select id, property_id from listings",
@@ -435,8 +514,8 @@ def test_the_dry_run_counts_what_a_rule_change_does_to_the_stored_row():
     new = core.resolve([mm.claim(1, "obec_name", value_text="Praha")], mm.context(),
                        resolver_version="v", registry_version=REGISTRY)
     counts: Counter[str] = Counter()
-    drain._tally(counts, (1, 599212, 490067, "8", "street", 50.3, 14.4), new)
-    drain._tally(counts, (2, 554782, None, None, "obec", new.lat, new.lon), new)
+    drain.tally(counts, drain.StoredRow(1, 599212, 490067, "8", "street", 50.3, 14.4), new)
+    drain.tally(counts, drain.StoredRow(2, 554782, None, None, "obec", new.lat, new.lon), new)
     assert counts == Counter({"n": 2, "town": 1, "part": 1, "number_lost": 1,
                               "moved_300m": 1, "granularity": 1, "street>obec": 1})
 
@@ -445,11 +524,11 @@ def test_the_dry_run_counts_what_a_rule_change_does_to_the_stored_row():
 
 
 def test_the_claims_select_maps_onto_claim_positionally():
-    """`_claim` unpacks `_CLAIM_COLUMNS`'s row BY INDEX, so a column added, removed or
+    """`claim_from_row` unpacks `CLAIM_COLUMNS`'s row BY INDEX, so a column added, removed or
     reordered in one and not the other is a silent mis-mapping: every value still has the
     right TYPE one slot over (three texts in a row, two floats, two nullable texts), so
     nothing raises — the resolver just reads the surface as the extraction method."""
-    body = resolve_db._CLAIM_COLUMNS
+    body = resolve_db.CLAIM_COLUMNS
     names, depth, current = [], 0, []
     for ch in body:
         if ch == "(":
@@ -476,7 +555,7 @@ def test_the_claims_select_maps_onto_claim_positionally():
            "portal", mm._T0, "Dlouhá", 3.5, 50.1, 14.4, {"k": "v"}, "exact_address",
            25.0, "declared", True)
     assert len(row) == len(labels)
-    claim = resolve_db._claim(row)
+    claim = resolve_db.claim_from_row(row)
 
     assert (claim.id, claim.listing_id, claim.source) == (11, 22, "sreality")
     assert (claim.claim_type, claim.surface) == ("street_name", "api_json")
@@ -492,7 +571,7 @@ def test_the_claims_select_maps_onto_claim_positionally():
     assert claim.subject_scoped is True
 
     # A NULL geometry must not become 0.0 — the resolver's `has_position` reads both.
-    assert resolve_db._claim(row[:10] + (None, None) + row[12:]).has_position is False
+    assert resolve_db.claim_from_row(row[:10] + (None, None) + row[12:]).has_position is False
 
 
 # ------------------------------------------------------------------ the run-scoped cache
@@ -534,10 +613,11 @@ def test_the_protocol_is_twelve_questions():
     back is a round trip per listing, and each of the three that were earns its one:
     `nearest_obec_within` is BIND's last rung, the thing that keeps a border pin from having
     no town (rule 25); `street_point` (W18) is the whole of "a bound street decides the
-    point", asked for the WINNER only and cached per STREET; `part_katastr_kod` (MF PR-B) is
-    the door rule for a část obce, asked ONLY for a row bound to a část in a multi-KÚ obec,
-    once per část per run — every other `katastr_kod` answer rides a read FILL already makes
-    (the address point, the street point, the chain)."""
+    point", asked for the WINNER only and cached per STREET; `part_point` (MF PR-B's door
+    rule, v5.8's position) is the same derivation over a část obce's doors, asked ONLY for a
+    row bound to a část that no pin placed or whose obec spans several KÚ, once per část per
+    run — every other `katastr_kod` answer rides a read FILL already makes (the address
+    point, the street point, the chain)."""
     from location_data.resolver.types import RegistryView
 
     declared = {
@@ -548,11 +628,11 @@ def test_the_protocol_is_twelve_questions():
         "address_point", "address_points_by_number", "streets_in_obec",
         "admin_units_by_name", "admin_chain", "admin_chain_by_code",
         "obec_codes_for_psc", "containing_obec", "in_czechia_polygon",
-        "nearest_obec_within", "street_point", "part_katastr_kod",
+        "nearest_obec_within", "street_point", "part_point",
     }
     for gone in ("parcels", "distance_to_admin_boundary_m",
                  "cast_obce_for_point", "cast_obce_extent_m", "admin_unit",
-                 "admin_unit_by_code"):
+                 "admin_unit_by_code", "part_katastr_kod"):
         assert gone not in declared, gone
 
 
@@ -610,12 +690,12 @@ def test_the_cache_memory_rail_cannot_change_an_answer():
 
 def test_a_name_is_asked_once_however_many_ways_it_is_narrowed():
     """The level tuple used to be part of the key, so `praha` asked for `('obec',)`, then for
-    `('obec','cast_obce','momc','zsj')`, then unnarrowed, was three round trips for one
+    `('obec','cast_obce','momc')`, then unnarrowed, was three round trips for one
     immutable answer. One query, narrowed in Python."""
     inner = _CountingMirror()
     view = resolve_db.CachedRegistryView(inner, resolve_db.RunCache())
     view.admin_units_by_name("praha", levels=("obec",))
-    view.admin_units_by_name("praha", levels=("obec", "cast_obce", "momc", "zsj"))
+    view.admin_units_by_name("praha", levels=("obec", "cast_obce", "momc"))
     view.admin_units_by_name("praha")
     view.admin_units_by_name("praha", levels=("katastralni_uzemi",))
     assert inner.calls == 1
@@ -793,11 +873,10 @@ def _enqueue_ctes() -> dict[str, str]:
 
     The sweep is deliberately NOT here (see the test below): it carries no evidence.
     """
-    from location_data import claims_intake, contracts, operator_corrections
+    from location_data import claims_store, contracts
     return {
-        "claims_intake._CLAIM_WRITE_SQL": claims_intake._CLAIM_WRITE_SQL,
+        "claims_store._WRITE_CLAIMS_SQL": claims_store._WRITE_CLAIMS_SQL,
         "contracts._RETRACT_BATCH_SQL": contracts._RETRACT_BATCH_SQL,
-        "operator_corrections._OPERATOR_CLAIM_SQL": operator_corrections._OPERATOR_CLAIM_SQL,
     }
 
 
@@ -831,7 +910,7 @@ def test_the_bump_only_touches_columns_dirty_locations_actually_has():
                        "last_error", "next_eligible_at"}, columns
     assert "next_eligible_at timestamptz not null" in " ".join(body.split())
     for sql in _enqueue_ctes().values():
-        clause = " ".join(sql.split()).lower().split("do update")[1]
+        clause = " ".join(sql.split()).lower().split("on conflict (listing_id) do update")[1]
         assert "next_eligible_at = null" not in clause
 
 
@@ -1141,7 +1220,7 @@ def test_workers_1_is_the_single_connection_path_statement_for_statement(monkeyp
         "select listing_id, attemp",
         # the prefetch on its own budget, restored before anything writes (W2-a6)
         "set local statement_timeout = '90s'",
-        "with evidence as ( select", "select id, source from li",
+        "select id, listing_id, so", "select id, source from li",
         "set local statement_timeout = '30s'",
         "insert into listing_locat", "delete from dirty_locatio",
         "set local statement_timeout = '30s'", "set local lock_timeout = '5s'",
@@ -1240,26 +1319,32 @@ def test_the_sweep_drives_off_every_listing_and_carries_no_cohort():
     assert "from listings l left join listing_location p on p.listing_id = l.id" in flat
     assert "where (p.listing_id is null" in flat
     assert "repr_listing_ref_id" not in flat and "properties" not in flat
-    assert "l.is_active" not in flat
+    # W2 walks every listing in two passes, active first: `is_active` is a BOUND value the
+    # caller sets to true and then false, never a predicate that leaves a listing out.
+    assert "and l.is_active = %s" in flat
+    state = _state(max_listing_id=10)
+    drain.enqueue_full_sweep(_FakeConn(state), window=250_000)
+    assert [p[2] for _, p in _sweep_windows(state)] == [True, False]
 
 
 def test_the_sweep_keeps_every_staleness_arm_and_the_placeholder_count():
-    """The staleness disjunction (missing row / resolver_version / registry_version / Czech
-    row without a town) and the NOT EXISTS lock-avoiding pre-filter are untouched by the
-    widening, and `enqueue_full_sweep` still binds exactly four values."""
+    """The staleness disjunction (missing row / resolver_version / registry_version) and the
+    NOT EXISTS lock-avoiding pre-filter are untouched by the widening; W2 deleted the fourth
+    arm (a Czech row without a town, re-resolved nightly for nothing) and binds one more value,
+    the pass's `is_active`."""
     flat = " ".join(drain._SWEEP_SQL.split()).lower()
     for arm in ("p.listing_id is null",
                 "or p.resolver_version <> %s",
-                "or p.registry_version <> %s",
-                "or (p.obec_kod is null and p.country_status <> 'foreign')"):
+                "or p.registry_version <> %s"):
         assert arm in flat, arm
+    assert "obec_kod" not in flat and "country_status" not in flat
     assert "not exists (select 1 from dirty_locations d where d.listing_id = l.id)" in flat
     assert "on conflict (listing_id) do nothing" in flat and "do update" not in flat
-    assert flat.count("%s") == 4
+    assert flat.count("%s") == 5
     state = _state(max_listing_id=100_000)
     drain.enqueue_full_sweep(_FakeConn(state), window=250_000)
-    (_, params), = _sweep_windows(state)
-    assert params == (RESOLVER_VERSION, REGISTRY, 0, 100_000)
+    (_, params), *_ = _sweep_windows(state)
+    assert params == (RESOLVER_VERSION, REGISTRY, True, 0, 100_000)
     # The id window is the last filter, so each window stays a keyset slice.
     where = flat[flat.index("where ("):]
     assert where.index("p.resolver_version") < where.index("and l.id > %s")

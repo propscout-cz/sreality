@@ -28,14 +28,15 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              without R2 env vars the lane logs once and idles (the proxy-skip
              posture).
 - maintenance: every `realtime_maintenance_interval_seconds` (default 30), one
-             incremental property-maintenance pass — straggler attach + dirty-set
-             recompute + settle (`settled_at` on fresh properties the pipeline is
-             done with, migration 668), via scripts.recompute_property_stats.
+             incremental property-maintenance pass — queue what is published
+             but not in Browse (`_enqueue_published`) + straggler attach + dirty-set
+             recompute + settle (`settled_at`, the publication stamp, on properties
+             the pipeline is done with, migrations 668/747), via scripts.recompute_property_stats.
              run_incremental_pass — the pass's only scheduled runtime: it is
              what delivers "a new/changed listing reaches properties (and the
              Browse read model) within minutes". Safe beside the daily sweep
              and a hand run: all callers serialize on the maintenance
-             lease row (migration 279 — pooler-proof CAS; a session advisory
+             lease row (scraper.job_lease — pooler-proof CAS; a session advisory
              lock strands over the transaction pooler) — an incremental caller
              skips while it is held, the sweep waits for it.
 - broker_maintenance: every `realtime_maintenance_interval_seconds` (shared
@@ -43,23 +44,23 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              one drain-until-empty broker pass via scripts.resolve_brokers.
              run_incremental_pass, the pass's only scheduled runtime. Attributes
              dirty listings to brokers, recomputes only the affected brokers'
-             rollups, and republishes the leaderboard matview when its
-             derived_artifacts stamp is older than ~an hour — so broker numbers
-             stop being a once-daily artifact of the full sweep (Broker Unify
-             W3). Safe beside the daily sweep and a hand run: all callers serialize on broker_resolution_lock;
+             names, contacts, firm and memberships (their numbers are the broker
+             book's; Broker Unify W3). Safe beside the daily sweep and a hand run: all callers serialize on the broker_resolution lease;
              a concurrent caller skips. Its own pass lock keeps an abandoned pass,
              whose lease row goes stale, from running beside the next one.
-- location_resolve: every `realtime_location_resolve_interval_seconds`
-             (default 15), one bounded pass of THE location resolver drain
-             (location_data.resolver.drain.run — the same code
-             location_resolve.yml runs), budget
+- location_resolve: every `realtime_location_resolve_interval_seconds` (absent = 15 s,
+             0 = idle; the ONE control since W2 of the location programme, no flag),
+             first `drain.reconcile`: sweep the corpus when this process's
+             (resolver version, registry label) pair changed — a deploy, a registry
+             publish — active listings first; else ONE bounded pass of THE location
+             resolver drain (location_data.resolver.drain.run), budget
              `realtime_location_resolve_max_seconds` (default 240, clamped) over
              `realtime_location_resolve_batch_size` rows (default 250, clamped),
              draining `LOCATION_RESOLVE_WORKERS` slices CONCURRENTLY (env var,
-             default 4, clamped — a throughput knob, not a flag; see the
-             constant block below). DARK until
-             `realtime_location_resolve_enabled` is set. Safe beside
-             location_resolve.yml: both take the SAME scheduled_jobs lease row.
+             default 4, clamped — a throughput knob, not a flag). The ONLY runtime
+             of the resolver since 2026-10-31 (ruling Q9): the GitHub lane is gone;
+             the drain claims evidence rows ahead of the sweep's, under the
+             scheduled_jobs lease.
 - location_intake_fast: every `LOCATION_INTAKE_FAST_INTERVAL_S` (default 60),
              ONE bounded pass of THE claim lane's incremental listing scan
              (location_data.claims_intake.run, the same code
@@ -69,16 +70,17 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              under its own `claims_intake.FAST_LANE` cursor. LIVE by default
              (`LOCATION_INTAKE_FAST_ENABLED=0` idles it). One lane, two
              schedules: see the constant block below.
-- location_refetch: every `LOCATION_REFETCH_INTERVAL_S` (default 86400, first
-             tick a few minutes after start), queue the active ads with no town
+- location_refetch: every 6 h (`LOCATION_REFETCH_TICK_SECONDS`, a constant), queue
+             the active ads with no town
              (rule 25, `location_steps.town_missing_sql`) for ONE more detail fetch, at
              db.QUEUE_PRIORITY_VERIFY and capped at
              `LOCATION_REFETCH_CAP_PER_SOURCE` (default 500) rows per portal per
              tick. ceskereality and realitymix geocode an ad AFTER publishing it,
              so a listing fetched at discovery carried no location and nothing
              ever re-read it; the drain does the rest (a bazos category page
-             raises ListingGoneError: a gone verdict, rule #3). LIVE by default
-             (`LOCATION_REFETCH_ENABLED=0` idles it).
+             raises ListingGoneError: a gone verdict, rule #3). The predicate (a
+             page at least `LOCATION_REFETCH_MIN_AGE_S` old) and the tick bound the
+             traffic together: see the constant block below.
 - sold_comps: every `realtime_sold_comps_interval_seconds` (DARK: the seeded row is
              0), fetch registered sales from reas.cz for up to 5 obec cells — the
              towns where the deal pipeline holds a live card, stalest first, minus
@@ -114,10 +116,11 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              the next begins, which is when a raised pass's memory goes (E949).
 - notifications: every NOTIFICATIONS_TICK_SECONDS (300, a constant), the three
              notification producers of api/notifications (notifications push program
-             W2a): watchdog_new (a live watchdog's matches first seen in the last 24 h,
-             once published: migrations 668/669), price (the canonical advert's price
-             steps of the last 7 days, for watchdogs and monitored collections) and
-             monitor (a monitored property gone for a day, back, or on a new portal).
+             W2a): watchdog_new (each property entering a watchdog's slice, once
+             published: migrations 668/669, 735), price (the canonical advert's price
+             steps of the last 7 days) and lifecycle (a property gone for a day, back,
+             or on a new portal), the last two for monitored collections and for the
+             watchdogs set to tell them (migration 735).
              Each step its own connection and transaction; a failing step is its own
              `portal_errors` cell.
              The producers' one clock: the API runs none since W2b.
@@ -131,7 +134,8 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              `unconfigured` and touches nothing. Steps fan_out / claim / send are its
              `portal_errors` cells, recorded by exception class only: an endpoint is a
              secret and never reaches the heartbeat or the log.
-- heartbeat: every 30s, upsert this worker's beat + per-lane fields into
+- heartbeat: every 30s, upsert this worker's beat, per-lane fields and the commit it
+             runs (`version`) into
              worker_heartbeats (migration 269) — the Health-page liveness hook — and
              record its own pass like every lane. Every lane in LANES has an entry from
              boot, seeded from the previous row, so a deploy resets no counter. It
@@ -177,8 +181,9 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from scraper import (
-    db, image_storage, portal_factory, portal_runner, sold_db, sold_fetch,
+    db, image_storage, portal_factory, portal_runner, sold_db, sold_fetch, stop,
 )
+from scraper.cgroup import memory_limit_mb as _memory_limit_mb
 from scraper.portal import PortalConfig
 from scraper.rate_ledger import RateBudgetUnavailable
 
@@ -287,7 +292,7 @@ class _PassLock:
 # run_incremental_pass), every MAINTENANCE_INTERVAL_DEFAULT seconds — the pass's
 # only scheduled runtime. Ships LIVE (the fix is the point); interval <= 0 idles
 # it. Safe beside the daily sweep and a hand run by construction: all serialize
-# on the maintenance lease row (migration 279) inside run_incremental_pass (this
+# on the maintenance lease row (scraper.job_lease) inside run_incremental_pass (this
 # lane skips while another writer holds it).
 # 30 s, not 120: the attach is the only birth, so this bounds how long a new ad
 # (a pasted one too) waits for its property; an idle pass costs ~6 ms (2026-10-20).
@@ -308,19 +313,15 @@ ESTIMATION_JOB_LANE_SETTING = "estimation_job_lane_enabled"
 ESTIMATION_INTERVAL_DEFAULT = 5
 ESTIMATION_STUCK_MINUTES_DEFAULT = 15
 
-# location_resolve lane (Decision 8b): THE resolver drain
-# (location_data.resolver.drain.run) run from here instead of only from
-# location_resolve.yml. The drain's cost is round trips, not work — ~11 registry
-# round trips per listing at ~120 ms from a US GitHub runner measured 0.7
-# listings/s, and GitHub fires the schedule ~7x/day, against a >100k
-# dirty_locations queue. This worker sits next to the database in the EU, so the
-# same code costs ~1-2 ms per trip and runs continuously. The GH lane STAYS as
-# the backstop (and owns --full-sweep / --dry-run / --listing-id); the two can
-# never drain at once because both take the SAME scheduled_jobs lease row.
-# Named location_resolve, never "resolve"/"drain": this worker already has a
-# lane called `drain` (the portal detail drain) whose heartbeat key and
+# location_resolve lane: THE resolver drain (location_data.resolver.drain.run), and since the
+# location programme's W2 (ruling Q9, 2026-10-31) its ONLY runtime: the GitHub
+# location_resolve.yml lane is gone. Each pass first asks `drain.reconcile` whether this
+# process's (resolver version, registry label) pair changed — a deploy, a registry publish —
+# and if so spends the pass on the corpus sweep (active listings first); otherwise it drains,
+# evidence rows before backfill. The interval setting is the ONE control (absent = 15 s,
+# 0 = idle-not-dead); there is no flag. Named location_resolve, never "resolve"/"drain": this
+# worker already has a lane called `drain` (the portal detail drain) whose heartbeat key and
 # jobs cell (`lane/drain`) would become unreadable.
-LOCATION_RESOLVE_LANE_SETTING = "realtime_location_resolve_enabled"
 LOCATION_RESOLVE_INTERVAL_DEFAULT = 15
 LOCATION_RESOLVE_MAX_SECONDS_DEFAULT = 240
 # A pass must stay clear of the jobs check's 1200 s in-flight Watch (a
@@ -462,22 +463,25 @@ _INTAKE_FAST_CONTRACTS_PROJECTED = False
 # first) is what keeps a portal with thousands of dead ads polite: it drains over days
 # instead of flooding one drain pass. Env vars, not app_settings: like the intake lane,
 # these are properties of the service this process runs on, and the reader touching no
-# database is what lets the lane ship LIVE (see _read_location_refetch_interval).
-LOCATION_REFETCH_ENABLED_ENV = "LOCATION_REFETCH_ENABLED"
-LOCATION_REFETCH_INTERVAL_ENV = "LOCATION_REFETCH_INTERVAL_S"
+# database is what lets the lane ship LIVE.
 LOCATION_REFETCH_MIN_AGE_ENV = "LOCATION_REFETCH_MIN_AGE_S"
 LOCATION_REFETCH_CAP_ENV = "LOCATION_REFETCH_CAP_PER_SOURCE"
-LOCATION_REFETCH_INTERVAL_DEFAULT = 86400
+# One constant tick (W2), the predicate's own 6 h (#2506): a page younger than MIN_AGE is
+# skipped, so an hourly tick re-read every active ad's location (25-120 s on Large) to find
+# almost nothing. Tick == MIN_AGE means a STILL-townless ad is re-read about every 12 h, not 6:
+# the drain's fetch lands after the tick that queued it, so the next tick finds its page a little
+# under 6 h old (a worker boot runs a pass too). Liveness reads it late after 18 h, and only once
+# the worker has been up 18 h.
+LOCATION_REFETCH_TICK_SECONDS = 21600.0
+# The candidates read joins every active ad to its location row. That is seconds on an instance
+# whose memory holds the listings heap and minutes on one that reads it from disk (Supabase Large,
+# 2026-11-04: the 120 s default cancelled it, and one failed pass is a Jobs Problem).
+# One read-only SELECT every 6 h that touches no Browse table can afford the wait.
+LOCATION_REFETCH_STATEMENT_TIMEOUT_S = 600
 # Older than this and the page is worth re-reading. Six hours, not a day: it is well past
-# the portals' geocoding lag, and it means a listing discovered today gets its second look
-# on TOMORROW's tick rather than waiting for the day after.
+# the portals' geocoding lag, and a listing discovered now is queued for its second look 6-12 h later.
 LOCATION_REFETCH_MIN_AGE_DEFAULT = 21600
 LOCATION_REFETCH_CAP_DEFAULT = 500
-# The first tick waits, for two reasons: a redeploy restarts every lane at once (the drain's
-# first pass, the contract projection, the intake's first walk) and a daily lane has no
-# reason to compete for that minute; and a deploy loop must not fire a queue-writing pass
-# every time the container restarts.
-LOCATION_REFETCH_FIRST_DELAY_SECONDS = 300.0
 
 # sold_comps lane (sold-comps W2): REGISTERED SALES FOR THE TOWNS THE OPERATOR IS
 # ACTUALLY WORKING IN. A sale is an external fact with no account and no listing, so
@@ -532,10 +536,13 @@ LOCATION_READINGS_FAST_STATEMENT_TIMEOUT_S = 60
 # lane's shape: no app_settings row, so no read that can fail; the brake is a deploy.
 HEALTH_TICK_SECONDS = 60.0
 # The watcher's health_lane cell fails a pass in flight past 600 s and a lane with no completed
-# pass for 600 s (migration 621): 500 s plus the 60 s tick and the heartbeat's 30 s lag stays
-# under both. Every hosted ALARM due at once fits (7 × 45 s +
-# parsing's 180 s = 495 s, wave 6); a gauge that does not fit the rest is deferred to the next
-# 60 s tick, never started short (run_due).
+# pass for 600 s (migration 621, c_lane_dead in 682's health_liveness): 500 s plus the 60 s tick and
+# the heartbeat's 30 s lag stays under both, so the pass cannot grow to hold every alarm at once.
+# Every hosted ALARM due at once owes scripts.verify_pipeline.WORKER_ALARMS_DUE_AT_ONCE_S, 730 s
+# since #2512 (the arithmetic is there): all but the last alarm
+# (parsing, 300 s) fit, 430 s, and it, like a gauge that does not fit the rest, is deferred to the
+# next 60 s tick, never started short (run_due); due alone, its 300 s fits. The harness stays a lazy
+# import of `_health_sync`, so the figure is read there.
 HEALTH_PASS_BUDGET_SECONDS = 500.0
 # Check results are kept 35 days (Q5, ruled 2026-10-18): pruned once a day per process, in
 # batches, so no one statement holds the table.
@@ -563,7 +570,7 @@ NOTIFICATIONS_TICK_SECONDS = 300.0
 NOTIFICATIONS_STEPS: dict[str, str] = {
     "watchdog_new": "match_once",
     "price": "match_changes_once",
-    "monitor": "match_monitored_collections_once",
+    "lifecycle": "match_lifecycle_once",
 }
 # A step's producers share one pass, so an abandoned pass must never overlap the next.
 _NOTIFICATIONS_PASS_LOCK = _PassLock("notifications")
@@ -584,7 +591,7 @@ _PUSH_PASS_LOCK = _PassLock("push")
 
 # autodedup lane (E914): THE one production path of the dedup engine
 # (autodedup.incremental_lane.run_incremental, imported and never copied). One pass decides,
-# groups and RECONCILES under the engine's own lease (`autodedup.rt_lease`): the groups it
+# groups and RECONCILES under the engine's own lease (`rt_lease`): the groups it
 # re-clustered become production merges through toolkit.property_identity.merge_property_set,
 # inside the area app_settings.autodedup_apply_scope names; it never splits. The engine bounds
 # its own time — a pass past its deadline rolls back (nothing written, no cursor moved) and
@@ -618,13 +625,13 @@ _load_library: Callable[[str], Any] = ctypes.CDLL
 _AUTODEDUP_PASS_LOCK = _PassLock("autodedup")
 # SHUTDOWN (E941). Railway SIGTERMs the old deployment once the new one is online and, by
 # default, SIGKILLs it 0 s later (docs.railway.com/deployments/reference): no handler ran, a
-# pass in flight died holding `autodedup.rt_lease`, and the next worker's passes were skipped
+# pass in flight died holding `rt_lease`, and the next worker's passes were skipped
 # "leased" until the lease's 2,400 s TTL — 40 minutes, three times on 2026-10-06/07. Letting
 # the pass FINISH instead would need a drain past its 1,050 s deadline, and the watchdog would
 # end that drain at 300 s anyway: the heartbeat lane stops at SIGTERM like every lane, and the
 # watchdog exits the process once no beat has finished for LIVENESS_BOUND_SECONDS. So the
 # lease is released at once, in four parts:
-#   * `railway.worker.json` `drainingSeconds` 30: the room between SIGTERM and SIGKILL;
+#   * `.railway/railway.ts` `WORKER_DRAINING_SECONDS` 30: the room between SIGTERM and SIGKILL;
 #   * the pass reads the signal as `stopping` at every deadline checkpoint (between steps,
 #     every 256 pair decisions, before every fact slice): it stops there, rolls back on its own
 #     live connection — freeing its row locks at once, not at SIGKILL — and releases its lease
@@ -650,7 +657,7 @@ _AUTODEDUP_STORE_WARNED = False
 # standing refusal would otherwise write the same line 1,440 times a day.
 _AUTODEDUP_LAST_OUTCOME: str | None = None
 # This process's boot second (E948). One worker process runs per container and a restart in
-# place keeps the hostname and the pid, so a live `autodedup.rt_lease` whose holder names both
+# place keeps the hostname and the pid, so a live `rt_lease` whose holder names both
 # and an earlier second was taken by a predecessor that died holding it (2026-10-10: most likely
 # the OOM killer, which sends no SIGTERM): a pass releases it before its take, and the engine
 # logs it, unless the claim cap is at its floor.
@@ -684,6 +691,7 @@ _CLIENT_CLASSES = {
 
 # log-once-per-process guard for proxied portals skipped without SCRAPER_PROXY_URL.
 _PROXY_WARNED: set[str] = set()
+_BROWSER_WARNED: set[str] = set()
 
 # log-once-per-process guard when R2 env vars are absent on the worker.
 _R2_WARNED: set[str] = set()
@@ -695,7 +703,7 @@ _R2_WARNED: set[str] = set()
 _PROBE_PASS_LOCK = _PassLock("probe")
 _DRAIN_PASS_LOCK = _PassLock("drain")
 # The broker lane's: an abandoned drain-until-empty pass keeps its thread, and its
-# broker_resolution_lock row goes stale after _LOCK_STALE_MIN, so without this the next
+# broker_resolution lease lapses after _LOCK_STALE_MIN, so without this the next
 # tick would take the lease and run a second pass beside it, a thread per abandoned pass.
 _BROKER_MAINTENANCE_PASS_LOCK = _PassLock("broker_maintenance")
 
@@ -801,11 +809,9 @@ def _read_estimation_stuck_minutes() -> int:
 
 
 def _read_location_resolve_interval() -> int:
-    # The flag gates the lane via interval<=0 (idle-not-dead, the _lane_loop
-    # contract): disabled => 0 (no lease attempt at all), enabled => the
-    # configured poll interval. Ships dark because the flag defaults absent.
-    if not _read_flag(LOCATION_RESOLVE_LANE_SETTING):
-        return 0
+    # ONE control, the sold_comps/autodedup convention: the interval IS the cadence and the
+    # kill switch (interval<=0 = idle-not-dead, the _lane_loop contract). Absent = 15 s. No
+    # flag: as the only runtime a dark default would mean a fresh environment never resolves.
     return _read_int(
         "realtime_location_resolve_interval_seconds",
         LOCATION_RESOLVE_INTERVAL_DEFAULT,
@@ -889,18 +895,6 @@ def _read_location_intake_fast_bodies_cap() -> int:
                     LOCATION_INTAKE_FAST_BODIES_CAP_DEFAULT, minimum=1, maximum=5000)
 
 
-def _read_location_refetch_interval() -> int:
-    # The flag gates the lane via interval<=0 (idle-not-dead, the _lane_loop contract).
-    # Ships LIVE — the lane is the fix itself, and an env var the operator must remember to
-    # set on the Railway service is a fix that never runs.
-    if not _env_flag(LOCATION_REFETCH_ENABLED_ENV, default=True):
-        return 0
-    # Floor of an hour: this lane writes to the shared queue, and nothing about it gets
-    # better by running more often than the portals geocode.
-    return _env_int(LOCATION_REFETCH_INTERVAL_ENV, LOCATION_REFETCH_INTERVAL_DEFAULT,
-                    minimum=3600, maximum=7 * 86400)
-
-
 def _read_location_refetch_min_age() -> int:
     return _env_int(LOCATION_REFETCH_MIN_AGE_ENV, LOCATION_REFETCH_MIN_AGE_DEFAULT,
                     minimum=600, maximum=30 * 86400)
@@ -980,6 +974,31 @@ def _skip_for_proxy(source: str) -> bool:
     if source not in _PROXY_WARNED:
         _PROXY_WARNED.add(source)
         LOG.warning("%s unset; skipping proxied portal %s", env, source)
+    return True
+
+
+def _skip_for_browser(source: str) -> bool:
+    """True when the portal is fetched through a headless browser and playwright is not
+    installed — every claim would only raise, and each raise burns one of a queue row's
+    five attempts (50k rows written off within hours).
+
+    The code and the image's `browser` extra deploy separately (the extra arrives with the
+    operator's `.railway/` apply), so this is the window between them, and the same guard
+    covers a later revert. Symmetrical to `_skip_for_proxy`.
+    """
+    mod_name, cls_name = _CLIENT_CLASSES[source]
+    cls = getattr(importlib.import_module(mod_name), cls_name)
+    if not getattr(cls, "USE_BROWSER", False):
+        return False
+    from scraper.browser_fetch import playwright_available
+
+    if playwright_available():
+        return False
+    if source not in _BROWSER_WARNED:
+        _BROWSER_WARNED.add(source)
+        LOG.warning(
+            "playwright is not installed; skipping browser-fetched portal %s "
+            "(the image needs the 'browser' extra + chromium)", source)
     return True
 
 
@@ -1150,7 +1169,7 @@ def _probe_sync(disabled: set[str], stop_event: asyncio.Event) -> dict[str, Any]
             # is_set() is a plain attribute read, safe off the loop's thread.
             if stop_event.is_set():
                 break
-            if source in disabled or _skip_for_proxy(source):
+            if source in disabled or _skip_for_proxy(source) or _skip_for_browser(source):
                 totals["skipped"] += 1
                 continue
             attempted.append(source)
@@ -1212,7 +1231,7 @@ def _drain_sync(
             claimable = counts.get(source, 0)
             if claimable <= 0:
                 continue
-            if source in disabled or _skip_for_proxy(source):
+            if source in disabled or _skip_for_proxy(source) or _skip_for_browser(source):
                 totals["skipped"] += 1
                 continue
             attempted.append(source)
@@ -1279,6 +1298,14 @@ def _run_images_sync(max_downloads: int) -> dict[str, Any]:
     return _run_image_downloads(max_downloads, IMAGES_WORKERS)
 
 
+def _run_phash_retry_sync() -> dict[str, int]:
+    # Lazy for the same reason: Pillow stays off the worker's startup path.
+    from scraper.image_phash import retry_unhashed
+
+    with db.connect() as conn:
+        return retry_unhashed(conn)
+
+
 async def _images_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None:
     slice_ = IMAGES_SLICE_DEFAULT
     try:
@@ -1300,17 +1327,27 @@ async def _images_pass(stop_event: asyncio.Event, state: dict[str, Any]) -> None
     if stop_event.is_set():
         return
     agg = await asyncio.to_thread(_run_images_sync, slice_)
+    retry: dict[str, int] = {}
+    if not stop_event.is_set():
+        try:
+            retry = await asyncio.to_thread(_run_phash_retry_sync)
+        except Exception as exc:  # noqa: BLE001 - the retry never costs the pass its download result
+            LOG.warning("images lane: phash retry failed: %s", exc)
     totals = {
         "downloaded": agg.get("images_stored", 0),
-        # Stored without an inline pHash (left for the hourly backstop); 0 in steady state.
+        # Stored without an inline pHash (left for the retry below); 0 in steady state.
         "phash_missed": agg.get("images_phash_missed", 0),
+        "phash_retried": retry.get("phash_retried", 0),
+        "phash_hashed": retry.get("phash_hashed", 0),
+        "phash_given_up": retry.get("phash_given_up", 0),
         "stopped_suspicious": bool(agg.get("stopped_suspicious", False)),
         "cap": slice_,
     }
     LOG.info(
-        "IMAGES lane downloaded=%d phash_missed=%d cap=%d stopped_suspicious=%s",
-        totals["downloaded"], totals["phash_missed"], slice_,
-        totals["stopped_suspicious"],
+        "IMAGES lane downloaded=%d phash_missed=%d phash_retried=%d phash_hashed=%d phash_given_up=%d "
+        "cap=%d stopped_suspicious=%s",
+        totals["downloaded"], totals["phash_missed"], totals["phash_retried"], totals["phash_hashed"],
+        totals["phash_given_up"], slice_, totals["stopped_suspicious"],
     )
     _record_pass(state, "images", totals)
 
@@ -1364,14 +1401,13 @@ async def _maintenance_pass(stop_event: asyncio.Event, state: dict[str, Any]) ->
 
 def _broker_maintenance_sync() -> dict[str, Any]:
     """One drain-until-empty broker pass on the worker's own connection. Reuses
-    THE script implementation (never forks it); broker_resolution_lock inside
+    THE script implementation (never forks it); the broker_resolution lease inside
     run_incremental_pass makes this safe beside the daily full sweep and a
     hand run — a concurrent caller returns skipped. In ONE thread holding the lane's pass
     lock (see _probe_sync). Lazy import keeps scripts.resolve_brokers off the worker's
     startup path."""
     if not _BROKER_MAINTENANCE_PASS_LOCK.try_enter():
-        return {"skipped": True, "previous_pass_running": True,
-                "attributed": 0, "brokers": 0, "refreshed": False}
+        return {"skipped": True, "previous_pass_running": True, "attributed": 0, "brokers": 0}
     try:
         from scripts.resolve_brokers import run_incremental_pass
 
@@ -1394,7 +1430,6 @@ async def _broker_maintenance_pass(stop_event: asyncio.Event, state: dict[str, A
         "skipped": bool(stats.get("skipped")),
         "attributed": stats.get("attributed", 0),
         "brokers": stats.get("brokers", 0),
-        "refreshed": bool(stats.get("refreshed")),
     }
     if stats.get("previous_pass_running"):
         # _PassLock has already logged the wedge once.
@@ -1402,10 +1437,7 @@ async def _broker_maintenance_pass(stop_event: asyncio.Event, state: dict[str, A
     elif last["skipped"]:
         LOG.info("BROKER lane skipped (resolution lock held by cron or daily sweep)")
     else:
-        LOG.info(
-            "BROKER lane attributed=%d brokers=%d refreshed=%s",
-            last["attributed"], last["brokers"], last["refreshed"],
-        )
+        LOG.info("BROKER lane attributed=%d brokers=%d", last["attributed"], last["brokers"])
     _record_pass(state, "broker_maintenance", last)
 
 
@@ -1520,10 +1552,10 @@ def _tune_resolver_log_level(*, idle: bool) -> None:
 
 
 def _location_resolve_sync() -> dict[str, Any]:
-    """One bounded pass of THE resolver drain (location_data.resolver.drain.run)
-    under THE shared scheduled_jobs lease, so this lane and location_resolve.yml
-    can never drain at once — plus an in-process lock, because an abandoned pass
-    outlives its lease. Lazy import keeps location_data off the worker's startup
+    """One pass of THE resolver under THE scheduled_jobs lease: `drain.reconcile`
+    (a corpus sweep when this process's version pair changed; the pass ends there),
+    else one bounded drain (location_data.resolver.drain.run) — plus an in-process
+    lock, because an abandoned pass outlives its lease. Lazy import keeps location_data off the worker's startup
     path; module-attribute calls (drain.run / job_lease.held) keep both patchable
     in tests. No try/except around run(): a raise is the signal — job_lease.held
     stamps last_outcome='failed' and re-raises, and _lane_loop records the
@@ -1575,11 +1607,11 @@ def _location_resolve_sync() -> dict[str, Any]:
                 cadence="15 minutes",
                 runner="railway-realtime-worker",
                 ttl_s=_location_resolve_lease_ttl(max_seconds, batch_size),
-            ) as acquired:
-                if not acquired:
+            ) as hold:
+                if hold is None:
                     if not _RESOLVE_LEASE_BUSY_LOGGED:
                         _RESOLVE_LEASE_BUSY_LOGGED = True
-                        # Never says WHY: a lease held by location_resolve.yml
+                        # Never says WHY: a lease held by another worker process
                         # and an operator's pause (scheduled_jobs.paused_until)
                         # are the same answer here, and guessing between them
                         # misdirects whoever is asking why the queue is not
@@ -1590,6 +1622,15 @@ def _location_resolve_sync() -> dict[str, Any]:
                         )
                     return {"acquired": False, "session_pooler": session_pooler}
                 _RESOLVE_LEASE_BUSY_LOGGED = False
+                # A sweep pass does nothing else (W2): the next pass, 15 s later, drains,
+                # so a corpus sweep never shares the lease TTL with a drain budget. The
+                # fence is asked between sweep windows; a cut sweep records no pair and the
+                # next pass re-sweeps.
+                swept = drain.reconcile(conn, stop=hold.fenced)
+                if swept is not None:
+                    _RESOLVE_LAST_IDLE = False
+                    return {"acquired": True, "session_pooler": session_pooler,
+                            "swept": swept, "claimed": 0}
                 stats = drain.run(
                     conn, batch_size=batch_size, max_seconds=max_seconds,
                     workers=_read_location_resolve_workers())
@@ -1629,6 +1670,15 @@ async def _location_resolve_pass(
     if stop_event.is_set():
         return
     last = await asyncio.to_thread(_location_resolve_sync)
+    if last.get("swept"):
+        # The WORKER logger, on purpose: once the queue is idle the drain logger sits at
+        # WARNING and would hide the sweep. Carried in the lane's heartbeat under `swept`
+        # (not inside `last`, which the next pass overwrites 15 s later), so the acceptance
+        # read "a boot that changed nothing enqueued 0 rows" is one SELECT.
+        LOG.info("LOCATION_RESOLVE lane swept pair=%s enqueued=%s complete=%s",
+                 last["swept"]["pair"], last["swept"]["rows"], last["swept"]["complete"])
+        state["lanes"].setdefault("location_resolve", {})["swept"] = {
+            **last["swept"], "at": datetime.now(timezone.utc).isoformat()}
     # Only when the pass did work: at a 15 s cadence an unconditional summary is
     # 5.7k lines/day of "claimed=0" once the queue is drained. The heartbeat
     # records every pass either way.
@@ -1731,7 +1781,6 @@ def _location_intake_fast_sync() -> dict[str, Any]:
     Lazy import keeps location_data (selectolax, boto3) off the worker's startup path;
     module-attribute calls keep claims_intake.run patchable in tests. No try/except around
     run(): a raise is the signal, and _lane_loop records the failed pass."""
-    from location_data import claims_intake
 
     global _INTAKE_FAST_LAST_IDLE
 
@@ -1810,7 +1859,7 @@ def _intake_fast_pass(conn: Any) -> dict[str, Any]:
     return {
         "ran": True,
         "listings": stats["listings"],
-        "claims_inserted": stats["claims_inserted"],
+        "written": stats["written"],
         "enqueued": stats["enqueued"],
         "bodies_mined": stats["bodies_mined"],
         "bodies_complete": bool(stats["bodies_pass_complete"]),
@@ -1829,9 +1878,9 @@ async def _location_intake_fast_pass(
     # Only when the pass did work — see _tune_intake_log_level for the same argument.
     if last.get("listings") or last.get("bodies_mined"):
         LOG.info(
-            "LOCATION_INTAKE_FAST lane listings=%d claims=%d enqueued=%d bodies=%d "
+            "LOCATION_INTAKE_FAST lane listings=%d written=%d enqueued=%d bodies=%d "
             "complete=%s %.1fs cursor=%s bodies_cursor=%s",
-            last["listings"], last["claims_inserted"], last["enqueued"],
+            last["listings"], last["written"], last["enqueued"],
             last["bodies_mined"], last["bodies_complete"], last["seconds"],
             last["cursor"], last["bodies_cursor"],
         )
@@ -1839,8 +1888,10 @@ async def _location_intake_fast_pass(
 
 
 def _location_refetch_sync() -> dict[str, Any]:
-    """One daily tick: read the active ads with no town whose page is old enough, and
-    queue them for one more detail fetch at VERIFY priority.
+    """One tick: read the active ads with no town whose newest page or payload is at
+    least LOCATION_REFETCH_MIN_AGE_S old, and queue them for one more detail fetch at VERIFY
+    priority, at most LOCATION_REFETCH_CAP_PER_SOURCE per portal — so a townless ad is re-read
+    about every 12 h while it stays townless (the constant block says why).
 
     No lease and no in-process lock: the pass is one SELECT plus one INSERT per portal,
     the enqueue is idempotent on (source, native_id), and a second caller would at worst
@@ -1851,7 +1902,8 @@ def _location_refetch_sync() -> dict[str, Any]:
     conn = db.connect()
     try:
         rows = db.location_refetch_candidates(
-            conn, min_age_seconds=min_age, cap_per_source=cap)
+            conn, min_age_seconds=min_age, cap_per_source=cap,
+            statement_timeout_s=LOCATION_REFETCH_STATEMENT_TIMEOUT_S)
         by_source: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             by_source.setdefault(row["source"], []).append(row)
@@ -1906,8 +1958,8 @@ def _sold_comps_sync() -> dict[str, Any]:
     No lease (the location_refetch lane's reason: one SELECT and a handful of
     idempotent cell writes), but one in-process lock — an abandoned pass has written
     no ledger row, so nothing else can stop the next tick re-walking its cells beside
-    it. `fetch_cell` raises only the shared ledger's refusal, which ends the tick; any
-    other bad cell costs its own ledger row.
+    it. `fetch_cell` raises only the shared ledger's refusal or a stop, which end the tick;
+    any other bad cell costs its own ledger row.
     """
     global _SOLD_COMPS_STORE_WARNED
 
@@ -1938,6 +1990,8 @@ def _sold_comps_sync() -> dict[str, Any]:
                     except RateBudgetUnavailable:
                         # Sticky for the client: every later cell would be refused too.
                         refused = True
+                        break
+                    except stop.StopRequested:
                         break
             return {
                 "ran": True,
@@ -2022,11 +2076,10 @@ def _readings_fast(conn: Any, listing_ids: list[int]) -> dict[str, Any]:
         LOG.warning("INTAKE readings fast ids=%d failed: %s", len(listing_ids), str(exc)[:200])
         return {"ids": len(listing_ids), "error": str(exc)[:200]}
     seconds = time.monotonic() - started
-    LOG.info("INTAKE readings fast ids=%d mined=%d superseded=%d in %.1fs", len(listing_ids),
-             stats["readings_mined"], stats["claims_superseded"], seconds)
+    LOG.info("INTAKE readings fast ids=%d mined=%d written=%d in %.1fs", len(listing_ids),
+             stats["readings_mined"], stats["written"], seconds)
     return {"ids": len(listing_ids), "mined": stats["readings_mined"],
-            "inserted": stats["claims_inserted"], "superseded": stats["claims_superseded"],
-            "seconds": round(seconds, 1)}
+            "written": stats["written"], "seconds": round(seconds, 1)}
 
 
 async def _text_extract_pass(
@@ -2065,25 +2118,6 @@ def _autodedup_store_present(conn: Any) -> bool:
         cur.execute(RT_STORE_PRESENT_SQL)
         rows = cur.fetchall()
     return bool(rows and rows[0][0])
-
-
-_CGROUP_ROOT = "/sys/fs/cgroup"
-# cgroup v1 spells "no limit" as its page counter's maximum (~8 EiB), never as "max".
-_CGROUP_V1_UNLIMITED_BYTES = 1 << 62
-
-
-def _memory_limit_mb(root: str = _CGROUP_ROOT) -> float | None:
-    """The container's memory limit in MiB (cgroup v2, else v1); None when unlimited or unread."""
-    for name in ("memory.max", os.path.join("memory", "memory.limit_in_bytes")):
-        try:
-            with open(os.path.join(root, name), encoding="ascii") as handle:
-                limit = int(handle.read().strip())
-        except FileNotFoundError:
-            continue
-        except Exception:  # noqa: BLE001 — "max", or unreadable: no limit to report
-            return None
-        return round(limit / 1_048_576.0, 1) if limit < _CGROUP_V1_UNLIMITED_BYTES else None
-    return None
 
 
 def _autodedup_outcome(
@@ -2343,7 +2377,7 @@ def _return_memory() -> float | None:
 
 
 def _autodedup_release_lease(holder: str, pass_conn: Any = None) -> bool:
-    """End `holder`'s `autodedup.rt_lease` row on a FRESH, bounded connection (E941). Best
+    """End `holder`'s `rt_lease` row on a FRESH, bounded connection (E941). Best
     effort and never raises: it runs on the shutdown path, where a raise helps nobody and the
     lease still ends by its TTL. The statement is keyed by holder, so a row another writer has
     taken since is never ended by it. First, the statement the pass may be running on
@@ -2366,10 +2400,10 @@ def _autodedup_release_lease(holder: str, pass_conn: Any = None) -> bool:
                 conn.close()
     except Exception as exc:  # noqa: BLE001 — a shutdown path never raises
         LOG.warning(
-            "AUTODEDUP: shutdown could not release autodedup.rt_lease for %s (%s: %s); it "
+            "AUTODEDUP: shutdown could not release rt_lease for %s (%s: %s); it "
             "expires by its TTL", holder, type(exc).__name__, exc)
         return False
-    LOG.info("AUTODEDUP: shutdown released autodedup.rt_lease for %s", holder)
+    LOG.info("AUTODEDUP: shutdown released rt_lease for %s", holder)
     return True
 
 
@@ -2398,9 +2432,12 @@ def _autodedup_release_on_stop() -> threading.Thread | None:
 
 
 def _on_stop_signal(stop_event: asyncio.Event) -> None:
-    """SIGTERM / SIGINT: no lane starts another pass, and the autodedup lease of a pass in
-    flight is released at once (E941; the mechanism is documented at `_AUTODEDUP_HOLDER`)."""
+    """SIGTERM / SIGINT: no lane starts another pass, a pass in flight stops at its next
+    portal-client request (`scraper.stop`: a drain hands back the claims it has not fetched and
+    flushes the rest, #2438), and the autodedup lease of a pass in flight is released at once
+    (E941; the mechanism is documented at `_AUTODEDUP_HOLDER`)."""
     stop_event.set()
+    stop.EVENT.set()
     _autodedup_release_on_stop()
 
 
@@ -2488,7 +2525,8 @@ def _beat_sync(state: dict[str, Any]) -> None:
                 cur.execute(_HEARTBEAT_SQL, {
                     "worker": WORKER_NAME,
                     "started_at": state["started_at"],
-                    "details": Jsonb(_lane_snapshot(state["lanes"])),
+                    "details": Jsonb({**_lane_snapshot(state["lanes"]),
+                                      "version": os.environ.get("RAILWAY_GIT_COMMIT_SHA")}),
                 })
         finally:
             with contextlib.suppress(Exception):
@@ -2904,11 +2942,13 @@ def _new_state() -> dict[str, Any]:
 async def _amain() -> int:
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
+    stop.arm()  # the loop owns the signals, so `scraper.stop` is armed, never installed
     for sig in (signal.SIGTERM, signal.SIGINT):
         # Railway sends SIGTERM on redeploy and SIGKILL `drainingSeconds` later: no lane starts
         # another pass, one in flight finishes if the drain lets it — the autodedup pass stops
-        # at its next checkpoint and rolls back instead — and the autodedup lease is released
-        # at once (E941; why, at `_AUTODEDUP_HOLDER`).
+        # at its next checkpoint and rolls back instead, a probe, drain or sold_comps pass at
+        # its next request (#2438) — and the autodedup lease is released at once (E941; why, at
+        # `_AUTODEDUP_HOLDER`).
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, _on_stop_signal, stop_event)
     loop.set_default_executor(ThreadPoolExecutor(max_workers=LANE_EXECUTOR_THREADS))
@@ -2955,17 +2995,14 @@ async def _amain() -> int:
             lambda: _estimation_pass(stop_event, state),
             state,
             default_interval=ESTIMATION_INTERVAL_DEFAULT)),
-        # default_interval=0 is the FAIL-SAFE, not a default: _lane_loop keeps
-        # this value when the app_settings read RAISES, and the flag lives
-        # inside the read that just failed. A positive fallback would turn a
-        # dark, deliberately-idled lane ON for one pass on any pooler blip —
-        # e.g. mid-migration or mid-registry-load, which is exactly when it must
-        # not drain. (It named `epoch_job` until W2-a deleted the epoch engine.)
+        # default_interval is the lane's own cadence (W2): it is the only runtime of the
+        # resolver, so a settings read that fails must not idle it. A pass during a registry
+        # load is harmless — its rows carry the old label and the publish's sweep redoes them.
         ("location_resolve", lambda: _lane_loop(
             "location_resolve", stop_event, _read_location_resolve_interval,
             lambda: _location_resolve_pass(stop_event, state),
             state,
-            default_interval=0)),
+            default_interval=LOCATION_RESOLVE_INTERVAL_DEFAULT)),
         # default_interval is the lane's OWN cadence here, not 0: this reader touches no
         # database (env vars only), so it cannot fail the way the app_settings readers can,
         # and the lane ships LIVE.
@@ -2974,15 +3011,14 @@ async def _amain() -> int:
             lambda: _location_intake_fast_pass(stop_event, state),
             state,
             default_interval=LOCATION_INTAKE_FAST_INTERVAL_DEFAULT)),
-        # Daily, and it does NOT alarm as dead between ticks: the jobs check judges a lane
-        # late against the interval_s it wrote (past 3 x a day here), and a failing pass
-        # of a daily lane at once, since it passes about once per boot.
+        # Every 6 h, a constant (W2, #2506): with the 6 h page-age predicate it sets how often a
+        # townless ad is re-read (about every 12 h) and how soon liveness notices a dead lane
+        # (late after 18 h, once the worker has been up that long).
         ("location_refetch", lambda: _lane_loop(
-            "location_refetch", stop_event, _read_location_refetch_interval,
+            "location_refetch", stop_event, lambda: LOCATION_REFETCH_TICK_SECONDS,
             lambda: _location_refetch_pass(stop_event, state),
             state,
-            default_interval=LOCATION_REFETCH_INTERVAL_DEFAULT,
-            first_delay_seconds=LOCATION_REFETCH_FIRST_DELAY_SECONDS)),
+            default_interval=LOCATION_REFETCH_TICK_SECONDS)),
         # default_interval=0 for the location_resolve lane's reason above: the
         # interval IS the kill switch, so a settings-read failure must not wake a
         # lane the operator deliberately left dark — and this one spends an external

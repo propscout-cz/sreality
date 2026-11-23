@@ -21,8 +21,7 @@ name: "Scraping: Bezrealitky scraper (pilot)"
 # Writes an 'index' scrape_runs row under source='bezrealitky' (its own
 # Health-page lane; does not touch sreality liveness / reconciliation).
 #
-# Required secret: SUPABASE_DB_URL. (Coordinates come from the API's gps field,
-# so no MAPY_CZ_API_KEY is needed.)
+# Required secret: SUPABASE_DB_URL.
 #
 # Cadence: every 6h, offset off the other scrapers.
 

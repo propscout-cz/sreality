@@ -23,6 +23,7 @@ from api import main as api_main
 def client(monkeypatch):
     api_main.app.dependency_overrides[deps.get_db_conn] = lambda: object()
     api_main.app.dependency_overrides[deps.require_token] = lambda: None
+    api_main.app.dependency_overrides[deps.require_admin] = lambda: {"sub": "operator", "is_admin": True}
     yield TestClient(api_main.app)
     api_main.app.dependency_overrides.clear()
 

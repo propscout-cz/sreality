@@ -88,10 +88,10 @@ def test_the_storey_count_band_is_the_parsers_band():
     assert m
     low, high = int(m[1]), int(m[2])
     assert high == floor._FLOOR_MAX
-    assert floor.total_floors_from_portal(low - 1) is None
-    assert floor.total_floors_from_portal(low) == low
-    assert floor.total_floors_from_portal(high) == high
-    assert floor.total_floors_from_portal(high + 1) is None
+    assert floor.total_floors_from_portal(low - 1, floor=None) is None
+    assert floor.total_floors_from_portal(low, floor=None) == low
+    assert floor.total_floors_from_portal(high, floor=None) == high
+    assert floor.total_floors_from_portal(high + 1, floor=None) is None
 
 
 def test_f1_is_the_idnes_placeholder_the_contract_declares():
@@ -99,8 +99,9 @@ def test_f1_is_the_idnes_placeholder_the_contract_declares():
     placeholder = "20. patro a vyšší"
     assert CONTRACT["idnes"]["floor"].sentinels == (placeholder,)
     assert source_value("idnes", "floor", {"podlaží": placeholder}) is None
-    # Without the sentinel the placeholder reads as storey 20: the value F1 targets.
-    assert floor.normalize_floor(placeholder) == 20
+    # When 573 ran, the placeholder read as storey 20 without the sentinel: the value F1
+    # targets. A patro wording is unread since #2552.
+    assert floor.normalize_floor(placeholder) is None
     # The header's pre-apply count splits F1 on exactly that raw label.
     assert f"'{placeholder}'" in _HEADER
 

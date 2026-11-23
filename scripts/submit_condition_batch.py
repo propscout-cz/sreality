@@ -42,8 +42,6 @@ from typing import Any
 # Chunk-sizing + submit-retry are shared with the dedup batch lane — see
 # toolkit.batch_submit, which new callers should import directly.
 from toolkit.batch_submit import (
-    MAX_BATCH_BYTES,
-    MAX_BATCH_REQUESTS,
     should_flush,
     submit_chunk_with_retry,
 )

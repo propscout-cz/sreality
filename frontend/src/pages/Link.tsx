@@ -20,7 +20,6 @@ import { useId, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { NewPropertyProgress } from '@/components/NewPropertyDialog';
-import { SectionLabel } from '@/components/section';
 import { CheckIcon, ChevronIcon, PasteIcon } from '@/components/phone/phoneIcons';
 import { useAuth } from '@/lib/auth';
 import { fmtShortDate, fmtTime24 } from '@/lib/format';
@@ -58,6 +57,7 @@ export default function LinkPage() {
   const navigate = useNavigate();
   const { isAdmin } = useAuth();
   const fieldId = useId();
+  const recentId = useId();
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const [text, setText] = useState('');
   const [problem, setProblem] = useState<string | null>(null);
@@ -186,7 +186,7 @@ export default function LinkPage() {
           <button
             type="submit"
             disabled={!text.trim() || busy}
-            className="h-11 rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-3 text-[14px] font-medium text-white active:bg-[var(--color-copper-2)] disabled:opacity-40"
+            className="h-11 rounded-[var(--radius-sm)] bg-[var(--color-copper)] px-3 text-[14px] font-medium text-[var(--color-on-copper)] active:bg-[var(--color-copper-2)] disabled:opacity-40"
           >
             {isAdmin ? 'Přidat' : 'Otevřít'}
           </button>
@@ -200,8 +200,11 @@ export default function LinkPage() {
       </p>
 
       {recent.length > 0 && (
-        <section aria-label="Naposledy vložené" className="mt-6">
-          <SectionLabel>Naposledy vložené</SectionLabel>
+        <section aria-labelledby={recentId} className="mt-6">
+          {/* A group of the page: an L3 title (system.md § Section cards ladder), never small caps. */}
+          <h2 id={recentId} className="text-sm leading-5 font-semibold text-[var(--color-ink)]">
+            Naposledy vložené
+          </h2>
           <ul className="mt-2 border-t border-[var(--color-rule)]">
             {recent.map((r) => (
               <li key={`${r.source}:${r.nativeId}`} className="border-b border-[var(--color-rule-soft)]">

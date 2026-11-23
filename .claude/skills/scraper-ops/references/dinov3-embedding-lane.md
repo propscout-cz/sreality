@@ -107,8 +107,8 @@ and if a pod dies silently, reproduce it on the bake-off lane, which can see.
 - **Never `git clone --branch <sha>`.** `--branch` resolves a branch or a tag only; the ref
   here is `GITHUB_SHA`, so the clone fails (`fatal: Remote branch … not found in upstream
   origin`, exit 128) and, under `set -euo pipefail`, so does the whole pod — which then idles
-  on the meter. The bootstrap uses `git init` + `git fetch --depth 1 origin <sha>` +
-  `git checkout FETCH_HEAD`. A test asserts `--branch` never comes back.
+  on the meter. Since #2016 the pod fetches no git at all: it downloads a signed `git archive`
+  of the sha from R2 (`pod_bootstrap.publish_archive_env`). A test asserts no git command returns.
 - **GPU selection is not price-only here.** `RunPodClient.eligible_gpus` ranks on price and
   knows nothing about vCPU or system RAM, and JPEG decode is CPU-side. The dispatcher's
   `--gpu-allowlist` (default: RTX 3090 / A5000, per ENCODER-DECISION §5.3) filters first and

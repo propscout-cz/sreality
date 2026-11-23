@@ -245,7 +245,7 @@ STALE_SWEEP_SQL = (
 
 # The funnel from the listing side, per portal and property type — the SHARED STEPS (W16,
 # operator ruling 2026-09-14), rendered from location_data/location_steps.py so this readout
-# and the audit page's waterfall can never again be two definitions of one question. Before
+# and the location scorecard can never again be two definitions of one question. Before
 # W16 step 2 was `has_projection` (the same set the audit calls `with_verdict`, under another
 # name) and step 3 was a town test with NO consumer rule — so its loss silently added
 # judged-but-not-located, abroad (an ANSWER, not a loss) and a Czech point without a town.

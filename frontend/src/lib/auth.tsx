@@ -13,9 +13,12 @@ import { resetActiveBoard } from './acting';
 import { isSupabaseConfigured, supabase } from './supabase';
 import { isTransientApiError } from './api';
 import { pgRead } from './pgRead';
+import { resetReads } from './revalidate';
+import { useCurationSync } from './curationSyncOwner';
 import { syncAppBadge } from './appBadge';
 import { endPushHere, setPushGate, signOutPush } from './push';
 import { ROUTES } from './routes';
+import { syncAppearance, type AppearanceProfile } from './theme';
 
 /**
  * Phase 1 auth context. Tracks the Supabase session and exposes sign-in/out.
@@ -42,15 +45,30 @@ type AuthState = {
 
 const AuthContext = createContext<AuthState | null>(null);
 
-/* THE notifications gate: the bell, the feed's nav entry, the unread poll and
- * push (lib/push `setPushGate`) all follow it. Admins, unconfigured local dev
- * and a plan read that failed (null: shown rather than blanked over a hiccup)
- * pass; otherwise the plan's `notifications` agenda decides. */
+/* The appearance lives in the user's own Supabase Auth profile (lib/theme). */
+const appearanceProfile: AppearanceProfile = {
+  read: async () => (await supabase.auth.getUser()).data.user,
+  save: (appearance) => supabase.auth.updateUser({ data: { appearance } }),
+};
+
+/* THE agenda gate (Settings › Tiers): admins, unconfigured local dev and a plan
+ * read that failed (null: shown rather than blanked over a hiccup) pass;
+ * otherwise the plan's agenda decides. UX only — routes carry the security gates. */
+export function agendaVisible(
+  isAdmin: boolean,
+  agendas: Record<string, boolean> | null,
+  agenda: string,
+): boolean {
+  return isAdmin || !isSupabaseConfigured() || agendas === null || agendas[agenda] === true;
+}
+
+/* The notifications gate: the bell, the feed's nav entry, the unread read and
+ * push (lib/push `setPushGate`) all follow it. */
 export function notificationsVisible(
   isAdmin: boolean,
   agendas: Record<string, boolean> | null,
 ): boolean {
-  return isAdmin || !isSupabaseConfigured() || agendas === null || agendas['notifications'] === true;
+  return agendaVisible(isAdmin, agendas, 'notifications');
 }
 
 /* Cache key for the session's plan agendas. Deliberately NOT under any
@@ -80,6 +98,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     return () => sub.subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    syncAppearance(session?.user ?? null, appearanceProfile);
+  }, [session]);
 
   /* The session's plan agendas: the explicit entitlements row's plan, else the
    * default plan. RLS returns only the caller's own entitlement. Admins never
@@ -151,7 +173,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * Push follows identity the same way (AUDIT F18): on any change of user,
    * sign-out included, and on a launch with CERTAINLY nobody signed in, this
    * device's subscription ends locally (no JWT needed) and the icon badge
-   * clears, so no subscription outlives its user. A launch that could not
+   * clears, so no subscription outlives its user; push being on by default,
+   * the next user's own comes with the opening of their gate (lib/push
+   * `resyncPush`). A launch that could not
    * refresh its session (`sessionUncertain`) ends nothing: its user is most
    * likely still there. None of it runs before the stored session is read
    * (`loading`): the null it starts from is not yet anyone. */
@@ -161,6 +185,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const prev = prevUserId.current;
     prevUserId.current = userId;
     if (prev !== null && prev !== userId) {
+      /* First the read scheduler's epoch (lib/revalidate): a hold, rollback or
+       * owed read of the previous account then paints and parks nothing here. */
+      resetReads(queryClient);
       queryClient.clear();
       /* The per-device pipeline board and "edit as owner" were the previous
        * account's pick (lib/acting): the next one starts on its own board. */
@@ -172,6 +199,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       void endPushHere();
     }
   }, [loading, userId, sessionUncertain, queryClient]);
+
+  /* Curation sync (lib/curationSyncOwner): this window follows the signed-in
+   * user's curation through the curation clock. Declared AFTER the identity
+   * effect on purpose: on a change of user React runs every changed effect's
+   * cleanup before any setup, so a switch is stop → resetReads + clear() →
+   * start, and the new owner never sees the previous account's cache. Keyed on
+   * the user id: the hourly token refresh restarts nothing. */
+  useCurationSync(loading ? null : userId);
 
   /* Push rides the notifications gate, once the plan is read (admins never
    * wait for it): turning true (a launch, a sign-in) re-sends this device's

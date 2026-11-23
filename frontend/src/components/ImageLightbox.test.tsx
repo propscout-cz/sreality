@@ -27,7 +27,6 @@ const img = (id: number, tag: string | null): ImagePublic => ({
   clip_fine_tag: tag,
   clip_logical_tag: tag,
   clip_confidence: 0.5,
-  clip_render_score: null,
   phash: null,
 });
 

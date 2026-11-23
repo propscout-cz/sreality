@@ -6,8 +6,8 @@
  * Taken from the property: its type (category_main), its deal (category_type),
  * its disposition and its ownership; a value the property does not state is left
  * unset and named in `dropped`, never matched as "unknown". Set by the user: the
- * radius (Browse's centre + radius, the square every Browse reader filters on —
- * lib/filters.effectiveBbox), the building material and the condition. Every
+ * radius (Browse's circle, the true circle every Browse reader filters on —
+ * `in_map_area`, migration 694), the building material and the condition. Every
  * other filter is unset. The lens is the Stats tab's (lib/stats.marketSample). */
 import {
   DEFAULT_FILTERS,
@@ -86,8 +86,7 @@ export function neighbourhoodFilters(p: NeighbourhoodProperty, scope: Neighbourh
       buildingMaterial: scope.buildingMaterial,
       conditionMatch: scope.conditionMatch,
       bounds: null,
-      locationMode: 'center_radius',
-      centerRadius: { lat: p.lat, lng: p.lng, radius_m: scope.radiusM },
+      circle: { lat: p.lat, lng: p.lng, radius_m: scope.radiusM },
     },
     dropped,
   };

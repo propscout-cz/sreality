@@ -11,9 +11,13 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
+import pytest
+
 from scraper import db, idnes_main
 from scraper.idnes_main import IdnesPortal
 from scraper.portal import PortalConfig, default_config
+
+pytestmark = pytest.mark.usefixtures("no_sighted_rearm")
 
 _JITTER_ID = "aaaaaaaaaaaaaaaaaaaaaa01"   # stored 23 692 431, index +0.075%
 _CUT_ID = "aaaaaaaaaaaaaaaaaaaaaa02"      # stored 10 000 000, index -1%

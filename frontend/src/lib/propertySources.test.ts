@@ -9,12 +9,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   tables: {} as Record<string, Array<Record<string, unknown>>>,
-  reads: [] as Array<{ relation: string; select: string; eq: Array<[string, unknown]> }>,
+  reads: [] as Array<{ relation: string; select: string; eq: Array<[string, unknown]>; order: string[] }>,
 }));
 
 vi.mock('./supabase', () => {
   const builder = (relation: string) => {
-    const call = { relation, select: '', eq: [] as Array<[string, unknown]> };
+    const call = { relation, select: '', eq: [] as Array<[string, unknown]>, order: [] as string[] };
     h.reads.push(call);
     const rows = () => h.tables[relation] ?? [];
     let single = false;
@@ -23,7 +23,10 @@ vi.mock('./supabase', () => {
         call.select = cols;
         return b;
       },
-      order: () => b,
+      order: (col: string) => {
+        call.order.push(col);
+        return b;
+      },
       eq: (col: string, val: unknown) => {
         call.eq.push([col, val]);
         return b;
@@ -59,10 +62,11 @@ beforeEach(() => {
 });
 
 describe('fetchPropertySources', () => {
-  it('is one read, scoped by the property', async () => {
+  it('is one read, scoped by the property, in the API price-history order', async () => {
     const out = await fetchPropertySources(774);
     expect(h.reads).toHaveLength(1);
     expect(h.reads[0].eq).toEqual([['property_id', 774]]);
+    expect(h.reads[0].order).toEqual(['first_seen_at', 'id']);
     expect(out).toHaveLength(2);
   });
 });

@@ -367,7 +367,7 @@ def _migration_columns(table: str) -> list[str]:
     added: list[str] = []
     for path in (GENERATION_MIGRATION, REALTIME_MIGRATION):
         added += re.findall(
-            rf"add column if not exists ([a-z_]+)",
+            r"add column if not exists ([a-z_]+)",
             path.read_text(encoding="utf-8").split(f"alter table autodedup.{table}", 1)[-1]
             .split(";", 1)[0],
         )

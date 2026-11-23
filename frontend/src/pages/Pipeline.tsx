@@ -1,13 +1,16 @@
-import { Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Suspense, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   DndContext,
   DragOverlay,
   KeyboardSensor,
   PointerSensor,
+  pointerWithin,
+  rectIntersection,
   useDroppable,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
@@ -30,10 +33,14 @@ import {
   useActingReadOnly,
   type ActiveBoard,
 } from '@/lib/acting';
-import { revalidatePipelineShares, useBoardSelection, useSharedBoardGuard } from '@/lib/pipelineShares';
+import { useBoardSelection, useSharedBoardGuard } from '@/lib/pipelineShares';
+import { revalidateTables } from '@/lib/curationSync';
+import { trimDraft, useServerDraft } from '@/lib/useServerDraft';
 import { useCollectionMembers, useCollections } from '@/lib/collectionCache';
 import { useTagReads } from '@/lib/useCardTags';
-import { matchesDistricts, pipelineKeys, pipelineShareKeys } from '@/lib/queries';
+import { BOARD_GESTURE_HELD, matchesDistricts, pipelineKeys, pipelineShareKeys } from '@/lib/queries';
+import { holdReads, type Hold } from '@/lib/revalidate';
+import Panel, { PANEL_ACTION } from '@/components/Panel';
 import ShareBlock from '@/components/ShareBlock';
 import { TwoStep } from '@/components/TwoStep';
 import BoardSwitcher from '@/components/pipeline/BoardSwitcher';
@@ -64,6 +71,7 @@ import TagColorPicker from '@/components/TagColorPicker';
 import ErrorBanner from '@/components/ErrorBanner';
 import { readFailed } from '@/components/ReadFailedMark';
 import { FunnelIcon, InfoIcon } from '@/components/icons';
+import { CalendarIcon } from '@/components/phone/phoneIcons';
 import SizeToggle, {
   LargeImageGlyph,
   MediumImageGlyph,
@@ -73,6 +81,7 @@ import {
   PIPELINE_CARD_GEOMETRY,
   PIPELINE_CARD_SIZE_LABELS,
   PIPELINE_CARD_SIZES,
+  PIPELINE_CLOSED_LANE_WIDTH,
   usePipelineCardSize,
   type PipelineCardSize,
 } from '@/lib/pipelineCardSize';
@@ -84,12 +93,12 @@ import BoardCard, {
 import { sortParamOf } from '@/lib/cardSort';
 import { PIPELINE_SORT_OPTIONS, sortPipelineCards } from '@/lib/pipelineSort';
 import { usePipelineViewState } from '@/lib/pipelineState';
-import { useCityQuality, type CityQualityByObec } from '@/lib/useCityQuality';
 import {
   type PipelineBoardCard,
   type PipelineShare,
   type PipelineShares,
   type PipelineStage,
+  type PipelineStageRole,
   type TagColor,
 } from '@/lib/types';
 
@@ -201,6 +210,14 @@ function BoardPage({ active, shares }: { active: ActiveBoard; shares: PipelineSh
 
   const stages = stagesQ.data ?? [];
   const cards = boardQ.data ?? NO_CARDS;
+  /* P22: the board draws the live stages as columns and folds the terminal ones
+   * into the Uzavřené lane, each half in the server's position order. The stage
+   * manager keeps the full list, so ticking "konec" there moves a stage between
+   * the two. */
+  const lanes = useMemo(() => {
+    const all = stagesQ.data ?? [];
+    return { live: all.filter((s) => !s.is_terminal), closed: all.filter((s) => s.is_terminal) };
+  }, [stagesQ.data]);
 
   // Client-side (rule #22) as ONE list the board, the count and Reset share.
   // A curation clause is skipped while its member map is unresolved.
@@ -260,11 +277,6 @@ function BoardPage({ active, shares }: { active: ActiveBoard; shares: PipelineSh
     () => cards.map((c) => c.listing_id).filter((id): id is number => id != null),
     [cards],
   );
-
-  /* Curated-city indexes for the card strip. Cached forever and keyed shared
-   * with the Browse map, so this is free once either surface has loaded them;
-   * `enabled` only once there is a board to decorate. */
-  const { byObec: cityQuality } = useCityQuality(cards.length > 0);
 
   const byStage = useMemo(() => {
     const m = new Map<number, PipelineBoardCard[]>();
@@ -396,9 +408,9 @@ function BoardPage({ active, shares }: { active: ActiveBoard; shares: PipelineSh
       {active != null && <ViewerLine share={active} />}
 
       {sharing && active == null && (
-        <section className="mt-5 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-4">
+        <div className="mt-5">
           <PipelineSharing shares={shares} />
-        </section>
+        </div>
       )}
 
       {manage && !readOnly && stages.length > 0 && <StageManager stages={stages} />}
@@ -518,7 +530,7 @@ function BoardPage({ active, shares }: { active: ActiveBoard; shares: PipelineSh
         /* Until BOTH reads land: a frame drawn from one alone is a board with no
            columns, or columns that read as empty. The stages are usually warm,
            so this is the real columns with the cards still in flight. */
-        <BoardSkeleton stages={stages} size={cardSize.value} />
+        <BoardSkeleton live={lanes.live} closed={lanes.closed} size={cardSize.value} />
       ) : (
         <CardHydrationProvider
           listingIds={visibleListingIds}
@@ -528,10 +540,10 @@ function BoardPage({ active, shares }: { active: ActiveBoard; shares: PipelineSh
           renders={{ covers: true, brokers: cards }}
         >
           <Board
-            stages={stages}
+            live={lanes.live}
+            closed={lanes.closed}
             cards={filteredCards}
             byStage={byStage}
-            cityQuality={cityQuality}
             size={cardSize.value}
           />
         </CardHydrationProvider>
@@ -543,7 +555,7 @@ function BoardPage({ active, shares }: { active: ActiveBoard; shares: PipelineSh
 const HEADER_BUTTON =
   'inline-flex items-center h-8 px-3 whitespace-nowrap rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] text-[0.8rem] text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)] hover:text-[var(--color-ink)] aria-pressed:border-[var(--color-copper)] aria-pressed:text-[var(--color-copper)]';
 const PRIMARY_BUTTON =
-  'inline-flex items-center gap-1.5 h-8 px-3.5 whitespace-nowrap rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[0.8rem] font-medium text-white hover:bg-[var(--color-copper-2)] transition-colors';
+  'inline-flex items-center gap-1.5 h-8 px-3.5 whitespace-nowrap rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[0.8rem] font-medium text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors';
 
 /* How many choices a curated-set scope holds, for its menu's label. */
 const scopeCount = (s: SetScope | null | undefined): number =>
@@ -558,7 +570,7 @@ function ViewerLine({ share }: { share: PipelineShare }) {
   const leave = useMutation({
     mutationFn: () => unsharePipeline(share.account_id, 'shared_with_me'),
     onSuccess: () => {
-      void revalidatePipelineShares(qc);
+      void revalidateTables(qc, ['pipeline_shares']);
       resetActiveBoard();
     },
     /* Its failure shows under the line; an onError keeps the global toast off it. */
@@ -601,7 +613,7 @@ function PipelineSharing({ shares }: { shares: PipelineShares | null }) {
         sharePipeline(email, mode ?? 'read').then((next) => qc.setQueryData(pipelineShareKeys.all, next))
       }
       onRevoke={(account_id) =>
-        unsharePipeline(account_id, 'shared_with').then(() => revalidatePipelineShares(qc))
+        unsharePipeline(account_id, 'shared_with').then(() => revalidateTables(qc, ['pipeline_shares']))
       }
     />
   );
@@ -623,21 +635,44 @@ const CARD_SIZE_GLYPH: Record<PipelineCardSize, JSX.Element> = {
  * neutral columns on the rare path where even the stages are cold, which keeps
  * the page from collapsing to a single line of text. */
 function BoardSkeleton({
-  stages,
+  live,
+  closed,
   size,
 }: {
-  stages: PipelineStage[];
+  live: PipelineStage[];
+  closed: PipelineStage[];
   size: PipelineCardSize;
 }) {
   const columns: Array<PipelineStage | null> =
-    stages.length > 0 ? stages : [null, null, null];
+    live.length > 0 ? live : [null, null, null];
   const geo = PIPELINE_CARD_GEOMETRY[size];
   return (
     <BoardFrame
       busy
-      header={columns.map((s, i) => (
-        <StageHeader key={s?.id ?? `skeleton-${i}`} stage={s} size={size} />
-      ))}
+      header={
+        <>
+          {columns.map((s, i) =>
+            s ? (
+              <StageHeader
+                key={s.id}
+                label={s.label}
+                labelColor={stageColor(s)}
+                ruleColor={stageColor(s)}
+                width={geo.column}
+              />
+            ) : (
+              <StageHeader
+                key={`skeleton-${i}`}
+                label={'\u00a0'}
+                labelColor="var(--color-ink-4)"
+                ruleColor="var(--color-rule)"
+                width={geo.column}
+              />
+            ),
+          )}
+          {closed.length > 0 && <ClosedLaneHeader width={PIPELINE_CLOSED_LANE_WIDTH} />}
+        </>
+      }
     >
       {columns.map((s, i) => (
         <ul
@@ -652,6 +687,18 @@ function BoardSkeleton({
           ))}
         </ul>
       ))}
+      {/* The lane as it will land, folded: its rows without their counts. */}
+      {closed.length > 0 && (
+        <div className={`shrink-0 p-1 ${PIPELINE_CLOSED_LANE_WIDTH}`}>
+          <ul className="space-y-1">
+            {closed.map((s) => (
+              <li key={s.id} className={`${CLOSED_ROW_BOX} ${CLOSED_ROW_IDLE}`}>
+                <ClosedRowFace stage={s} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <span className="sr-only">Načítání pipeline…</span>
     </BoardFrame>
   );
@@ -706,28 +753,32 @@ function BoardFrame({
 }
 
 /* A stage's label and rule in its colour, plus its card count once the board
- * has loaded. The skeleton's stand-in columns (stages still cold) pass no
- * stage and draw a neutral rule; the no-break space holds the label's line
- * height so the row doesn't collapse. */
+ * has loaded. The skeleton's stand-in columns (stages still cold) pass a
+ * neutral rule and a no-break space, which holds the label's line height so
+ * the row doesn't collapse; the Uzavřené lane passes its own neutral pair. */
 function StageHeader({
-  stage,
+  label,
+  labelColor,
+  ruleColor,
   count,
-  size,
+  width,
 }: {
-  stage: PipelineStage | null;
+  label: string;
+  labelColor: string;
+  ruleColor: string;
   count?: number;
-  size: PipelineCardSize;
+  width: string;
 }) {
   return (
     <div
-      className={`flex shrink-0 items-baseline justify-between px-1 pb-2 border-b-2 ${PIPELINE_CARD_GEOMETRY[size].column}`}
-      style={{ borderColor: stage ? stageColor(stage) : 'var(--color-rule)' }}
+      className={`flex shrink-0 items-baseline justify-between px-1 pb-2 border-b-2 ${width}`}
+      style={{ borderColor: ruleColor }}
     >
       <span
         className="text-[0.72rem] tracking-[0.14em] uppercase font-medium"
-        style={{ color: stage ? stageColor(stage) : 'var(--color-ink-4)' }}
+        style={{ color: labelColor }}
       >
-        {stage?.label ?? ' '}
+        {label}
       </span>
       {count != null && (
         <span className="font-mono tabular-nums text-[0.7rem] text-[var(--color-ink-4)]">
@@ -761,24 +812,83 @@ export function planMove(
   return { propertyId, stageId };
 }
 
+/* A closed-stage row registers this as its droppable data; the columns none. */
+const CLOSED_ROW = { closed: true };
+
+/* Which droppable a drag is over (P22). A closed-stage row is ~2rem tall and
+ * the drag ghost 4.5rem (Malé) to ~22rem (Velké), so dnd-kit's overlap rule
+ * would close a deal into whichever row the ghost happened to cover most. A
+ * row is hit by a POINT instead: the pointer, or on a keyboard drag (which has
+ * no pointer) the ghost's centre. The columns keep the overlap rule they have
+ * always had. Exported for its test. */
+export const boardCollision: CollisionDetection = (args) => {
+  const rows = args.droppableContainers.filter((c) => c.data.current?.closed);
+  const columns = args.droppableContainers.filter((c) => !c.data.current?.closed);
+  const { left, top, width, height } = args.collisionRect;
+  const point = args.pointerCoordinates ?? { x: left + width / 2, y: top + height / 2 };
+  const onRow = pointerWithin({ ...args, droppableContainers: rows, pointerCoordinates: point });
+  return onRow.length > 0 ? onRow : rectIntersection({ ...args, droppableContainers: columns });
+};
+
 /* No sensor, no drag: a read-only board's DndContext never starts one. */
 const NO_SENSORS: ReturnType<typeof useSensors> = [];
 
+/* What a drag holds: a gesture's board reads, and the stages — they are the
+ * droppable columns (docs/design/curation-sync.md Decision 10). */
+const DRAG_HELD = [...BOARD_GESTURE_HELD, pipelineKeys.stages] as const;
+
+/* A drag holds its board's reads from pick-up to drop, so a re-read — a change
+ * made elsewhere, a mount — never repaints the columns under the card in hand:
+ * one in flight at pick-up is cancelled and owed, one that starts meanwhile too
+ * (lib/revalidate `holdReads`). The drop calls `move.mutate` FIRST, whose own
+ * hold (lib/useOptimisticWrite) registers synchronously over the board and the
+ * members map, and only then lets the drag's go. A read is paid when the LAST
+ * hold over it goes, so what the drag parked on the board and members waits for
+ * the move's settle, which reads each once; the stages, held by the drag alone,
+ * are read at the drop. A drop with no move, a cancel and an unmount pay
+ * everything parked at once. */
+function useDragHold(): { grab: () => void; letGo: () => void } {
+  const qc = useQueryClient();
+  const actAs = useActAs();
+  const held = useRef<Hold | null>(null);
+  const letGo = useCallback(() => {
+    held.current?.release();
+    held.current = null;
+  }, []);
+  useEffect(() => letGo, [letGo]);
+  const grab = () => {
+    letGo();
+    held.current = holdReads(
+      qc,
+      DRAG_HELD.map((key) => ({ queryKey: actingKey(actAs, key) })),
+    );
+  };
+  return { grab, letGo };
+}
+
 function Board({
-  stages,
+  live,
+  closed,
   cards,
   byStage,
-  cityQuality,
   size,
 }: {
-  stages: PipelineStage[];
+  live: PipelineStage[];
+  closed: PipelineStage[];
   cards: PipelineBoardCard[];
   byStage: Map<number, PipelineBoardCard[]>;
-  cityQuality: CityQualityByObec;
   size: PipelineCardSize;
 }) {
   const readOnly = useActingReadOnly();
   const [activeId, setActiveId] = useState<string | null>(null);
+  /* One closed stage open at a time, local like Spravovat fáze. Looked up in
+   * the list, so a stage un-ticked from "konec" simply closes. */
+  const [openClosedId, setOpenClosedId] = useState<number | null>(null);
+  const openClosed = closed.find((s) => s.id === openClosedId) ?? null;
+  const geo = PIPELINE_CARD_GEOMETRY[size];
+  /* One value for the lane's header and body, so the pinned header row keeps
+   * the columns' scroll range. */
+  const laneWidth = openClosed ? geo.column : PIPELINE_CLOSED_LANE_WIDTH;
   const sensors = useSensors(
     // distance:6 so a click on the card's link/select doesn't start a drag.
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -790,6 +900,8 @@ function Board({
    * listing header exactly like a click there repaints the board, and a failed
    * one snaps back AND says why (rule #22). */
   const { move, remove } = usePipelineCard();
+  const onRemove = (propertyId: number) => remove.mutate(propertyId);
+  const drag = useDragHold();
 
   const activeCard = activeId
     ? cards.find((c) => `${CARD_PREFIX}${c.property_id}` === activeId) ?? null
@@ -798,8 +910,15 @@ function Board({
   return (
     <DndContext
       sensors={readOnly ? NO_SENSORS : sensors}
-      onDragStart={(e: DragStartEvent) => setActiveId(String(e.active.id))}
-      onDragCancel={() => setActiveId(null)}
+      collisionDetection={boardCollision}
+      onDragStart={(e: DragStartEvent) => {
+        drag.grab();
+        setActiveId(String(e.active.id));
+      }}
+      onDragCancel={() => {
+        setActiveId(null);
+        drag.letGo();
+      }}
       onDragEnd={(e: DragEndEvent) => {
         setActiveId(null);
         const plan = planMove(
@@ -807,29 +926,48 @@ function Board({
           e.over ? String(e.over.id) : null,
           cards,
         );
+        // The move's hold first, then the drag lets go (useDragHold).
         if (plan) move.mutate(plan);
+        drag.letGo();
       }}
     >
       <BoardFrame
-        header={stages.map((s) => (
-          <StageHeader
-            key={s.id}
-            stage={s}
-            count={byStage.get(s.id)?.length ?? 0}
-            size={size}
-          />
-        ))}
+        header={
+          <>
+            {live.map((s) => (
+              <StageHeader
+                key={s.id}
+                label={s.label}
+                labelColor={stageColor(s)}
+                ruleColor={stageColor(s)}
+                count={byStage.get(s.id)?.length ?? 0}
+                width={geo.column}
+              />
+            ))}
+            {closed.length > 0 && <ClosedLaneHeader width={laneWidth} />}
+          </>
+        }
       >
-        {stages.map((s) => (
+        {live.map((s) => (
           <StageColumn
             key={s.id}
             stage={s}
             cards={byStage.get(s.id) ?? []}
-            cityQuality={cityQuality}
             size={size}
-            onRemove={(propertyId) => remove.mutate(propertyId)}
+            onRemove={onRemove}
           />
         ))}
+        {closed.length > 0 && (
+          <ClosedLane
+            stages={closed}
+            byStage={byStage}
+            open={openClosed}
+            onToggle={(id) => setOpenClosedId((cur) => (cur === id ? null : id))}
+            width={laneWidth}
+            size={size}
+            onRemove={onRemove}
+          />
+        )}
       </BoardFrame>
       {/* dropAnimation={null}: the optimistic move already places the card in
           the target column on release, so the default "fly back to origin"
@@ -838,9 +976,9 @@ function Board({
       <DragOverlay dropAnimation={null}>
         {activeCard ? (
           <div
-            className={`${PIPELINE_CARD_GEOMETRY[size].overlay} rounded-[var(--radius-md)] border border-[var(--color-rule-strong)] bg-[var(--color-paper-2)] p-2.5 shadow-lg`}
+            className={`${geo.overlay} rounded-[var(--radius-md)] border border-[var(--color-rule-strong)] bg-[var(--color-paper-2)] p-2.5 shadow-lg`}
           >
-            <CardFace card={activeCard} cityQuality={cityQuality} size={size} />
+            <CardFace card={activeCard} size={size} />
           </div>
         ) : null}
       </DragOverlay>
@@ -855,17 +993,13 @@ function StageManager({ stages }: { stages: PipelineStage[] }) {
   const [err, setErr] = useState<string | null>(null);
   const [newLabel, setNewLabel] = useState('');
 
-  /* Narrowed from a wholesale `['pipeline']` sweep to the two caches a stage
-   * edit can actually change: the stage list itself, and the board (whose
-   * columns and badges render from it). The old prefix also swept
-   * `card(id)` and `members` — and, had the decoration keys been nested under
-   * it, every thumbnail and broker line on the board as well. They are not
-   * (lib/hydration owns its own namespace, pinned by hydration.test.ts), but
-   * the sweep was still wider than the fact that changed. */
+  /* What a stage edit moves is lib/curationSync's `pipeline_stages` row: the
+   * stage list, the board (its columns) and the members map, whose stage label,
+   * colour and code every funnel badge renders from (property_pipeline_public
+   * joins the stages). The hand list it replaces omitted the members. */
   const invalidate = () => {
     setErr(null);
-    void qc.invalidateQueries({ queryKey: actingKey(actAs, pipelineKeys.stages) });
-    void qc.invalidateQueries({ queryKey: actingKey(actAs, pipelineKeys.board) });
+    void revalidateTables(qc, ['pipeline_stages'], actAs);
   };
   const onError = (e: unknown) =>
     setErr(e instanceof Error ? e.message : 'Akce selhala.');
@@ -897,15 +1031,16 @@ function StageManager({ stages }: { stages: PipelineStage[] }) {
     if (label) create.mutate(label);
   };
 
+  /* A section card like Sdílení (C1–C6): the stages its count. Adding a stage stays the body's last row:
+     a title bar holds buttons and links only (C6), never a field. */
   return (
-    <section className="mt-5 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-4">
-      <p className="text-[0.7rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
-        Fáze pipeline
-      </p>
-      {err && (
-        <p className="mt-2 text-xs text-[var(--color-brick)]">{err}</p>
-      )}
-      <ul className="mt-3 space-y-2">
+    <Panel
+      className="mt-5"
+      title="Fáze pipeline"
+      count={stages.length}
+    >
+      {err && <p className="text-xs text-[var(--color-brick)]">{err}</p>}
+      <ul className="space-y-2">
         {stages.map((s, i) => (
           <StageEditorRow
             key={s.id}
@@ -919,7 +1054,7 @@ function StageManager({ stages }: { stages: PipelineStage[] }) {
           />
         ))}
       </ul>
-      <div className="mt-4 flex items-center gap-2 border-t border-[var(--color-rule)] pt-3">
+      <div className="flex items-center gap-2 border-t border-[var(--color-rule-soft)] pt-3">
         <input
           aria-label="Nová fáze"
           value={newLabel}
@@ -935,12 +1070,12 @@ function StageManager({ stages }: { stages: PipelineStage[] }) {
           type="button"
           onClick={submitNew}
           disabled={!newLabel.trim() || create.isPending}
-          className="text-[0.72rem] tracking-[0.1em] uppercase px-3 py-1.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)] hover:text-[var(--color-ink)] disabled:opacity-50"
+          className={PANEL_ACTION}
         >
           Přidat
         </button>
       </div>
-    </section>
+    </Panel>
   );
 }
 
@@ -963,9 +1098,12 @@ function StageEditorRow({
   onError: (e: unknown) => void;
   invalidate: () => void;
 }) {
-  const [label, setLabel] = useState(stage.label);
-  const [code, setCode] = useState(stage.code ?? '');
+  /* Both fields follow the stage while untouched, so a rename made elsewhere shows
+   * here and a focus and blur never writes it back (D3, lib/useServerDraft). */
+  const label = useServerDraft(stage.label, trimDraft);
+  const code = useServerDraft(stage.code ?? '', trimDraft);
   const actAs = useActAs();
+  const viewing = stage.role === 'viewing';
 
   const update = useMutation({
     mutationFn: (patch: {
@@ -974,6 +1112,7 @@ function StageEditorRow({
       is_terminal?: boolean;
       is_entry?: boolean;
       code?: string | null;
+      role?: PipelineStageRole | null;
     }) => updatePipelineStage(stage.id, patch, ...actOpts(actAs)),
     onSuccess: invalidate,
     onError,
@@ -984,18 +1123,27 @@ function StageEditorRow({
     onError,
   });
 
+  /* Only what the user typed is saved; an emptied name is refused, back to the stage's.
+   * The row stays open after a save, so the saved draft is marked: the next value
+   * the server reads back ends it, even a change made elsewhere meanwhile. */
   const saveLabel = () => {
-    const next = label.trim();
-    if (next && next !== stage.label) update.mutate({ label: next });
-    else setLabel(stage.label);
+    label.onBlur();
+    const next = label.edited();
+    if (next === '') label.reset();
+    else if (next != null) {
+      update.mutate({ label: next });
+      label.saved();
+    }
   };
 
   /* Empty box = no code: the badge falls back to the ordinal rather than
    * freezing a guessed number into the row (migration 377). */
   const saveCode = () => {
-    const next = code.trim();
-    if (next === (stage.code ?? '')) return;
+    code.onBlur();
+    const next = code.edited();
+    if (next == null) return;
     update.mutate({ code: next === '' ? null : next });
+    code.saved();
   };
 
   return (
@@ -1027,8 +1175,7 @@ function StageEditorRow({
           </button>
         </div>
         <input
-          value={code}
-          onChange={(e) => setCode(e.target.value)}
+          {...code.bind}
           onBlur={saveCode}
           onKeyDown={(e) => {
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
@@ -1040,8 +1187,7 @@ function StageEditorRow({
           className="w-10 shrink-0 rounded-[var(--radius-sm)] border border-transparent bg-[var(--color-inset)] px-1 py-1 text-center font-mono text-sm tabular-nums text-[var(--color-ink)] hover:border-[var(--color-rule)]"
         />
         <input
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
+          {...label.bind}
           onBlur={saveLabel}
           onKeyDown={(e) => {
             if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
@@ -1064,13 +1210,37 @@ function StageEditorRow({
           </button>
           <Hint text={'Vstupní fáze: sem se nemovitost přidá jako záložka („Přidat do pipeline“). Právě jedna fáze může být vstupní.'} />
         </span>
+        {/* The viewing role (migration 734): whatever the stage is called, this is where a
+            property with a viewing belongs; a viewing date offers it. At most one stage, never a closed one. */}
+        <span className="flex shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            onClick={() => update.mutate({ role: viewing ? null : 'viewing' })}
+            disabled={stage.is_terminal}
+            aria-pressed={viewing}
+            title={
+              stage.is_terminal
+                ? 'Koncová fáze nemůže být fází prohlídky'
+                : viewing
+                  ? 'Fáze prohlídky (kliknutím zrušíte)'
+                  : 'Nastavit jako fázi prohlídky'
+            }
+            aria-label="Fáze prohlídky"
+            className="flex w-5 justify-center disabled:cursor-default disabled:opacity-25"
+            style={{ color: viewing ? 'var(--color-copper)' : 'var(--color-ink-4)' }}
+          >
+            <CalendarIcon className="h-4 w-4" />
+          </button>
+          <Hint text={'Fáze prohlídky: sem patří nemovitosti, na které se chystáte na prohlídku, ať se fáze jmenuje jakkoli. Když k nemovitosti přidáte termín prohlídky, aplikace nabídne přesun sem. Nejvýš jedna fáze, nikdy koncová.'} />
+        </span>
         <span className="flex shrink-0 items-center gap-0.5 text-[0.68rem] text-[var(--color-ink-3)]">
           <label className="flex items-center gap-1">
             <input
               type="checkbox"
               checked={stage.is_terminal}
               onChange={(e) => update.mutate({ is_terminal: e.target.checked })}
-              disabled={stage.is_entry}
+              disabled={stage.is_entry || viewing}
+              title={viewing ? 'Fáze prohlídky nemůže být koncová' : undefined}
             />
             konec
           </label>
@@ -1123,13 +1293,11 @@ function Hint({ text }: { text: string }) {
 function StageColumn({
   stage,
   cards,
-  cityQuality,
   size,
   onRemove,
 }: {
   stage: PipelineStage;
   cards: PipelineBoardCard[];
-  cityQuality: CityQualityByObec;
   size: PipelineCardSize;
   onRemove: (propertyId: number) => void;
 }) {
@@ -1148,20 +1316,160 @@ function StageColumn({
           : ''
       }`}
     >
-      {cards.length === 0 ? (
-        <li className="px-1 py-2 text-sm text-[var(--color-ink-4)]">—</li>
-      ) : (
-        cards.map((c) => (
-          <li key={c.property_id}>
-            <BoardCard
-              card={c}
-              cityQuality={cityQuality}
-              size={size}
-              onRemove={onRemove}
-            />
-          </li>
-        ))
-      )}
+      <StageCards cards={cards} size={size} onRemove={onRemove} />
     </ul>
+  );
+}
+
+/* A stage's cards, or the dash of an empty stage: a live column's and an
+ * opened closed row's alike, so a closed deal is the same BoardCard. */
+function StageCards({
+  cards,
+  size,
+  onRemove,
+}: {
+  cards: PipelineBoardCard[];
+  size: PipelineCardSize;
+  onRemove: (propertyId: number) => void;
+}) {
+  if (cards.length === 0) {
+    return <li className="px-1 py-2 text-sm text-[var(--color-ink-4)]">—</li>;
+  }
+  return (
+    <>
+      {cards.map((c) => (
+        <li key={c.property_id}>
+          <BoardCard card={c} size={size} onRemove={onRemove} />
+        </li>
+      ))}
+    </>
+  );
+}
+
+const CLOSED_LANE_LABEL = 'Uzavřené';
+
+/* The lane's header in the pinned row: neutral, and no total, since the
+ * counts are on its rows. */
+function ClosedLaneHeader({ width }: { width: string }) {
+  return (
+    <StageHeader
+      label={CLOSED_LANE_LABEL}
+      labelColor="var(--color-ink-3)"
+      ruleColor="var(--color-rule-strong)"
+      width={width}
+    />
+  );
+}
+
+/* P22: the terminal stages folded into one lane after the live columns, a row
+ * per closed stage with its count. Each row is a drop target that closes a deal
+ * into its stage (rule #22: a move, through the same planMove → move as a
+ * column drop). A row opens that stage's cards UNDER the rows, so no drop
+ * target moves when one opens. */
+function ClosedLane({
+  stages,
+  byStage,
+  open,
+  onToggle,
+  width,
+  size,
+  onRemove,
+}: {
+  stages: PipelineStage[];
+  byStage: Map<number, PipelineBoardCard[]>;
+  open: PipelineStage | null;
+  onToggle: (stageId: number) => void;
+  width: string;
+  size: PipelineCardSize;
+  onRemove: (propertyId: number) => void;
+}) {
+  const listId = useId();
+  return (
+    <div className={`shrink-0 p-1 ${width}`}>
+      <ul aria-label={CLOSED_LANE_LABEL} className="space-y-1">
+        {stages.map((s) => (
+          <ClosedStageRow
+            key={s.id}
+            stage={s}
+            count={byStage.get(s.id)?.length ?? 0}
+            open={open?.id === s.id}
+            controls={listId}
+            onToggle={() => onToggle(s.id)}
+          />
+        ))}
+      </ul>
+      {open && (
+        <ul id={listId} aria-label={open.label} className="mt-2 space-y-2">
+          <StageCards cards={byStage.get(open.id) ?? []} size={size} onRemove={onRemove} />
+        </ul>
+      )}
+    </div>
+  );
+}
+
+const CLOSED_ROW_BOX = 'flex items-center gap-2 rounded-[var(--radius-sm)] border px-2 py-1.5';
+const CLOSED_ROW_IDLE = 'border-[var(--color-rule)] bg-[var(--color-paper-2)]';
+
+function ClosedStageRow({
+  stage,
+  count,
+  open,
+  controls,
+  onToggle,
+}: {
+  stage: PipelineStage;
+  count: number;
+  open: boolean;
+  controls: string;
+  onToggle: () => void;
+}) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: `${STAGE_PREFIX}${stage.id}`,
+    data: CLOSED_ROW,
+  });
+  /* The drag-over treatment sits on the button, which fills the row: on the
+     <li> the button's own paper would hide it. Copper = the open row. */
+  return (
+    <li ref={setNodeRef}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-controls={open ? controls : undefined}
+        aria-label={`${stage.label} · ${count}`}
+        className={`${CLOSED_ROW_BOX} w-full text-left transition-colors ${
+          isOver
+            ? 'border-[var(--color-rule-strong)] bg-[var(--color-inset)] outline outline-1 outline-[var(--color-rule-strong)]'
+            : `${CLOSED_ROW_IDLE} hover:border-[var(--color-rule-strong)] aria-expanded:border-[var(--color-copper)]`
+        }`}
+      >
+        <ClosedRowFace stage={stage} count={count} />
+      </button>
+    </li>
+  );
+}
+
+/* A closed row's contents, also drawn by the skeleton (no count yet): the
+ * stage's colour as a bar, as in the stage editor, then its label and count. */
+function ClosedRowFace({ stage, count }: { stage: PipelineStage; count?: number }) {
+  return (
+    <>
+      <span
+        className="h-4 w-1 shrink-0 rounded-full"
+        style={{ background: stageColor(stage) }}
+        aria-hidden
+      />
+      <span
+        className="min-w-0 flex-1 truncate text-[0.72rem] font-medium uppercase tracking-[0.14em] text-[var(--color-ink-2)]"
+        title={stage.label}
+      >
+        {stage.label}
+      </span>
+      {count != null && (
+        <span className="font-mono tabular-nums text-[0.7rem] text-[var(--color-ink-3)]">
+          {count}
+        </span>
+      )}
+    </>
   );
 }

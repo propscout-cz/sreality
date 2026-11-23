@@ -13,6 +13,7 @@ import { ROUTES } from '@/lib/routes';
 import type { Collection } from '@/lib/types';
 
 import Collections from '../Collections';
+import { COLLECTION_KINDS } from '@/lib/notifyKinds';
 
 vi.mock('@/lib/phoneShell', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/phoneShell')>()),
@@ -36,6 +37,7 @@ const coll = (c: Partial<Collection>): Collection => ({
   is_system: false,
   owner_email: null,
   shared_with: [],
+  notify_kinds: COLLECTION_KINDS.map((k) => k.kind),
   ...c,
 });
 
@@ -81,12 +83,12 @@ describe('<Collections> on the phone', () => {
     expect(within(rows[1]).getByText('sledováno')).toBeInTheDocument();
   });
 
-  it('offers no rename, delete, monitoring or sharing control — the footer says where they live', async () => {
+  it('offers no rename, delete, monitoring or sharing control — the footer says the collection page has them', async () => {
     renderPage();
     await screen.findByRole('list', { name: 'Sbírky' });
     expect(screen.queryByRole('button', { name: /delete|smazat/i })).toBeNull();
     expect(screen.queryByRole('switch')).toBeNull();
-    expect(screen.getByText('Přejmenování, smazání, sledování a sdílení nastavíte na počítači.')).toBeInTheDocument();
+    expect(screen.getByText('Přejmenování, smazání, sledování a sdílení najdete na stránce sbírky.')).toBeInTheDocument();
   });
 
   it('creates a collection from the sheet with monitoring off', async () => {
@@ -148,7 +150,10 @@ describe('<Collections> on the phone', () => {
     renderPage();
     const mine = await screen.findByRole('list', { name: 'Sbírky' });
     expect(within(mine).getAllByRole('link')).toHaveLength(1);
-    expect(screen.getByRole('heading', { name: 'Sdílené se mnou' })).toBeInTheDocument();
+    /* A group of the list: an L3 title like the desktop's, never small caps (section cards ladder). */
+    const sharedTitle = screen.getByRole('heading', { name: 'Sdílené se mnou' });
+    expect(sharedTitle).toHaveClass('text-sm', 'font-semibold', 'text-[var(--color-ink)]');
+    expect(sharedTitle).not.toHaveClass('uppercase');
     const shared = screen.getByRole('list', { name: 'Sdílené se mnou' });
     const [row] = within(shared).getAllByRole('link');
     expect(row).toHaveAttribute('href', ROUTES.collectionDetail.build({ id: 5 }));
@@ -169,6 +174,44 @@ describe('<Collections> on the phone', () => {
     await user.type(within(sheet).getByLabelText('Název'), 'Od Jany');
     expect(within(sheet).queryByText(/už existuje/)).toBeNull();
     expect(within(sheet).getByRole('button', { name: 'Založit sbírku' })).toBeEnabled();
+  });
+
+  /* Ruling P30, the phone following desktop (operator 2026-10-27): the add entry
+     is a dashed slot at the end of my own list, before what others share. */
+  const follows = (a: Node, b: Node) =>
+    Boolean(b.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+  it("puts a dashed 'Nová sbírka' after my collections and before 'Sdílené se mnou'", async () => {
+    vi.mocked(api.listCollections).mockResolvedValue({
+      data: [coll({}), coll({ id: 5, name: 'Od Jany', owner_email: 'jana@example.com' })],
+      total: 2,
+    });
+    renderPage();
+    const mine = await screen.findByRole('list', { name: 'Sbírky' });
+    const add = screen.getByRole('button', { name: 'Nová sbírka' });
+    expect(add).toHaveClass('border-dashed');
+    expect(follows(add, mine)).toBe(true);
+    expect(follows(screen.getByRole('heading', { name: 'Sdílené se mnou' }), add)).toBe(true);
+  });
+
+  it("with no collection of my own, 'Nová sbírka' follows the empty line", async () => {
+    vi.mocked(api.listCollections).mockResolvedValue({ data: [], total: 0 });
+    renderPage();
+    const empty = await screen.findByText('Zatím žádná sbírka.');
+    expect(follows(screen.getByRole('button', { name: 'Nová sbírka' }), empty)).toBe(true);
+  });
+
+  it("keeps 'Nová sbírka' while the list loads and after it failed", async () => {
+    vi.mocked(api.listCollections).mockReturnValueOnce(new Promise(() => {}));
+    const { unmount } = renderPage();
+    expect(screen.getByRole('status')).toHaveTextContent('Načítám…');
+    expect(screen.getByRole('button', { name: 'Nová sbírka' })).toBeInTheDocument();
+    unmount();
+
+    vi.mocked(api.listCollections).mockRejectedValue(new Error('boom'));
+    renderPage();
+    const failed = await screen.findByText('Sbírky se nepodařilo načíst.');
+    expect(follows(screen.getByRole('button', { name: 'Nová sbírka' }), failed)).toBe(true);
   });
 
   it('shows the shared group even when I have no collection of my own', async () => {

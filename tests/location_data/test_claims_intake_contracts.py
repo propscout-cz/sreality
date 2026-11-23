@@ -9,7 +9,6 @@ not at INSERT time, and never at resolution time.
 from __future__ import annotations
 
 import ast
-from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -264,6 +263,15 @@ def test_a_locator_key_the_reader_never_reads_is_refused():
     # And the optional ones are legal: `value_kind` is read, just not required.
     assert _entry(locator={"reader": "scalar", "json_pointer": "/x",
                            "value_kind": "num"}).reader == "scalar"
+
+
+def test_only_the_marker_reader_may_declare_an_absence():
+    """`absent: retract` (W3) is `html_marker`'s alone: a value reader that found nothing has
+    no node whose presence it tested, so it cannot state an absence."""
+    with pytest.raises(contracts.ContractError) as excinfo:
+        _entry(locator={"reader": "scalar", "json_pointer": "/x", "absent": "retract"})
+    assert "never reads locator.absent" in str(excinfo.value)
+    assert "absent" in READER_CONTRACTS["html_marker"].optional_keys
 
 
 def test_a_page_entry_declared_for_a_kind_the_lane_never_stores_is_refused():

@@ -590,7 +590,7 @@ prerequisite for Gate 1 is met; it needs only the operator window (§6).
    (api/notifications.py:1790) goes NULL → NOT NULL violation aborts that whole pass.
 8. **The read-model surface is ~3× the doc's list**: 25 live views/matviews reference the
    listings identity (10 matviews + 15 views; §5). Two more relations reference an
-   *unrelated* `admin_boundaries.sreality_id` — leave those alone.
+   *unrelated* `admin_boundaries.sreality_id` (dropped 729) — leave those alone.
 9. **Two column-name collisions**: `property_merge_events.listing_id` already exists holding
    legacy sreality values, and `properties.repr_listing_id` likewise. Pick one convention
    for the new columns on these two tables (suggested: `listing_ref_id` /

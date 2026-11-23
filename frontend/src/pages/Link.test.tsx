@@ -4,7 +4,7 @@
  * with the URL in the navigation state. The two refusals that need no server —
  * no link, a portal page that is not one ad — stay on the device; any other site
  * is the server's call. */
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
@@ -179,6 +179,10 @@ describe('<LinkPage>', () => {
     renderLink();
     const roll = screen.getByRole('region', { name: 'Naposledy vložené' });
     expect(roll).toHaveTextContent('Bazoš');
+    /* An L3 group title (section cards ladder), not a small-caps label. */
+    const title = within(roll).getByRole('heading', { level: 2, name: 'Naposledy vložené' });
+    expect(title).toHaveClass('text-sm', 'font-semibold');
+    expect(title).not.toHaveClass('uppercase');
     await userEvent.click(screen.getByRole('button', { name: /196123456/ }));
     expect(await screen.findByTestId('landed')).toHaveTextContent('/listing/bazos/196123456');
   });

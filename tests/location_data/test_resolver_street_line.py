@@ -27,7 +27,7 @@ def _street(value: str, town: str = "Mladá Boleslav"):
 
 
 def _bind(value: str, obec_kods=(MLADA_BOLESLAV,)):
-    return composite.resolve_street([value], obec_kods, mm.default_mirror())
+    return composite.resolve_street(value, obec_kods, mm.default_mirror())
 
 
 def test_a_street_binds_inside_its_town_and_nowhere_else():
@@ -64,9 +64,9 @@ def test_a_claim_naming_the_town_or_one_of_its_parts_is_never_a_street():
     town: the line names that part (v5.7, 1c). One naming the town itself names nothing."""
     mirror = mm.default_mirror()
     mirror.streets.append(Street(code=116, name="Kladno", name_norm="kladno", obec_kod=KLADNO))
-    town = composite.resolve_street(["Kladno"], (KLADNO,), mirror)
+    town = composite.resolve_street("Kladno", (KLADNO,), mirror)
     assert (town.street, town.named_part, town.reason) == (None, None, "no_match")
-    part = composite.resolve_street(["Zábřeh"], (OSTRAVA,), mirror)
+    part = composite.resolve_street("Zábřeh", (OSTRAVA,), mirror)
     assert (part.street, part.named_part.code, part.reason) == (None, 554791, "street_names_part")
 
 

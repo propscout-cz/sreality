@@ -1,8 +1,9 @@
 """DINOv3 bake-off — the pod-side harness for ENCODER-DECISION §5 Set 2 (job b).
 
-Consumes the manifest built by scripts/dinov3_bakeoff_manifest.py (presigned R2 URLs,
+Consumes the manifest scripts/dinov3_bakeoff_manifest.py built, deleted under Actions exit R6a
+(docs/design/new-dedup/PROGRAM.md says how to restore it): presigned R2 URLs,
 the five §5.2 populations, stored-CLIP cosines, the synthetic-transform recipes, the
-weights-canary fixture) and measures NEAR-DUPLICATE SEPARATION per encoder arm.
+weights-canary fixture. It measures NEAR-DUPLICATE SEPARATION per encoder arm.
 
 SELF-CONTAINED ON PURPOSE — no repo imports. It must run on a bare GPU pod holding
 nothing but this one file, the manifest, and pip-installed packages:
@@ -10,8 +11,8 @@ nothing but this one file, the manifest, and pip-installed packages:
     pip install torch transformers pillow requests huggingface_hub
     python3 dinov3_bakeoff.py --manifest dinov3_manifest.json --out results.json
 
-SCOPE, STATED PLAINLY. Nothing launches a pod. The manifest is built by a GitHub
-Actions workflow that holds the DB and R2 credentials a bare pod does not; running
+SCOPE, STATED PLAINLY. Nothing launches a pod. The manifest was built where the DB and
+R2 credentials are, which a bare pod does not hold; running
 THIS file against that manifest on a real GPU is a MANUAL step the operator performs
 by hand, when they choose to spend the ~$2 §5.3 estimates. There is no pod-launch
 automation here and there never should be in this file — a harness that can spend
@@ -43,7 +44,7 @@ THE EXCLUSION IS TWO INDEPENDENT KNOBS. `--p1a-hamming` (what the manifest calle
 POSITIVE) and `--exclusion-hamming` (the contamination filter applied to the P3 side)
 are separate parameters, because the predecessor harness defaulted them to the same
 value and would therefore have produced an empty positive set by construction. The
-exclusion's CLIP-DERIVED limbs (stored cosine at ceiling, render_score floor) are
+exclusion's CLIP-DERIVED limb (stored cosine at ceiling) is
 reported both ON and OFF: baking the incumbent's opinion into the evaluation set is a
 confound when one of the arms IS the incumbent.
 
@@ -63,7 +64,10 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 LOG = logging.getLogger("dinov3_bakeoff")
 
@@ -170,7 +174,6 @@ def is_shared_photo(
     hamming_max: int,
     clip_limbs: bool,
     clip_ceiling: float = SHARED_CLIP_COS,
-    render_max: float = 1.01,
 ) -> bool:
     """'These two are literally the same picture' — the rule that strips shared
     marketing renders out of the NEGATIVE side.
@@ -179,8 +182,9 @@ def is_shared_photo(
     Hamming distance that DEFINES P1a; the predecessor defaulted both to 2, which made
     the positive population empty by construction (ENCODER-DECISION §5.2 fix 1).
 
-    `clip_limbs=False` drops the CLIP-derived limbs (stored cosine at ceiling, and the
-    render_score floor), leaving a purely encoder-independent rule. Both readings are
+    `clip_limbs=False` drops the CLIP-derived limb (stored cosine at ceiling; the render
+    score floor went with render scoring, ruling 2026-10-28), leaving a purely
+    encoder-independent rule. Both readings are
     reported, because deciding which pairs survive with the incumbent's own opinion is
     a confound when the incumbent is one of the arms (§5.2 fix 2, §5.1 gap 5).
     """
@@ -190,9 +194,6 @@ def is_shared_photo(
         cos = pair.get("clip_cos")
         if cos is not None and cos >= clip_ceiling:
             return True
-        ra, rb = a.get("render_score"), b.get("render_score")
-        if (ra or 0.0) >= render_max or (rb or 0.0) >= render_max:
-            return True
     pa, pb = a.get("phash"), b.get("phash")
     return pa is not None and pb is not None and hamming64(pa, pb) <= hamming_max
 
@@ -201,14 +202,14 @@ def is_shared_photo(
 # P1b — the synthetic transforms, applied HERE (§5.2). Pure PIL functions.
 # ---------------------------------------------------------------------------
 
-def t_crop10(im):
+def t_crop10(im: Image.Image) -> Image.Image:
     """Centre crop to 90% of each side — breaks pHash, keeps human identity."""
     w, h = im.size
     dx, dy = int(round(w * 0.05)), int(round(h * 0.05))
     return im.crop((dx, dy, w - dx, h - dy))
 
 
-def t_resize_half(im):
+def t_resize_half(im: Image.Image) -> Image.Image:
     """Downscale to 50% and back up: resampling loss at the original dimensions."""
     from PIL import Image
 
@@ -217,7 +218,7 @@ def t_resize_half(im):
     return small.resize((w, h), Image.BICUBIC)
 
 
-def t_rejpeg_q60(im):
+def t_rejpeg_q60(im: Image.Image) -> Image.Image:
     """Re-encode as JPEG quality 60. Same dimensions, different bytes."""
     from PIL import Image
 
@@ -227,7 +228,7 @@ def t_rejpeg_q60(im):
     return Image.open(buf).convert("RGB")
 
 
-def t_watermark_band(im):
+def t_watermark_band(im: Image.Image) -> Image.Image:
     """Opaque bands over the LEFT and RIGHT thirds, never the centre.
 
     Placement is the whole point: a centred watermark is exactly what a
@@ -246,7 +247,7 @@ def t_watermark_band(im):
     return out
 
 
-def t_letterbox(im):
+def t_letterbox(im: Image.Image) -> Image.Image:
     """Pad to square with black bars. Aspect ratio preserved; nothing cropped."""
     from PIL import Image
 
@@ -257,7 +258,7 @@ def t_letterbox(im):
     return canvas
 
 
-def t_crop10_rejpeg_q60(im):
+def t_crop10_rejpeg_q60(im: Image.Image) -> Image.Image:
     """The composed case: geometry AND compression at once."""
     return t_rejpeg_q60(t_crop10(im))
 
@@ -276,14 +277,14 @@ TRANSFORMS: dict[str, Callable[[Any], Any]] = {
 # Preprocessing arms (§3.2: MEASURED, not locked)
 # ---------------------------------------------------------------------------
 
-def pp_square_squash(im, size: int):
+def pp_square_squash(im: Image.Image, size: int) -> Image.Image:
     """The HF processor default: resize to size x size, ignoring aspect ratio."""
     from PIL import Image
 
     return im.convert("RGB").resize((size, size), Image.BICUBIC)
 
 
-def pp_shortest_side_center_crop(im, size: int):
+def pp_shortest_side_center_crop(im: Image.Image, size: int) -> Image.Image:
     """Resize the shortest side to `size`, then centre-crop a square.
 
     Discards the left and right edges of a 4:3 portal photo — where the watermarks
@@ -301,7 +302,7 @@ def pp_shortest_side_center_crop(im, size: int):
     return im.crop((left, top, left + size, top + size))
 
 
-def pp_letterbox_pad(im, size: int):
+def pp_letterbox_pad(im: Image.Image, size: int) -> Image.Image:
     """Fit the whole image inside size x size and pad the remainder black. Nothing
     is discarded and the aspect ratio survives; the cost is wasted pixels."""
     from PIL import Image
@@ -544,7 +545,7 @@ def download_images(images: dict, cache_dir: str, workers: int) -> dict[int, str
     return out
 
 
-def _load_model(arm: Arm, revision: str, device: str):
+def _load_model(arm: Arm, revision: str, device: str) -> tuple[Any, Any]:
     """Model + processor, both pinned to the SAME resolved revision.
 
     `model.eval()` is mandatory for DINOv3: its config carries pos_embed_shift /
@@ -754,21 +755,19 @@ def readouts(
     synth: dict[str, dict[str, float]],
     *,
     exclusion_hamming: int,
-    render_max: float,
     worst_n: int,
 ) -> dict[str, Any]:
     """§5.4's readouts 1-3 for one arm, at three exclusion settings.
 
     `all` applies no contamination filter; `excl_phash_only` applies the
-    encoder-independent limb; `excl_with_clip` adds the CLIP-derived limbs. Reporting
+    encoder-independent limb; `excl_with_clip` adds the CLIP-derived limb. Reporting
     all three is the answer to §5.1's gap 5 — with only the last one, the incumbent's
     opinion silently decides which pairs every OTHER arm is judged on.
     """
     variants = {
         "all": None,
         "excl_phash_only": {"hamming_max": exclusion_hamming, "clip_limbs": False},
-        "excl_with_clip": {"hamming_max": exclusion_hamming, "clip_limbs": True,
-                           "render_max": render_max},
+        "excl_with_clip": {"hamming_max": exclusion_hamming, "clip_limbs": True},
     }
     out: dict[str, Any] = {}
     for variant, exclusion in variants.items():
@@ -831,7 +830,7 @@ class ArmResult:
     readouts: dict[str, Any] = field(default_factory=dict)
 
 
-def _decode(path: str):
+def _decode(path: str) -> Image.Image | None:
     from PIL import Image
 
     try:
@@ -882,9 +881,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                     help="THE CONTAMINATION FILTER's pHash threshold, independent of "
                          "the manifest's P1a definition. Same value for both is the "
                          "predecessor's bug: it empties the positive set.")
-    ap.add_argument("--render-max", type=float, default=0.95,
-                    help="CLIP-derived render_score floor, one of the limbs reported "
-                         "both on and off.")
     ap.add_argument("--worst-pairs", type=int, default=20)
     ap.add_argument("--gpu-cost-per-hr", type=float, default=0.22,
                     help="RTX 3090 list price per §5.3; used for the $/1M readout.")
@@ -932,7 +928,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     LOG.info("arms: %s", [a.name for a in arms])
 
-    def _pair_lookup(table: dict[tuple[str, str], float]):
+    def _pair_lookup(
+        table: dict[tuple[str, str], float],
+    ) -> Callable[[int, int, dict], float | None]:
         def cos(a: int, b: int, _pair: dict) -> float | None:
             return table.get((str(a), str(b)), table.get((str(b), str(a))))
         return cos
@@ -952,8 +950,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         manifest, images,
         lambda a, b, pair: pair.get("clip_cos"),
         synth={},  # a stored vector has no transformed twin to compare against
-        exclusion_hamming=args.exclusion_hamming, render_max=args.render_max,
-        worst_n=args.worst_pairs)
+        exclusion_hamming=args.exclusion_hamming, worst_n=args.worst_pairs)
     baseline.note = ("P1b is absent for the stored arm by construction: no vector "
                      "exists for a transform that was never embedded. Read this arm "
                      "through P1a_vs_P3 — it is the pHash control's own baseline.")
@@ -1007,7 +1004,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             },
             readouts=readouts(manifest, images, _pair_lookup(table), synth,
                               exclusion_hamming=args.exclusion_hamming,
-                              render_max=args.render_max, worst_n=args.worst_pairs),
+                              worst_n=args.worst_pairs),
         ))
         LOG.info("%s: %.1f img/s, $%.2f/1M", arm.name, img_per_s,
                  results[-1].throughput["usd_per_1m_images"])
@@ -1033,7 +1030,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                        "vectors were written to any database."),
         "args": {"device": device, "batch_size": args.batch_size,
                  "exclusion_hamming": args.exclusion_hamming,
-                 "render_max": args.render_max,
                  "gpu_cost_per_hr": args.gpu_cost_per_hr},
         "arms": [asdict(r) for r in results],
         "precision_drift": drift,

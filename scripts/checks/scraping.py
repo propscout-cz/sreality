@@ -29,14 +29,15 @@ from scripts.checks.common import (
     as_utc,
     cell,
     graded,
+    in_dwell_ctes,
     iso,
     judged,
     now,
     num,
     result,
-    wilson_lower,
     with_trends,
 )
+from toolkit.measures import wilson_lower
 
 # The four baselines: the same window 7, 14, 21 and 28 days earlier (the weekday cycle).
 _BASELINE_WEEKS = 4
@@ -47,8 +48,10 @@ _POISON_GIVE_UPS = 3
 # carrying its portal's facts (a portal whose runs never finished keeps one row with no unit; one
 # with no run in the window is added from SOURCES, so none drops out). A unit reached the end in
 # a walk when every entry of its label did; G is the median start gap of the portal's finished
-# walks in the stale window (the open gap never enters it). Entries carry no scope key and labels
-# repeat, so a unit's totals sum its entries.
+# walks in the stale window (the open gap never enters it). Labels repeat, so a unit's totals sum
+# its entries. A walk cycle's end entry (scope {}, NULL labels) is dated at the cycle's anchor, which
+# its orphans were judged against, and the portal's every-unit walk is its newest cycle that reached
+# the end of every scope group.
 _WALKS_SQL = f"""
 with runs as (
     select source, started_at, by_category,
@@ -58,7 +61,10 @@ with runs as (
      where run_type = 'index'
        and started_at > now() - make_interval(days => %(recent_days)s::int)),
 units as (
-    select r.source, r.started_at,
+    select r.source,
+           case when e -> 'scope' = '{{}}'::jsonb
+                then coalesce((e ->> 'cycle_started_at')::timestamptz, r.started_at)
+                else r.started_at end as started_at,
            e ->> 'category_main' as category_main, e ->> 'category_type' as category_type,
            bool_and(coalesce((e ->> 'walk_reached_end')::boolean, false)) as reached,
            sum((e ->> '{DECLARED_TOTAL_KEY}')::numeric) as declared,
@@ -90,12 +96,12 @@ spacing as (
                and started_at > now() - make_interval(days => %(stale_days)s::int)) g
      group by source),
 ends as (
-    select source, max(started_at) as all_reached_at
-      from (select source, started_at, bool_and(reached) as all_reached
-              from units
-             group by source, started_at) w
-     where all_reached
-     group by source),
+    select r.source, max((e ->> 'cycle_started_at')::timestamptz) as all_reached_at
+      from runs r
+      cross join lateral jsonb_array_elements(
+            case when r.finished then r.by_category else '[]'::jsonb end) as e
+     where e -> 'scope' = '{{}}'::jsonb and coalesce((e ->> 'walk_reached_end')::boolean, false)
+     group by r.source),
 walked as (
     select source, category_main, category_type, max(started_at) as walked_at
       from units
@@ -181,29 +187,27 @@ select i.source, count(*) filter (where i.recent), count(*) filter (where i.rece
 """
 
 # Active ads per portal and category, and those with a gone verdict newer than their last
-# sighting (in dwell: the page read gone once and the flip waits out the dwell).
-_HELD_SQL = """
+# sighting (in dwell: the page read gone once and the flip waits out the dwell; one row an ad).
+_HELD_SQL = f"""
 with held as (
     select source, category_main, category_type, count(*) as held
       from listings
      where is_active and source = any(%(sources)s)
      group by 1, 2, 3),
-pending as (
-    select l.source, l.category_main, l.category_type, count(distinct l.id) as pending
-      from detail_queue_completions c
-      join listings l on l.source = c.source and l.source_id_native = c.native_id
-     where c.outcome = 'gone' and c.source = any(%(sources)s) and l.is_active
-       and c.completed_at > coalesce(l.last_seen_at, '-infinity'::timestamptz)
+{in_dwell_ctes(" and c.source = any(%(sources)s)")},
+dwell as (
+    select source, category_main, category_type, count(*) as pending
+      from pending
      group by 1, 2, 3)
 select h.source, h.category_main, h.category_type, h.held, coalesce(p.pending, 0)
   from held h
-  left join pending p on p.source = h.source
+  left join dwell p on p.source = h.source
         and p.category_main is not distinct from h.category_main
         and p.category_type is not distinct from h.category_type
 """
 
 # Active ads unseen since before the start of their category's newest end-reached walk (with no
-# such walk, their portal's newest walk in which every entry reached the end) that the walks' own
+# such walk, the anchor of their portal's newest walk cycle that reached the end of every group) that the walks' own
 # predicate, db.nominable_predicate judged at that start, still calls nominable: no walk is
 # nominating them (an ad the drain finished inside the recheck throttle before it was skipped).
 _UNNOMINATED_SQL = f"""

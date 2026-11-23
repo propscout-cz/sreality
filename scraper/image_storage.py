@@ -291,6 +291,9 @@ class R2Client:
         secret_access_key: str,
         bucket: str,
         max_pool_connections: int = 32,
+        connect_timeout_s: float | None = None,
+        read_timeout_s: float | None = None,
+        max_attempts: int | None = None,
     ) -> None:
         # boto3/botocore are imported here, not at module top, so that
         # importing this module (and anything that transitively pulls it in —
@@ -307,24 +310,37 @@ class R2Client:
         self._secret_access_key = secret_access_key
         # Pool sized to the download worker count — the default of 10 caused
         # constant "Connection pool is full, discarding connection" churn
-        # under the 32-worker image phase.
+        # under the 32-worker image phase. Timeouts left unset keep botocore's 60 s
+        # each, and attempts left unset pin legacy retries (5 attempts), which
+        # botocore 1.44 stopped defaulting to (standard: 3); only the clip job sets
+        # them, so one stalled GET cannot hold its chunk for minutes (#2032).
+        # max_attempts counts the first request too (botocore's total_max_attempts).
+        timeouts: dict[str, Any] = {name: value for name, value in (("connect_timeout", connect_timeout_s),
+                                                                    ("read_timeout", read_timeout_s))
+                                    if value is not None}
+        timeouts["retries"] = ({"mode": "legacy"} if max_attempts is None
+                               else {"total_max_attempts": max_attempts, "mode": "standard"})
         self._client = boto3.client(
             "s3",
             endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
             aws_access_key_id=access_key_id,
             aws_secret_access_key=secret_access_key,
             region_name="auto",
-            config=BotoConfig(max_pool_connections=max(10, max_pool_connections)),
+            config=BotoConfig(max_pool_connections=max(10, max_pool_connections), **timeouts),
         )
 
     @classmethod
-    def from_env(cls, max_pool_connections: int = 32) -> R2Client:
+    def from_env(cls, max_pool_connections: int = 32, connect_timeout_s: float | None = None,
+                 read_timeout_s: float | None = None, max_attempts: int | None = None) -> R2Client:
         return cls(
             account_id=_required("R2_ACCOUNT_ID"),
             access_key_id=_required("R2_ACCESS_KEY_ID"),
             secret_access_key=_required("R2_SECRET_ACCESS_KEY"),
             bucket=_required("R2_BUCKET_NAME"),
             max_pool_connections=max_pool_connections,
+            connect_timeout_s=connect_timeout_s,
+            read_timeout_s=read_timeout_s,
+            max_attempts=max_attempts,
         )
 
     def upload_bytes(

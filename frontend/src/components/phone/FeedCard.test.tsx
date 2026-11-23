@@ -16,6 +16,7 @@ import { CardHydrationProvider } from '@/lib/hydration';
 import * as queries from '@/lib/queries';
 import type { CardRow, PipelineMembers } from '@/lib/queries';
 import type { ImagePublic, PipelineStage } from '@/lib/types';
+import { fakeCreateMap, resetFakeMaps } from '@/test/fakeMap';
 
 import FeedCard, { feedDelta, feedLine2, feedPricePerM2, portalsWord } from './FeedCard';
 
@@ -37,7 +38,10 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   addPipelineCard: vi.fn(),
   apiGet: vi.fn(),
-  apiGetBlob: vi.fn(),
+}));
+vi.mock('@/lib/basemap', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/basemap')>()),
+  createMap: (await import('@/test/fakeMap')).fakeCreateMap,
 }));
 vi.mock('@/lib/imageUrl', () => ({
   imageSrc: (img: { storage_path: string | null }, opts: { w?: number } = {}) =>
@@ -108,7 +112,6 @@ const photo = (seq: number): ImagePublic => ({
   clip_fine_tag: null,
   clip_logical_tag: null,
   clip_confidence: null,
-  clip_render_score: null,
   phash: null,
 });
 
@@ -169,7 +172,7 @@ beforeEach(() => {
   vi.mocked(queries.fetchIsDismissed).mockResolvedValue(false);
   vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map());
   vi.mocked(api.apiGet).mockReset();
-  vi.mocked(api.apiGetBlob).mockReset();
+  resetFakeMaps();
 });
 
 describe('<FeedCard> — the per-m² figure carries its basis (rule 23)', () => {
@@ -210,7 +213,7 @@ describe('<FeedCard> — the lines', () => {
     expect(screen.getByText('3 portály')).toBeInTheDocument();
     expect(screen.getByText('12 dní')).toBeInTheDocument();
     expect(screen.getByText('−5 %')).toBeInTheDocument();
-    expect(screen.getByText('MF 4,1 %')).toBeInTheDocument();
+    expect(screen.getByText('Výnos MF 4,1 %')).toBeInTheDocument();
   });
 
   it('keeps the MF badge to sale flats and says "dnes" for a fresh ad', () => {
@@ -296,6 +299,11 @@ describe('<FeedCard> — photo, wash, funnel', () => {
 });
 
 describe('<FeedCard> — the photo strip', () => {
+  /* The strip's slides, copies included: [copy of the last, 1..n, copy of the first]. */
+  const frames = () => Array.from(strip().children) as HTMLElement[];
+  const srcs = () => Array.from(strip().querySelectorAll('img'), (i) => i.getAttribute('src'));
+  const src = (n: number) => `/images/9001/000${n}.jpg?w=1080`;
+
   it('draws a slide per photo; the cover and the next load, the rest as the swipe nears them', async () => {
     vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map([[9001, photos(5)]]));
     renderCard(base);
@@ -305,41 +313,93 @@ describe('<FeedCard> — the photo strip', () => {
       expect(slide).toHaveAttribute('tabindex', '-1');
     }
     const el = strip();
-    let imgs = el.querySelectorAll('img');
-    expect(imgs).toHaveLength(2);
-    expect(imgs[0]).toHaveAttribute('src', '/images/9001/0001.jpg?w=1080');
-    expect(imgs[1]).toHaveAttribute('src', '/images/9001/0002.jpg?w=1080');
-    for (const img of imgs) expect(img).toHaveAttribute('loading', 'lazy');
+    /* Round: a hidden copy at each end. The first's copy shows the cover already loaded; the last's stays bare. */
+    expect(frames()).toHaveLength(7);
+    expect(frames()[0]).toHaveAttribute('aria-hidden', 'true');
+    expect(frames()[0].querySelector('img')).toBeNull();
+    expect(frames()[6]).toHaveAttribute('aria-hidden', 'true');
+    expect(srcs()).toEqual([src(1), src(2), src(1)]);
+    for (const img of el.querySelectorAll('img')) expect(img).toHaveAttribute('loading', 'lazy');
     expect(dots()).toHaveLength(5);
     expect(dots()[0]).toHaveAttribute('data-dot', 'on');
 
-    scrollStripTo(el, 390);
+    /* One swipe on: slot 2 is the second photo. */
+    scrollStripTo(el, 2 * 390);
     fireEvent.scroll(el);
-    await waitFor(() => expect(el.querySelectorAll('img')).toHaveLength(3));
-    imgs = el.querySelectorAll('img');
-    expect(imgs[2]).toHaveAttribute('src', '/images/9001/0003.jpg?w=1080');
-    expect(imgs[2]).toHaveAttribute('loading', 'lazy');
-    expect(dots()[1]).toHaveAttribute('data-dot', 'on');
+    await waitFor(() => expect(dots()[1]).toHaveAttribute('data-dot', 'on'));
     expect(dots()[0]).not.toHaveAttribute('data-dot');
+    expect(srcs()).toEqual([src(1), src(2), src(3)]);
   });
 
-  it('stops at eight and ends on "all N photos" when the ad has more', async () => {
+  it('loads the photo before the cover once a finger is on the strip', async () => {
+    vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map([[9001, photos(5)]]));
+    renderCard(base);
+    await waitFor(() => expect(slides()).toHaveLength(5));
+    expect(srcs()).not.toContain(src(5));
+    fireEvent.touchStart(strip(), { touches: [{ identifier: 1, target: strip() }] });
+    await waitFor(() => expect(frames()[0].querySelector('img')).toHaveAttribute('src', src(5)));
+  });
+
+  it('goes round: back from the cover lands on the last photo, on from the last on the cover', async () => {
+    vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map([[9001, photos(5)]]));
+    renderCard(base);
+    await waitFor(() => expect(slides()).toHaveLength(5));
+    const el = strip();
+
+    /* Back from the cover: at rest on the copy of the last, the strip moves to the last itself. */
+    scrollStripTo(el, 0);
+    fireEvent.scroll(el);
+    await waitFor(() => expect(dots()[4]).toHaveAttribute('data-dot', 'on'));
+    expect(el.scrollLeft).toBe(5 * 390);
+
+    /* On from the last: at rest on the copy of the cover, the strip moves to the cover. */
+    scrollStripTo(el, 6 * 390);
+    fireEvent.scroll(el);
+    await waitFor(() => expect(dots()[0]).toHaveAttribute('data-dot', 'on'));
+    expect(el.scrollLeft).toBe(390);
+  });
+
+  it('never moves the strip under a finger; it settles when the finger lifts', async () => {
+    vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map([[9001, photos(3)]]));
+    renderCard(base);
+    await waitFor(() => expect(slides()).toHaveLength(3));
+    const el = strip();
+    fireEvent.touchStart(el, { touches: [{ identifier: 1, target: el }] });
+    scrollStripTo(el, 0);
+    fireEvent.scroll(el);
+    await waitFor(() => expect(dots()[2]).toHaveAttribute('data-dot', 'on'));
+    expect(el.scrollLeft).toBe(0);
+    fireEvent.touchEnd(el, { touches: [] });
+    expect(el.scrollLeft).toBe(3 * 390);
+  });
+
+  it('holds every photo and counts past eight instead of dotting', async () => {
     vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map([[9001, photos(12)]]));
     renderCard(base);
-    await waitFor(() => expect(slides()).toHaveLength(9));
-    const last = slides()[8];
-    expect(last).toHaveTextContent('Zobrazit všech 12 fotek');
-    expect(last).toHaveAttribute('href', expect.stringContaining('/property/304388'));
-    expect(dots()).toHaveLength(8);
+    await waitFor(() => expect(slides()).toHaveLength(12));
+    expect(screen.queryByText(/Zobrazit všech/)).toBeNull();
+    expect(dots()).toHaveLength(0);
+    expect(strip().parentElement!.querySelector('[data-counter]')).toHaveTextContent('1 / 12');
     expect(screen.getByText(/fot\./).textContent).toMatch(/12/);
   });
 
-  it('draws neither dots nor an end slide for a single photo', async () => {
+  it('keeps every photo past fifty, the last one a swipe back from the cover', async () => {
+    vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map([[9001, photos(60)]]));
+    renderCard(base);
+    await waitFor(() => expect(slides()).toHaveLength(60));
+    expect(screen.queryByText(/Zobrazit všech/)).toBeNull();
+    expect(frames()[0]).toHaveAttribute('aria-hidden', 'true');
+    fireEvent.touchStart(strip(), { touches: [{ identifier: 1, target: strip() }] });
+    await waitFor(() => expect(frames()[0].querySelector('img')).toHaveAttribute('src', '/images/9001/00060.jpg?w=1080'));
+    expect(strip().parentElement!.querySelector('[data-counter]')).toHaveTextContent('1 / 60');
+  });
+
+  it('draws neither dots nor copies for a single photo', async () => {
     vi.mocked(queries.fetchImagesForListingIds).mockResolvedValue(new Map([[9001, photos(1)]]));
     renderCard(base);
     await waitFor(() => expect(slides()).toHaveLength(1));
+    expect(frames()).toHaveLength(1);
     expect(dots()).toHaveLength(0);
-    expect(screen.queryByText(/Zobrazit všech/)).toBeNull();
   });
 
   it('opens the property on a tap, never on a swipe', async () => {
@@ -393,38 +453,36 @@ describe('<FeedCard> — Poloha', () => {
     }
     /* Nothing is read until the sheet opens. */
     expect(api.apiGet).not.toHaveBeenCalled();
-    expect(api.apiGetBlob).not.toHaveBeenCalled();
+    expect(fakeCreateMap).not.toHaveBeenCalled();
   });
 
   it('opens the Poloha sheet with the map, the place and the three map apps', async () => {
-    URL.createObjectURL = vi.fn(() => 'blob:map');
-    URL.revokeObjectURL = vi.fn();
     vi.mocked(api.apiGet).mockResolvedValue({
       lat: 50.105,
       lon: 14.5,
       granularity: 'street',
       granularity_rank: 60,
       label: 'Freyova, Praha 9 – Vysočany',
-      zoom: 16,
+      precision: 'street',
       note: null,
     });
-    vi.mocked(api.apiGetBlob).mockResolvedValue(new Blob(['png'], { type: 'image/png' }));
     renderCard(base);
     await userEvent.click(screen.getByRole('button', { name: 'Poloha' }));
     const sheet = await screen.findByRole('dialog', { name: 'Poloha' });
     expect(api.apiGet).toHaveBeenCalledWith('/properties/304388/location', undefined, expect.anything());
-    expect(await within(sheet).findByRole('img')).toHaveAttribute('src', 'blob:map');
+    expect(await within(sheet).findByText('Freyova, Praha 9 – Vysočany')).toBeInTheDocument();
     expect(within(sheet).getAllByRole('link').map((a) => a.textContent)).toEqual([
       'Apple Maps',
       'Google Maps',
       'Mapy.cz',
     ]);
-  });
+    await waitFor(() => expect(fakeCreateMap).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    expect(sheet).toContainElement(fakeCreateMap.mock.calls[0][0]);
+  }, 15_000);
 
   it('says "Bez polohy" when the property has no point', async () => {
     const none = new api.ApiError('no_location', 404, { detail: { reason: 'no_location' } });
     vi.mocked(api.apiGet).mockRejectedValue(none);
-    vi.mocked(api.apiGetBlob).mockRejectedValue(none);
     renderCard(base);
     await userEvent.click(screen.getByRole('button', { name: 'Poloha' }));
     const sheet = await screen.findByRole('dialog', { name: 'Poloha' });

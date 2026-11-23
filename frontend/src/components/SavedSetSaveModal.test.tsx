@@ -37,7 +37,7 @@ function Host({
       {open ? (
         <SavedSetSaveModal
           words={PRESET_COPY}
-          mode="update"
+          mode="edit"
           initial={{ name: '2+kk Praha pod 6M', color: null }}
           checkbox={checkbox}
           onSubmit={onSubmit}
@@ -58,7 +58,7 @@ describe('<SavedSetSaveModal> dialog contract', () => {
   it('takes its name from the visible heading rather than a second string', () => {
     render(<Host />);
     fireEvent.click(screen.getByRole('button', { name: 'Save preset' }));
-    expect(screen.getByRole('dialog')).toHaveAccessibleName('Update preset');
+    expect(screen.getByRole('dialog')).toHaveAccessibleName('Edit preset');
   });
 
   it('opens with the current name focused AND selected, so it can be typed over', () => {
@@ -94,7 +94,7 @@ describe('<SavedSetSaveModal> the checkbox', () => {
     expect(box).toHaveAttribute('aria-pressed', 'false');
     fireEvent.click(box);
     expect(box).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(screen.getByRole('button', { name: 'Update preset' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(onSubmit).toHaveBeenCalledWith('2+kk Praha pod 6M', true, null);
   });
 
@@ -109,7 +109,7 @@ describe('<SavedSetSaveModal> the checkbox', () => {
     render(<Host onSubmit={onSubmit} checkbox={null} />);
     open();
     expect(screen.queryByRole('button', { name: /map area/ })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Update preset' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(onSubmit).toHaveBeenCalledWith('2+kk Praha pod 6M', false, null);
   });
 });

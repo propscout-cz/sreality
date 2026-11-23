@@ -65,6 +65,7 @@ def _patch_probe(monkeypatch, client: _FakeProbeClient, *, existing: dict[int, d
         return len(e)
 
     monkeypatch.setattr(scraper_main.db, "enqueue_detail", _fake_enqueue)
+    monkeypatch.setattr(scraper_main.db, "rearm_sighted_given_up", lambda _conn, _source, _ids: 0)
     return calls
 
 
@@ -102,7 +103,7 @@ def test_probe_category_respects_probe_pages_cap(monkeypatch):
     client = _FakeProbeClient(pages=[
         [_estate(1)], [_estate(2)], [_estate(3)], [_estate(4)],
     ])
-    calls = _patch_probe(monkeypatch, client)
+    _patch_probe(monkeypatch, client)
     portal = scraper_main.SrealityPortal()
     seen, counts, total, pages, complete = portal.probe_category(
         (1, 2), conn=object(), dry_run=False, limiter=None, probe_pages=2,

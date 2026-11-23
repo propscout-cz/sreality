@@ -39,7 +39,7 @@ def test_split_qualifier():
 def test_build_rows_emits_official_deaccented_and_qualifier_stripped():
     rows = name_index.build_rows(
         "obec", 42, "Krásný Les u Frýdlantu",
-        is_street=False, parent_obec_unit_id=42, parent_okres_unit_id=7,
+        parent_obec_unit_id=42, parent_okres_unit_id=7,
         psc_set=["46401", "46401", ""],
     )
     kinds = {r.name_kind: r for r in rows}
@@ -53,31 +53,25 @@ def test_build_rows_emits_official_deaccented_and_qualifier_stripped():
 
 def test_build_rows_without_diacritics_has_no_duplicate_alias():
     rows = name_index.build_rows(
-        "obec", 1, "Testov", is_street=False,
-        parent_obec_unit_id=1, parent_okres_unit_id=None,
+        "obec", 1, "Testov", parent_obec_unit_id=1, parent_okres_unit_id=None,
     )
     assert [r.name_kind for r in rows] == ["official"]
 
 
 def test_homonym_count_is_per_kind_and_normalized_name():
     rows = (
-        name_index.build_rows("obec", 1, "Krásný Les", is_street=False,
-                              parent_obec_unit_id=1, parent_okres_unit_id=None)
-        + name_index.build_rows("obec", 2, "Krasny Les", is_street=False,
-                                parent_obec_unit_id=2, parent_okres_unit_id=None)
-        + name_index.build_rows("ulice", 3, "Krásný Les", is_street=True,
-                                parent_obec_unit_id=1, parent_okres_unit_id=None)
+        name_index.build_rows("obec", 1, "Krásný Les", parent_obec_unit_id=1, parent_okres_unit_id=None)
+        + name_index.build_rows("obec", 2, "Krasny Les", parent_obec_unit_id=2, parent_okres_unit_id=None)
+        + name_index.build_rows("cast_obce", 3, "Krásný Les", parent_obec_unit_id=1,
+                                parent_okres_unit_id=None)
     )
     counts = name_index.count_homonyms(rows)
     assert counts[("obec", "krasny les")] == 2
-    assert counts[("ulice", "krasny les")] == 1
+    assert counts[("cast_obce", "krasny les")] == 1
 
 
-def test_deaccented_alias_is_what_makes_a_cross_portal_join_possible():
-    """ceskereality stores streets ~98 % de-accented and realitymix 27 %."""
-    rows = name_index.build_rows(
-        "ulice", 9, "Bílovecká", is_street=True,
-        parent_obec_unit_id=1, parent_okres_unit_id=None,
-    )
-    assert {r.name_norm for r in rows} == {"bilovecka"}
-    assert {r.name for r in rows} == {"Bílovecká", "Bilovecka"}
+def test_deaccented_alias_keeps_both_spellings_under_one_key():
+    rows = name_index.build_rows("obec", 9, "Bílovec", parent_obec_unit_id=9, parent_okres_unit_id=None)
+    assert {r.name_norm for r in rows} == {"bilovec"}
+    assert {r.name for r in rows} == {"Bílovec", "Bilovec"}
+

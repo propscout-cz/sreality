@@ -27,7 +27,7 @@ vi.mock('@/components/ExploreAreaModal', () => ({
 
 import { fetchStatsPivot, listStatsDashboards, marketSample } from '@/lib/stats';
 import { DEFAULT_SCOPE, neighbourhoodFilters } from '@/lib/neighbourhood';
-import { pivotOf } from '@/components/stats/testPivot';
+import { cell, pivotOf } from '@/components/stats/testPivot';
 import MarketTile from './MarketTile';
 
 const CHART: ChartSpec = { id: 'c1', view: 'table', rows: [], cols: [], measure: 'ppm2', stats: ['median'] };
@@ -97,9 +97,23 @@ describe('<MarketTile>', () => {
     fireEvent.click(within(screen.getByRole('group', { name: 'Vzorek' })).getByRole('button', { name: 'Vše' }));
     fireEvent.click(within(screen.getByRole('group', { name: 'Okruh' })).getByRole('button', { name: '1 km' }));
     await waitFor(() => expect(lastPivotFilters()).toMatchObject({
-      status: 'any', showDismissed: true, centerRadius: { radius_m: 1000 },
+      status: 'any', showDismissed: true, circle: { radius_m: 1000 },
     }));
     expect(JSON.parse(localStorage.getItem('sreality.marketTile') ?? '{}')).toEqual({ radiusM: 1000, market: 'all' });
+  });
+
+  /* A pick-one is the ONE joined bar (operator ruling 2026-10-27); Budova and Stav pick several, so they stay chips. */
+  it('draws Okruh and Vzorek as joined bars, the chosen segment filled copper', async () => {
+    renderTile();
+    await screen.findByRole('heading', { level: 3 });
+    for (const [name, lit] of [['Okruh', '500 m'], ['Vzorek', 'Prodáno (trh)']]) {
+      const group = screen.getByRole('group', { name });
+      expect(group.firstElementChild).toHaveClass('inline-flex', 'border', 'bg-[var(--color-paper-2)]');
+      expect(within(group).getByRole('button', { name: lit })).toHaveAttribute('aria-pressed', 'true');
+      expect(within(group).getByRole('button', { name: lit })).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+      for (const b of within(group).getAllByRole('button')) expect(b).not.toHaveClass('border');
+    }
+    expect(screen.getByRole('button', { name: 'Panel' })).toHaveClass('border');
   });
 
   it('names an attribute the property does not state, and leaves it unset', async () => {
@@ -116,9 +130,15 @@ describe('<MarketTile>', () => {
       ],
       total: 2,
     });
-    renderTile();
+    const { container } = renderTile();
     expect(await screen.findByRole('link', { name: 'Otevřít Statistiky →' })).toHaveAttribute('href', '/browse?tab=stats');
     expect(fetchStatsPivot).not.toHaveBeenCalled();
+    /* A section card (C1–C10): the region is named by its title; the hint is one muted line and its
+       action (C10), never a dashed box inside the card (C9); the explore button is the title bar's. */
+    const card = screen.getByRole('region', { name: 'Okolí dashboard' });
+    const bar = within(card).getByRole('heading', { level: 2 }).parentElement as HTMLElement;
+    expect(within(bar).getByRole('button', { name: /Prozkoumat okolí/ })).toBeInTheDocument();
+    expect(container.querySelector('.border-dashed')).toBeNull();
   });
 
   it('opens the explore window over the same neighbourhood, lens and dashboard', async () => {
@@ -136,5 +156,21 @@ describe('<MarketTile>', () => {
     renderTile({ ...PROPERTY, lat: null } as unknown as PropertyPublic);
     expect(await screen.findByText('Bez souřadnic nelze hledat okolí.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Prozkoumat okolí/ })).toBeNull();
+  });
+
+  it('shows small samples on the property page exactly when its dashboard saved the switch on', async () => {
+    const smallPivot = pivotOf({
+      spec: { rows: [], cols: [], measure: 'ppm2' },
+      cells: [{ ...cell([], 3, null), small: { min: 100_000, max: 140_000, mean: 120_000, median: 118_000 } }],
+    });
+    vi.mocked(fetchStatsPivot).mockResolvedValue(smallPivot);
+    vi.mocked(listStatsDashboards).mockResolvedValue({ data: [dashboard({ show_small: true })], total: 1 });
+    const { unmount } = renderTile();
+    expect(await screen.findByText('malý vzorek')).toBeInTheDocument();
+    unmount();
+    vi.mocked(listStatsDashboards).mockResolvedValue({ data: [dashboard({ show_small: false })], total: 1 });
+    renderTile();
+    expect(await screen.findByText(/^pod 5$/)).toBeInTheDocument();
+    expect(screen.queryByText('malý vzorek')).toBeNull();
   });
 });

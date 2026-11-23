@@ -54,10 +54,10 @@ def test_the_page_body_is_returned_unparsed():
     assert _client().fetch_sold_page((49.0, 14.0, 50.0, 15.0)) == "<html></html>"
 
 
-def test_we_identify_ourselves_and_carry_no_contact_data():
-    agent = ReasClient.USER_AGENT
-    assert agent is not None and "sreality-tracker" in agent
-    assert "@" not in agent, "a User-Agent is not a place for contact data"
+def test_we_identify_ourselves_by_the_product_site_and_mailbox():
+    from scraper import contact
+
+    assert ReasClient.USER_AGENT == contact.USER_AGENT
     assert ReasClient.USE_PROXY is False
 
 

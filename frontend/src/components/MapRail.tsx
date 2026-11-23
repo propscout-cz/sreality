@@ -1,5 +1,6 @@
-/* Browse's map control rail: a column of icon buttons on the map's right edge,
- * each opening one panel beside it. On a map narrower than 520 px the panel
+/* The map control rail (Browse's map, the property map and its dialog): a column of
+ * icon buttons on the map's right edge, each opening one panel beside it. On a map
+ * narrower than 520 px the panel
  * rises from the bottom instead (the map root is the `@container`). One panel
  * at a time; a click outside the rail, Escape, or the same button closes it.
  * Everything else stays off the map, which is the point: the controls used to
@@ -10,9 +11,10 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 const SURFACE =
   'pointer-events-auto rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] shadow-[0_2px_6px_rgba(0,0,0,0.06)]';
 
-/* The open panel and the element a click must land in to keep it open. */
-export function useRailPanel<P extends string>() {
-  const [open, setOpen] = useState<P | null>(null);
+/* The open panel and the element a click must land in to keep it open; `initial`
+ * opens one with the map (the property map's dialog opens on its Vrstvy). */
+export function useRailPanel<P extends string>(initial: P | null = null) {
+  const [open, setOpen] = useState<P | null>(initial);
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (open == null) return;
@@ -144,12 +146,6 @@ export const LayersIcon = () => (
     <path d="M8 2.2 14 5.4 8 8.6 2 5.4Z" />
     <path d="M2 8.3 8 11.5 14 8.3" />
     <path d="M2 11.1 8 14.3 14 11.1" />
-  </Icon>
-);
-export const LabelIcon = () => (
-  <Icon>
-    <path d="M2.5 2.5h5.2l5.8 5.8-5.2 5.2-5.8-5.8Z" />
-    <circle cx="5.6" cy="5.6" r="1" />
   </Icon>
 );
 export const SlidersIcon = () => (

@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from api import broker_review as review
 from api import dependencies as deps
+from api import tenant_pool
 
 router = APIRouter(prefix="/broker-review", tags=["broker-review"])
 
@@ -48,7 +49,7 @@ def get_candidates(
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     reason: str | None = Query(default=None),
-    conn: Any = Depends(deps.get_db_conn),
+    conn: Any = Depends(tenant_pool.read_conn),
     _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     return review.list_candidates(conn, status=status, limit=limit, offset=offset,

@@ -1,0 +1,97 @@
+# Secrets inventory: every credential, where it lives, who reads it
+
+One row per secret: where a copy is stored, which code reads it, how to rotate it, and how to prove the
+new value works. Each rotation's date and check go in `docs/design/agent-platform/MVP.md` (§ 3, the M0 credential
+rotation log; agent platform M0, #2061). Update this file in the same PR as any change
+to where a secret lives or who reads it.
+
+The Railway services sit in three separate projects: **API** (`api/`, uvicorn),
+**worker** (`scraper/realtime_worker.py`, same image) and **SPA** (`frontend/`, Caddy; it holds only the
+public `VITE_*` build values). The worker's project also runs **job-runner** (`scraper/job_runner.py`, same image,
+#2025), which stores no secret: its `SUPABASE_DB_URL` and its four `R2_*` are references to the worker's
+(`sreality.env.<NAME>`; the R2 set by reference since #2032), so a worker rotation changes them too and redeploys it
+after the worker; its other two variables are `EXTRAS` and `HF_HUB_OFFLINE` (`1`). "GH" is a GitHub Actions repository secret. Railway's variable names per
+service come from the 2026-10-25 audit (API 20, worker 14, SPA 3); the operator confirms each on the
+service's Variables page before editing it.
+Railway variable NAMES live in `.railway/railway.ts` (each `preserve()`, but job-runner's references and plain values;
+values stay in Railway): add a name there in the same PR as the secret, remove it there to delete one (an operator
+apply, `scripts/railway_iac_wizard.sh`).
+`EXTRAS` (API and worker: `api`; job-runner: `api,clip,geo`) is the root Dockerfile's build argument.
+
+## Rotated in M0 (ruling Q13, MVP.md § 4)
+
+| Secret | GH | Railway API | Railway worker | Elsewhere | Read by | Rotate at | Verified by |
+|---|---|---|---|---|---|---|---|
+| `SUPABASE_DB_URL` (the postgres password) | yes, 62 workflow refs: the **shared** pooler's transaction string (runners reach Supabase over IPv4 only) | yes, the kind it holds today | yes, likewise; job-runner reads it by reference (a worker rotation redeploys it) | RunPod pods get it from a workflow's env | `scraper/db.py` `connect`, `api/dependencies.py` `get_db_conn`, scripts | Supabase → Database settings → Reset database password (one password, so no overlap: stage Railway first, set GitHub just before the reset) | psycopg on the exact GitHub string; signed-in `GET /estimations` |
+| `SUPABASE_DB_SESSION_URL` (same password, session pooler 5432) | yes, 7 refs | if present | yes | | `scraper/db.py` `connect_session` (falls back to `SUPABASE_DB_URL`) | with the password above | psycopg; `apply_migration.yml` dry run (its connectivity step prefers this one) |
+| `TENANT_POOL_DB_URL` (`tenant_pool.<ref>` role on the shared pooler, migration 293; an impersonation credential, audit F7) | no | yes | no | | `api/tenant_pool.py` | `ALTER ROLE tenant_pool PASSWORD '<SCRAM verifier>'` (compute the verifier locally, so no plaintext password reaches a log) | psycopg as `tenant_pool`; signed-in `GET /pipeline/stages` |
+| `SUPABASE_SERVICE_ROLE_KEY` (a `sb_secret_…` key, not a JWT; never `VITE_*`) | yes | **to set** (#2073: serves a run's files; unset = 503) | no; **agent-worker to set** (#2075: stores them; unset = marked not stored) | | `api/agents/agent_files.py`, with `SUPABASE_URL` | Supabase → Settings → API Keys → new secret key, then delete the old one | `GET /auth/v1/admin/users?per_page=1` → 200; a run's file downloads |
+| `R2_ACCESS_KEY_ID` + `R2_SECRET_ACCESS_KEY` | yes, 27 refs | yes (serves `/images/{key}`, the zip) | yes (images lane); job-runner reads the set by reference (a worker rotation redeploys it) | RunPod pods via workflow env | `scraper/image_storage.py` (the API and the worker both import it), `autodedup/lane.py`, `location_data/payloads.py`, scripts | Cloudflare → R2 → Manage API tokens → create (Object Read & Write), then delete the old token | boto3 `head_bucket`; the API's presigned photo URL carries the new key id (`X-Amz-Credential`, public); the worker's variable by eye |
+| `MAPY_CZ_API_KEY` | yes, unused since #2454 (Stage B removes it) | yes, unread since #2453 (Stage B removes it) | no (#2454: the operator removes the worker's copy by the wizard) | | nothing since #2453 | none: Stage B (#2455) revokes it at Mapy | none |
+| `MAPY2_CZ_API_KEY` (backup) | yes, unused since #2454 | yes, unread since #2453 | no (as above) | | nothing since #2453 | as above | none |
+| `VALUO_API_TOKEN`, `VALUO_SANDBOX_API_TOKEN` | no | yes | no | never local | `api/valuo_client.py` | from Valuo (their portal or account contact); ask them to revoke the old ones | `POST /v1/advert/detail` with no ids (prices nothing): 401/403 refused, 000/5xx inconclusive; the API's variables by eye |
+| `CUZK_LOGIN_KEY` (a Fernet key; encrypts each account's own ČÚZK password in `account_cuzk_logins`) | no | **to set** (#2597: unset = `PUT /account/cuzk-login` answers 503 and stores nothing) | no | never local | `api/cuzk_login.py` | on a leak: delete every row of `account_cuzk_logins` (the old tokens stay decryptable with the leaked key, in the table and in backups), set a new key, redeploy, and tell each account that had a login stored to CHANGE ITS ČÚZK PASSWORD at ČÚZK and enter the new one. Rotating also resets every username's run in the login-check budget (the ledger's names are keyed with it). Rotating without a leak has no re-encryption path: stored logins become unreadable and are entered again, so rotate only on a leak. Generate with no output, into a file only you can read, paste into Railway, delete the file: `python3 -c "import os;from cryptography.fernet import Fernet;os.umask(0o077);open(os.path.expanduser('~/cuzk_login_key.txt'),'xb').write(Fernet.generate_key())"` | save a login in the avatar menu's ČÚZK login dialog → "Saved."; the API's variable by eye |
+| `CUZK_WSDP_BASE` (not a secret: the WSDP address, for ČÚZK's free test service only) | no | **never set** (unset = production `katastr.cuzk.gov.cz`) | no | a developer's shell | `api/wsdp_client.py` `base_url`: https only and one of ČÚZK's two hosts, else nothing is sent | n/a | `tests/api/test_cuzk_login.py` |
+| `GH_DISPATCH_TOKEN` (fine-grained PAT, Actions read+write) | no | yes | no | | `api/price_stats.py` | github.com → Settings → Fine-grained tokens → resource owner **propscout-cz**, only `sreality`, Actions read+write (1 year; recreated 2026-10-27, #2008); approve it under the org's token requests if pending | `PUT …/workflows/scrape_price_stats.yml/enable` on the active workflow → 204 (a no-op write: only a write proves the Actions write scope); the API's variable by eye |
+| `STRIPE_WEBHOOK_SECRET` | no | **absent** (audit 2026-10-25: the billing webhook fails closed) | no | | `api/routes/billing.py` | Stripe → Developers → Webhooks → endpoint → Roll secret, only if stored | Stripe's "Send test event" → 2xx |
+| `STRIPE_SECRET_KEY` | no | absent | no | | nothing | Stripe → Developers → API keys → Roll, only if it was ever stored | n/a |
+| `SMOKE_TEST_ADMIN_PASSWORD`, `SMOKE_TEST_NONADMIN_PASSWORD` | no | no | no | local `.env` only | the production smoke checks; the non-admin pair also `scripts/place_search_gate_eval.py` (#2452, until Stage B #2455) | sign in, then set a new password (`PUT /auth/v1/user`) | sign-in with the new password |
+
+Declare `SUPABASE_SERVICE_ROLE_KEY` in `.railway/railway.ts` in the PR that sets it (#2075, which also declares agent-worker and gives it `SUPABASE_URL`, which the realtime worker lacks): a set name the file omits plans as a destructive delete.
+
+## Deleted in M0 (no reader)
+
+`RUNPOD_API_KEY` has no reader on Railway: pods are rented only inside workflows (the judge lane runs in `autodedup.yml`;
+the worker's autodedup lane calls no provider). Both Railway copies are deleted.
+
+
+| Secret | Where | Why it is dead |
+|---|---|---|
+| `API_TOKEN` | Railway API | the static key was deleted 2026-10-13; the API accepts only a Supabase JWT |
+| `SUPABASE_JWT_SECRET` | Railway API | read by nothing since 2026-10-13 (`verify_jwt` uses the project JWKS) |
+| `EXT_API_TOKEN` | GH | the extension stopped sending a static key 2026-07-21 (Wave 1, #888); the build no longer reads it |
+| `RUNPOD_API_KEY` | Railway worker | no worker code reads it (above) |
+
+Also in M0: the Supabase **legacy JWT secret**. If it sits under JWT Keys → Previously used, anyone who
+holds it can mint a `service_role` token that PostgREST accepts. Revoke it only once every client sends a
+`sb_publishable_…` key: the SPA does (`VITE_SUPABASE_ANON_KEY`), and so does every extension build since v0.10.143
+(`EXT_SUPABASE_ANON_KEY`). Supabase refuses the revoke until API Keys → the legacy tab → **Disable JWT-based API
+keys** is done (that switch is reversible; the revoke is not). Never revoke the **Current** signing key (ECC P-256):
+it signs every session and never leaves Supabase. Revoked 2026-10-27.
+
+## How a rotation runs
+
+Make each new credential while the old one still works, stage it on Railway without deploying, set the GitHub
+secret (the operator runs `gh secret set NAME < file`; Claude's auto mode refuses it), deploy each service once with
+the autodedup brake (every worker deploy restarts the dedup lease), check, and only then revoke the old one.
+Values never enter a chat: generate or hold them in a private scratch file and hand them over with `clip.exe`. The
+database goes last (Supabase keeps one postgres password, so there is no overlap): shared pooler
+`aws-0-eu-west-1.pooler.supabase.com`, 6543 for `SUPABASE_DB_URL` and `TENANT_POOL_DB_URL`, 5432 for
+`SUPABASE_DB_SESSION_URL`; reset under Database settings → Reset password (wait for the green toast), deploy the API
+and worker at once (job-runner, which reads the worker's string by reference, redeploys after the worker; if it
+does not, job-runner → Deploy Latest Commit, and check its Health cells too), then re-key `tenant_pool`. A burst of failed connections right after the reset is the pooler's
+cache, not a bad password: do not reset twice.
+
+## Resend
+
+`RESEND_API_KEY` (Railway API; `docs/design/email/PROGRAM.md`): a sending-only key for `novinky.propscout.cz`, read by
+`api/resend_client.py` for the waitlist confirmation (`POST /waitlist`, after the redirect). Unset = no email and no claim;
+the signup still stands. Resend's free plan shares 100 a day with Supabase's password resets, hence
+`waitlist.CONFIRMATION_DAILY_CAP`. Supabase's own key (`propscout-supabase`, `mail.propscout.cz`) lives in its SMTP
+settings. To rotate: create the new key in Resend, paste its value over the old in Railway (the name stays), deploy, delete
+the old key. The account also holds other projects' domains and keys: leave those alone.
+
+## Not rotated here
+
+- Rotated 2026-10-22, before the M0 rotation: `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `QWEN_API_KEY`,
+  `RUNPOD_API_KEY`, the Cloudflare API token. `VAPID_PRIVATE_KEY` was created after the incident and stays.
+- `SCRAPER_PROXY_URL` (GH + worker; the DataImpulse residential proxy, `http://<login>:<password>@gw.dataimpulse.com:823`,
+  read through `scraper/portal_base.py` `PROXY_ENV` by idnes, mmreality, ceskereality): rotated 2026-10-27 by operator
+  ruling. The plan page's ↻ regenerates the password with no overlap, so take the autodedup brake first, then
+  regenerate, test (`curl -K -` with the proxy on stdin → CONNECT 200), stage + deploy the worker, `gh secret set`.
+  A rejected proxy login is a `ProxyError`, retried, never a gone signal.
+- GitHub-only, so outside Railway's incident: `HF_TOKEN`, `SREALITY_LOGIN_EMAIL` / `SREALITY_LOGIN_PASSWORD` /
+  `SREALITY_SESSION_COOKIE`.
+- Public values: `SUPABASE_URL`, `R2_ACCOUNT_ID`, `R2_BUCKET_NAME`, `EXT_SUPABASE_URL`, `EXT_API_BASE_URL`,
+  `EXT_APP_BASE_URL`, every `VITE_*`.
+- `LOCATION_DB_DIRECT_URL` is read by one workflow but is not set as a secret (the job falls back to the pooler).

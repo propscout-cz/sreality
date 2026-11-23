@@ -5,8 +5,9 @@
  * read. The browser holds no threshold and no per-key table: sections, labels, units, order and
  * owner links come from the registry, every status from the checks themselves.
  *
- * Only the lazy Health chunk imports this module. Keep it out of lib/queries.ts and lib/api.ts:
- * both are first-visit JS, which has a blocking size budget (scripts/bundle-budget.mjs). */
+ * Only lazy chunks import this module (Health; Location quality, which renders the location
+ * gauge's row through HEALTH_QUERY). Keep it out of lib/queries.ts and lib/api.ts: both are
+ * first-visit JS, which has a blocking size budget (scripts/bundle-budget.mjs). */
 import { matchRoutes } from 'react-router-dom';
 import { routes } from '@/routes';
 import { apiPost } from '@/lib/api';
@@ -191,11 +192,14 @@ export function cellsWorstFirst(cells: HealthCell[]): HealthCell[] {
 
 type MatrixCell = { status: Status; cell: HealthCell | null; measured: number; notMeasured: number };
 
-/* One check's verdict for one portal, by the harness's own rule (common.result): the worst
+/* "walks/byt-prodej" for "sreality/walks/byt-prodej": a row that names the portal already. */
+export const tail = (subject: string, portal: string): string =>
+  subject.startsWith(`${portal}/`) ? subject.slice(portal.length + 1) : subject;
+
+/* The verdict of some of one check's cells, by the harness's own rule (common.result): the worst
  * MEASURED cell; Not measured only when nothing was. A row the view reads Not measured (stale
  * or unmeasured) measured nothing now, so its stored cells never vote. */
-function portalVerdict(row: HealthRow, portal: string): MatrixCell {
-  const mine = cellsOf(row).filter((c) => c.portal === portal);
+export function verdictOf(row: HealthRow, mine: HealthCell[]): MatrixCell {
   const measured = effective(row) === 'unknown' ? [] : mine.filter((c) => asStatus(c.status) !== 'unknown');
   const worst = cellsWorstFirst(measured)[0] ?? null;
   return {
@@ -205,6 +209,10 @@ function portalVerdict(row: HealthRow, portal: string): MatrixCell {
     notMeasured: mine.length - measured.length,
   };
 }
+
+/* One check's verdict for one portal. */
+const portalVerdict = (row: HealthRow, portal: string): MatrixCell =>
+  verdictOf(row, cellsOf(row).filter((c) => c.portal === portal));
 
 /* The portal matrix: columns = the `portals` section's checks in registry order, rows = every
  * portal a cell of theirs names (alphabetical). Fleet cells (portal null) never enter. A result

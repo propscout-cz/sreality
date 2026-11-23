@@ -1,3 +1,9 @@
+# The CLIP checkpoint pin, alone: the job runner's model layer below is keyed on model + revision only, so a prompt
+# edit to data/clip_taxonomy.json neither re-downloads the weights nor invalidates the pip layers.
+FROM python:3.12-slim AS clip-ref
+COPY data/clip_taxonomy.json scripts/bake_clip_weights.py /ref/
+RUN python /ref/bake_clip_weights.py --pin /ref/clip_taxonomy.json /ref/clip_checkpoint.json
+
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -9,6 +15,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
+
+# EXTRAS: the pyproject extras this image installs. A Railway service variable of the same name reaches this ARG at
+# build time (.railway/railway.ts: the API and the worker set `api`, the job runner `api,clip,geo`); unset, it is
+# `api`. The echo shows in the build log.
+ARG EXTRAS
+
+# The job runner's model layer (EXTRAS names clip; a no-op for the API and the worker), before the source so a
+# code-only build reuses it: CPU torch from PyTorch's CPU index (PyPI's wheel pulls CUDA), then the pinned CLIP
+# checkpoint. These two pins are the clip extra's runtime companions (pyproject.toml); the offline load below proves
+# them. The Xet chunk cache would only duplicate the weights.
+COPY --from=clip-ref /ref/clip_checkpoint.json ./data/
+COPY scripts/bake_clip_weights.py ./scripts/
+RUN case ",${EXTRAS}," in *,clip,*) \
+      pip install --upgrade pip \
+      && pip install "torch==2.14.1" --index-url https://download.pytorch.org/whl/cpu \
+      && pip install "huggingface_hub>=0.34,<1.0" \
+      && HF_HUB_DOWNLOAD_TIMEOUT=60 python scripts/bake_clip_weights.py data/clip_checkpoint.json \
+      && rm -rf /root/.cache/huggingface/xet ;; \
+    esac
+# The vector stack beside torch, from one manifest, in its own layer after the weights, so a bump rebuilds neither
+# torch nor the checkpoint. Pillow decodes and resizes the pixels CLIP reads: the re-embed proof
+# (scripts/clip_reembed.py) holds only while these stay put. The later extras install keeps them (they satisfy its
+# ranges), and the offline proof below asserts them.
+COPY data/requirements-clip-runner.txt ./data/
+RUN case ",${EXTRAS}," in *,clip,*) \
+      pip install -r data/requirements-clip-runner.txt ;; \
+    esac
 
 COPY pyproject.toml ./
 COPY scraper/ ./scraper/
@@ -37,9 +70,45 @@ COPY data/ ./data/
 # tree in the image (setuptools' packages.find matches nothing and fails silently at build
 # time, so the miss only shows as a crash-loop at runtime).
 COPY autodedup/ ./autodedup/
+# The agent folders api/agents/definition.py loads (#2065).
+COPY skills/ ./skills/
 
-RUN pip install --upgrade pip && pip install ".[api]"
+RUN echo "EXTRAS=${EXTRAS:-unset}" && pip install --upgrade pip && pip install ".[${EXTRAS:-api}]"
+# ONE portal is fetched through a real browser (ceskereality: a JS proof-of-work
+# interstitial since 2026-10-31, #2529), so the image that runs the scrapers bakes
+# chromium and its system libraries. Only the service whose EXTRAS names `browser` pays
+# the weight — the API never scrapes. Baked at build time on purpose: a runtime download
+# would make the first walled fetch of a fresh container fail.
+# libatomic1 first, by hand: `--with-deps` installs chromium's system libraries, but it is
+# itself driven by playwright's bundled node, which this slim base cannot even load without
+# libatomic.so.1 (exit 127 before any dependency is resolved — build failure 2026-11-16).
+RUN case ",${EXTRAS}," in *,browser,*) \
+      apt-get update \
+      && apt-get install -y --no-install-recommends libatomic1 \
+      && playwright install --with-deps chromium \
+      && python -c 'from playwright.sync_api import sync_playwright; \
+        p = sync_playwright().start(); b = p.chromium.launch(); \
+        print("BROWSER baked", b.version); b.close(); p.stop()' \
+      && rm -rf /var/lib/apt/lists/* ;; \
+    esac
+# The job runner's proof, offline: CPU torch at its pin, the vector stack at the manifest's versions (a resolver that
+# replaced one fails the build), and Tagger.load reads only the baked checkpoint (a missing file fails the build after
+# Tagger.load's retries, and the old deployment stays live).
+RUN case ",${EXTRAS}," in *,clip,*) \
+      HF_HUB_OFFLINE=1 python -c 'import torch; assert torch.version.cuda is None, torch.version.cuda; \
+        assert torch.__version__.split("+")[0] == "2.14.1", torch.__version__; \
+        from importlib.metadata import version; \
+        pins = dict(line.split("#")[0].strip().split("==") for line in open("data/requirements-clip-runner.txt") \
+                    if "==" in line.split("#")[0]); \
+        got = {name: version(name) for name in pins}; assert got == pins, (got, pins); \
+        print("CLIP stack torch", torch.__version__, got); \
+        from scraper.clip_tagger import Tagger; t = Tagger.load(); \
+        print("CLIP baked", t.model_id, t.revision, "torch", torch.__version__)' \
+      && du -sh /root/.cache/huggingface ;; \
+    esac
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# No access log: a line holds the request URL, query string and all, so a place typed into suggest would reach the
+# deploy log (#2444). Railway's HTTP log keeps the path without the query.
+CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000} --no-access-log"]

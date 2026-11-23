@@ -40,8 +40,9 @@ from autodedup.incremental_sql import (RT_LEASE_READ_SQL, RT_NEW_LISTINGS_SQL, R
 from autodedup.legacy_retire import LEGACY_SOURCE, RETIRE_BY
 from autodedup.ui_sql import NEGATIVE_VERDICTS
 from scripts.checks import dedup as dd
-from scripts.checks.common import iso, wilson_lower
+from scripts.checks.common import iso
 from scripts.verify_pipeline import THRESHOLDS
+from toolkit.measures import wilson_lower
 from toolkit.property_identity import BIRTH_REASONS
 
 _DB_URL = os.environ.get("TEST_DATABASE_URL")
@@ -57,8 +58,8 @@ _LANE_SCOPE = [{"grain": "obec", "code": _TOWN}, {"grain": "cast_obce", "code": 
 _OPEN = {"blocks": [f"town:{_TOWN}"], "category_types": ["prodej", "pronajem"], "all_blocks": False,
          "listing_ids": None, "max_clusters_per_run": 600}
 _CLOSED = {**_OPEN, "blocks": []}
-_SUBJECTS = ["state", "stream", "build", "merge_pause", "decision_lag", "lease", "rulings/ads", "rulings/brokers",
-             "splits"]
+_SUBJECTS = ["state", "stream", "build", "merge_pause", "decision_lag", "unread_arrivals", "held_unpublished",
+             "lease", "rulings/ads", "rulings/brokers", "splits"]
 
 pytestmark = pytest.mark.skipif(
     not _DB_URL and not _REQUIRED,
@@ -284,10 +285,11 @@ def _set_ruled(conn: Any, members: list[int] | None, verdict: str, *, key: int, 
 
 def _lease(conn: Any, name: str, holder: str, *, taken_min: float, ends_min: float) -> None:
     """The lane's one lease row: taken `taken_min` ago, ending `ends_min` from now (negative: it has ended)."""
-    conn.execute("insert into autodedup.rt_lease (name, holder, taken_at, expires_at) values (%(name)s, %(holder)s, "
+    conn.execute("insert into scheduled_jobs (job_name, cadence, runner, lease_holder, last_started_at, "
+                 "lease_expires_at) values (%(name)s, '10 minutes', 'railway-realtime-worker', %(holder)s, "
                  "now() - make_interval(secs => %(taken)s), now() + make_interval(secs => %(ends)s)) "
-                 "on conflict (name) do update set holder = excluded.holder, taken_at = excluded.taken_at, "
-                 "expires_at = excluded.expires_at",
+                 "on conflict (job_name) do update set lease_holder = excluded.lease_holder, "
+                 "last_started_at = excluded.last_started_at, lease_expires_at = excluded.lease_expires_at",
                  {"name": name, "holder": holder, "taken": taken_min * 60, "ends": ends_min * 60})
 
 
@@ -352,7 +354,7 @@ def test_the_whole_check_reads_every_statement_on_the_replayed_schema(conn, name
 
     assert {subject: c["status"] for subject, c in cells.items()} == {
         "state": "ok", "stream": "ok", "build": "ok", "merge_pause": "ok", "decision_lag": "unknown",
-        "lease": "ok", "rulings/ads": "ok", "rulings/brokers": "ok", "splits": "unknown"}
+        "unread_arrivals": "ok", "held_unpublished": "ok", "lease": "ok", "rulings/ads": "ok", "rulings/brokers": "ok", "splits": "unknown"}
     assert cells["stream"]["facts"]["live"] is True and cells["build"]["message"] == "merging: not building"
     assert cells["decision_lag"]["facts"]["n"] == 0
     assert cells["rulings/brokers"]["facts"] == {"state": "merging", "active": 0, "lifted": 0, "violations": 0}
@@ -443,7 +445,8 @@ def test_the_decision_lag_reads_the_new_feeds_in_scope_ads_first_seen_1_to_24_h_
     _decided(conn, f"w5{uuid.uuid4().hex[:10]}", oldest, after_min=5)   # another generation's decision
 
     young_h, old_h = dd._LAG_WINDOW_H
-    assert conn.execute(dd._ARRIVAL_FLOOR_SQL, {"hours": old_h + dd._FLOOR_SLACK_H}).fetchone() == (floor,)
+    assert conn.execute(dd._ARRIVAL_FLOOR_SQL, {"hours": old_h + dd._FLOOR_SLACK_H,
+                                                "sources": [_PORTAL]}).fetchone() == (floor,)
     window = conn.execute(RT_NEW_LISTINGS_SQL, {"after_id": floor, "lag": young_h * 3600,
                                                 "window": dd._LAG_WINDOW_ROWS,
                                                 **parse_scope(_LANE_SCOPE).params()}).fetchone()

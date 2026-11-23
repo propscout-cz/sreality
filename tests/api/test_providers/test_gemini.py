@@ -75,10 +75,12 @@ class _FakeGenerateConfig:
 
 
 class _FakeUsageMeta:
-    def __init__(self, prompt_token_count: int, candidates_token_count: int, cached_content_token_count: int = 0) -> None:
+    def __init__(self, prompt_token_count: int, candidates_token_count: int, cached_content_token_count: int = 0,
+                 thoughts_token_count: int = 0) -> None:
         self.prompt_token_count = prompt_token_count
         self.candidates_token_count = candidates_token_count
         self.cached_content_token_count = cached_content_token_count
+        self.thoughts_token_count = thoughts_token_count
 
 
 class _FakeCandidate:
@@ -123,6 +125,7 @@ def patch_gemini(monkeypatch):
         types_mod.Tool = _FakeTool
         types_mod.Content = _FakeContent
         types_mod.GenerateContentConfig = _FakeGenerateConfig
+        types_mod.HttpOptions = lambda *, timeout: {"timeout": timeout}
 
         genai_mod = types.ModuleType("google.genai")
         genai_mod.types = types_mod
@@ -179,6 +182,15 @@ def test_text_block_round_trips(patch_gemini):
     assert client.models.calls[0]["config"].kwargs["system_instruction"] == "be terse"
 
 
+def test_a_deadline_becomes_the_requests_http_timeout_in_milliseconds(patch_gemini):
+    client = patch_gemini(_text_response("hi"))
+    message = [Message(role="user", content=[TextBlock(text="hi")])]
+    GeminiProvider().complete(system="", messages=message, tools=[], model="gemini-2.5-pro")
+    assert "http_options" not in client.models.calls[0]["config"].kwargs
+    GeminiProvider().complete(system="", messages=message, tools=[], model="gemini-2.5-pro", timeout_s=12.5)
+    assert client.models.calls[1]["config"].kwargs["http_options"] == {"timeout": 12500}
+
+
 def test_role_assistant_is_mapped_to_model(patch_gemini):
     client = patch_gemini(_text_response("ok"))
     p = GeminiProvider()
@@ -194,6 +206,29 @@ def test_role_assistant_is_mapped_to_model(patch_gemini):
     contents = client.models.calls[0]["contents"]
     assert contents[0].role == "user"
     assert contents[1].role == "model"
+
+
+def test_a_call_cut_at_the_output_limit_reports_max_tokens(patch_gemini):
+    """Its arguments may be half-written, so it must not read as a finished tool call."""
+    response = _tool_call_response("find_things", {})
+    response.candidates[0].finish_reason = "MAX_TOKENS"
+    patch_gemini(response)
+    out = GeminiProvider().complete(
+        system="", messages=[Message(role="user", content=[TextBlock(text="go")])], tools=[], model="gemini-2.5-pro",
+    )
+    assert out.tool_calls and out.stop_reason == "max_tokens"
+
+
+def test_usage_counts_every_billed_token_once(patch_gemini):
+    """The cached part sits inside prompt_token_count; thinking is billed at the output rate apart from candidates."""
+    response = _text_response("ok")
+    response.usage_metadata = _FakeUsageMeta(prompt_token_count=1_000, candidates_token_count=50,
+                                             cached_content_token_count=600, thoughts_token_count=400)
+    patch_gemini(response)
+    out = GeminiProvider().complete(
+        system="", messages=[Message(role="user", content=[TextBlock(text="go")])], tools=[], model="gemini-2.5-pro",
+    )
+    assert (out.usage.input_tokens, out.usage.cache_read_tokens, out.usage.output_tokens) == (400, 600, 450)
 
 
 def test_function_call_extracted(patch_gemini):
@@ -307,3 +342,14 @@ def test_schema_for_gemini_strips_additional_properties_recursively():
     assert clean["properties"]["rooms"]["items"]["properties"]["index"] == {"type": "integer"}
     # the original is not mutated (pure)
     assert dirty["additionalProperties"] is False
+
+
+def test_schema_for_gemini_drops_an_integer_vocabulary_and_keeps_a_string_one():
+    """Gemini's Schema.enum is a list of strings; the server still refuses an off-vocabulary integer."""
+    from api.providers.gemini import _schema_for_gemini
+
+    days = {"type": "integer", "enum": [1, 3, 7], "description": "Days.", "nullable": True}
+    status = {"type": "string", "enum": ["any", "active"]}
+    clean = _schema_for_gemini({"type": "object", "properties": {"days": days, "status": status}})
+    assert clean["properties"] == {"days": {"type": "integer", "description": "Days.", "nullable": True},
+                                   "status": status}

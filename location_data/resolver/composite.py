@@ -13,10 +13,9 @@ carries the portal's line verbatim and every answer here is a RÚIAN row, never 
 
 Three rules, in order:
 
-1. **Whole string first.** The normalised line is looked up at obec, část obce, MOMC and
-   správní obvod. An exact match at any level wins and nothing is split — which is why
-   "Frýdek-Místek" stays the town it is and "Praha-Řeporyje" binds the MOMC and resolves up
-   to Praha, with no special-case list anywhere.
+1. **Whole string first.** The normalised line is looked up at obec, část obce and MOMC. An
+   exact match at any level wins and nothing is split — which is why "Frýdek-Místek" stays the
+   town it is and "Praha-Řeporyje" anchors Praha, with no special-case list anywhere.
 2. **Then parts, scoped by the anchoring obec.** Only when nothing matched whole is the line
    split on the separators the portals use. A token naming exactly one obec anchors the
    search; failing that, a token naming exactly one part anchors it through its own parent
@@ -31,7 +30,8 @@ Three rules, in order:
    hyphenated okres names the regex had to carry.
 
 Numbers are part of an official name here, not a shape to strip: "Praha 4", "Plzeň 3" and
-"Pardubice II" are what RÚIAN calls those units, so they match as themselves.
+"Pardubice II" are what RÚIAN calls those units, so they match as themselves. What a match
+BINDS is `part_of`'s answer: a MOMC anchors its town and is never the quarter (W5, ruling Q1).
 """
 
 from __future__ import annotations
@@ -40,6 +40,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
+from location_data.name_index import split_qualifier
 from location_data.resolver.normalize import (
     case_fold,
     deaccent,
@@ -51,11 +52,13 @@ from location_data.resolver.normalize import (
 )
 from location_data.resolver.types import AdminUnit, RegistryView, Street
 
-# The levels a locality line may name BELOW the town, finest first.
-PART_LEVELS: tuple[str, ...] = ("cast_obce", "momc", "spravni_obvod")
+# The levels BELOW the town a place name is matched at, finest first (W5, ruling Q1). Every
+# match anchors its town; only a část obce is ever bound (`part_of`). MOMC stays a key: 1,607
+# remax ads write their town "Praha N". Správní obvod and ZSJ are no level.
+MATCH_LEVELS: tuple[str, ...] = ("cast_obce", "momc")
 # The whole-string ladder. The town is tried first: a name that IS a town is never read as
 # somebody else's quarter.
-WHOLE_LEVELS: tuple[str, ...] = ("obec", *PART_LEVELS)
+WHOLE_LEVELS: tuple[str, ...] = ("obec", *MATCH_LEVELS)
 # Regions, and never a locality. RÚIAN spells nine okresy exactly like a městský obvod
 # ("Brno-venkov", "Plzeň-sever", "Praha-východ"), which is why this test exists at all.
 REGION_LEVELS: tuple[str, ...] = ("okres", "kraj")
@@ -102,9 +105,7 @@ def resolve_locality(value: str, registry: RegistryView) -> CompositeBind:
         obec = obec_of(unit, registry)
         if obec is None:
             continue
-        part = _part_inside(tokens, index, obec, registry)
-        if part is None and unit.level != "obec":
-            part = unit
+        part = _part_inside(tokens, index, obec, registry) or part_of(unit, obec.code, registry)
         if part is not None:
             return CompositeBind(obec=obec, part=part, reason="anchored_part")
         if town_only is None:
@@ -118,7 +119,7 @@ def _resolve_up(unit: AdminUnit, registry: RegistryView, reason: str) -> Composi
     obec = obec_of(unit, registry)
     if obec is None:
         return CompositeBind(reason="no_obec_ancestor")
-    return CompositeBind(obec=obec, part=None if unit.level == "obec" else unit, reason=reason)
+    return CompositeBind(obec=obec, part=part_of(unit, obec.code, registry), reason=reason)
 
 
 def _anchor_candidates(
@@ -149,7 +150,7 @@ def _anchor_candidates(
             continue
         if towns:
             continue
-        _, parts = _first_match(registry, key, PART_LEVELS)
+        _, parts = _first_match(registry, key, MATCH_LEVELS)
         if len(parts) == 1:
             part_hits.append((index, parts[0]))
     return [*obec_hits, *part_hits]
@@ -158,24 +159,33 @@ def _anchor_candidates(
 def _part_inside(
     tokens: Sequence[str], anchor_index: int, obec: AdminUnit, registry: RegistryView
 ) -> AdminUnit | None:
-    """The finest unit another token names INSIDE the anchoring town."""
+    """The one část obce another token names INSIDE the anchoring town (two settle nothing)."""
     for index, token in enumerate(tokens):
         if index == anchor_index:
             continue
-        key = normalize_match_key(token)
-        if not key:
-            continue
-        for level in PART_LEVELS:
-            inside = [
-                unit
-                for unit in _lookup(registry, key, (level,))
-                if (parent := obec_of(unit, registry)) is not None and parent.code == obec.code
-            ]
-            if len(inside) == 1:
-                return inside[0]
-            if inside:
-                break  # ambiguous inside one town: this token settles nothing
+        inside = [unit for unit in _lookup(registry, normalize_match_key(token), ("cast_obce",))
+                  if town_code(unit, registry) == obec.code]
+        if len(inside) == 1:
+            return inside[0]
     return None
+
+
+def part_of(unit: AdminUnit, town: int, registry: RegistryView) -> AdminUnit | None:
+    """The část a match binds (W5, Q1/Q2): a část itself; a KÚ the one část of its obec its
+    qualifier-free name spells ("Podolí u Mohelnice" -> Podolí); a MOMC or the obec nothing."""
+    if unit.level == "cast_obce":
+        return unit
+    if unit.level != "katastralni_uzemi":
+        return None
+    key = normalize_match_key(split_qualifier(unit.name)[0])
+    spelled = [u for u in _lookup(registry, key, ("cast_obce",))
+               if town_code(u, registry) == town]
+    return spelled[0] if len(spelled) == 1 else None
+
+
+def town_code(unit: AdminUnit, registry: RegistryView) -> int | None:
+    """The unit's obec code: the ltree path's for free, the chain's where a view has none."""
+    return unit.obec_kod or getattr(obec_of(unit, registry), "code", None)
 
 
 def obec_of(unit: AdminUnit, registry: RegistryView) -> AdminUnit | None:
@@ -227,8 +237,9 @@ def _tokens(value: str) -> list[str]:
 #     worth 215 titles that bind only with the generic word kept.
 #  2. NOT A PLACE. A claim naming the anchoring obec, or a část obce / MOMC inside it, is
 #     never a street candidate — 76 register streets across 20 obce are spelled exactly like a
-#     část obce of their own town. Since v5.7 a line naming exactly one part of the town IS
-#     that part (`named_part`): "Nový Svět" in Harrachov is the village whose č.p. 701 it is.
+#     část obce of their own town. Since v5.7 a line naming exactly one část of the town IS
+#     that část (`named_part`): "Nový Svět" in Harrachov is the village whose č.p. 701 it is.
+#     A line naming a MOMC names no part (W5) and is still no street: R3 never reads it.
 #
 # Two more since v5.7, each measured on the register (2026-10-14):
 #
@@ -241,17 +252,27 @@ def _tokens(value: str) -> list[str]:
 #     sides: 1,001 register streets change key and no two streets of one obec share a key
 #     that did not share one before (per entry: csa 19, ceskoslovenske armady 45, nam 597, tr
 #     60, nabr 27, gen 85, kpt 126, plk 25, sidl 30 streets — 0 new collisions each).
-_ABBREVIATIONS = tuple((re.compile(rf"\b{short}\b"), full) for short, full in (
+_ABBREVIATION_PAIRS = (
     ("ceskoslovenske armady", "cs armady"), ("csa", "cs armady"), ("nam", "namesti"),
     ("tr", "trida"), ("nabr", "nabrezi"), ("gen", "generala"), ("kpt", "kapitana"),
-    ("plk", "plukovnika"), ("sidl", "sidliste")))
-_PART_OF_TOWN_LEVELS = ("cast_obce", "momc")
+    ("plk", "plukovnika"), ("sidl", "sidliste"))
+_ABBREVIATIONS = tuple((re.compile(rf"\b{short}\b"), full) for short, full in _ABBREVIATION_PAIRS)
 
 
 def fold_abbreviations(key: str) -> str:
     for pattern, full in _ABBREVIATIONS:
         key = pattern.sub(full, key)
     return key
+
+
+def abbreviation_spellings(key: str) -> frozenset[str]:
+    """Every spelling `fold_abbreviations` folds onto `key`'s fold: the raw `ruian_streets.name_norm` keys one name may
+    have, for a read that cannot fold the register's side as `register_street_keys` does (place_search, #2451)."""
+    folded = fold_abbreviations(key)
+    spellings = {folded}
+    for short, full in _ABBREVIATION_PAIRS:
+        spellings |= {re.sub(rf"\b{full}\b", short, s) for s in spellings}
+    return frozenset(s for s in spellings if fold_abbreviations(s) == folded)
 
 
 @dataclass(frozen=True, slots=True)
@@ -369,52 +390,41 @@ def match_streets(
 
 
 def resolve_street(
-    lines: Sequence[str], obec_kods: Sequence[int], registry: RegistryView,
-    *, place_lines: Sequence[str] = (),
+    line: str | None, obec_kods: Sequence[int], registry: RegistryView,
+    *, place_line: str | None = None,
 ) -> StreetBind:
-    """-> the ONE street the claims name inside the constraining obec, or nothing.
+    """-> the ONE street the street claim names inside the constraining obec, or nothing.
 
-    Distinct across every claim, because two streets are two answers and neither is the
-    listing's. Two SPELLINGS of one register row are one answer, which is why the set is keyed
-    on the street's code. `place_lines` are street claims S1 refused as a place name: never a
-    street, asked only which part of the town they name.
+    A line that reaches two distinct streets names neither. Two SPELLINGS of one register row
+    are one answer, which is why the set is keyed on the street's code. `place_line` is a
+    street claim S1 refused as a place name: never a street, asked only which part of the town
+    it names.
     """
-    tiers: dict[str, dict[int, tuple[Street, dict[str, object]]]] = {"exact": {}, "stripped": {}}
-    # Per tier, what each line reached and, for a line WITH diacritics reaching several, the one
-    # it is spelled like — a line's own twins only, never pooled across two street claims.
-    reached: dict[str, list[tuple[set[int], int | None]]] = {"exact": [], "stripped": []}
+    found: dict[int, tuple[Street, dict[str, object]]] = {}
+    spelled: int | None = None
     parts: dict[int, AdminUnit] = {}
-    for line in lines:
-        _, keys = street_match_keys(line)
-        if not keys:
-            continue
-        streets, tier = match_streets(line, obec_kods, registry)
+    keys = street_match_keys(line)[1] if line else ()
+    if line and keys:
+        streets, _ = match_streets(line, obec_kods, registry)
         # The place test is asked AFTER the match and only about a claim that matched: asked
         # first, prose keys would fill a `RunCache` that CLEARS ITSELF at 250,000 entries.
         places = places_named(keys, {s.obec_kod for s in streets}, registry) if streets else []
         if places:
             parts.update(_parts_of_town(places))
-            continue
-        _, numbers = split_street_and_number(strip_street_generic(line))
-        for street in streets:
-            tiers[tier].setdefault(street.code, (street, numbers))
-        reached[tier].append(({s.code for s in streets}, _spelled_like(line, streets)))
-    for line in place_lines:
+        else:
+            _, numbers = split_street_and_number(strip_street_generic(line))
+            found = {street.code: (street, numbers) for street in streets}
+            spelled = _spelled_like(line, streets)
+    if place_line:
         parts.update(_parts_of_town(
-            places_named(street_match_keys(line)[1], set(obec_kods), registry)))
+            places_named(street_match_keys(place_line)[1], set(obec_kods), registry)))
     named_part = _one_part(parts)
-    # The EXACT tier is consulted alone when it has anything at all: a claim that names one
-    # street exactly and grazes another through the tolerant fold has named one street.
-    tier = "exact" if tiers["exact"] else "stripped"
-    found = tiers[tier]
     if not found:
-        return StreetBind(reason="street_names_part" if named_part else "no_match",
+        return StreetBind(reason="street_names_part" if parts else "no_match",
                           named_part=named_part)
     if len(found) > 1:
-        spelled = set().union(*({one} if one is not None else codes
-                                for codes, one in reached[tier]))
         return StreetBind(reason="ambiguous_streets", named_part=named_part, candidates=tuple(
-            replace(_bound(*found[code]), spelled=spelled == {code}) for code in sorted(found)))
+            replace(_bound(*found[code]), spelled=spelled == code) for code in sorted(found)))
     return _bound(*found[next(iter(found))], named_part=named_part)
 
 
@@ -446,7 +456,7 @@ def places_named(
     obce of their own town)."""
     found: dict[int, AdminUnit] = {}
     for key in keys:
-        for unit in registry.admin_units_by_name(key, levels=("obec", *PART_LEVELS)):
+        for unit in registry.admin_units_by_name(key, levels=WHOLE_LEVELS):
             # Through the CHAIN, not through `AdminUnit.obec_kod`: that column is filled off
             # the ltree path by the SQL view and is empty on any other `RegistryView`, so
             # reading it here would make the rail fire in production and nowhere else.
@@ -457,20 +467,17 @@ def places_named(
 
 
 def _parts_of_town(places: Sequence[AdminUnit]) -> dict[int, AdminUnit]:
-    """A line naming the town itself names no part of it."""
+    """The places below the town a line names (a MOMC included); naming the town names none."""
     if any(unit.level == "obec" for unit in places):
         return {}
-    return {u.unit_id: u for u in places if u.level in _PART_OF_TOWN_LEVELS}
+    return {u.unit_id: u for u in places}
 
 
 def _one_part(parts: dict[int, AdminUnit]) -> AdminUnit | None:
-    """The one část the lines name — a MOMC spelled alike (Ostrava's Poruba) is the same place,
-    and the část is the level a streetless house number is unique in."""
-    for level in _PART_OF_TOWN_LEVELS:
-        found = [u for u in parts.values() if u.level == level]
-        if found:
-            return found[0] if len(found) == 1 else None
-    return None
+    """The one část the lines name: a MOMC spelled alike (Ostrava's Poruba) is a key, never the
+    part, and the část is the level a streetless house number is unique in."""
+    found = [u for u in parts.values() if u.level == "cast_obce"]
+    return found[0] if len(found) == 1 else None
 
 
 def _as_int(value: object) -> int | None:

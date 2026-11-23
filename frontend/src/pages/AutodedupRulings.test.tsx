@@ -213,6 +213,19 @@ describe('<AutodedupRulings> the list', () => {
     await waitFor(() => expect(lastQuery()).toMatchObject({ grain: 'group' }));
   });
 
+  /* A pick-one is the ONE joined bar (operator ruling 2026-10-27), drawn via Segmented. */
+  it('draws the grain and the engine agreement as joined bars', async () => {
+    setup();
+    for (const [name, lit] of [['Zrnitost', 'Páry'], ['Engine', 'Vše']]) {
+      const bar = await screen.findByRole('group', { name });
+      expect(bar.firstElementChild).toHaveClass('inline-flex', 'border', 'bg-[var(--color-paper-2)]');
+      expect(within(bar).getByRole('button', { name: lit })).toHaveClass(
+        'bg-[var(--color-copper)]',
+        'text-[var(--color-on-copper)]',
+      );
+    }
+  });
+
   it('reads a filter from the link another page built, and drops it on ✕', async () => {
     setup('/autodedup/rulings?property=100&verdict=bogus');
     await screen.findByTestId('ruling-11-12');

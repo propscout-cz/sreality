@@ -55,7 +55,7 @@ export function TwoStep({
         disabled={pending}
         className={`${size || 'px-3 py-1 text-[0.75rem]'} tracking-wide rounded-[var(--radius-sm)] ${
           dark
-            ? 'bg-[var(--color-brick)] text-white'
+            ? 'bg-[var(--color-brick)] text-[var(--color-on-brick)]'
             : 'bg-[var(--color-brick-soft)] text-[var(--color-brick)] hover:bg-[var(--color-brick)]/15'
         } disabled:opacity-50`}
       >

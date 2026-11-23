@@ -1,11 +1,13 @@
-"""Platform checks: jobs, capacity and llm (the worker's health lane), migration_drift (GitHub).
+"""Platform checks: jobs, capacity, llm and curation_sync (the worker's health lane), migration_drift (GitHub).
 
 `check_jobs` judges every scheduled machine once, one cell per job: each GitHub workflow on
 main by its production runs (a `schedule` run, or a `push` on main), the canary's poller that
-records them, each pg_cron job, each worker lane (from the heartbeat) and each derived
-artifact. `check_capacity` judges whether the database and the worker's memory keep up,
-against references an incident cannot erode. `check_llm` judges whether each provider is
-serving, per provider and per job, and whether fleet spend is sane. `check_migration_drift`
+records them, each pg_cron job, each worker lane (from the heartbeat), each derived
+artifact and the job runner's registry (the watcher judges each runner job). `check_capacity`
+judges whether the database and the worker's memory keep up, against references an incident
+cannot erode. `check_llm` judges whether each provider is
+serving, per provider and per job, and whether fleet spend is sane. `check_curation_sync` judges
+whether every committed curation change still moves the curation clock. `check_migration_drift`
 asks the live catalog whether the newest merged migrations exist; it reads a checkout, so it
 stays on GitHub. Each check takes the harness's `thresholds`, sends every statement through the
 per-check clock and imports neither the harness nor the worker; one that could measure nothing
@@ -18,16 +20,17 @@ from __future__ import annotations
 import datetime as _dt
 import re
 import statistics
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 from psycopg import errors as _pg_errors
 
 from autodedup.incremental_lane import LEASE_LOST as _LEASE_LOST, STOPPING as _STOPPING
+from scraper.jobs import RUNNER as _RUNNER, runner_jobs as _runner_jobs
 from scripts.checks.clock import fetchall, fetchone
 from scripts.checks.common import (
     BEAT_FRESH_S as _BEAT_FRESH_S,
-    CLOCK_SQL as _CLOCK_SQL,
     WORKER as _WORKER,
     ago as _ago,
     as_utc as _as_utc,
@@ -45,9 +48,12 @@ from scripts.migration_objects import MIGRATION_OBJECT_PROBE_SQL, SAFE_IDENT, lo
 from scripts.record_workflow_failures import CURSOR_KEY, MONITOR_WORKFLOW_NAME
 
 _UTC = _dt.timezone.utc
-# A role without access to pg_cron's schema or tables reads no history: Not measured, never OK.
-_CRON_UNREADABLE = (_pg_errors.InsufficientPrivilege, _pg_errors.InvalidSchemaName,
-                    _pg_errors.UndefinedTable)
+# A platform extension's tables (pg_cron's, pg_stat_statements'), not a migration's: a role without access to its schema
+# or tables, or the extension absent, reads nothing there. Not measured, never OK.
+_EXTENSION_UNREADABLE = (_pg_errors.InsufficientPrivilege, _pg_errors.InvalidSchemaName,
+                         _pg_errors.UndefinedTable)
+# pg_stat_statements also answers 55000 (object not in prerequisite state) where it is installed but not preloaded.
+_STATEMENTS_UNREADABLE = (*_EXTENSION_UNREADABLE, _pg_errors.ObjectNotInPrerequisiteState)
 # One outage, two wordings: OpenAI's 429 says "You have no credits remaining", Anthropic's
 # "credit balance" (the patterns llm_errors used, carried verbatim; auth failures match neither).
 _CREDIT_ERROR_PATTERNS = ("%credit balance%", "%no credits remaining%")
@@ -222,7 +228,7 @@ def _cron_cells(conn: Any, thresholds: dict[str, Any],
     """One cell per pg_cron job: failures in its newest runs, and lateness on its own gaps."""
     try:
         rows = fetchall(conn, _CRON_JOBS_SQL)
-    except _CRON_UNREADABLE as exc:
+    except _EXTENSION_UNREADABLE as exc:
         return [], f"pg_cron's tables are unreadable ({_oneline(exc)})"
     if not rows:
         return [], _CRON_EMPTY
@@ -270,12 +276,18 @@ select beat_at, started_at, details from worker_heartbeats where worker = %(work
 # scraper/realtime_worker.LANES, in its order (a check never imports the worker; a test pins the two). The worker seeds
 # every lane it registers into its heartbeat at boot, so a lane named here and absent from the beat was written by an
 # OLDER process beating beside this one (a deploy overlap). It cannot see a lone worker on old code: that worker runs
-# the old check too, and only Railway's per-service commit status shows it (the W2b gate reads that).
+# the old check too, and only its beat's `version` shows it (scripts/check_worker_version.py).
 WORKER_LANES: tuple[str, ...] = (
     "probe", "drain", "images", "maintenance", "broker_maintenance",
     "estimation", "location_resolve", "location_intake_fast", "location_refetch",
     "sold_comps", "text_extract", "health", "autodedup", "notifications", "push", "heartbeat",
 )
+# scraper/realtime_worker.LANE_PASS_TIMEOUT_SECONDS (a check never imports the worker; a test pins the two): past it
+# the worker abandons the pass (a wedge sat nine hours). A pass in flight is Watch at two thirds of it (eight portals
+# at up to 120 s each make ~16 min an honest drain pass) and a Problem past it. The worker's own number, not a
+# THRESHOLDS key (#2026 replaced the two global in-flight keys with it).
+LANE_PASS_BUDGET_S = 1800
+LANE_INFLIGHT_WARN_S = LANE_PASS_BUDGET_S * 2 // 3
 
 
 def _lane_cells(conn: Any, thresholds: dict[str, Any],
@@ -306,6 +318,11 @@ def _lane_cells(conn: Any, thresholds: dict[str, Any],
     return cells, None
 
 
+def _stored_facts(cells: dict[str, dict[str, Any]], subject: str) -> dict[str, Any]:
+    """The facts a stored result's cell `subject` carried, or none."""
+    return (cells.get(subject) or {}).get("facts") or {}
+
+
 def _missing_lane(lane: str, previous: dict[str, Any]) -> dict[str, Any]:
     """A registered lane the heartbeat lacks: Watch at once, Problem when the previous measurement read it missing too.
 
@@ -314,7 +331,7 @@ def _missing_lane(lane: str, previous: dict[str, Any]) -> dict[str, Any]:
     beating beside this one.
     """
     subject = f"lane/{lane}"
-    again = bool(((previous.get(subject) or {}).get("facts") or {}).get("missing"))
+    again = bool(_stored_facts(previous, subject).get("missing"))
     said = ("missing: the heartbeat has no entry for it, so the beat is from an older process "
             "beating beside this one (a deploy overlap)")
     return _cell(subject, "fail" if again else "warn",
@@ -358,8 +375,8 @@ def _lane(lane: str, info: dict[str, Any], previous: dict[str, Any], thresholds:
     # from until it completes a pass: its clock starts at that measurement, never at the boot nor
     # at a pass from before the pause (autodedup came off its brake at 02:40 on 2026-10-19 and read
     # "late ... 2.1 h" at once; on 2026-10-23 a 5 h brake left a pre-brake pass as the clock).
-    held = previous.get(subject) or {}
-    held_interval = _num((held.get("facts") or {}).get("interval_s"))
+    held_facts = _stored_facts(previous, subject)
+    held_interval = _num(held_facts.get("interval_s"))
     was_off = held_interval is not None and held_interval <= 0
     reference = max(stamp for stamp in (last_pass, previous_at if was_off else None,
                                         booted if last_pass is None else None) if stamp)
@@ -378,11 +395,11 @@ def _lane(lane: str, info: dict[str, Any], previous: dict[str, Any], thresholds:
         else:
             conditions.append(("warn", f"its newest pass failed: {error}"))
     in_flight = _num(info.get("in_flight_s"))
-    if in_flight is not None and in_flight > float(thresholds["jobs_lane_inflight_fail_s"]):
+    if in_flight is not None and in_flight > LANE_PASS_BUDGET_S:
         conditions.append(("fail", f"one pass in flight for {_ago(in_flight)}"))
-    elif in_flight is not None and in_flight > float(thresholds["jobs_lane_inflight_warn_s"]):
+    elif in_flight is not None and in_flight > LANE_INFLIGHT_WARN_S:
         conditions.append(("warn", f"one pass in flight for {_ago(in_flight)}"))
-    flap = _flap(previous.get(subject), passes, failed, thresholds)
+    flap = _flap(held_facts, passes, failed, thresholds)
     if flap:
         conditions.append(("warn", flap))
     # An abort (the engine's pair_budget or deadline: the pass rolled back, nothing committed) is
@@ -397,7 +414,6 @@ def _lane(lane: str, info: dict[str, Any], previous: dict[str, Any], thresholds:
     aborted = _abort_reason(last.get("aborted"))
     facts["last_aborted"] = aborted
     if aborted:
-        held_facts = held.get("facts") or {}
         held_aborted = _abort_reason(held_facts.get("last_aborted"))
         held_passes = _num(held_facts.get("passes"))
         if held_aborted and held_passes is not None and passes > held_passes:
@@ -427,10 +443,8 @@ def _abort_reason(value: Any) -> str | None:
     return _oneline(value) or None
 
 
-def _flap(prev: dict[str, Any] | None, passes: int, failed: int,
-          thresholds: dict[str, Any]) -> str | None:
-    """Half or more of the passes since this check's previous result failed, over enough passes."""
-    facts = (prev or {}).get("facts") or {}
+def _flap(facts: dict[str, Any], passes: int, failed: int, thresholds: dict[str, Any]) -> str | None:
+    """Half or more of the passes since this check's previous result (its stored `facts`) failed, over enough passes."""
     if facts.get("passes") is None or facts.get("failed_passes") is None:
         return None
     done, broke = passes - int(facts["passes"]), failed - int(facts["failed_passes"])
@@ -509,6 +523,59 @@ def _artifact_cells(conn: Any, thresholds: dict[str, Any],
     return cells
 
 
+# --- jobs: the job runner's registry -------------------------------------------------------------
+
+# scraper/job_lease._DUE_SQL's predicate: a job with no such row is claimed by no replica, and the watcher gives a
+# never-registered job no job/<name> cell (migration 682), so this census is the one alarm for a runner that never
+# registered it.
+_REGISTERED_SQL = """
+select job_name from scheduled_jobs
+ where runner = %(runner)s and registry_at is not null and retired_at is null
+ order by job_name
+"""
+_REGISTRY = "job-runner/registry"
+
+
+def _registry_cell(conn: Any, thresholds: dict[str, Any], now: _dt.datetime,
+                   declared: Iterable[str] | None = None) -> dict[str, Any]:
+    """Every job this code puts on the job runner has a live registered row, and no other row is live.
+
+    A merge restarts the worker at once and the runner after its image build, so a gap is judged only past the grace
+    from the worker's boot. A missing job is a Problem once the previous measurement read it missing too: in a deploy
+    overlap both workers beat one heartbeat row, so a read can see the predecessor's long-past boot.
+    """
+    names = sorted({j.name for j in _runner_jobs()} if declared is None else set(declared))
+    registered = [row[0] for row in fetchall(conn, _REGISTERED_SQL, {"runner": _RUNNER})]
+    beat = fetchone(conn, _HEARTBEAT_SQL, {"worker": _WORKER})
+    booted = _as_utc(beat[1]) if beat else None
+    up = None if booted is None else (now - booted).total_seconds()
+    missing = [n for n in names if n not in registered]
+    undeclared = [n for n in registered if n not in names]
+    facts = {"declared": names, "registered": registered, "missing": missing, "undeclared": undeclared,
+             "worker_up_s": _round(up)}
+    settled = up is None or up > float(thresholds["jobs_runner_register_grace_s"])
+    conditions: list[tuple[str, str]] = []
+    if missing and settled:
+        said = f"declared on the job runner in this code but not registered: {', '.join(missing)}"
+        held = _stored_facts(_previous_result(conn, "jobs")[1], _REGISTRY).get("missing") or []
+        if set(missing) & set(held):
+            conditions.append(("fail", f"{said}. The runner is not running this registry (its deploy failed or was "
+                                       "skipped, it refused the entry, or an older image booted and retired it); see "
+                                       "Railway's job-runner deployments"))
+        else:
+            conditions.append(("warn", f"{said}; a Problem if the next measurement reads it missing too (one read "
+                                       "can be a deploy overlap's, whose heartbeat is the predecessor's)"))
+    if undeclared and settled:
+        conditions.append(("warn", f"registered by a runner on other code than this worker's: {', '.join(undeclared)}"))
+    if not settled and (missing or undeclared):
+        ok = f"waiting for the runner's deploy (worker up {_ago(up)})"
+    elif names:
+        ok = f"{len(names)} jobs declared on the job runner, all registered"
+    else:
+        ok = "no job is declared on the job runner yet"
+    return _judged(_REGISTRY, conditions, ok, value=len(missing), unit="jobs", facts=facts)
+
+
 def check_jobs(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     """Is every scheduled machine, on every runtime, running and succeeding? One cell per job."""
     now = _now(conn)
@@ -520,6 +587,7 @@ def check_jobs(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
         if why:
             not_measured[arm] = why
     cells += _artifact_cells(conn, thresholds, now)
+    cells.append(_registry_cell(conn, thresholds, now))
     return _result("jobs", cells, not_measured)
 
 
@@ -634,7 +702,7 @@ def _capacity_cron_cells(conn: Any, thresholds: dict[str, Any],
     try:
         rows = fetchall(conn, _CAPACITY_CRON_SQL)
         weeks = fetchall(conn, _CAPACITY_REFERENCE_SQL, {"ref": ref})
-    except _CRON_UNREADABLE as exc:
+    except _EXTENSION_UNREADABLE as exc:
         return [], f"pg_cron's tables are unreadable ({_oneline(exc)})"
     if not rows:
         return [], _CRON_EMPTY
@@ -913,6 +981,175 @@ def check_llm(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     return _result("llm", cells, {})
 
 
+# --- curation_sync: does every committed curation change move the clock? -------------------
+#
+# Curation sync (docs/design/curation-sync.md § 3.9, migrations 696 and 715): fourteen deferred constraint triggers are the
+# curation clock's only writer, so a trigger disabled by a hygiene migration, or a bump that stopped landing, leaves
+# every open window showing stale curation with no error anywhere. Two cells are should-never-happen:
+#   triggers     Problem unless exactly CURATION_CLOCK_TRIGGERS triggers on bump_curation_clock() are enabled and
+#                initially deferred (the writer kill switch turns it red by intent while it is in force).
+#   board_bumps  Problem when a property_pipeline_events row of the last 24 h has no board clock row of its account
+#                changed at or after it. Exact: an event is written only in the transaction of a card change
+#                (api/pipeline.py), whose commit bumps board at clock_timestamp() >= the event's now(); the 696 seed
+#                stamps every account at the apply, so events before it hold too.
+# Two watch the clock's READER (W4), from pg_stat_statements (Not measured without it, as in CI's replayed schema,
+# or when the worker sees authenticated's statement text masked, lacking pg_read_all_stats), never paged: the
+# browser's read is a statement run as authenticated naming curation_clock_public.
+#   reads        Watch when its call count has not advanced for CURATION_CLOCK_QUIET_H: no signed-in window follows
+#                curation (the reader kill switch, a dead read in the SPA, or nobody signed in). `quiet_since` rides
+#                the cell's facts from one result to the next (previous_result); fewer calls under the same reset (an
+#                evicted entry) is no advance, a reset with calls since is one.
+#   load         Watch when its share of all statement time between this measurement and the previous one is at
+#                least CURATION_CLOCK_LOAD_PCT: the planned trigger to re-cost the interval (§ 3.8). A statistics
+#                reset, or a first measurement, takes a baseline and judges nothing.
+
+# A clock trigger that fires: enabled (origin), a constraint trigger, initially deferred (migration 696's shape).
+_CLOCK_TRIGGER_ARMED = "t.tgenabled = 'O' and t.tgconstraint <> 0 and t.tgdeferrable and t.tginitdeferred"
+_CURATION_TRIGGERS_SQL = f"""
+select count(*) filter (where {_CLOCK_TRIGGER_ARMED}),
+       count(*),
+       coalesce(array_agg(c.relname::text order by c.relname) filter (where not ({_CLOCK_TRIGGER_ARMED})), '{{}}')
+  from pg_trigger t
+  join pg_class c on c.oid = t.tgrelid
+ where t.tgfoid = to_regprocedure('public.bump_curation_clock()') and not t.tgisinternal
+"""
+
+_CURATION_BOARD_BUMPS_SQL = """
+select count(*) filter (where e.missed), count(distinct e.account_id) filter (where e.missed),
+       min(e.created_at) filter (where e.missed), count(*)
+  from (select e.account_id, e.created_at,
+               not exists (select 1 from curation_clock c
+                            where c.account_id = e.account_id and c.family = 'board'
+                              and c.changed_at >= e.created_at) as missed
+          from property_pipeline_events e
+         where e.created_at > now() - interval '24 hours') e
+"""
+
+
+# Cumulative since the statistics' reset: the clock read's calls and execution time, all statements' time, the reset,
+# and authenticated's entries whose text the worker may not read (no pg_read_all_stats: the pattern cannot match them).
+_CURATION_STATEMENTS_SQL = """
+select coalesce(sum(s.calls) filter (where s.browser and s.named), 0)::bigint,
+       coalesce(sum(s.total_exec_time) filter (where s.browser and s.named), 0)::float8,
+       coalesce(sum(s.total_exec_time), 0)::float8,
+       (select i.stats_reset from pg_stat_statements_info i),
+       count(*) filter (where s.browser and s.masked)
+  from (select p.calls, p.total_exec_time, p.userid = to_regrole('authenticated')::oid as browser,
+               p.query ilike %(relation)s as named, p.query = '<insufficient privilege>' as masked
+          from pg_stat_statements p) s
+"""
+
+
+def _curation_triggers_cell(conn: Any, expected: int) -> dict[str, Any]:
+    armed, found, off = fetchone(conn, _CURATION_TRIGGERS_SQL)
+    armed, found, off = int(armed or 0), int(found or 0), sorted(off or [])
+    facts = {"expected": expected, "armed": armed, "found": found, "off": off}
+    if armed == expected:
+        return _cell("triggers", "ok", f"all {expected} curation-clock triggers are enabled and deferred",
+                     value=armed, unit="triggers", facts=facts)
+    off_text = f"; off on {', '.join(off)}" if off else ""
+    return _cell("triggers", "fail", (
+        f"{armed} of {expected} curation-clock triggers are enabled and deferred ({found} found{off_text}): "
+        "a change to an unclocked table reaches no other open window. Re-enable them by a forward migration "
+        "(red by intent while the writer kill switch is in force)"), value=armed, unit="triggers", facts=facts)
+
+
+def _curation_board_bumps_cell(conn: Any, at: _dt.datetime) -> dict[str, Any]:
+    missed, accounts, first, events = fetchone(conn, _CURATION_BOARD_BUMPS_SQL)
+    missed, accounts, events = int(missed or 0), int(accounts or 0), int(events or 0)
+    facts = {"events_24h": events, "accounts": accounts, "first_missed_at": _iso(_as_utc(first))}
+    if not events:
+        return _cell("board_bumps", "ok", "no card events in the last 24 h: nothing to check against the board "
+                     "clock", value=0, unit="events", facts=facts)
+    if missed:
+        oldest = _ago((at - _as_utc(first)).total_seconds())
+        return _cell("board_bumps", "fail", (
+            f"{missed} of {events} card events of the last 24 h ({accounts} accounts, the oldest {oldest} ago) "
+            "have no board clock bump at or after them: a committed card change moved no clock, so other open "
+            "windows never re-read it"), value=missed, unit="events", facts=facts)
+    return _cell("board_bumps", "ok", f"every one of the {events} card events of the last 24 h bumped "
+                 "its account's board clock", value=0, unit="events", facts=facts)
+
+
+def _curation_reads_cell(calls: int, reset: str | None, previous: dict[str, Any], at: _dt.datetime,
+                         quiet_h: float) -> dict[str, Any]:
+    """Watch once the clock read's call count has stood still for `quiet_h` (an evicted entry is no advance)."""
+    before = previous.get("calls")
+    same_reset = reset == previous.get("stats_reset")
+    advanced = before is not None and calls > (int(before) if same_reset else 0)
+    since = None if before is None or advanced else _as_utc(previous.get("quiet_since"))
+    since = since or at
+    quiet_s = (at - since).total_seconds()
+    facts = {"calls": calls, "quiet_since": _iso(since), "stats_reset": reset}
+    value = round(quiet_s / 3600, 1)
+    if quiet_s >= quiet_h * 3600:
+        return _cell("reads", "warn", (
+            f"no browser has read the curation clock for {_ago(quiet_s)} (its count stood at {calls} since "
+            f"{_stamp(since)}): no signed-in window follows curation. The reader kill switch is in force, the SPA "
+            "no longer sends the read, or nobody was signed in"), value=value, unit="h", facts=facts)
+    if before is None:
+        return _cell("reads", "ok", f"watching the clock read from now ({calls} calls so far)", value=value,
+                     unit="h", facts=facts)
+    if advanced:
+        return _cell("reads", "ok", f"the browsers read the curation clock ({calls} calls)", value=value,
+                     unit="h", facts=facts)
+    return _cell("reads", "ok", f"no clock read for {_ago(quiet_s)} (Watch at {quiet_h:g} h)", value=value,
+                 unit="h", facts=facts)
+
+
+def _curation_load_cell(clock_ms: float, all_ms: float, reset: str | None, previous: dict[str, Any],
+                        watch_pct: float) -> dict[str, Any]:
+    """Watch when the clock read took at least `watch_pct` % of all statement time since the previous measurement."""
+    facts: dict[str, Any] = {"clock_ms": round(clock_ms, 1), "all_ms": round(all_ms, 1), "stats_reset": reset}
+    prev_clock, prev_all = previous.get("clock_ms"), previous.get("all_ms")
+    spent = None if prev_all is None or reset != previous.get("stats_reset") else all_ms - float(prev_all)
+    took = None if prev_clock is None else clock_ms - float(prev_clock)
+    if spent is None or took is None or spent <= 0 or took < 0:
+        return _cell("load", "unknown", "Not measured: a baseline taken now; the share is judged between two "
+                     "measurements", unit="%", facts=facts)
+    share = took / spent * 100
+    facts["share_pct"] = round(share, 3)
+    if share >= watch_pct:
+        return _cell("load", "warn", (
+            f"the clock read took {share:.1f} % of all statement time since the previous measurement (Watch at "
+            f"{watch_pct:g} %): re-cost the interval (docs/design/curation-sync.md § 3.8)"),
+            value=round(share, 2), unit="%", facts=facts)
+    return _cell("load", "ok", f"the clock read took {share:.2f} % of all statement time since the previous "
+                 "measurement", value=round(share, 2), unit="%", facts=facts)
+
+
+def check_curation_sync(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
+    """Does every committed curation change still move the curation clock, and does any window still read it?"""
+    at = _now(conn)
+    cells = [_curation_triggers_cell(conn, int(thresholds["CURATION_CLOCK_TRIGGERS"]))]
+    not_measured: dict[str, str] = {}
+
+    def reader_not_measured(why: str) -> dict[str, Any]:
+        not_measured.update(reads=why, load=why)
+        return _result("curation_sync", cells, not_measured)
+
+    try:
+        cells.append(_curation_board_bumps_cell(conn, at))
+    except _pg_errors.UndefinedTable as exc:
+        not_measured["board_bumps"] = f"the curation clock is absent ({_oneline(exc)})"
+    try:
+        calls, clock_ms, all_ms, reset, masked = fetchone(
+            conn, _CURATION_STATEMENTS_SQL, {"relation": "%curation_clock_public%"})
+    except _STATEMENTS_UNREADABLE as exc:
+        return reader_not_measured(f"pg_stat_statements cannot be read here ({_oneline(exc)})")
+    if masked:
+        return reader_not_measured(
+            f"the worker cannot read other roles' statement text ({int(masked)} entries of authenticated show "
+            "<insufficient privilege>; grant it pg_read_all_stats)")
+    reset_at = _iso(_as_utc(reset))
+    previous = _previous_result(conn, "curation_sync")[1]
+    cells.append(_curation_reads_cell(int(calls or 0), reset_at, _stored_facts(previous, "reads"), at,
+                                      float(thresholds["CURATION_CLOCK_QUIET_H"])))
+    cells.append(_curation_load_cell(float(clock_ms or 0), float(all_ms or 0), reset_at,
+                                     _stored_facts(previous, "load"), float(thresholds["CURATION_CLOCK_LOAD_PCT"])))
+    return _result("curation_sync", cells, not_measured)
+
+
 # --- migration drift: merged is not applied (2026-08-25 outage) -----------------------------
 #
 # Applying a migration is a SEPARATE act from merging it, and nothing connected the two.
@@ -920,37 +1157,51 @@ def check_llm(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
 # portals violated a CHECK constraint the code assumed existed, and scrape_runs.errors read 0
 # the whole time. CI proves a migration REPLAYS against an empty database; it says nothing
 # about production. This asks the live catalog directly: for each of the newest migrations, do
-# the objects it declares actually exist? The ledger (supabase_migrations.schema_migrations) is
+# the objects it declares exist, and are the ones it drops gone? The ledger (supabase_migrations.schema_migrations) is
 # deliberately NOT the oracle; scripts/migration_objects.py says why. One cell per file, OK ones
 # included, so a file applied late recovers on a measured OK. Unverifiable keeps its old meaning
-# (no object the probe can look up); a file that only redefines objects an earlier file already
+# (nothing the probe can look up); a file that only redefines objects an earlier file already
 # made reads OK, not unverifiable as the design's § 4 asks: owed with the apply ledger (#1855).
 
-_UNVERIFIABLE = ("Unverifiable: it declares no object the catalog probe can look up (only "
-                 "grants, drops, data updates or cron changes, or objects a later migration "
-                 "retires), so this check cannot see whether it was applied.")
+_UNVERIFIABLE = ("Unverifiable: it declares or drops no object the catalog probe can look up (only "
+                 "grants, function drops, data updates or cron changes, or objects a later migration "
+                 "retires or re-creates), so this check cannot see whether it was applied.")
 
 
-def _migration_cell(filename: str, objects: list[Any],
+def _migration_cell(filename: str, objects: list[Any], dropped: list[Any],
                     present: dict[tuple[str, str], bool]) -> dict[str, Any]:
-    """One migration file: applied, not applied, partly applied, or unverifiable."""
-    if not objects:
+    """One migration file: applied, not applied, partly applied, drop not applied, or unverifiable."""
+    # A still-present drop is Watch, never Problem: destructive applies follow their deploy by design.
+    if not objects and not dropped:
         return _cell(filename, "unknown", _UNVERIFIABLE, facts={"objects": 0})
     absent = [o for o in objects if not present.get((o.kind, o.ident), False)]
+    # No answer for a drop proves nothing, so only a row that says absent counts as gone.
+    lingering = [o for o in dropped if present.get((o.kind, o.ident), True)]
     facts: dict[str, Any] = {"objects": len(objects), "absent": len(absent)}
-    if not absent:
-        return _cell(filename, "ok", f"Applied: all {len(objects)} of its objects exist.",
-                     value=0, unit="objects absent", facts=facts)
-    facts["first_absent"] = str(absent[0])
-    if len(absent) == len(objects):
+    if dropped:
+        facts |= {"dropped": len(dropped), "still_present": len(lingering)}
+    if absent:
+        facts["first_absent"] = str(absent[0])
+    if lingering:
+        facts["first_still_present"] = str(lingering[0])
+    if absent and len(absent) == len(objects):
         return _cell(filename, "fail", (
             f"Not applied: none of its {len(objects)} objects exist ({absent[0]} absent), so "
             "code that assumes this schema fails on every write. Apply it."),
             value=len(absent), unit="objects absent", facts=facts)
-    return _cell(filename, "warn", (
-        f"Partly applied: {len(absent)} of its {len(objects)} objects are absent ({absent[0]}): "
-        "a half-applied migration, or the object parser misread the file."),
-        value=len(absent), unit="objects absent", facts=facts)
+    unit = "objects out of place" if dropped else "objects absent"
+    if not absent and not lingering:
+        said = [f"all {len(objects)} of its objects exist"] if objects else []
+        said += [f"its {len(dropped)} dropped objects are gone"] if dropped else []
+        return _cell(filename, "ok", f"Applied: {' and '.join(said)}.", value=0, unit=unit, facts=facts)
+    findings = []
+    if absent:
+        findings.append(f"Partly applied: {len(absent)} of its {len(objects)} objects are absent ({absent[0]}): "
+                        "a half-applied migration, or the object parser misread the file.")
+    if lingering:
+        findings.append(f"Drop not applied: {len(lingering)} of {len(dropped)} dropped objects still exist; "
+                        f"apply it once its last reader is live ({lingering[0]}).")
+    return _cell(filename, "warn", " ".join(findings), value=len(absent) + len(lingering), unit=unit, facts=facts)
 
 
 def check_migration_drift(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
@@ -966,9 +1217,11 @@ def check_migration_drift(conn: Any, thresholds: dict[str, Any]) -> dict[str, An
                         "was probed (the probe reads a repository checkout's migrations/)."),
         }
 
-    checkable = {mig.filename: [o for o in mig.objects if SAFE_IDENT.match(o.ident)]
-                 for mig in migrations}
-    probes = [(o.kind, o.ident) for objects in checkable.values() for o in objects]
+    def safe(objects: list[Any]) -> list[Any]:
+        return [o for o in objects if SAFE_IDENT.match(o.ident)]
+
+    checkable = {mig.filename: (safe(mig.objects), safe(mig.dropped)) for mig in migrations}
+    probes = [(o.kind, o.ident) for lists in checkable.values() for objects in lists for o in objects]
     present: dict[tuple[str, str], bool] = {}
     if probes:
         for kind, ident, is_present in fetchall(conn, MIGRATION_OBJECT_PROBE_SQL, {
@@ -976,5 +1229,5 @@ def check_migration_drift(conn: Any, thresholds: dict[str, Any]) -> dict[str, An
         }):
             present[(kind, ident)] = bool(is_present)
     return _result("migration_drift",
-                   [_migration_cell(mig.filename, checkable[mig.filename], present)
+                   [_migration_cell(mig.filename, *checkable[mig.filename], present)
                     for mig in migrations], {})

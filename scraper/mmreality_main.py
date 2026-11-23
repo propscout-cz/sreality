@@ -160,6 +160,8 @@ class MmRealityPortal(portal_runner.PortalDefaults):
     registry config; one category per (sale type, property type) index."""
 
     source = SOURCE
+    walk_every_s = 6 * 3600
+    walk_timeout_s = 60 * 60
     index_rate = 1.0
 
     def __init__(self, config: PortalConfig, *, max_pages: int | None = None) -> None:

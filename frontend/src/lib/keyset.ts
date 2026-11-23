@@ -33,8 +33,8 @@
  * appended to every ORDER BY and compared DESC, so a whole scrape batch that
  * lands on one identical `last_seen_at` second still has a total order.
  *
- * It is a PARAMETER rather than a constant for the listing-grain pin audit
- * (lib/pinAudit.ts), whose unique key is `listing_id`. Every function here
+ * It is a PARAMETER rather than a constant for the listing-grain position audit
+ * (lib/positionAudit.ts), whose unique key is `listing_id`. Every function here
  * takes the same `tiebreak` argument, so a caller cannot mix a `property_id`
  * ORDER BY with a `listing_id` cursor.
  *

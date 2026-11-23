@@ -1,5 +1,6 @@
-import { useId, useState } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import { useNewTabProps } from '@/lib/linkGestures';
 import {
   fmtArea,
   fmtCzk,
@@ -13,10 +14,10 @@ import type { ImagePublic, ListingPublic, ListingSummaryBody } from '@/lib/types
 import { listingKindLabel, priceUnitLabel } from '@/lib/enums';
 import { imageSrc } from '@/lib/imageUrl';
 import ImageTagBadge from '@/components/ImageTagBadge';
-import { portalBadge } from '@/lib/portals';
+import { advertLink, portalBadge } from '@/lib/portals';
 import { listingPath } from '@/lib/listingUrl';
 import Dialog, { DialogClose } from '@/components/Dialog';
-import { Hairline, SectionLabel } from '@/components/section';
+import { Hairline } from '@/components/section';
 
 /* The comparable's detail card, opened from a row of the estimation-detail
  * comparables table — which is itself inside a dialog, so this is the app's
@@ -135,12 +136,18 @@ function Header({ listing, titleId }: { listing: ListingPublic; titleId: string 
   );
 }
 
+/* A dialog has no section cards: its sections are L3 titles (Inter 600 14/20, ink) between
+ * hairlines (system.md § Section cards). Small caps stay for the field labels under them. */
+function DialogSectionTitle({ children }: { children: ReactNode }) {
+  return <h3 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">{children}</h3>;
+}
+
 function Carousel({ images, isActive }: { images: ImagePublic[]; isActive: boolean }) {
   const [i, setI] = useState(0);
   if (images.length === 0) {
     return (
       <div>
-        <SectionLabel>Photos</SectionLabel>
+        <DialogSectionTitle>Photos</DialogSectionTitle>
         <p className="mt-2 text-sm text-[var(--color-ink-3)]">No photos recorded.</p>
       </div>
     );
@@ -151,7 +158,7 @@ function Carousel({ images, isActive }: { images: ImagePublic[]; isActive: boole
   return (
     <div>
       <div className="flex items-baseline justify-between">
-        <SectionLabel>Photos</SectionLabel>
+        <DialogSectionTitle>Photos</DialogSectionTitle>
         <p className="text-[0.7rem] tracking-wide text-[var(--color-ink-4)] font-mono tabular-nums">
           {safe + 1} / {images.length}
         </p>
@@ -267,7 +274,7 @@ function SummarySection({
 }) {
   return (
     <div>
-      <SectionLabel>Summary</SectionLabel>
+      <DialogSectionTitle>Summary</DialogSectionTitle>
       {loading ? (
         <p className="mt-2 text-sm text-[var(--color-ink-3)]">Generating…</p>
       ) : error ? (
@@ -313,7 +320,7 @@ function Facts({ listing }: { listing: ListingPublic }) {
   ];
   return (
     <div>
-      <SectionLabel>Details</SectionLabel>
+      <DialogSectionTitle>Details</DialogSectionTitle>
       <dl className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-x-5 gap-y-3">
         {facts.map(([label, value]) => (
           <div key={label}>
@@ -338,9 +345,10 @@ function Facts({ listing }: { listing: ListingPublic }) {
 }
 
 function Footer({ listing }: { listing: ListingPublic }) {
-  // The origin-portal link is the row's stored `source_url` (migration 494) for
-  // every portal; null → only the in-app "View in full" link shows.
-  const external = listing.source_url;
+  // The origin-portal link (lib/portals advertLink); null → only the in-app "View in full" link shows.
+  const external = advertLink(listing);
+  /* "View in full" opens a new tab: the run and this modal stay open behind it. */
+  const newTab = useNewTabProps();
   return (
     <div className="flex items-center justify-between">
       {/* listingPath needs a real sreality_id (never route the surrogate
@@ -350,6 +358,7 @@ function Footer({ listing }: { listing: ListingPublic }) {
       {listing.sreality_id != null ? (
         <Link
           to={listingPath(listing.sreality_id)}
+          {...newTab}
           className="inline-flex items-center gap-1.5 px-4 py-2 text-sm rounded-[var(--radius-sm)] border border-[var(--color-copper)]/40 bg-[var(--color-copper-soft)] text-[var(--color-copper)] hover:text-[var(--color-copper-2)] hover:border-[var(--color-copper)] transition-colors"
         >
           View in full

@@ -4,15 +4,17 @@
  * affordance and the property's number; the canonical ad's photos as a swiper
  * (bare — the stage is the curation row's); the price in Fraunces with its move and its
  * per-m² under its basis (rule 23, through lib/measure — never price ÷ area); the
- * curation row; then hairline-separated sections, Poloha first (a streamed Mapy
- * static image through the API, never a WebGL map on the phone), then "Moje fotky"
- * (the camera and the user's own photos, PropertyPhotos).
+ * curation row; the broker strip (Zavolat, Uložit kontakt: BrokerStrip); then the sections as section cards (components/Panel, the desktop
+ * tabs' card: operator ruling 2026-10-28), 16 px apart, Poloha first (its own small
+ * lazy map, PhoneMap), then "Moje fotky" (the camera and the user's own photos,
+ * PropertyPhotos).
  *
  * PropertyDetail owns every read and hands them down, so the phone and the
  * desktop page are two drawings of ONE set of queries. Out on the phone: the
- * header map (Poloha's static image stands in), Explore area, the comparables map (RunPanel skips it under the
+ * header map (Poloha's own map stands in), Explore area, the comparables map (RunPanel skips it under the
  * phone shell) and the new-estimation / re-run buttons. */
 
+import BuildingCard from '@/components/listing-detail/BuildingCard';
 import { Suspense, useMemo, useState } from 'react';
 
 import Skeleton from '@/components/Skeleton';
@@ -22,6 +24,8 @@ import PriceHistoryBlock from '@/components/listing-detail/PriceHistoryBlock';
 import DownloadPropertyButton from '@/components/listing-detail/DownloadPropertyButton';
 import { fmtShortDate, fmtTomDays } from '@/lib/format';
 import { lazyChunk } from '@/lib/lazyChunk';
+import { MF_YIELD_TITLE, mfYieldLine } from '@/lib/mfReference';
+import { contactAbout } from '@/lib/brokerContact';
 import { buildPriceSeries, priceChangeEvents, type PriceAdvert } from '@/lib/priceHistory';
 import type { PropertyPublic } from '@/lib/queries';
 import type {
@@ -32,12 +36,12 @@ import type {
   PropertySource,
 } from '@/lib/types';
 
+import BrokerStrip from './BrokerStrip';
 import { NO_FOCUS_ZOOM } from './chips';
 import CurationRow from './CurationRow';
 import {
   feedDelta,
   feedLine2,
-  feedMfYield,
   feedPrice,
   feedPricePerM2,
   portalsWord,
@@ -61,11 +65,6 @@ const PhoneTagsAndNotes = lazyChunk(() =>
 );
 
 export const NOTES_SECTION_ID = 'poznamky';
-
-/* A reused block's frame: the block brings its own label; an empty block (it
- * rendered nothing) takes no room and draws no rule. */
-const BLOCK = 'min-w-0 px-4 py-4 empty:hidden';
-
 
 /* "Na trhu 12 dní · 3 portály · cena snížena 7. 10." */
 export function metaLine({
@@ -136,10 +135,11 @@ export default function PhoneProperty({
   const price = feedPrice(property);
   const ppm2 = feedPricePerM2(property);
   const delta = feedDelta(property.total_price_change_pct);
-  const mf = feedMfYield(property);
+  const mf = mfYieldLine(property.mf_gross_yield_pct, property.mf_reference_rent);
   const line2 = feedLine2(property);
   const portals = sources.length > 0 ? new Set(sources.map((s) => s.source)).size : 1;
   const priceText = price.text ? `${price.text}${price.perMonth ? ' /měs' : ''}` : null;
+  const about = useMemo(() => contactAbout(property), [property]);
 
   const toNotes = () => {
     const section = document.getElementById(NOTES_SECTION_ID);
@@ -149,7 +149,8 @@ export default function PhoneProperty({
 
   return (
     <article aria-label="Nemovitost" className={`pb-6 ${NO_FOCUS_ZOOM}`}>
-      <PropertyGallery images={images} loading={imagesLoading} isActive={property.is_active} />
+      {/* Keyed: the page stays mounted from one property to the next, and the swiper must open on the new cover. */}
+      <PropertyGallery key={property.id} images={images} loading={imagesLoading} isActive={property.is_active} />
 
       <header className="flex flex-col gap-1 px-4 pb-4 pt-2">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -183,7 +184,7 @@ export default function PhoneProperty({
             )}
             {mf && (
               <span
-                title="Hrubý výnos dle cenové mapy nájemného MF (nájem ÷ cena)"
+                title={MF_YIELD_TITLE}
                 className="inline-flex h-5 items-center whitespace-nowrap rounded-[var(--radius-xs)] border border-[var(--color-rule-strong)] px-1 font-mono text-[11px] tabular-nums text-[var(--color-ink-2)]"
               >
                 {mf}
@@ -202,14 +203,18 @@ export default function PhoneProperty({
 
       <CurationRow subject={{ property_id: propertyId, text: line2, figure: priceText }} onNote={toNotes} />
 
-      <div className="divide-y divide-[var(--color-rule)] border-t border-[var(--color-rule)]">
+      {/* The broker one tap away: call, or save the contact (operator 2026-11-06). */}
+      <BrokerStrip sources={sources} sourcesFailed={sourcesFailed} canonicalId={property.id} about={about} />
+
+      {/* Every section is its own card, reused blocks included; one that has nothing keeps its card
+          and says so (C10). */}
+      <div className="space-y-4 border-t border-[var(--color-rule)] px-4 pt-4">
         <LocationSection propertyId={propertyId} />
-        <div className={BLOCK}>
-          <Suspense fallback={<Skeleton height={168} />}>
-            <PropertyPhotos property_id={propertyId} lang="cs" camera />
-          </Suspense>
-        </div>
+        <Suspense fallback={<Skeleton height={168} />}>
+          <PropertyPhotos property_id={propertyId} lang="cs" camera />
+        </Suspense>
         <FactsSection property={property} />
+        <BuildingCard propertyId={propertyId} ad={property} />
         <DescriptionSection text={property.description} />
         <AdsSection
           sources={sources}
@@ -219,38 +224,31 @@ export default function PhoneProperty({
           openedId={openedAdvertId}
           details={adDetails}
         />
-        <div className={BLOCK}>
-          <PriceHistoryBlock property={property} adverts={chartAdverts} snapshots={snapshots} label="Vývoj ceny" />
-        </div>
+        <PriceHistoryBlock property={property} adverts={chartAdverts} snapshots={snapshots} label="Vývoj ceny" />
         <BrokersSection
           adverts={sources}
           canonicalId={property.id}
           advertsFailed={sourcesFailed}
           onRetryAdverts={onRetrySources}
+          about={about}
         />
         <SoldSection property={property} />
-        <div className={BLOCK}>
-          <Suspense fallback={<Skeleton height={140} />}>
-            <EstimationsBlock listing={property} listingIds={advertIds} readOnly bare label="Odhady" />
-          </Suspense>
-        </div>
-        <div className={BLOCK}>
-          {/* No placeholder: most properties hold no Valuo answer, so the block takes no room. */}
-          <Suspense fallback={null}>
-            <ValuoSection property={property} listingIds={advertIds} readOnly bare />
-          </Suspense>
-        </div>
+        <Suspense fallback={<Skeleton height={140} />}>
+          <EstimationsBlock listing={property} listingIds={advertIds} readOnly label="Odhady" />
+        </Suspense>
+        <Suspense fallback={<Skeleton height={140} />}>
+          <ValuoSection property={property} listingIds={advertIds} readOnly />
+        </Suspense>
         {property.sreality_id != null && (
-          <div className={BLOCK}>
-            <FreshnessBlock sreality_id={property.sreality_id} checks={checks} label="Čerstvost" />
-          </div>
+          <FreshnessBlock sreality_id={property.sreality_id} checks={checks} label="Čerstvost" />
         )}
-        <section id={NOTES_SECTION_ID} aria-label="Štítky a poznámky" className={`scroll-mt-16 ${BLOCK}`}>
+        {/* Štítky, the artifact link and Poznámky: three cards; the curation row's "Poznámka" scrolls here. */}
+        <div id={NOTES_SECTION_ID} className="scroll-mt-16">
           <Suspense fallback={<Skeleton height={140} />}>
             <PhoneTagsAndNotes property_id={propertyId} listing_id={property.id} />
           </Suspense>
-        </section>
-        <div className="px-4 py-4">
+        </div>
+        <div className="py-2">
           <DownloadPropertyButton propertyId={propertyId} images={images} variant="phone" />
         </div>
       </div>

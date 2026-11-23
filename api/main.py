@@ -1,4 +1,4 @@
-"""FastAPI service exposing the analytical toolkit + estimate_yield.
+"""FastAPI service exposing the analytical toolkit.
 
 Tool routes return the standard toolkit envelope verbatim for the agent
 layer; non-tool routes (e.g. GET /estimations) shape their own.
@@ -26,13 +26,9 @@ from api import pipeline as pipeline_module
 from api import shares as shares_module
 from api import price_stats as price_stats_module
 from api import dependencies as deps
-from api import maps
 from api import sreality_price_map
 from api import tenant_pool
 from api import schemas as s
-from api import skills as skills_module
-from api.agent import AGENT_TOOLS
-from api.estimate_yield import estimate_yield
 from api.building_runs import (
     assert_editable_for_attachments,
     confirm_units,
@@ -46,6 +42,7 @@ from api.building_runs import (
 from api import attachments as attachments_module
 from api import feedback as feedback_module
 from api import refiner as refiner_module
+from api.filter_args import filter_values
 from api.estimation_runs import (
     create_estimation_run,
     estimation_run_owned,
@@ -62,6 +59,7 @@ from api.labeling import router as labeling_router
 from api.portal_lookup import lookup_portal_listings
 from api.property_merge import router as property_merge_router
 from api.routes.admin import router as admin_router
+from api.routes.agent_runs import router as agent_runs_router
 from api.routes.billing import router as billing_router
 from api.routes.brokers import router as brokers_router
 from api.routes.broker_review import router as broker_review_router
@@ -71,44 +69,48 @@ from api.routes.filter_presets import router as filter_presets_router
 from api.routes.stats_dashboards import router as stats_dashboards_router
 from api.routes.images import router as images_router
 from api.routes.property_download import router as property_download_router
+from api.routes.property_building import router as property_building_router
+from api.routes.property_building_sales import router as property_building_sales_router
 from api.routes.property_location import router as property_location_router
+from api.routes.property_price_history import router as property_price_history_router
 from api.routes.valuo import router as valuo_router
 from api.routes.map_overlays import router as map_overlays_router
 from api.new_dedup_bakeoff import router as new_dedup_bakeoff_router
 from api.new_dedup_labeling import router as new_dedup_labeling_router
 from api.new_dedup_tags import router as new_dedup_tags_router
 from api.routes.autodedup import router as autodedup_router
-from api.routes.location_quality import router as location_quality_router
+from api.routes.location_corrections import router as location_corrections_router
 from api.routes.new_dedup import router as new_dedup_router
 from api.routes.new_dedup_candidates import router as new_dedup_candidates_router
 from api.routes.notifications import router as notifications_router
+from api.routes.cadastre_prices import router as cadastre_prices_router
+from api.routes.cuzk_login import router as cuzk_login_router
 from api.routes.push import router as push_router
+from api.routes.waitlist import admin_router as waitlist_admin_router
+from api.routes.waitlist import router as waitlist_router
+from location_data import place_search
 from scraper import image_storage
 from scraper.db import sweep_stuck_scrape_runs
 from toolkit import (
     ComparableFilters,
     TargetSpec,
-    analyze_distribution,
     cluster_comparables,
     compare_listing_images,
     compare_snapshots,
     compute_amenity_supply,
-    compute_listing_velocity,
-    compute_market_velocity,
     compute_walkability,
-    describe_neighborhood,
     find_anchor_amenities,
     find_comparables,
     find_comparables_along_axis,
-    find_comparables_relaxed,
-    find_distribution_outliers,
     summarize_listing,
     verify_listing_freshness,
 )
 from toolkit.image_similarity import ImageCompareError
-from toolkit.measures import MeasureBasisError
-from toolkit.rent_map import compute_reference_rent
 from toolkit.summaries import SummarizeError
+
+# Past every walk's timeout plus the kill grace, so the boot sweep never finalizes a running walk (job registry census).
+STUCK_RUN_CUTOFF_MINUTES = 300
+
 
 @contextlib.asynccontextmanager
 async def _lifespan(_app: FastAPI) -> "AsyncIterator[None]":
@@ -132,18 +134,14 @@ async def _lifespan(_app: FastAPI) -> "AsyncIterator[None]":
     useful for tests / one-off CLI invocations that import api.main but
     don't want a background task chattering.
     """
+    # First: uvicorn exits on a failed startup, so the deploy crashes instead of serving an open API.
+    deps.refuse_auth_optional_on_railway()
     if not os.environ.get("STUCK_ROW_SWEEP_DISABLED"):
         try:
             with deps.open_background_conn() as conn:
                 est = sweep_stuck_runs(conn)
                 bld = sweep_stuck_buildings(conn)
-                # Above every scrape job's timeout-minutes (idnes's index walk, at
-                # 240, is the binding one): the API boots on every deploy, and
-                # stamping ended_at on a RUNNING walk would break run_phase's
-                # contract (ended_at = the phase completed) if that walk later
-                # crashed. Healing a genuinely dead row late costs nothing —
-                # finalize re-stamps ended_at anyway.
-                scr = sweep_stuck_scrape_runs(conn, older_than_minutes=300)
+                scr = sweep_stuck_scrape_runs(conn, older_than_minutes=STUCK_RUN_CUTOFF_MINUTES)
             if est or bld or scr:
                 logging.info(
                     "stuck-row sweep on startup: %s estimation_runs, "
@@ -208,22 +206,9 @@ if _cors_origins:
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
+        # Starlette's default, pinned: a typeahead POSTs to one fixed path, so a cached preflight is one per 10 minutes.
+        max_age=600,
     )
-
-
-# The database's "busy right now" error classes: a read cancelled by
-# statement_timeout (57014 — how a lock-blocked reader dies after 120 s, the
-# 2026-09-30 Brokers outage), a lock refused outright (55P03), a deadlock
-# victim (40P01). Retrying CAN help these, so they answer 503 + Retry-After —
-# the one signal the SPA's transient-only retry predicate acts on. Everything
-# else is deterministic and answers 500. Routes that already catch these and
-# refuse with their own contract (toolkit/property_split's structured 409)
-# never reach this handler.
-_DB_BUSY_ERRORS = (
-    psycopg.errors.QueryCanceled,
-    psycopg.errors.LockNotAvailable,
-    psycopg.errors.DeadlockDetected,
-)
 
 
 @app.exception_handler(Exception)
@@ -234,7 +219,7 @@ async def _unhandled_exception_handler(request: "Request", exc: Exception) -> "J
         headers["access-control-allow-origin"] = origin
         headers["vary"] = "Origin"
 
-    if isinstance(exc, _DB_BUSY_ERRORS):
+    if isinstance(exc, deps.DB_BUSY_ERRORS):
         logging.warning(
             "DB busy (%s) on %s %s", type(exc).__name__, request.method, request.url.path
         )
@@ -265,12 +250,6 @@ async def _unhandled_exception_handler(request: "Request", exc: Exception) -> "J
         headers=headers,
     )
 
-# Skill validation needs to know the registered agent tools and the
-# registered provider names. Populate at import time so PUT /admin/skills/*
-# rejects bogus tool / provider names with a clear 400.
-skills_module.AGENT_TOOL_NAMES = set(AGENT_TOOLS.keys())
-skills_module.PROVIDER_NAMES = set(deps.get_providers().keys())
-
 # /admin/* is admin-gated — the router itself carries Depends(require_admin)
 # (see api/routes/admin.py): a real is_admin JWT claim is required and the
 # static operator token no longer passes (that dual-auth window is closed).
@@ -288,6 +267,14 @@ app.include_router(notifications_router)
 # open) — the key for any signed-in caller; the three writes are the caller's own account (never acted
 # for) on the service role, opened in the handler after that gate (api/routes/push.py).
 app.include_router(push_router)
+# /account/cuzk-login (an account's own ČÚZK WSDP login: its state, a checked save, a removal) — the
+# caller's own account (never acted for) on the service role, opened in the handler; no route returns
+# the password (api/routes/cuzk_login.py).
+app.include_router(cuzk_login_router)
+# /properties/{id}/building/prices (cadastre prices on request: the caller's own purchase and deeds; POST buys
+# one paid ČÚZK output on the caller's own stored login, only with the price acknowledged) — the caller's own
+# account, never acted for; service role opened in the handler (api/routes/cadastre_prices.py).
+app.include_router(cadastre_prices_router)
 # /properties/merge|{id}/split|{id}/origins (merge MECHANICS: collapse an
 # operator-chosen set, split one property's adverts, where each came from)
 # — mutating operator actions, admin-gated (require_admin). Mounted before the
@@ -296,7 +283,7 @@ app.include_router(property_merge_router)
 # /labeling/* (operator image labels + annotations: training examples, border
 # cases, tag annotations, image-pair notes) — admin-gated (require_admin).
 app.include_router(labeling_router)
-# /brokers/* (broker intelligence reads: leaderboard, detail, listings, contacts)
+# /brokers/* (broker intelligence reads: the board, detail, listings, contacts)
 # — real user identity (verify_jwt) with contact PII masked to has_email/has_phone
 # for non-admins; /contacts is admin-only.
 app.include_router(brokers_router)
@@ -317,16 +304,30 @@ app.include_router(stats_dashboards_router)
 # /health) — an <img> tag can't send a bearer header and these are public
 # photos; the key regex keeps it scoped to listing images only.
 app.include_router(images_router)
+# /waitlist (+ /answer) — the propscout.cz landing page's signup form. Public by design: a visitor
+# from an ad has no account; honeypot + rate limit + strict checks, 303 back to the page (api/routes/waitlist.py).
+app.include_router(waitlist_router)
+app.include_router(waitlist_admin_router)   # GET /admin/waitlist: the admin Sign-ups page
 # /properties/{id}/download.zip — the property page's download: a PDF of the ad plus the
 # canonical ad's photos, zipped server-side (R2 sends no CORS header, so the SPA can't).
 # JWT-gated: it proxies bytes through us, and broker contacts follow the PII policy.
 app.include_router(property_download_router)
-# /properties/{id}/location + /static-map.png — the phone's Poloha: the canonical ad's point,
-# granularity and label, and Mapy's static map of it streamed through us on every view (Mapy's
-# terms forbid storing it; 4 credits a fetch, MAPY_STATIC_MAPS_ENABLED=0 turns it off). JWT-gated.
+# /properties/{id}/location — the phone's Poloha: the location ad's point, granularity, label and note. JWT-gated.
 app.include_router(property_location_router)
+# /properties/{id}/building — what the RÚIAN register states about the property's building, reached through
+# its location ad's address point; null when the door names none. JWT-gated, service role (open register data).
+app.include_router(property_building_router)
+# /properties/{id}/building/sales — the registered sales we hold in the property's building (its door's RÚIAN
+# building code = the sale's own). JWT-gated, service role (shared market data).
+app.include_router(property_building_sales_router)
+# /properties/{id}/price-history — the extension's price chart: every ad of the property and its
+# price snapshots, the SPA property page's two reads. JWT-gated, service role (market data).
+app.include_router(property_price_history_router)
 # /properties/{id}/valuo — the Valuo section (GET editor + own history, POST a paid call); verify_jwt, tenancy shape 3.
 app.include_router(valuo_router)
+# /runs* — start, list, read, read the steps of and cancel an agent run: the caller's own account, never acted for; reads
+# under RLS, writes through api/agents/executor.py on the service role (#2071).
+app.include_router(agent_runs_router)
 # /map-overlays + /map-overlays/{section}/{z}/{x}/{y}.mvt — the maps' reference overlays (metro,
 # flood zones, kraje): the layer registry and tiles pre-rendered at ingest, read by primary key and
 # cached a year (the URL carries the section version). JWT-gated; the overlay store is service-role only.
@@ -371,13 +372,11 @@ app.include_router(new_dedup_candidates_router)
 # See autodedup/progress_sql.py, autodedup/ui_sql.py and docs/design/autodedup/PROGRAM.md
 # (Q11, §9, §12).
 app.include_router(autodedup_router)
-# /location/* (location-quality dashboard + operator corrections) — the consumer
-# of `listing_location`, the location program's one answer table (mig 501),
-# admin-gated (require_admin). Reads via toolkit/location_quality.py; the
-# corrections POST appends an operator claim and resolves synchronously
-# (05 5.5.5). W2-b deleted the /sample/* and /compare/* families with their
-# tables.
-app.include_router(location_quality_router)
+# /location/corrections (the address picker's write, W3b) — admin-gated (require_admin):
+# the property page's pick becomes operator claims on every ad of the property, and the
+# location ad resolves synchronously (05 5.5.5). W3b deleted the /listing/* inspector;
+# W2-b /sample/* and /compare/*; W1 /quality/* (the page renders the gauge's cells).
+app.include_router(location_corrections_router)
 
 
 @app.get("/health")
@@ -394,16 +393,6 @@ def health() -> dict[str, str]:
     }
 
 
-@app.get("/maps/suggest")
-def get_maps_suggest(
-    query: str = Query(..., min_length=1, max_length=200),
-    limit: int = Query(default=10, ge=1, le=15),
-    lang: str = Query(default="cs", min_length=2, max_length=8),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    return maps.suggest(query, limit=limit, lang=lang)
-
-
 @app.get("/maps/sreality-price-map")
 def get_maps_sreality_price_map(
     label: str = Query(..., min_length=1, max_length=300),
@@ -417,20 +406,30 @@ def get_maps_sreality_price_map(
     return sreality_price_map.resolve(label, lat, lng)
 
 
-@app.post("/maps/resolve")
-def post_maps_resolve(
-    body: s.ResolveLocationIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    return maps.resolve(
-        conn,
-        lat=body.lat,
-        lng=body.lng,
-        type_=body.type,
-        name=body.name,
-        regional_structure=[e.model_dump() for e in body.regional_structure],
-    )
+def _place_search_unavailable() -> HTTPException:
+    return HTTPException(503, detail={"code": "place_search_unavailable",
+                                      "message": "Vyhledávání míst je teď nedostupné."})
+
+
+@app.post("/places/suggest")
+def post_places_suggest(body: s.PlaceSuggestIn, _: None = Depends(deps.require_token)) -> dict[str, Any]:
+    """Own place search (#2449), every place box's (#2453): rows that are already chips, a shortcut that adds its places
+    (#2450), or a door with its street's chip (#2451). The connection opens here, not as a dependency, so a database it
+    cannot reach is the same 503 as a failed read."""
+    try:
+        with deps.open_background_conn() as conn:
+            places = place_search.suggest(conn, body.query, limit=body.limit)
+    except place_search.SearchUnavailable:
+        raise _place_search_unavailable() from None
+    except psycopg.OperationalError as exc:
+        logging.warning("places/suggest: no database connection (%s)", type(exc).__name__)
+        raise _place_search_unavailable() from None
+    return {"items": [p.item() for p in places]}
+
+
+def _build_comparables_inputs(body: s.FindComparablesIn) -> tuple[TargetSpec, ComparableFilters]:
+    """The body's target, and its cohort filters by registry id (every one it declares reaches the cohort)."""
+    return TargetSpec(**body.target.model_dump()), ComparableFilters(**filter_values(body))
 
 
 @app.post("/tools/find_comparables")
@@ -441,20 +440,6 @@ def post_find_comparables(
 ) -> dict[str, Any]:
     target, filters = _build_comparables_inputs(body)
     return find_comparables(conn, target, filters)
-
-
-@app.post("/tools/find_comparables_relaxed")
-def post_find_comparables_relaxed(
-    body: s.FindComparablesRelaxedIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    target, filters = _build_comparables_inputs(body)
-    return find_comparables_relaxed(
-        conn, target, filters,
-        min_results=body.min_results,
-        relaxation_ladder=body.relaxation_ladder,
-    )
 
 
 @app.post("/tools/find_comparables_along_axis")
@@ -471,14 +456,6 @@ def post_find_comparables_along_axis(
         corridor_m=body.corridor_m,
         cache_ttl_days=body.cache_ttl_days,
     )
-
-
-@app.post("/tools/analyze_distribution")
-def post_analyze_distribution(
-    body: s.AnalyzeDistributionIn,
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    return analyze_distribution(body.listings, field=body.field)
 
 
 @app.post("/tools/cluster_comparables")
@@ -519,93 +496,6 @@ def post_compare_snapshots(
         else None
     )
     return compare_snapshots(conn, body.sreality_id, since, listing_id=body.listing_id)
-
-
-@app.post("/tools/describe_neighborhood")
-def post_describe_neighborhood(
-    body: s.DescribeNeighborhoodIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    return describe_neighborhood(
-        conn,
-        lat=body.lat,
-        lng=body.lng,
-        radius_m=body.radius_m,
-        max_age_days=body.max_age_days,
-        category_main=body.category_main,
-        category_type=body.category_type,
-    )
-
-
-@app.post("/tools/find_distribution_outliers")
-def post_find_distribution_outliers(
-    body: s.FindDistributionOutliersIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    return find_distribution_outliers(
-        conn,
-        body.listings,
-        field=body.field,
-        iqr_multiplier=body.iqr_multiplier,
-        investigate_history=body.investigate_history,
-    )
-
-
-@app.post("/tools/compute_market_velocity")
-def post_compute_market_velocity(
-    body: s.ComputeMarketVelocityIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    target = TargetSpec(
-        lat=body.target.lat,
-        lng=body.target.lng,
-        area_m2=body.target.area_m2,
-        disposition=body.target.disposition,
-        floor=body.target.floor,
-        exclude_listing_ids=list(body.target.exclude_listing_ids),
-    )
-    filters = ComparableFilters(
-        radius_m=body.radius_m,
-        area_band_pct=body.area_band_pct,
-        disposition_match=body.disposition_match,
-        # lifecycle left at default (None); the velocity `lifecycle` arg
-        # drives the is_active gate.
-        floor_band=body.floor_band,
-        portals=body.portals,
-        condition_match=body.condition_match,
-        building_type_match=body.building_type_match,
-        energy_rating_match=body.energy_rating_match,
-        has_balcony=body.has_balcony,
-        has_lift=body.has_lift,
-        has_parking=body.has_parking,
-        min_price_czk=body.min_price_czk,
-        max_price_czk=body.max_price_czk,
-        tom_days_min=body.tom_days_min,
-        tom_days_max=body.tom_days_max,
-        tom_observed_only=body.tom_observed_only,
-        category_main=body.category_main,
-        category_type=body.category_type,
-        include_unreliable=body.include_unreliable,
-        category_sub_cb=body.category_sub_cb,
-        furnished=body.furnished,
-        terrace=body.terrace,
-        cellar=body.cellar,
-        garage=body.garage,
-        ownership=body.ownership,
-        min_estate_area=body.min_estate_area,
-        max_estate_area=body.max_estate_area,
-        min_usable_area=body.min_usable_area,
-        max_usable_area=body.max_usable_area,
-        min_parking_lots=body.min_parking_lots,
-    )
-    return compute_market_velocity(
-        conn, target, filters,
-        lifecycle=body.lifecycle,
-        trend_split_days=body.trend_split_days,
-    )
 
 
 @app.post("/tools/find_anchor_amenities")
@@ -663,8 +553,9 @@ def post_summarize_listing(
     body: s.SummarizeListingIn,
     conn: Any = Depends(deps.get_db_conn),
     llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
+    claims: dict | None = Depends(deps.token_claims),
 ) -> dict[str, Any]:
+    deps.require_admin_to_force(body.force_refresh, claims)
     try:
         return summarize_listing(
             conn, llm_client,
@@ -726,8 +617,9 @@ def post_compare_listing_images(
     body: s.CompareListingImagesIn,
     conn: Any = Depends(deps.get_db_conn),
     llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
+    claims: dict | None = Depends(deps.token_claims),
 ) -> dict[str, Any]:
+    deps.require_admin_to_force(body.force_refresh, claims)
     try:
         return compare_listing_images(
             conn, llm_client,
@@ -738,21 +630,6 @@ def post_compare_listing_images(
         )
     except ImageCompareError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@app.post("/tools/compute_listing_velocity")
-def post_compute_listing_velocity(
-    body: s.ComputeListingVelocityIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    return compute_listing_velocity(
-        conn,
-        body.sreality_id,
-        radius_m=body.radius_m,
-        disposition_match=body.disposition_match,
-        lifecycle=body.lifecycle,
-    )
 
 
 @app.post("/estimations")
@@ -767,9 +644,10 @@ def post_estimations(
     """verify_jwt (not require_token) so a real per-user JWT gets its account
     stamped onto the run — but `conn` stays the service-role connection, NOT
     the tenant pool: a run's execution can run minutes long (agent mode), and
-    tenant_conn holds one pooler transaction open for the whole request
-    (Wave 1 W1-1 boundary; moving execution itself off the request process is
-    W1-3). resolve_account_id is plain SQL, safe on any connection."""
+    TenantConn holds one pooler transaction open for the whole handler,
+    committed before the response is sent (Wave 1 W1-1 boundary; moving
+    execution itself off the request process is W1-3). resolve_account_id
+    is plain SQL, safe on any connection."""
     account_id = tenant_pool.resolve_account_id(conn, claims) or deps.SYSTEM_ACCOUNT_ID
     return create_estimation_run(
         conn, client, llm_client, body, background_tasks=background_tasks,
@@ -810,7 +688,7 @@ def get_latest_estimations_by_listing(
 @app.get("/estimations/{run_id}")
 def get_estimation(
     run_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     row = get_estimation_run(conn, run_id)
     if row is None:
@@ -822,7 +700,7 @@ def get_estimation(
 def patch_estimation_scenario(
     run_id: int,
     body: s.ScenarioUpdateIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     """Persist the operator's yield-scenario overrides.
 
@@ -846,7 +724,7 @@ def patch_estimation_scenario(
 def get_estimation_trace_payload(
     run_id: int,
     step_n: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     """RLS-only read: migration 292's policy on `estimation_trace_payloads` hides
     another account's step, so a foreign run answers the same 404 as a missing one."""
@@ -862,7 +740,7 @@ def get_estimation_trace_payload(
 @app.get("/estimations/{run_id}/feedback")
 def list_estimation_feedback(
     run_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     if not estimation_run_visible(conn, run_id):
         raise HTTPException(status_code=404, detail="estimation run not found")
@@ -1002,20 +880,21 @@ def list_estimations(
 @app.post("/listings/lookup")
 def post_listings_lookup(
     body: s.PortalLookupIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     market_conn: Any = Depends(deps.get_db_conn),
 ) -> dict[str, Any]:
-    """Batch (source, native id) → MF rent/yield + latest estimate, for the
-    Chrome extension's detail panel + index-card overlay across all portals.
+    """Batch (source, native id) → MF rent/yield, the property's header facts (MS11 grain)
+    + latest estimate, for the Chrome extension's detail panel + index-card overlay across all portals.
 
     Two connections on purpose: shared market facts on the service-role conn
     (listings/properties are RLS-enabled-with-zero-policies — broker PII, the
     A5 correction), per-account joins on the tenant conn. RLS-ONLY BY DESIGN:
     no account is resolved here, because membership must be the same answer the
-    SPA gets, and the SPA reads property_pipeline_public under the plural
-    `current_account_ids()`. A second definition is what broke this route from
-    2026-07-23 to 2026-09-11. Wave 5's route census lists it on the explicit
-    RLS-only allowlist for exactly that reason."""
+    SPA gets: the SPA's property_pipeline_public read and the per-caller state
+    read here, `curation.property_state`, both answer through RLS under
+    `acting_account_ids()` (migration 641). A second definition is what broke
+    this route from 2026-07-23 to 2026-09-11. Wave 5's route census lists it on
+    the explicit RLS-only allowlist for exactly that reason."""
     return lookup_portal_listings(market_conn, conn, body.items)
 
 
@@ -1045,7 +924,7 @@ def get_listings_ingest(
 def post_buildings(
     body: s.CreateBuildingIn,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     return create_building_run(conn, body)
 
@@ -1058,7 +937,7 @@ def post_buildings_confirm_units(
     conn: Any = Depends(deps.get_db_conn),
     sreality_client: Any = Depends(deps.get_sreality_client),
     llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     return confirm_units(
         conn, building_id, body,
@@ -1073,7 +952,7 @@ def post_buildings_re_extract(
     building_id: int,
     conn: Any = Depends(deps.get_db_conn),
     llm_client: Any = Depends(deps.get_llm_client),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     return re_extract(conn, llm_client, building_id)
 
@@ -1086,7 +965,7 @@ def get_buildings(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     return list_building_runs(
         conn,
@@ -1102,7 +981,7 @@ def get_buildings(
 def get_building(
     building_id: int,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     row = get_building_run(conn, building_id)
     if row is None:
@@ -1115,7 +994,7 @@ def patch_building_inputs(
     building_id: int,
     body: s.UpdateBuildingInputsIn,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     return update_building_inputs(conn, building_id, body)
 
@@ -1126,7 +1005,7 @@ def post_building_attachment(
     file: UploadFile = File(...),
     source: str = "ui",
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     row = assert_editable_for_attachments(conn, building_id)
     uploaded_by = source if source in ("ui", "api", "clickup") else None
@@ -1142,7 +1021,7 @@ def post_building_attachment(
 def list_building_attachments(
     building_id: int,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     # 404 if the parent doesn't exist; otherwise return rows (may be empty).
     if get_building_run(conn, building_id) is None:
@@ -1155,7 +1034,7 @@ def delete_building_attachment(
     building_id: int,
     attachment_id: int,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> dict[str, Any]:
     assert_editable_for_attachments(conn, building_id)
     attachments_module.delete_building_attachment(conn, building_id, attachment_id)
@@ -1167,99 +1046,13 @@ def get_building_attachment_raw(
     building_id: int,
     attachment_id: int,
     conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
+    _: dict = Depends(deps.require_admin),
 ) -> Response:
     """The preview proxy (the bucket is private): cached hard, as every attachment's bytes are,
     because a row never changes them (without it each `AttachmentCard` mount re-pulled up to 25 MB
     over two hops)."""
     return attachments_module.file_response(*attachments_module.building_attachment_bytes(
         conn, attachment_id, building_run_id=building_id))
-
-
-@app.post("/estimate_yield")
-def post_estimate_yield(
-    body: s.EstimateYieldIn,
-    conn: Any = Depends(deps.get_db_conn),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    target = TargetSpec(
-        lat=body.target.lat,
-        lng=body.target.lng,
-        area_m2=body.target.area_m2,
-        disposition=body.target.disposition,
-        floor=body.target.floor,
-        exclude_listing_ids=list(body.target.exclude_listing_ids),
-    )
-    filters = ComparableFilters(
-        radius_m=body.radius_m,
-        area_band_pct=body.area_band_pct,
-        disposition_match=body.disposition_match,
-        max_age_days=body.max_age_days,
-        lifecycle=body.lifecycle,
-        floor_band=body.floor_band,
-        portals=body.portals,
-        condition_match=body.condition_match,
-        building_type_match=body.building_type_match,
-        energy_rating_match=body.energy_rating_match,
-        has_balcony=body.has_balcony,
-        has_lift=body.has_lift,
-        has_parking=body.has_parking,
-        min_price_czk=body.min_price_czk,
-        max_price_czk=body.max_price_czk,
-        tom_days_min=body.tom_days_min,
-        tom_days_max=body.tom_days_max,
-        tom_observed_only=body.tom_observed_only,
-        category_main=body.category_main,
-        category_type=body.category_type,
-        include_unreliable=body.include_unreliable,
-        category_sub_cb=body.category_sub_cb,
-        furnished=body.furnished,
-        terrace=body.terrace,
-        cellar=body.cellar,
-        garage=body.garage,
-        ownership=body.ownership,
-        min_estate_area=body.min_estate_area,
-        max_estate_area=body.max_estate_area,
-        min_usable_area=body.min_usable_area,
-        max_usable_area=body.max_usable_area,
-        min_parking_lots=body.min_parking_lots,
-    )
-    try:
-        result = estimate_yield(
-            conn, target, filters, body.purchase_price_czk,
-            estimate_kind=body.estimate_kind,
-            expected_monthly_rent_czk=body.expected_monthly_rent_czk,
-        )
-    except MeasureBasisError as exc:
-        # A cohort with no single per-m² basis (or one contradicting
-        # estimate_kind) is a bad REQUEST, not a server fault: the caller pinned
-        # a category set whose Kč/m² has no one unit, and scaling it would
-        # return a confident number nobody can name. The two run-backed callers
-        # (POST /estimations, the watchdog auto-estimate) already record this as
-        # a failed run; this ad-hoc route has no run to fail, so it answers 422.
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    # Secondary MF Cenová mapa reference (rent only). The amenity filters double as the
-    # subject's facts on this ad-hoc surface; a typed point has no stored location, so
-    # its obec comes from the one containing-obec statement and it never binds a KÚ.
-    # A secondary reference never fails the route: on an error the payload omits it.
-    if body.estimate_kind == "rent":
-        try:
-            reference_rent = compute_reference_rent(
-                conn,
-                category_main=body.category_main, category_type=body.category_type,
-                disposition=target.disposition, area_m2=target.area_m2,
-                price_czk=body.purchase_price_czk, condition=None,
-                has_balcony=body.has_balcony, terrace=body.terrace,
-                furnished="ano" if "ano" in (body.furnished or []) else None,
-                garage=body.garage, has_lift=body.has_lift, building_type=None,
-                obec_kod=maps.containing_obec_kod(conn, lat=target.lat, lng=target.lng),
-            )
-        except Exception:  # noqa: BLE001 - secondary reference, never fatal
-            logging.warning("MF reference for /estimate_yield failed", exc_info=True)
-            reference_rent = None
-        if reference_rent is not None:
-            result["data"]["reference_rent"] = reference_rent
-    return result
 
 
 # --- curation -------------------------------------------------------------
@@ -1269,17 +1062,17 @@ def post_estimate_yield(
 @app.post("/collections")
 def post_create_collection(
     body: s.CreateCollectionIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
     act_as: uuid.UUID | None = Depends(tenant_pool.act_as_header),
 ) -> dict[str, Any]:
-    curation.refuse_monitoring_while_acting(act_as, body.monitoring_enabled)
+    curation.refuse_monitoring_while_acting(act_as, body.monitoring_enabled or body.notify_kinds is not None)
     return curation.create_collection(conn, body, account_id=str(account_id))
 
 
 @app.get("/collections")
 def get_list_collections(
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.list_collections(conn)
 
@@ -1287,7 +1080,7 @@ def get_list_collections(
 @app.get("/collections/{collection_id}")
 def get_collection(
     collection_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.get_collection(conn, collection_id)
 
@@ -1296,17 +1089,18 @@ def get_collection(
 def patch_collection(
     collection_id: int,
     body: s.UpdateCollectionIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     act_as: uuid.UUID | None = Depends(tenant_pool.act_as_header),
 ) -> dict[str, Any]:
-    curation.refuse_monitoring_while_acting(act_as, body.monitoring_enabled is not None)
+    curation.refuse_monitoring_while_acting(
+        act_as, body.monitoring_enabled is not None or body.notify_kinds is not None)
     return curation.update_collection(conn, collection_id, body)
 
 
 @app.delete("/collections/{collection_id}")
 def delete_collection(
     collection_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.delete_collection(conn, collection_id)
 
@@ -1315,7 +1109,7 @@ def delete_collection(
 def post_collection_properties(
     collection_id: int,
     body: s.AddPropertiesToCollectionIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.add_properties_to_collection(conn, collection_id, body)
 
@@ -1324,7 +1118,7 @@ def post_collection_properties(
 def delete_collection_property(
     collection_id: int,
     property_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.remove_property_from_collection(
         conn, collection_id, property_id,
@@ -1339,7 +1133,7 @@ def delete_collection_property(
 def post_collection_share(
     collection_id: int,
     body: s.ShareCollectionIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     _own: uuid.UUID = Depends(tenant_pool.require_account_id),
 ) -> dict[str, Any]:
     return curation.create_share(conn, deps.open_background_conn, collection_id, body)
@@ -1349,7 +1143,7 @@ def post_collection_share(
 def delete_collection_share(
     collection_id: int,
     account_id: uuid.UUID,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.delete_share(conn, collection_id, str(account_id))
 
@@ -1421,15 +1215,14 @@ def get_price_stat_city_metrics(
     return price_stats_module.dataset_city_metrics(conn, dataset_id)
 
 
-@app.get("/price-stats/datasets/{dataset_id}/cities/{entity_type}/{entity_id}/series")
+@app.get("/price-stats/datasets/{dataset_id}/cities/{obec_id}/series")
 def get_price_stat_city_series(
     dataset_id: int,
-    entity_type: str,
-    entity_id: int,
+    obec_id: int,
     conn: Any = Depends(deps.get_db_conn),
     _: None = Depends(deps.require_token),
 ) -> dict[str, Any]:
-    return price_stats_module.dataset_city_series(conn, dataset_id, entity_type, entity_id)
+    return price_stats_module.dataset_city_series(conn, dataset_id, obec_id)
 
 
 # --- curation (cont.): notes, artifact links, attachments, tags -----------
@@ -1438,7 +1231,7 @@ def get_price_stat_city_series(
 @app.get("/properties/{property_id}/notes")
 def get_property_notes(
     property_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.list_notes(conn, property_id)
 
@@ -1447,7 +1240,7 @@ def get_property_notes(
 def post_property_note(
     property_id: int,
     body: s.CreateNoteIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return curation.create_note(conn, property_id, body, account_id=str(account_id))
@@ -1458,7 +1251,7 @@ def patch_property_note(
     property_id: int,
     note_id: int,
     body: s.UpdateNoteIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.update_note(conn, property_id, note_id, body)
 
@@ -1467,19 +1260,19 @@ def patch_property_note(
 def delete_property_note(
     property_id: int,
     note_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.delete_note(conn, property_id, note_id)
 
 
 @app.get("/viewings")
-def get_viewings(conn: Any = Depends(tenant_pool.tenant_conn)) -> dict[str, Any]:
+def get_viewings(conn: tenant_pool.TenantConn) -> dict[str, Any]:
     return curation.list_viewings(conn)
 
 
 @app.get("/artifact-links")
 def get_artifact_links(
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.list_artifact_links(conn)
 
@@ -1488,7 +1281,7 @@ def get_artifact_links(
 def put_property_artifact_link(
     property_id: int,
     body: s.SetArtifactLinkIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return curation.set_artifact_link(conn, property_id, body, account_id=str(account_id))
@@ -1497,7 +1290,7 @@ def put_property_artifact_link(
 @app.delete("/properties/{property_id}/artifact-link")
 def delete_property_artifact_link(
     property_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.delete_artifact_link(conn, property_id)
 
@@ -1505,9 +1298,9 @@ def delete_property_artifact_link(
 @app.post("/properties/{property_id}/attachments")
 def post_property_attachment(
     property_id: int,
+    conn: tenant_pool.TenantConn,
     file: UploadFile = File(...),
     note_id: int | None = Form(None),
-    conn: Any = Depends(tenant_pool.tenant_conn),
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return attachments_module.add_attachment(
@@ -1517,8 +1310,8 @@ def post_property_attachment(
 @app.get("/properties/{property_id}/attachments")
 def get_property_attachments(
     property_id: int,
+    conn: tenant_pool.TenantConn,
     note_id: int | None = None,
-    conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> dict[str, Any]:
     return attachments_module.list_attachments(conn, property_id, note_id)
 
@@ -1527,8 +1320,8 @@ def get_property_attachments(
 def get_property_attachment(
     property_id: int,
     attachment_id: int,
+    conn: tenant_pool.TenantConn,
     w: int | None = None,
-    conn: Any = Depends(tenant_pool.tenant_conn),
 ) -> Response:
     """The original's bytes, or with `?w=1080` an image's display copy (made on first request);
     only ever through this JWT proxy."""
@@ -1540,14 +1333,14 @@ def get_property_attachment(
 def delete_property_attachment(
     property_id: int,
     attachment_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return attachments_module.delete_attachment(conn, property_id, attachment_id)
 
 
 @app.get("/tags")
 def get_tags(
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.list_tags(conn)
 
@@ -1555,7 +1348,7 @@ def get_tags(
 @app.post("/tags")
 def post_tag(
     body: s.CreateTagIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return curation.create_tag(conn, body, account_id=str(account_id))
@@ -1565,7 +1358,7 @@ def post_tag(
 def patch_tag(
     tag_id: int,
     body: s.UpdateTagIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.update_tag(conn, tag_id, body)
 
@@ -1573,7 +1366,7 @@ def patch_tag(
 @app.delete("/tags/{tag_id}")
 def delete_tag(
     tag_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.delete_tag(conn, tag_id)
 
@@ -1582,7 +1375,7 @@ def delete_tag(
 def post_attach_tag(
     property_id: int,
     body: s.AttachTagIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.attach_tag(conn, property_id, body)
 
@@ -1591,18 +1384,18 @@ def post_attach_tag(
 def delete_property_tag(
     property_id: int,
     tag_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return curation.detach_tag(conn, property_id, tag_id)
 
 
 # --- deal pipeline (migration 205; account-scoped since 294) ---------------
-# Every route runs on the JWT-scoped tenant_conn; the SPA reads membership
+# Every route runs on the JWT-scoped `TenantConn`; the SPA reads membership
 # itself through the security_invoker view property_pipeline_public.
 
 @app.get("/pipeline/stages")
 def get_pipeline_stages(
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     """Pure display read — RLS scopes it, so no account is resolved."""
     return pipeline_module.list_stages(conn)
@@ -1611,7 +1404,7 @@ def get_pipeline_stages(
 @app.post("/pipeline/stages")
 def post_pipeline_stage(
     body: s.CreateStageIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.create_stage(conn, body, account_id=account_id)
@@ -1620,7 +1413,7 @@ def post_pipeline_stage(
 @app.post("/pipeline/stages/reorder")
 def post_pipeline_stages_reorder(
     body: s.ReorderStagesIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.reorder_stages(conn, body, account_id=account_id)
@@ -1630,7 +1423,7 @@ def post_pipeline_stages_reorder(
 def patch_pipeline_stage(
     stage_id: int,
     body: s.UpdateStageIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.update_stage(conn, stage_id, body, account_id=account_id)
@@ -1639,7 +1432,7 @@ def patch_pipeline_stage(
 @app.delete("/pipeline/stages/{stage_id}")
 def delete_pipeline_stage(
     stage_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.archive_stage(conn, stage_id, account_id=account_id)
@@ -1648,7 +1441,7 @@ def delete_pipeline_stage(
 @app.post("/pipeline/cards")
 def post_pipeline_card(
     body: s.AddPipelineCardIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.add_card(conn, body, account_id=account_id)
@@ -1658,7 +1451,7 @@ def post_pipeline_card(
 def patch_pipeline_card(
     property_id: int,
     body: s.MoveCardIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.move_card(conn, property_id, body, account_id=account_id)
@@ -1667,7 +1460,7 @@ def patch_pipeline_card(
 @app.delete("/pipeline/cards/{property_id}")
 def delete_pipeline_card(
     property_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return pipeline_module.remove_card(conn, property_id, account_id=account_id)
@@ -1680,7 +1473,7 @@ def delete_pipeline_card(
 
 @app.get("/pipeline/shares")
 def get_pipeline_shares(
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     return shares_module.list_pipeline_shares(conn)
 
@@ -1688,7 +1481,7 @@ def get_pipeline_shares(
 @app.post("/pipeline/shares")
 def post_pipeline_share(
     body: s.SharePipelineIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
 ) -> dict[str, Any]:
     shares_module.grant(
@@ -1701,7 +1494,7 @@ def post_pipeline_share(
 def delete_pipeline_share(
     account_id: uuid.UUID,
     side: s.ShareSide,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     """Stop sharing my board with `account_id` (side=shared_with) or leave theirs (shared_with_me)."""
     return shares_module.revoke_pipeline(conn, str(account_id), side)
@@ -1714,7 +1507,7 @@ def delete_pipeline_share(
 @app.post("/dismissals")
 def post_dismissal(
     body: s.DismissPropertyIn,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
     account_id: uuid.UUID = Depends(tenant_pool.require_acting_account_id),
 ) -> dict[str, Any]:
     return dismissals_module.dismiss(conn, body, account_id=account_id)
@@ -1723,7 +1516,7 @@ def post_dismissal(
 @app.delete("/dismissals/{property_id}")
 def delete_dismissal(
     property_id: int,
-    conn: Any = Depends(tenant_pool.tenant_conn),
+    conn: tenant_pool.TenantConn,
 ) -> dict[str, Any]:
     """RLS-only: "dismissed" is read under the plural acting_account_ids() (the caller's
     accounts without X-Act-As), so undo lifts every active row the caller can see."""
@@ -1768,49 +1561,3 @@ def decide_skill_refinement(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _build_comparables_inputs(
-    body: s.FindComparablesIn,
-) -> tuple[TargetSpec, ComparableFilters]:
-    target = TargetSpec(
-        lat=body.target.lat,
-        lng=body.target.lng,
-        area_m2=body.target.area_m2,
-        disposition=body.target.disposition,
-        floor=body.target.floor,
-        exclude_listing_ids=list(body.target.exclude_listing_ids),
-    )
-    filters = ComparableFilters(
-        radius_m=body.radius_m,
-        area_band_pct=body.area_band_pct,
-        disposition_match=body.disposition_match,
-        max_age_days=body.max_age_days,
-        lifecycle=body.lifecycle,
-        floor_band=body.floor_band,
-        portals=body.portals,
-        condition_match=body.condition_match,
-        building_type_match=body.building_type_match,
-        energy_rating_match=body.energy_rating_match,
-        has_balcony=body.has_balcony,
-        has_lift=body.has_lift,
-        has_parking=body.has_parking,
-        min_price_czk=body.min_price_czk,
-        max_price_czk=body.max_price_czk,
-        tom_days_min=body.tom_days_min,
-        tom_days_max=body.tom_days_max,
-        tom_observed_only=body.tom_observed_only,
-        category_main=body.category_main,
-        category_type=body.category_type,
-        include_unreliable=body.include_unreliable,
-        category_sub_cb=body.category_sub_cb,
-        furnished=body.furnished,
-        terrace=body.terrace,
-        cellar=body.cellar,
-        garage=body.garage,
-        ownership=body.ownership,
-        min_estate_area=body.min_estate_area,
-        max_estate_area=body.max_estate_area,
-        min_usable_area=body.min_usable_area,
-        max_usable_area=body.max_usable_area,
-        min_parking_lots=body.min_parking_lots,
-    )
-    return target, filters

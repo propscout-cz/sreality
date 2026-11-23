@@ -23,7 +23,7 @@ name: "Scraping: Sreality condition scoring (PARKED, manual backfill)"
 # cancel preserves rows already done; scored listings drop out of the next
 # selection. workflow_dispatch defaults region_ids to empty = the
 # Settings-page enabled kraje (app_settings.condition_scoring_enabled_region_ids,
-# admin_boundaries ids), limit 500, cost cap $10.
+# RÚIAN kraj codes), limit 500, cost cap $10.
 #
 # The selection is portal-agnostic (a DB predicate over listings /
 # listing_snapshots), so any scraper that lands rows in those tables is
@@ -38,7 +38,7 @@ on:
   workflow_dispatch:
     inputs:
       region_ids:
-        description: Comma-separated admin_boundaries kraj ids (empty = the Settings-page enabled list)
+        description: Comma-separated RÚIAN kraj codes (empty = the Settings-page enabled list)
         required: false
         default: ""
         type: string

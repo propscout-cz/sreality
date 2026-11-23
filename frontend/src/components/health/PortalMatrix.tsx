@@ -15,6 +15,7 @@ import {
   anchorId,
   cellsWorstFirst,
   pivotByPortal,
+  tail,
   type HealthRow,
   type Status,
 } from '@/lib/healthChecks';
@@ -25,10 +26,6 @@ type Pivot = ReturnType<typeof pivotByPortal>;
 type Entry = Pivot['cells'][string][string];
 
 const NONE: Entry = { status: 'unknown', cell: null, measured: 0, notMeasured: 0 };
-
-/* "walks/byt-prodej" for "sreality/walks/byt-prodej": the row already names the portal. */
-const tail = (subject: string, portal: string) =>
-  subject.startsWith(`${portal}/`) ? subject.slice(portal.length + 1) : subject;
 
 /* Worst portal first: its worst cell; on a tie, its worst ALARM cell (a standing gauge Problem
  * does not pin a portal above a live alarm), then more Problems, more Watch, more Not measured. */
@@ -139,10 +136,12 @@ export default function PortalMatrix({ pivot }: { pivot: Pivot }) {
 
 /* One verdict. OK is a quiet dot (its word for screen readers only) that hides below 768 px; every
  * other status says its word, so colour is never the only cue (sage and brick read alike to a
- * red-green colour-blind eye). The full message is the cell's title and its line below. */
-function MatrixCell({ label, portal, entry }: { label: string; portal: string; entry: Entry }) {
+ * red-green colour-blind eye). The full message is the cell's title and its line below. The arm
+ * is named unless the column already is it (the Location Quality page's columns are arms). */
+export function MatrixCell({ label, portal, entry }: { label: string; portal: string; entry: Entry }) {
   const ok = entry.status === 'ok';
   const value = entry.cell ? fmtValue(entry.cell.value, entry.cell.unit) : null;
+  const arm = entry.cell ? tail(entry.cell.subject, portal) : null;
   const notMeasured = entry.notMeasured ? `${entry.notMeasured} not measured` : null;
   return (
     <td
@@ -155,8 +154,8 @@ function MatrixCell({ label, portal, entry }: { label: string; portal: string; e
         {!ok && entry.cell && (
           <span className="min-w-0 break-words text-[var(--color-ink)]">
             {value && <span className="font-mono tabular-nums">{value}</span>}
-            {value && ' · '}
-            <span className="font-mono text-[0.72rem] text-[var(--color-ink-2)]">{tail(entry.cell.subject, portal)}</span>
+            {value && arm !== label && ' · '}
+            {arm !== label && <span className="font-mono text-[0.72rem] text-[var(--color-ink-2)]">{arm}</span>}
           </span>
         )}
       </span>

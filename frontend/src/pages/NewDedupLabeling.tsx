@@ -39,6 +39,7 @@ import ImageTagBadge from '@/components/ImageTagBadge';
 import ImageLightbox from '@/components/ImageLightbox';
 import BorderCaseButton from '@/components/BorderCaseButton';
 import ImageSizeToggle from '@/components/ImageSizeToggle';
+import { SegmentedBar } from '@/components/controls';
 import Spinner from '@/components/Spinner';
 import TaxonomyManageModal from '@/components/TaxonomyManageModal';
 import LabelCombobox, { type LabelOption } from '@/components/LabelCombobox';
@@ -87,6 +88,15 @@ const STATUS_TABS: ReadonlyArray<{ key: TabKey; label: string }> = [
  * random pool can never build their sets — candidates are FOUND now, by ranking
  * a bounded pool against the tag's own centroid. */
 type Mode = 'proposals' | 'candidates';
+const MODE_OPTIONS: ReadonlyArray<{ value: Mode; label: string }> = [
+  { value: 'proposals', label: 'Proposals' },
+  { value: 'candidates', label: 'Candidates' },
+];
+/* false = Taxonomy v1's tag, true = the production CLIP tagger's own fine_tag. */
+const TAG_VERSION_OPTIONS: ReadonlyArray<{ value: boolean; label: string }> = [
+  { value: false, label: 'New tag' },
+  { value: true, label: 'Original tag' },
+];
 type CandidateStateFilter = TagState | 'untouched' | 'all';
 const CANDIDATE_STATE_OPTIONS: ReadonlyArray<{ key: CandidateStateFilter; label: string }> = [
   { key: 'all', label: 'All' },
@@ -897,24 +907,16 @@ export default function NewDedupLabeling() {
 
       <section className="mt-8">
         <div className="flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-1">
-            <ToggleButton active={mode === 'proposals'} onClick={() => setMode('proposals')}>
-              Proposals
-            </ToggleButton>
-            <ToggleButton active={mode === 'candidates'} onClick={() => setMode('candidates')}>
-              Candidates
-            </ToggleButton>
-          </div>
+          <SegmentedBar hug label="Labeling mode" options={MODE_OPTIONS} value={mode} onChange={setMode} />
           <div className="flex items-center gap-2 flex-wrap">
             {mode === 'proposals' && (
-              <div className="flex items-center gap-1">
-                <ToggleButton active={!showOriginal} onClick={() => setShowOriginal(false)}>
-                  New tag
-                </ToggleButton>
-                <ToggleButton active={showOriginal} onClick={() => setShowOriginal(true)}>
-                  Original tag
-                </ToggleButton>
-              </div>
+              <SegmentedBar
+                hug
+                label="Tag version"
+                options={TAG_VERSION_OPTIONS}
+                value={showOriginal}
+                onChange={setShowOriginal}
+              />
             )}
             <ImageSizeToggle
               large={imageLarge.value}
@@ -1013,7 +1015,7 @@ export default function NewDedupLabeling() {
 
         {mode === 'proposals' && (
           <div className="mt-3">
-            <Tabs tabs={STATUS_TABS} active={tab} onChange={setTab} />
+            <Tabs tabs={STATUS_TABS} active={tab} onChange={setTab} ariaLabel="Review status" />
           </div>
         )}
 
@@ -1071,9 +1073,9 @@ export default function NewDedupLabeling() {
 
         {mode === 'proposals' ? (
           <>
-            {/* The pool the secondary-CLIP scores to make the suggestions below
-              * — a different pool from the per-tag candidate queues above, and
-              * it lives here because this is the only mode it feeds. */}
+            {/* The pool the retired secondary-CLIP scored to make the suggestions
+              * below — a different pool from the per-tag candidate queues above,
+              * and it lives here because this is the only mode it fed. */}
             <section className="mt-4 border border-[var(--color-rule)] rounded-[var(--radius-sm)] p-4">
               <span className="block text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] mb-3">
                 Proposal pool
@@ -1116,15 +1118,14 @@ export default function NewDedupLabeling() {
               {lastGrow && (
                 <p className="mt-2.5 text-xs text-[var(--color-sage)]">
                   {lastGrow.added > 0
-                    ? `Added ${lastGrow.added} image${lastGrow.added === 1 ? '' : 's'} — dispatch the relabel workflow below to generate proposals for them.`
+                    ? `Added ${lastGrow.added} image${lastGrow.added === 1 ? '' : 's'}. Nothing scores them now, so they gain no proposals.`
                     : `No new images matched (requested ${lastGrow.requested}) — everything eligible is already in the sample.`}
                 </p>
               )}
 
               <p className="mt-2 text-xs text-[var(--color-ink-4)] leading-relaxed">
-                Adds newest not-yet-sampled images to the pool. Scoring runs separately via the
-                "NEW DEDUP — Labeling secondary-CLIP proposals" GitHub Actions workflow (model:{' '}
-                {secondaryModel ?? '…'}).
+                Adds newest not-yet-sampled images to the pool. The secondary-CLIP scorer (model:{' '}
+                {secondaryModel ?? '…'}) is retired; the proposals it wrote stay reviewable here.
               </p>
             </section>
 
@@ -1263,32 +1264,6 @@ export default function NewDedupLabeling() {
         />
       )}
     </div>
-  );
-}
-
-function ToggleButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={[
-        'px-2.5 py-1 rounded-[var(--radius-sm)] border text-[0.78rem] transition-colors',
-        active
-          ? 'border-[var(--color-copper)] bg-[var(--color-copper-soft)] text-[var(--color-copper)]'
-          : 'border-[var(--color-rule)] text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
-      ].join(' ')}
-    >
-      {children}
-    </button>
   );
 }
 

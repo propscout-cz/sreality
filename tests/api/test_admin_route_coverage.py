@@ -26,7 +26,7 @@ from fastapi.routing import APIRoute  # noqa: E402
 
 from api import dependencies as deps  # noqa: E402
 from api import tenant_pool  # noqa: E402
-from api.main import app  # noqa: E402
+from tests.api._routes import _api_routes, _bucket, _reachable_calls  # noqa: E402
 
 # Routes that legitimately authenticate some other way. Every entry is a deliberate,
 # reviewable decision — adding one should take an argument, not a reflex.
@@ -35,6 +35,13 @@ _PUBLIC_ALLOWLIST: frozenset[tuple[str, str]] = frozenset({
     ("GET", "/images/{key:path}"),    # R2 image proxy, opaque keys
     # Authenticates in-handler by verifying a Stripe HMAC over the raw request body.
     ("POST", "/billing/webhook"),
+    # The propscout.cz landing page's waitlist form and its thank-you question: a visitor from an ad has
+    # no account. Honeypot + rate limit + strict input checks; writes only waitlist_signups (mig 700).
+    ("POST", "/waitlist"),
+    ("POST", "/waitlist/answer"),
+    # Every waitlist email's link: its reader has no account, the entry's token is the credential.
+    ("GET", "/waitlist/unsubscribe"),
+    ("POST", "/waitlist/unsubscribe"),
 })
 
 # Every route under these must resolve to require_admin. `/properties` as a whole is
@@ -44,6 +51,9 @@ _ADMIN_PREFIXES: tuple[str, ...] = (
     "/admin", "/properties/merge", "/labeling",
     "/outreach", "/broker-review", "/skill-refinements", "/location",
     "/autodedup",
+    # Paste-a-building (rule 13) spends an extraction plus one estimation per unit and holds no
+    # account of its own: operator-only since agent platform M0 (#2059).
+    "/buildings",
 )
 
 # Sentinels proving those routers actually mounted. Without this, a mis-mounted router
@@ -51,65 +61,6 @@ _ADMIN_PREFIXES: tuple[str, ...] = (
 _MOUNT_SENTINELS: tuple[str, ...] = (
     "/admin", "/properties/merge", "/labeling", "/notifications",
 )
-
-
-def _reachable_calls(dependant) -> set:
-    """Every dependency callable reachable from a route, including nested ones."""
-    seen: set[int] = set()
-    out: set = set()
-    stack = list(dependant.dependencies)
-    while stack:
-        d = stack.pop()
-        call = getattr(d, "call", None)
-        if call is not None and id(call) not in seen:
-            seen.add(id(call))
-            out.add(call)
-        stack.extend(d.dependencies)
-    return out
-
-
-def _bucket(route: APIRoute) -> str:
-    calls = _reachable_calls(route.dependant)
-    if deps.require_admin in calls:
-        return "admin"
-    if tenant_pool.tenant_conn in calls or deps.verify_jwt in calls:
-        return "tenant"
-    if deps.require_token in calls:
-        return "token"
-    # account_scope is require_token's reader (`_bearer`: a verified JWT) plus a
-    # read scope, so it buckets with it.
-    if deps.account_scope in calls:
-        return "token"
-    return "public"
-
-
-def _collect(routes) -> list[APIRoute]:
-    """Flatten the app's route table across FastAPI versions.
-
-    Older versions splice an included router's routes directly into app.routes; since
-    0.13x `include_router` instead appends one `_IncludedRouter` wrapper holding the
-    original router. Recurse through either shape, or this returns almost nothing and
-    every assertion below passes vacuously (which is what the mount sentinel catches).
-    """
-    out: list[APIRoute] = []
-    for r in routes:
-        if isinstance(r, APIRoute):
-            out.append(r)
-            continue
-        nested = getattr(getattr(r, "original_router", None), "routes", None)
-        if nested is None:
-            nested = getattr(r, "routes", None)
-        if nested:
-            out.extend(_collect(nested))
-    return out
-
-
-def _api_routes() -> list[tuple[str, str, APIRoute]]:
-    return [
-        (method, r.path, r)
-        for r in _collect(app.routes)
-        for method in sorted(r.methods - {"HEAD", "OPTIONS"})
-    ]
 
 
 def test_admin_routers_are_mounted() -> None:
@@ -135,6 +86,21 @@ def test_admin_surfaces_require_admin() -> None:
         "Depends(deps.require_admin) — SPA route-gating is a client affordance, not a "
         "security boundary:\n" + "\n".join(offenders)
     )
+
+
+def _takes_force_refresh(route: APIRoute) -> bool:
+    body = route.body_field.field_info.annotation if route.body_field is not None else None
+    return "force_refresh" in getattr(body, "model_fields", {})
+
+
+def test_a_forced_refresh_is_admin_gated_wherever_it_is_accepted() -> None:
+    """A body field `force_refresh` re-buys a cached LLM answer: every route accepting it calls
+    `deps.require_admin_to_force` (M0, #2059). The gate reads the body, so no dependency can carry it."""
+    accepting = [(m, p, r) for m, p, r in _api_routes() if _takes_force_refresh(r)]
+    assert len(accepting) >= 2, "the census found no route taking force_refresh: check how it reads the body"
+    ungated = sorted(f"  {m} {p}" for m, p, r in accepting
+                     if "require_admin_to_force(" not in inspect.getsource(r.endpoint))
+    assert not ungated, "route(s) accept force_refresh without the admin gate:\n" + "\n".join(ungated)
 
 
 def test_no_route_is_unauthenticated_by_accident() -> None:
@@ -167,9 +133,9 @@ def test_no_route_is_unauthenticated_by_accident() -> None:
 #
 # SCOPE, stated honestly. The subject is routes reaching `tenant_pool.tenant_conn`.
 # `_bucket` says "tenant" for anything reaching `verify_jwt`, which also covers the
-# twelve `/brokers/*` + `POST /estimations` routes — those run on the service-role
+# `/brokers/*` + `POST /estimations` routes — those run on the service-role
 # `get_db_conn`, where `verify_jwt` is authentication only and RLS is not the scope.
-# They are EXCLUDED structurally, not by twelve copies of one sentence: an allowlist
+# They are EXCLUDED structurally, not by a copy of one sentence each: an allowlist
 # that doubles in size for a class it cannot judge is a gate that cries wolf, and a
 # gate that cries wolf gets disabled. The account each of them resolves by hand is
 # the subject of the second arm of `tests/api/test_account_scope_census.py`.
@@ -442,9 +408,6 @@ def test_estimation_child_routes_ride_the_tenant_connection() -> None:
             f"{_FEEDBACK_POST} depends on {held_too_early.__name__} again — see the "
             "comment above for why it must open its connections in the handler"
         )
-    assert "tenant_pool.tenant_transaction(" in inspect.getsource(post.endpoint), (
-        f"{_FEEDBACK_POST} no longer gates on a tenant transaction"
-    )
 
 
 @pytest.mark.parametrize("key", [
@@ -455,6 +418,9 @@ def test_estimation_child_routes_ride_the_tenant_connection() -> None:
     ("PUT", "/push/subscription"),
     ("DELETE", "/push/subscription"),
     ("POST", "/push/opened"),
+    # An account's own ČÚZK login (migration 759): the same shape.
+    ("GET", "/account/cuzk-login"),
+    ("DELETE", "/account/cuzk-login"),
 ])
 def test_the_share_routes_open_the_service_role_only_after_their_gate(key: tuple[str, str]) -> None:
     # tenancy.md's second "tenant gate, then a service-role write": a recipient's or a

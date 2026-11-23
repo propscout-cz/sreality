@@ -5,7 +5,8 @@ Parser tests run against a committed fixture XLSX (hermetic, no network). The
 measure itself is SQL (`mf_reference()`, migration 565) and is tested live in
 tests/test_mf_reference.py; here only the wrapper's hand-off, on a fake connection.
 The ingest runs live in tests/test_map_overlays_live.py; here its order and its
-failure policy, on a fake connection.
+failure policy, on a fake connection, and the monthly job's closing re-render
+(scripts.fetch_rent_map).
 """
 
 from __future__ import annotations
@@ -49,7 +50,7 @@ def test_parses_all_territories(parsed):
     assert parsed.source_date == date(2026, 5, 15)
 
 
-def test_level_split_matches_admin_boundaries(parsed):
+def test_level_split_matches_the_register(parsed):
     levels = {v.ruian_code: v.level for v in parsed.values}
     assert sum(1 for lv in levels.values() if lv == "ku") == 1582
     assert sum(1 for lv in levels.values() if lv == "obec") == 6048
@@ -243,16 +244,22 @@ def _insert(conn):
 
 @pytest.fixture()
 def seams(monkeypatch):
-    """Log the overlay render and every matview refresh into the fake connection's log."""
+    """Log the overlay render, every matview refresh and every registry stamp into the fake
+    connection's log; a stamp logs the rows and duration it passed."""
     def install(conn, render=lambda: 99):
         def fake_render(c, key):
             assert c is conn
             conn.log.append(f"render {key}")
             return render()
 
+        def fake_stamp(c, name, *, rows=None, duration_ms=None):
+            assert c is conn
+            conn.log.append(f"stamp {name} rows={rows} duration_ms={duration_ms}")
+
         monkeypatch.setattr(api_rent_map, "render_sql_section", fake_render)
         monkeypatch.setattr(scraper_db, "refresh_matview",
                             lambda c, name, **kw: conn.log.append(f"refresh {name}") or 1)
+        monkeypatch.setattr(scraper_db, "stamp_derived_artifact", fake_stamp)
     return install
 
 
@@ -263,7 +270,7 @@ def test_a_new_revision_re_renders_the_map_overlay_inside_its_transaction(seams)
     seams(conn)
     assert _insert(conn) == 7
     assert conn.log == [
-        "BEGIN", "select source_revision from", "insert into rent_map_revisions",
+        "BEGIN", "select r.source_revision, exists", "insert into rent_map_revisions",
         "copy rent_map_values", "copy rent_map_adjustments",
         "render rent_map", "refresh rent_map_cells", "COMMIT",
     ]
@@ -297,11 +304,28 @@ def test_any_other_overlay_failure_rolls_the_ingest_back(seams):
     assert conn.log[-1] == "ROLLBACK" and "refresh rent_map_cells" not in conn.log
 
 
-def test_an_unchanged_file_re_renders_nothing(seams):
-    conn = _IngestConn(existing=(3,))
+def test_a_quiet_month_stamps_the_cells_current_and_re_renders_nothing(seams):
+    """#2318: MF published no new file, and the one it publishes is the revision the cells
+    serve, so they are current now. Without the stamp a working monthly job reads on Health
+    as a dead one after 40 days. Nothing was refreshed, so rows and duration are passed as
+    not measured and the registry keeps the last refresh's figures (migration 441)."""
+    conn = _IngestConn(existing=(3, True))
     seams(conn)
     assert _insert(conn) is None
-    assert conn.log == ["BEGIN", "select source_revision from", "COMMIT"]
+    assert conn.log == ["BEGIN", "select r.source_revision, exists",
+                        "stamp rent_map_cells rows=None duration_ms=None", "COMMIT"]
+
+
+def test_a_known_file_the_cells_do_not_serve_stamps_nothing(seams, caplog):
+    """A known file that is not the served revision (an older file MF offers again, or the
+    latest revision whose ingest refresh was skipped) proves nothing about the cells, so the
+    cell keeps ageing and the log says why."""
+    conn = _IngestConn(existing=(1, False))
+    seams(conn)
+    with caplog.at_level(logging.WARNING, logger="rent_map"):
+        assert _insert(conn) is None
+    assert conn.log == ["BEGIN", "select r.source_revision, exists", "COMMIT"]
+    assert "not the revision rent_map_cells serves" in caplog.text
 
 
 def test_the_api_image_ships_the_overlay_ingest_this_module_imports():
@@ -311,3 +335,57 @@ def test_the_api_image_ships_the_overlay_ingest_this_module_imports():
     dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
     assert "COPY scripts/ ./scripts/" in dockerfile.read_text(encoding="utf-8")
     assert api_rent_map.render_sql_section is ingest_map_overlays.render_sql_section
+
+
+# --- scripts.fetch_rent_map: the job ends with the rent_map re-render (fetch_rent_map.yml's last step, folded) -----
+
+
+@pytest.fixture()
+def job(monkeypatch):
+    """scripts.fetch_rent_map with its fetch, connection, ingest and the overlay ingest's main() faked."""
+    from scripts import fetch_rent_map
+
+    calls = SimpleNamespace(render=[], ingest=[], code=0)
+
+    @contextlib.contextmanager
+    def fake_connect():
+        yield "conn"
+
+    def fake_render(argv):
+        calls.render.append(argv)
+        return calls.code
+
+    monkeypatch.setattr(fetch_rent_map, "fetch_latest_xlsx", lambda url: (b"xlsx", "2026-08-15_Cenova-mapa.xlsx"))
+    monkeypatch.setattr(fetch_rent_map, "parse_rent_map_xlsx", lambda data, source_date: _PARSED)
+    monkeypatch.setattr(fetch_rent_map, "connect", fake_connect)
+    monkeypatch.setattr(fetch_rent_map, "ingest_bytes", lambda conn, data, **kw: calls.ingest.append(conn) or {
+        "ingested": False, "file_sha256": "ab" * 32})
+    monkeypatch.setattr(ingest_map_overlays, "main", fake_render)
+    calls.main = fetch_rent_map.main
+    return calls
+
+
+@pytest.mark.parametrize("code", [0, 1])
+def test_a_live_run_ends_with_the_rent_map_re_render_and_returns_its_code(job, code):
+    """Every month, a no-op one included: a refused render (exit 1) is what turns the job red."""
+    job.code = code
+    assert job.main([]) == code
+    assert job.ingest == ["conn"] and job.render == [["--sections", "rent_map"]]
+
+
+def test_a_dry_run_re_renders_dry(job):
+    assert job.main(["--dry-run"]) == 0
+    assert job.ingest == [] and job.render == [["--sections", "rent_map", "--dry-run"]]
+
+
+def test_a_fetch_that_raises_renders_nothing(job, monkeypatch):
+    """The workflow's re-render ran only on the fetch step's success; the job raises (exit 1) before it."""
+    from scripts import fetch_rent_map
+
+    def refuse(url):
+        raise RuntimeError("MF page has no xlsx link")
+
+    monkeypatch.setattr(fetch_rent_map, "fetch_latest_xlsx", refuse)
+    with pytest.raises(RuntimeError, match="no xlsx link"):
+        job.main([])
+    assert job.render == [] and job.ingest == []

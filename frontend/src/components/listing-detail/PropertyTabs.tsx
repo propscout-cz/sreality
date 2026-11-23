@@ -6,8 +6,10 @@
  * (an estimation run, an advert row), else the overview. A tab is mounted the
  * first time it opens and then kept, hidden: a half-typed note or a picked
  * radius survives a look at another tab. */
-import { useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
+
+import Tabs from '@/components/Tabs';
 
 export type PropertyTabId = 'prehled' | 'fotky' | 'hodnota' | 'okoli' | 'inzeraty' | 'audit';
 
@@ -74,56 +76,23 @@ export function PropertyTabs({
   const [visited, setVisited] = useState<ReadonlySet<PropertyTabId>>(() => new Set([tab]));
   if (!visited.has(tab)) setVisited(new Set(visited).add(tab));
 
-  /* Arrow keys move along the bar (the WAI-ARIA tabs pattern); Tab leaves it. */
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    const step = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
-    if (step === 0 && e.key !== 'Home' && e.key !== 'End') return;
-    e.preventDefault();
-    const i = PROPERTY_TABS.findIndex((t) => t.id === tab);
-    const n = PROPERTY_TABS.length;
-    const to = e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : (i + step + n) % n;
-    onSelect(PROPERTY_TABS[to].id);
-    document.getElementById(`ptab-${PROPERTY_TABS[to].id}`)?.focus();
-  };
-
+  /* The shared strip (components/Tabs.tsx) draws the bar, its keys and the
+   * `ptab-*` / `ppanel-*` ids; a count shows only above zero. It stays a direct
+   * child of this wrapper, so it sticks for as long as the panels scroll. */
   return (
     <div className="mt-6">
-      <div
-        role="tablist"
-        aria-label="Části stránky"
-        onKeyDown={onKeyDown}
-        className="sticky top-0 z-10 -mx-2 flex gap-1 overflow-x-auto border-b border-[var(--color-rule-strong)] bg-[var(--color-paper)] px-2"
-      >
-        {PROPERTY_TABS.map(({ id, label }) => {
-          const selected = id === tab;
-          const count = counts[id];
-          return (
-            <button
-              key={id}
-              id={`ptab-${id}`}
-              type="button"
-              role="tab"
-              aria-selected={selected}
-              aria-controls={`ppanel-${id}`}
-              tabIndex={selected ? 0 : -1}
-              onClick={() => onSelect(id)}
-              className={[
-                'inline-flex h-11 shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-3 text-sm transition-colors',
-                selected
-                  ? 'border-[var(--color-copper)] font-medium text-[var(--color-ink)]'
-                  : 'border-transparent text-[var(--color-ink-3)] hover:text-[var(--color-ink)]',
-              ].join(' ')}
-            >
-              {label}
-              {count != null && count > 0 && (
-                <span className="rounded-full bg-[var(--color-inset)] px-1.5 py-0.5 font-mono text-[0.68rem] tabular-nums text-[var(--color-ink-2)]">
-                  {count}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
+      <Tabs
+        tabs={PROPERTY_TABS.map(({ id, label }) => ({
+          key: id,
+          label,
+          count: (counts[id] ?? 0) > 0 ? counts[id] : undefined,
+        }))}
+        active={tab}
+        onChange={onSelect}
+        ariaLabel="Části stránky"
+        idPrefix="p"
+        sticky
+      />
       {PROPERTY_TABS.map(({ id }) =>
         visited.has(id) || id === tab ? (
           <div

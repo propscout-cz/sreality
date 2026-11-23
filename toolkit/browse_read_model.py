@@ -1,24 +1,25 @@
 """Read-your-writes patch of the Browse read model (`browse_list`).
 
 `browse_list` (migration 276) is an UNLOGGED snapshot of `browse_projection`,
-rebuilt wholesale every 15 min by pg_cron (`rebuild_browse_list`, migration 277;
-the cadence moved 5 -> 15 min in migration 413, which cut the rebuild's duty
-cycle from 142% to 79.7%). That cadence fits organic scrape churn but not an
+rebuilt wholesale by pg_cron (`rebuild_browse_list`, migration 277; every 5 min,
+15 since migration 413, hourly at :45 since migration 740, beside the maintenance
+pass queueing what the 6 h cap publishes). That cadence fits a reconcile but not an
 operator-initiated identity change: a merge / detach / split must show in
 Browse the instant the API returns, not up to a rebuild-interval later (the
 "merge did nothing, then fixed itself after ~2 min" report — docs/design/browse-merge-consistency.md). This
 patches exactly the touched rows; the periodic rebuild stays the backstop.
 
 Called by `scripts.recompute_property_stats.properties_changed` (both identity writers and the
-dirty drain). The drain is there since W6
+dirty drain, which the pass's published enqueue feeds what the cap released). The drain is there since W6
 (docs/design/field-capture/PROGRAM.md, A15) — a post-publication attribute fill reaches
 `properties` in ~2 min and then waited a measured 11.7 min on average (94 rebuilds over 24 h;
 worst 36.6) for the wholesale rebuild to carry it into Browse. It is a FAST PATH, not a
 guarantee: a rebuild snapshots `browse_projection` at its start and swaps the new table in at
 its end (61.9 s of every 900 s, measured 2026-10-19), so a patch committed inside that window
 writes a table that is about to be dropped. Since migration 630 the rebuild re-patches every
-property a merge, detach or split touched since its previous run before the swap; any other
-patch in the window is superseded until the next rebuild.
+property a merge, detach or split touched since its previous run before the swap, and the
+published enqueue re-queues a new property the swap left out on the next pass; any other patch
+in the window is superseded until the next rebuild.
 """
 
 from __future__ import annotations

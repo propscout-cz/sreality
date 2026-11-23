@@ -103,6 +103,13 @@ export const ROUTES = {
   listingLegacy: def('/listing/:sreality_id'),
   health: def('/health'),
   costs: def('/costs'),
+  // The propscout.cz waitlist (admin): who signed up from the landing page.
+  signups: def('/signups'),
+  // Where the agent platform programme stands (admin), in plain words.
+  agentPlatform: def('/agent-platform'),
+  // Start, follow and cancel agent runs: shown to accounts that may start one (GET /runs/options).
+  runs: def('/runs'),
+  runDetail: def('/runs/:id'),
   estimations: def('/estimations'),
   estimationDetail: def('/estimation/:id'),
   brokers: def('/brokers'),
@@ -133,8 +140,6 @@ export const ROUTES = {
   newDedupExam: def('/new-dedup/exam'),
   newDedupExamReview: def('/new-dedup/exam/review'),
   newDedupTaggingBakeoff: def('/new-dedup/tagging-bakeoff'),
-  // The set W5 hides from consumers until its location is resolved (mig 514).
-  newDedupPinAudit: def('/new-dedup/pin-audit'),
   // The AUTONOMOUS dedup program (docs/design/autodedup/PROGRAM.md) — a separate
   // program from NEW DEDUP above, with its own schema, lane and settings
   // namespace. Progress is its first surface (PROGRAM.md §12, W1); bare

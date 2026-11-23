@@ -17,6 +17,7 @@ import {
   confirmBuildingUnits,
 } from '@/lib/api';
 import type { BuildingRun, BuildingUnit } from '@/lib/types';
+import Panel from '@/components/Panel';
 
 interface Props {
   building: BuildingRun;
@@ -80,18 +81,18 @@ export default function BuildingUnitEditor({ building, onConfirmed }: Props) {
   };
 
   return (
-    <section className="mt-6 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper)]">
-      <header className="px-5 py-3 border-b border-[var(--color-rule)]">
-        <h2 className="text-[1rem]" style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}>
-          Review units
-        </h2>
-        <p className="text-[0.78rem] text-[var(--color-ink-3)] mt-1">
+    <Panel
+      title="Review units"
+      count={rows.length}
+      lede={
+        <>
           The extractor proposed {initial.length} unit{initial.length === 1 ? '' : 's'}.
           Edit any field, add or remove rows, then confirm to start per-unit estimations.
-        </p>
-      </header>
-
-      <div className="overflow-x-auto">
+        </>
+      }
+    >
+      {/* A table that scrolls keeps its own box (section cards, C9). */}
+      <div className="overflow-x-auto rounded-[var(--radius-md)] border border-[var(--color-rule)]">
         <table className="w-full text-[0.83rem]">
           <thead>
             <tr className="text-[0.7rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
@@ -190,7 +191,7 @@ export default function BuildingUnitEditor({ building, onConfirmed }: Props) {
         </table>
       </div>
 
-      <footer className="flex items-center justify-between px-5 py-3 border-t border-[var(--color-rule)]">
+      <footer className="flex items-center justify-between">
         <button
           type="button"
           onClick={add}
@@ -214,14 +215,14 @@ export default function BuildingUnitEditor({ building, onConfirmed }: Props) {
               'px-4 py-2 text-sm rounded-[var(--radius-sm)] border transition-colors',
               rows.length === 0 || confirmMut.isPending
                 ? 'bg-[var(--color-rule-strong)] text-[var(--color-ink-4)] border-[var(--color-rule-strong)] cursor-not-allowed'
-                : 'bg-[var(--color-copper)] text-white border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
+                : 'bg-[var(--color-copper)] text-[var(--color-on-copper)] border-[var(--color-copper)] hover:bg-[var(--color-copper-2)] hover:border-[var(--color-copper-2)]',
             ].join(' ')}
           >
             {confirmMut.isPending ? 'Confirming…' : 'Confirm units'}
           </button>
         </div>
       </footer>
-    </section>
+    </Panel>
   );
 }
 

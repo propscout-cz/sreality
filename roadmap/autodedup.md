@@ -92,8 +92,8 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   seed commits, never a bare revert: brake, revert, re-seed** (the retired `payload` still holds
   the 10-16 calibration). Owed, scheduled right after that sitting is verified: the DROP of
   `payload` / `artifact_url` (destructive: the operator's OK + a backup; the old reader then
-  fails loudly). Still binding at the nation's size: `MAX_SCHEMA_MB` 10,000 (~470k ads,
-  E940/E962), the cut's memory bound 699,050 ads at 12 kB (E962); the worker's calibration is
+  fails loudly). Still binding at the nation's size: `MAX_SCHEMA_MB` 14,000 since 2026-10-30
+  (~660k ads; 10,000 / ~470k under E940/E962), the cut's memory bound 699,050 ads at 12 kB (E962); the worker's calibration is
   ~2.9 GB through every pass (resident ~1.6 + `context_for`'s copy ~1.2) and ~4.5–5 GB at a
   digest change — under its 22.9 GB (one row a block of `block_token_df` would let the read
   parse a block at a time; not built).
@@ -200,8 +200,10 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
 - **E975 (2026-10-21, the sweep slice):** the reconcile sweeps 2,000 groups a pass past its cursor (was
   200): with Prague's 34k clusters the hand-on ran dry at 12:00Z and the merges fell to a third; a cycle
   is ~2 h now and the discovery matches the re-claim. One constant, no decision module, digest unchanged.
-  Owed: the three `applied_merges` overlap scans of the reconcile's planning read id arrays that grow with
-  the list (DIAGNOSIS recommendation 3: an index they can use) before they near the 2-min statement timeout.
+  Since #2508 `ENGINE_MERGES` reads only the adverts a group consults, 150 a read on the partial GIN, and
+  `LEDGER_HISTORY` only the candidates' members; since #2525 (2026-11-16, the operator's "proceed with
+  #2525" read as E41 kept) it reads migration 746's partial index on the refused rows. Owed:
+  `RC_OUTCOME_HISTORY` still scans `applied_merges` once a pass (a full GIN on `member_ids`).
 - **E976 (2026-10-22, the build reads live adverts first):** during a build the entrant feed orders the
   snapshot's unread adverts live first, then inactive, ids ascending within each, under no id cursor (the
   `rt_fp` anti-join advances it); outside a build nothing changes. Praha's 11,864 live unread adverts are
@@ -214,6 +216,20 @@ data. The legacy engine's history is [`dedup-track.md`](dedup-track.md) — neve
   `autodedup.settings` `rt_build_priority:<generation>` first, in that row's category order (Liberec
   `obec:563889`: flats for rent, houses for sale, flats for sale, the rest), then E978's order. Data, not
   code: changing it needs no deploy; no row or a malformed one is E978's order exactly. Order only.
+- **E980 (2026-10-26, active arrivals re-checked first):** every pass the evidence sweep probes the
+  newest 1,000 active adverts still marked incomplete before its round-robin. The kraj build had filled the
+  round-robin to 90,984 rows, ~50 h a cycle at 400 a pass, so an active arrival decided before its CLIP
+  vector waited out the cycle: 1,014 such at 13:00Z, one Hradec Králové flat four properties for 16 h. A row
+  written in the last hour waits; the round-robin's cursor stops before a mover the share cut. Order only;
+  no decision module, digest unchanged.
+  Reverted the same day (#2096): its 57–80 re-decides a pass overran the build's pass deadline twice.
+  **E980b** brings it back OFF in a build and at most 15 re-decides a pass outside one (constants).
+- **E984 + E987 + E988 (2026-11-17, draft; light after the coordinator's review, merge on the
+  operator's word):** after the 11-16/17 brake the scope walks held all 32 blocks behind ~4,100
+  unread arrivals and nothing merged from 12:58Z (#2537's E985 was not the cause; reverted, #2553).
+  E987: outside a build the entrant feed reads fewest-unread blocks first (72 h fairness), from one
+  scan the reconcile reuses; E988: the new feed skips rows the lane holds; E984: a steady clock-cut
+  pass with work waiting is measured. Lane only; no decision module, digest unchanged.
 - **E977 (2026-10-22, built; ships only on the operator's yes):** during a build, a block whose walk is
   complete holds back only the groups whose own adverts (members, carried riders) have no fingerprint, not
   every group in the block; a block never walked or mid-walk, an advert the snapshot does not place and the

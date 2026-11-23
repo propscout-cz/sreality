@@ -1,7 +1,7 @@
 """E948: the lease a dead predecessor of this container left is released, and its death halves
 the claim cap.
 
-2026-10-10: a bootstrap pass took `autodedup.rt_lease` at 07:39:07Z as `0103ceb2490c:1:1791617947`
+2026-10-10: a bootstrap pass took `rt_lease` at 07:39:07Z as `0103ceb2490c:1:1791617947`
 and the worker process died before 07:40:53Z, when Railway restarted it IN PLACE (the same
 container hostname and pid, no deploy, no SIGTERM, so E941's release never ran; most likely the
 OOM killer, on a 500-advert claim whose neighbourhood read grows with the store). The lease then
@@ -36,7 +36,8 @@ from typing import Any
 
 import pytest
 
-from autodedup import incremental_lane, incremental_sql, rt_lease
+from autodedup import incremental_lane, rt_lease
+from scraper import job_lease
 from autodedup.incremental_lane import (
     CLAIM_CAP_FLOOR,
     E948_LIMIT_MB,
@@ -50,15 +51,14 @@ from autodedup.incremental_lane import (
     read_claim_cap,
     run_incremental,
 )
-from autodedup.incremental_sql import (
-    RT_LEASE_PREDECESSOR_SQL,
-    RT_LEASE_RELEASE_PREDECESSOR_SQL,
-    RT_LEASE_TAKE_SQL,
-    RT_SETTING_WRITE_SQL,
-)
+from autodedup.incremental_sql import RT_SETTING_WRITE_SQL
+from scraper.job_lease import _ACQUIRE_LANE_SQL, _BOUND_SQL, _END_PREDECESSOR_SQL, _PREDECESSOR_SQL, _UPSERT_LANE_SQL
 from tests.autodedup import lane_world
 from tests.autodedup.fake_pg import FakePg
 from tests.autodedup.test_rt_bootstrap import _scope_rows, _work
+
+# The statements `job_lease.acquire` runs before its compare-and-set.
+_TAKE_PREAMBLE = [_BOUND_SQL, _UPSERT_LANE_SQL]
 
 HOST = "0103ceb2490c"
 PID = 1                                  # the worker is the container's first process
@@ -144,11 +144,12 @@ def test_the_release_and_its_read_twin_are_one_predicate_on_the_lease_row() -> N
     def flat(sql: str) -> str:
         return " ".join(sql.lower().split())
 
-    where = flat(incremental_sql._RT_LEASE_PREDECESSOR_WHERE)
-    release, read = flat(RT_LEASE_RELEASE_PREDECESSOR_SQL), flat(RT_LEASE_PREDECESSOR_SQL)
-    assert release == f"update autodedup.rt_lease set expires_at = now() {where} returning holder"
-    assert read == f"select holder from autodedup.rt_lease {where}"
-    assert where.startswith("where name = %(name)s::text")
+    where = flat(job_lease._PREDECESSOR_WHERE)
+    release, read = flat(_END_PREDECESSOR_SQL), flat(_PREDECESSOR_SQL)
+    assert release == (f"update scheduled_jobs set lease_expires_at = now(), last_outcome = null {where} "
+                       "returning lease_holder")
+    assert read == f"select lease_holder from scheduled_jobs {where}"
+    assert where.startswith("where job_name = %(job)s")
 
 
 def test_the_pass_releases_it_right_before_its_take_and_reports_it(tmp_path: Path) -> None:
@@ -162,9 +163,9 @@ def test_the_pass_releases_it_right_before_its_take_and_reports_it(tmp_path: Pat
     assert out.get("skipped") is None and out["aborted"] == "", "the lane is not stranded"
     assert out["predecessor_released"] == dead
     statements = world.statements[before:]
-    release = statements.index(RT_LEASE_RELEASE_PREDECESSOR_SQL)
-    take = statements.index(RT_LEASE_TAKE_SQL)
-    assert statements[release + 1:take] == [RT_SETTING_WRITE_SQL], "the halved cap, then take"
+    release = statements.index(_END_PREDECESSOR_SQL)
+    take = statements.index(_ACQUIRE_LANE_SQL)
+    assert statements[release + 1:take] == [RT_SETTING_WRITE_SQL, *_TAKE_PREAMBLE], "the halved cap, then take"
     row = rt_lease.current(world)
     assert (row["holder"], row["live"]) == (own, False), "the pass's own lease, given back"
 
@@ -177,8 +178,7 @@ def test_with_no_predecessor_the_take_follows_the_release_at_once(tmp_path: Path
 
     statements = world.statements[before:]
     assert out["predecessor_released"] is None
-    assert (statements.index(RT_LEASE_TAKE_SQL)
-            == statements.index(RT_LEASE_RELEASE_PREDECESSOR_SQL) + 1)
+    assert statements[statements.index(_END_PREDECESSOR_SQL) + 1:statements.index(_ACQUIRE_LANE_SQL)] == _TAKE_PREAMBLE
     assert world.settings[claim_cap_key("rt")] == full_claim_cap("rt_seed"), "nothing halved"
 
 
@@ -189,8 +189,8 @@ def test_a_caller_that_names_no_boot_releases_nothing(tmp_path: Path) -> None:
     out = run_incremental(lambda: world)
 
     assert out["skipped"] == "leased"
-    assert RT_LEASE_RELEASE_PREDECESSOR_SQL not in world.statements
-    assert RT_LEASE_PREDECESSOR_SQL not in world.statements
+    assert _END_PREDECESSOR_SQL not in world.statements
+    assert _PREDECESSOR_SQL not in world.statements
 
 
 # ------------------------------------------------------------------ (b) the claim cap
@@ -225,7 +225,7 @@ def test_the_death_halves_the_cap_and_logs_it_in_a_commit_before_the_pass(
     assert halved["limit_mb"] == LIMIT
     assert seen["in_tx"] is True and seen["cap"] == halved, "committed BEFORE the pass"
     assert seen["logged"] == [
-        f"AUTODEDUP: a predecessor of this container died holding autodedup.rt_lease: {dead}; "
+        f"AUTODEDUP: a predecessor of this container died holding rt_lease: {dead}; "
         "released, and the claim cap halved from 500 to 250 (E948)"], "logged before it, too"
     assert world.rolled_back >= 1 and world.settings[key] == halved
     assert world.settings_by[key].endswith(":halved")
@@ -370,13 +370,13 @@ def test_at_the_floor_the_dead_predecessors_lease_is_left_to_its_ttl_and_named(
     assert out["skipped"] == "leased"
     assert (out["predecessor_kept"], out["predecessor_released"]) == (dead, None)
     assert out["reason"].startswith(
-        "a dead predecessor of this container holds autodedup.rt_lease, left to its TTL at "
+        "a dead predecessor of this container holds rt_lease, left to its TTL at "
         f"the claim cap's floor ({CLAIM_CAP_FLOOR}; E948): held by '{dead}'")
     row = rt_lease.current(world)
     assert (row["holder"], row["live"]) == (dead, True), "it ends by its TTL"
     statements = world.statements[before:]
-    assert RT_LEASE_PREDECESSOR_SQL in statements
-    assert RT_LEASE_RELEASE_PREDECESSOR_SQL not in statements
+    assert _PREDECESSOR_SQL in statements
+    assert _END_PREDECESSOR_SQL not in statements
     assert world.settings[key] == {"cap": CLAIM_CAP_FLOOR, "reason": "x"}
     assert not [r for r in caplog.records if r.name == incremental_lane.__name__]
 
@@ -712,11 +712,11 @@ def test_in_one_boot_a_grown_limit_releases_the_dead_predecessor_without_halving
     assert row["reason"].startswith(reason) and world.settings_by[key].endswith(written_by)
     assert out["claim_bound"]["cap"] == PASS_LIMITS.max_listings and out["claim_cap"] == row
     statements = world.statements[before:]
-    release = statements.index(RT_LEASE_RELEASE_PREDECESSOR_SQL)
+    release = statements.index(_END_PREDECESSOR_SQL)
     assert statements[release - 1] == RT_SETTING_WRITE_SQL, "the fit, then the release"
     logged = [r.getMessage() for r in caplog.records if r.name == incremental_lane.__name__]
     assert logged[-1] == (
-        f"AUTODEDUP: a predecessor of this container died holding autodedup.rt_lease: {dead}; "
+        f"AUTODEDUP: a predecessor of this container died holding rt_lease: {dead}; "
         "released, and the claim cap kept at 500: it ran under a smaller memory limit (E948b)")
     assert len(_resets(caplog)) == int(written_by == ":limit_grew")
 

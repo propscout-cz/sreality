@@ -142,9 +142,18 @@ def function_bodies(conn) -> dict[str, str]:
 # refresh_health_matviews' body, and migration 643 (Health W9) dropped that function,
 # its six matviews and their registry rows. The helper 441 defines stays, and a
 # definition is not a call.
+#
+# 514 and 523 are the case again: their literal stamps sit in refresh_location_pin_audit_mv's
+# bodies, and migration 719 dropped that function and the location_audit_waterfall row.
+# 719 then follows: its `refresh_matview` cron command names the matview, and 765 dropped
+# the matview, its job and its row; 765's revert re-registers the row it would rebuild.
 _RETIRED_MIGRATIONS = {
     "migrations/510_location_pin_audit.sql",
     "migrations/441_stamp_derived_artifact.sql",
+    "migrations/514_location_w5_serve_resolved.sql",
+    "migrations/523_location_w14_audit_waterfall.sql",
+    "migrations/719_location_audit_waterfall_drop.sql",
+    "migrations/reverts/765_revert_location_w6c2_pin_audit_drop.sql",
 }
 
 
@@ -201,14 +210,14 @@ def _repo_call_sites() -> tuple[dict[str, set[str]], dict[str, list[str]]]:
 
 
 def _catalog_call_names(bodies: dict[str, str]) -> dict[str, set[str]]:
-    """{proname: literal artifact names it stamps through the helper}."""
+    """{proname: literal artifact names it stamps, through the helper or an inline UPDATE}."""
     out: dict[str, set[str]] = {}
     for name, body in bodies.items():
         found = {
             m.group("arg").strip("'")
             for m in _SQL_CALL.finditer(body)
             if m.group("arg").startswith("'")
-        }
+        } | {m.group("name") for m in _INLINE_STAMP.finditer(body)}
         if found:
             out[name] = found
     return out
@@ -257,16 +266,16 @@ def test_every_stamp_call_in_the_repo_names_a_registered_artifact(registry):
 def test_every_stamp_call_inside_the_catalog_names_a_registered_artifact(
     registry, function_bodies
 ):
-    """RED by: mistyping one of the two names inside `refresh_location_pin_audit_mv`'s body.
+    """RED by: mistyping the name in `refresh_llm_cost_rollups`' inline UPDATE.
 
     The repo scan above cannot see a function body that was replaced directly against the
     database outside any migration file; this reads `pg_proc.prosrc`, so it can.
     """
     per_function = _catalog_call_names(function_bodies)
     assert per_function, (
-        "no function in the catalog stamps the registry through stamp_derived_artifact "
-        "with a literal name — refresh_location_pin_audit_mv (migration 523) lost its two "
-        "stamps, and this arm would check nothing"
+        "no function in the catalog stamps the registry with a literal name — "
+        "refresh_llm_cost_rollups and rebuild_browse_list lost their inline stamps, and this "
+        "arm would check nothing"
     )
     unknown = sorted(
         (fn, name)
@@ -301,8 +310,8 @@ def test_every_registry_row_is_stamped_by_something(registry, function_bodies):
     """Corollary E, whole: a declared artifact whose freshness nothing writes is exactly
     the permanently-red row this wave exists to delete.
 
-    RED by: deleting any producer's stamp — the helper call in a Python producer, one of
-    the two inside `refresh_location_pin_audit_mv`, or one of the pre-441 inline
+    RED by: deleting any producer's stamp — the helper call in a Python producer, a pg_cron
+    command's `refresh_matview`, or one of the pre-441 inline
     `update derived_artifacts ... where name = '...'` blocks.
 
     Four stamp shapes count, because four genuinely exist: a literal-name call of the
@@ -320,8 +329,6 @@ def test_every_registry_row_is_stamped_by_something(registry, function_bodies):
         stamped |= names
     for names in _catalog_call_names(function_bodies).values():
         stamped |= names
-    for body in function_bodies.values():
-        stamped |= {m.group("name") for m in _INLINE_STAMP.finditer(body)}
 
     unobserved = sorted(set(registry) - stamped)
     assert not unobserved, (
@@ -339,8 +346,8 @@ def test_every_registry_row_s_producer_exists(conn, registry):
     have refreshed it, so a producer naming something that no longer exists turns the
     panel's most actionable column into a dead end. Two spellings are legal and both are
     live today: a function in `pg_proc`, and a repo path on disk — including the one
-    composite, `api/rent_map.py + fetch_rent_map.yml`, which is honest about an artifact
-    refreshed inside a request handler with a monthly workflow as its floor.
+    composite, `api/rent_map.py + scripts/fetch_rent_map.py`, which is honest about an
+    artifact refreshed inside a request handler with a monthly job as its floor.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -354,9 +361,7 @@ def test_every_registry_row_s_producer_exists(conn, registry):
         for token in (t.strip() for t in producer.split("+")):
             if not token:
                 continue
-            if token.endswith((".yml", ".yaml")) and "/" not in token:
-                ok = (_REPO / ".github" / "workflows" / token).is_file()
-            elif "/" in token or token.endswith(".py"):
+            if "/" in token or token.endswith(".py"):
                 ok = (_REPO / token).is_file()
             else:
                 ok = token in functions
@@ -366,6 +371,39 @@ def test_every_registry_row_s_producer_exists(conn, registry):
         "derived_artifacts.producer names something that does not exist:\n  "
         + "\n  ".join(broken)
     )
+
+
+def test_no_registry_producer_names_a_workflow_file(registry):
+    """RED by: a `derived_artifacts.producer` token that is a workflow file (migration 565's
+    `fetch_rent_map.yml`, until 683).
+
+    A workflow is a host, and the Actions exit (#2007) moves hosts: a producer naming one
+    becomes a dead pointer the day its job moves, and the move's revert would have to edit
+    the row back. The producer names the code that refreshes the artifact; `host` says where.
+    """
+    named = sorted(
+        f"{name}: {token}"
+        for name, producer in registry.items()
+        for token in (t.strip() for t in producer.split("+"))
+        if token.endswith((".yml", ".yaml"))
+    )
+    assert not named, f"derived_artifacts.producer names a workflow file: {named}"
+
+
+def test_no_artifact_of_a_runner_job_is_hosted_on_github(conn):
+    """RED by: `map_overlay_tiles` reading `github-actions` after its job moved (until 702): a move PR re-hosts its row."""
+    from scraper.jobs import runner_jobs
+
+    moved = {f"{job.argv[0].replace('.', '/')}.py": job.name for job in runner_jobs()}
+    with conn.cursor() as cur:
+        cur.execute("select name, producer from public.derived_artifacts where host = 'github-actions'")
+        left = sorted(
+            f"{name}: {token} is job {moved[token]}"
+            for name, producer in cur.fetchall()
+            for token in (t.strip() for t in producer.split("+"))
+            if token in moved
+        )
+    assert not left, f"derived_artifacts rows still hosted on GitHub: {left}"
 
 
 def test_the_stamp_helper_is_unreachable_from_every_browser_role(conn):

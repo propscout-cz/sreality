@@ -68,7 +68,9 @@ _JSON = "application/json"
 _INDEX = "index"
 
 # sha256 of the NORMALISED body of every committed detail fixture, taken under
-# payload_norm@3 as it shipped — i.e. computed from the code this change replaces.
+# payload_norm@3 as it shipped — i.e. computed from the code this change replaces. The
+# fixtures #2035 touched (a third-party credential blanked, the contact banner reworded)
+# were re-pinned: their inputs moved, never the normaliser.
 # They are the regression that matters: the profiles themselves are untouched, and a
 # keying change must be a pure no-op on the surface they were measured for.
 _DETAIL_DIGESTS: dict[tuple[str, str], str] = {
@@ -76,8 +78,11 @@ _DETAIL_DIGESTS: dict[tuple[str, str], str] = {
         "3260342567e793274f496d789d1bb4edf42bec6c6e54119347ea3d586afe252a",
     ("ceskereality", "location_w2/ceskereality_detail.html"):
         "28d988eb7f224a2310fc7c6606a2728d4898951b0ee4d95305680f584226966e",
+    # Moved by idnes@7 (W3): the modelled page gained the detail map every live idnes body
+    # carries its disclaimer in (`section#map-container`), the node @7's marker reads. New
+    # BYTES, the same payload_norm@3 profile.
     ("idnes", "location_w2/idnes_detail.html"):
-        "c212524063f9841526115ea0788c8f32d1c4bbc199e0f4c49ff6f23da96c8c90",
+        "064268e7ac13ec62383488f7511bb831b63fb6cb6287c8a78a4c51687b7403f1",
     ("maxima", "location_w2/maxima_detail.html"):
         "b37cb00c8fdaef6445e0081245b8c2a7c34907df374eb8c9ae9f2ca411f6595d",
     # Moved once, in the mmreality@2 activation: the pinned fixture was re-authored so its
@@ -93,9 +98,10 @@ _DETAIL_DIGESTS: dict[tuple[str, str], str] = {
     # mandatory town carrier. The PROFILE is untouched, which is the property this table
     # exists to pin — a fixture edit moves the body's digest, never the cohort key. It
     # lands with the fixture and the golden (realitymix@5.json) in one commit, or the
-    # fixture-diff gate and this pin disagree about the same bytes.
+    # fixture-diff gate and this pin disagree about the same bytes. Moved again by @8 (W4):
+    # the model gained the blank interactive `div#map` the hidden-geocode pages serve.
     ("realitymix", "location_w2/realitymix_detail.html"):
-        "53836c6ee03bb83b55f790128edbc7484b74f463ea56f568f8593e4f4960fffa",
+        "7147d42d0931977c215c9ec0c2c9cd474145a28122364d229c6bf868ce7e0a1f",
     # W2-6 re-pinned: the FIXTURE moved, not the normaliser. remax's pinned body carried a
     # hand-written one-line `h2.pd-header__address`, which hid the nested `mapa` jump-link
     # every real remax page carries; the block is now copied verbatim from the archived
@@ -105,41 +111,43 @@ _DETAIL_DIGESTS: dict[tuple[str, str], str] = {
     ("sreality", "location_w2/sreality_detail.json"):
         "58f277d33ee9bd08f243602a236934f0ecbd0b5b8a4654f1bdb3ea367c246af1",
     ("ceskereality", "location_w2a_refetch/ceskereality_a1.html"):
-        "236fc60ca2597d8f393bf320d4548646e35aad464326c77dac5d4125a9ed10ba",
+        "1924ac96e1be081d24ba4f4c7258854c459d5069924064dc7e013bc540c25981",
     ("ceskereality", "location_w2a_refetch/ceskereality_a2.html"):
-        "236fc60ca2597d8f393bf320d4548646e35aad464326c77dac5d4125a9ed10ba",
+        "1924ac96e1be081d24ba4f4c7258854c459d5069924064dc7e013bc540c25981",
     ("ceskereality", "location_w2a_refetch/ceskereality_b1.html"):
-        "4b6495e634f4ac3e5cb8aa110583b0056f194b238d6d3fcd596a2919a992ea08",
+        "21d2724fe444be579d0066866bf314bd848ce7fbe20463dbe8e8289e4b5a065f",
     ("idnes", "location_w2a_refetch/idnes_a1.html"):
-        "c5437bca4fcd8c133bce0f84a6ccacc219f190c42b9f9b1d45d809613b73cee6",
+        "b09e76ab502e5917aaa34157406305fdc56c23a9599084629e9404a70e1f2397",
     ("idnes", "location_w2a_refetch/idnes_a2.html"):
-        "c5437bca4fcd8c133bce0f84a6ccacc219f190c42b9f9b1d45d809613b73cee6",
+        "b09e76ab502e5917aaa34157406305fdc56c23a9599084629e9404a70e1f2397",
     ("idnes", "location_w2a_refetch/idnes_b1.html"):
-        "244c9fb8f70a266ddfbfc9690a1f497452652f802941c3843490ce1f58d7671f",
+        "456f29c9f06a56bd15d2a5efcf3f6171244e5bda66b24a16ea78e0d59c4366e2",
     # idnes@4's foreign capture (Malinska, Krk). A third listing in the refetch set rather
     # than a churn pair: it is committed for what it CARRIES — a null Czech hierarchy and a
     # `listing_localityState` of "HR" — and it is pinned here because every committed detail
     # body is, which is the property this table exists to keep true.
     ("idnes", "location_w2a_refetch/idnes_c1.html"):
-        "043186d06314cc6ba8e1381249ca7987848a1c41ddd750a5a610daa4b9e59669",
+        "4bcb5b0da58ff849944e810c66e5e914b45b33581fc81ea48e9c36bd5c861918",
     ("mmreality", "location_w2a_refetch/mmreality_a1.html"):
-        "1c44407509e96eb3dfe142ef68853c5ca3e63dea8cb02428db5b3cc09e7b44c1",
+        "6d5587a279727bc2092ade11500c9f31b856be52be3e12ab98ba85da275b7072",
     ("mmreality", "location_w2a_refetch/mmreality_a2.html"):
-        "1c44407509e96eb3dfe142ef68853c5ca3e63dea8cb02428db5b3cc09e7b44c1",
+        "6d5587a279727bc2092ade11500c9f31b856be52be3e12ab98ba85da275b7072",
     ("mmreality", "location_w2a_refetch/mmreality_b1.html"):
-        "ab0b2d4deb1fbeca3b068237cc594c9d4b6f8af3ec0e66aa6312f3cd0fc55464",
+        "9c905380dcae114dc8710e082f683f0003cbe7845c245162eca7d1a29fccd3f3",
     ("realitymix", "location_w2a_refetch/realitymix_a1.html"):
-        "26548ade553e452f7dba63e981fd36e5bff5ce148d7d16421716f074a7168578",
+        "c16e2fd60643569fd4a22dedeea75efef8c164ecf6956f55c0b22802456aa4c7",
     ("realitymix", "location_w2a_refetch/realitymix_a2.html"):
-        "26548ade553e452f7dba63e981fd36e5bff5ce148d7d16421716f074a7168578",
+        "c16e2fd60643569fd4a22dedeea75efef8c164ecf6956f55c0b22802456aa4c7",
     ("realitymix", "location_w2a_refetch/realitymix_b1.html"):
-        "24da1228858037c32a2811b8162dee5d211567cadbaf2f51de3aa50d603fcf30",
+        "b50fa146f728a98b085ec311f8189af47496bb4171931a2e903c5f7e35720a00",
+    ("realitymix", "location_w2a_refetch/realitymix_c1.html"):
+        "732e5f9cfc1fee86db77ea1c76bb9cb225bf28b28b0193cd5b999bce97956469",
     ("remax", "location_w2a_refetch/remax_a1.html"):
-        "f47783e1002f8be7c07d7436053e669d72ebcfb968e019fc4b70bd4938b3a493",
+        "c71ae246101eea41aaabbc343804ba528472545a9490ed0a9015f747d534f559",
     ("remax", "location_w2a_refetch/remax_a2.html"):
-        "f47783e1002f8be7c07d7436053e669d72ebcfb968e019fc4b70bd4938b3a493",
+        "c71ae246101eea41aaabbc343804ba528472545a9490ed0a9015f747d534f559",
     ("remax", "location_w2a_refetch/remax_b1.html"):
-        "8bf84d0958d755f407703477209ab1589ec98fbf50fd250a49a673311098102a",
+        "e216af3ad495c372cb6113bdd5a44958d568c11fd9e682259eaabaa0a127646f",
     # The parser suite's own detail captures — different pages, and older, than the
     # W2 set above. They are committed detail bodies too, so they belong in the pin:
     # what it protects is the claim "detail output did not move", and a fixture left
@@ -150,16 +158,16 @@ _DETAIL_DIGESTS: dict[tuple[str, str], str] = {
     ("bazos", "portal_html/bazos_detail.html"):
         "ca6a521eacf6a5d3dd1b5567fdd39071d7936af7bbc4b833428b8ab7159ae437",
     ("idnes", "portal_html/idnes_detail.html"):
-        "6952b4899e1ecc7e3ddbcaa22fcf43ffb71f92a8096758fea0d94a6b359dc965",
+        "c9000e99bd8530ba0b30522b19c8e251c7b739cf0f3b2c5c8698e689a94198e4",
     ("mmreality", "portal_html/mmreality_detail.html"):
-        "2f97d89cbf626c931839708a9eea195052bfcd30c1faedce1c1a8ead202d473c",
-    # Moved by the W2-8 PII scrub: the captured page still carried a real agent name in a
-    # public repo, replaced with the placeholder by
+        "684f2b4b1de44793d5b1a3f3183d8dca8d2c99ad076a261b5f5b7a2a01de852e",
+    # Moved by the W2-8 PII scrub: the captured page still carried a real agent name,
+    # replaced with the placeholder by
     # `scripts/fetch_and_anonymize_fixtures.py --scrub-contacts --name …`.
     ("realitymix", "portal_html/realitymix_detail.html"):
-        "0d8d874e7f2cba09f7acda8a53ef9f16d7052a1032b5609b4997eba73575ebd2",
+        "28a4c3cbc3faf642610f84056a582ebb9a48d52a1c3175488a48cb7acc2cffdd",
     ("remax", "portal_html/remax_detail.html"):
-        "d1557becec21011c9253421cbf4be0172f0f2d85fe2d20bdd09f7c96a7e51c8b",
+        "c3b197ba900e48202938fcd9b4d65df9b85f4164eb72d95462d7259341ea0060",
 }
 
 

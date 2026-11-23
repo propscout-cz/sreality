@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
@@ -57,14 +57,13 @@ const dossier = (broker: Partial<brokers.BrokerPublic>): brokers.BrokerDossier =
     firm_id: null,
     firm_domain: null,
     firm_name: 'RE/MAX',
-    listing_count: 52,
-    active_listing_count: 37,
-    property_count: 50,
-    active_property_count: 35,
+    properties: 50,
+    active_properties: 35,
     ...broker,
   } as brokers.BrokerPublic,
   memberships: [],
   region_shares: [],
+  categories: [],
   pii_masked: true,
 });
 
@@ -132,7 +131,7 @@ describe('<BrokerDetail> honest error states', () => {
   });
 
   /* The dossier succeeds independently now, so an inventory failure rendered as
-     "Žádné inzeráty." would sit directly under a stats strip asserting 37/52. */
+     "Žádné inzeráty." would sit directly under a stats strip asserting 35/50. */
   it('does not report a failed inventory read as an empty inventory', async () => {
     vi.mocked(brokers.fetchBrokerListings).mockRejectedValue(new Error('timeout'));
     renderPage();
@@ -173,6 +172,7 @@ describe('<BrokerDetail> locality cell never fabricates a listing link', () => {
 
     const link = await screen.findByRole('link', { name: /S cilem/ });
     expect(link).toHaveAttribute('href', '/property/42?advert=2');
+    expect(link).toHaveAttribute('target', '_blank');
   });
 
   it('still links a row that carries a sreality id', async () => {
@@ -219,5 +219,91 @@ describe('<BrokerDetail> explore this broker', () => {
       categoryMain: 'dum',
       categoryType: 'pronajem',
     });
+  });
+});
+
+/* Typ and Nabídka are pick-ones, so each is the ONE joined bar (operator ruling
+ * 2026-10-27, system.md § Option groups); Vše keeps its place, first. */
+describe('<BrokerDetail> inventory filters', () => {
+  it('draws Typ and Nabídka as joined bars, Vše lit by default, the chosen segment filled copper', async () => {
+    vi.mocked(brokers.fetchBrokerListings).mockResolvedValue([listing({})]);
+    renderPage();
+    const typ = await screen.findByRole('group', { name: 'Typ' });
+    const offer = screen.getByRole('group', { name: 'Nabídka' });
+    expect(within(typ).getAllByRole('button').map((b) => b.textContent)).toEqual(['Vše', 'Byty', 'Domy', 'Pozemky', 'Komerční']);
+    expect(within(offer).getAllByRole('button').map((b) => b.textContent)).toEqual(['Vše', 'Prodej', 'Pronájem']);
+    for (const bar of [typ, offer]) {
+      expect(bar.firstElementChild).toHaveClass('inline-flex', 'border', 'bg-[var(--color-paper-2)]');
+      expect(within(bar).getByRole('button', { name: 'Vše' })).toHaveAttribute('aria-pressed', 'true');
+      expect(within(bar).getByRole('button', { name: 'Vše' })).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+      for (const b of within(bar).getAllByRole('button')) expect(b).not.toHaveClass('border');
+    }
+    fireEvent.click(within(typ).getByRole('button', { name: 'Domy' }));
+    expect(within(typ).getByRole('button', { name: 'Domy' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(typ).getByRole('button', { name: 'Vše' })).toHaveAttribute('aria-pressed', 'false');
+  });
+});
+
+/* Section cards (operator ruling 2026-10-28, system.md § Section cards): the
+ * stats strip stays; each section below it is a card named by its title, with
+ * a bare count in the title bar (0 and one muted line when empty, C10), and no
+ * bordered box inside the card except the inventory's scrolling table. */
+describe('<BrokerDetail> section cards', () => {
+  const card = (name: string) => screen.getByRole('region', { name });
+  const countOf = (region: HTMLElement) =>
+    within(region).getByRole('heading', { level: 2 }).nextElementSibling?.textContent;
+
+  it('draws Kde inzeruje, Kanceláře and Inventář as cards with their counts', async () => {
+    vi.mocked(brokers.fetchBrokerDossier).mockResolvedValue({
+      ...dossier({}),
+      region_shares: [
+        { geo_id: 1, name: 'Praha', active_properties: 9 },
+        { geo_id: 2, name: 'Brno', active_properties: 3 },
+      ] as unknown as brokers.BrokerRegionShare[],
+      memberships: [
+        { firm_id: 5, firm_name: 'RE/MAX', firm_domain: null, is_current: true },
+      ] as unknown as brokers.BrokerMembership[],
+    });
+    vi.mocked(brokers.fetchBrokerListings).mockResolvedValue([listing({ listing_id: 1 }), listing({ listing_id: 2 })]);
+    renderPage();
+    await screen.findByRole('table');
+    for (const name of ['Kde inzeruje', 'Kanceláře', 'Inventář']) {
+      const r = card(name);
+      expect(r.tagName).toBe('SECTION');
+      expect(r).toHaveClass('border', 'bg-[var(--color-paper-2)]', 'rounded-[var(--radius-md)]');
+    }
+    expect(countOf(card('Kde inzeruje'))).toBe('2');
+    expect(countOf(card('Kanceláře'))).toBe('1');
+    expect(countOf(card('Inventář'))).toBe('2');
+    // Ruling 4: property grain, no ad counts.
+    expect(screen.queryByText('Inzeráty')).toBeNull();
+    /* No box in a box: the lists sit on the card itself; the table keeps its own. */
+    expect(within(card('Kde inzeruje')).getByRole('list').parentElement).not.toHaveClass('border');
+    expect(within(card('Kanceláře')).getByRole('list').parentElement).not.toHaveClass('border');
+    expect(within(card('Inventář')).getByRole('table').parentElement).toHaveClass('overflow-x-auto', 'border');
+    /* Typ / Nabídka are L4 field labels. */
+    expect(within(card('Inventář')).getByText('Typ', { selector: 'span' }))
+      .toHaveClass('uppercase', 'tracking-[0.08em]', 'font-semibold');
+  });
+
+  it('marks a full inventory page as a cap, not the whole book', async () => {
+    vi.mocked(brokers.fetchBrokerListings).mockResolvedValue(
+      Array.from({ length: brokers.BROKER_LISTINGS_LIMIT }, (_, i) => listing({ listing_id: i + 1 })),
+    );
+    renderPage();
+    await screen.findByRole('table');
+    expect(countOf(card('Inventář'))).toBe('500+');
+    fireEvent.click(within(card('Inventář')).getByRole('button', { name: 'Domy' }));
+    expect(countOf(card('Inventář'))).toBe('0 z 500+');
+  });
+
+  it('keeps an empty section as its card with count 0 and one muted line', async () => {
+    renderPage();
+    expect(await screen.findByText('Žádné inzeráty.')).toBeInTheDocument();
+    expect(countOf(card('Kde inzeruje'))).toBe('0');
+    expect(within(card('Kde inzeruje')).getByText('Bez aktivního regionu.')).toBeInTheDocument();
+    expect(countOf(card('Kanceláře'))).toBe('0');
+    expect(countOf(card('Inventář'))).toBe('0');
+    expect(within(card('Inventář')).getByText('Žádné inzeráty.').closest('.border')).toBe(card('Inventář'));
   });
 });

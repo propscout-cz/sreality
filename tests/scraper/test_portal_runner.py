@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from scraper import delist_policy, portal_factory, portal_runner, stop
 from scraper.portal import deadline_reached
 from scraper.portal_runner import DrainItem
+from scripts.failure_signature import reason_line
 
 
 class _Conn:
@@ -53,6 +54,7 @@ def _is_drop(exc: BaseException) -> bool:
 class _FakePortal:
     source = "fake"
     index_rate = 1.0
+    walk_timeout_s = 3600
 
     def __init__(self, *, categories=None, reached_end=True,
                  result_size=2, fetch_kinds=None, walk_fails=None, conn_close_error=None,
@@ -135,6 +137,17 @@ class _FakePortal:
 
 # --- run_index_walk ---------------------------------------------------------
 
+START = datetime(2026, 10, 29, 6, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def ledger(monkeypatch):
+    """The cycle ledger every walk reads first (db.walk_ledger): empty unless a test adds runs, so each walk starts
+    a fresh cycle anchored at START."""
+    runs: list[tuple[datetime, list[dict[str, Any]]]] = []
+    monkeypatch.setattr(portal_runner.db, "walk_ledger", lambda conn, source, run_id, days: (START, list(runs)))
+    return runs
+
 
 def _nominations(monkeypatch):
     """Capture what the runner nominates for a page check (rule #3, 2026-09-07:
@@ -146,8 +159,8 @@ def _nominations(monkeypatch):
         cap["candidates"].append((scope.get("category_main"), set(seen), seen_key))
         return ([("7", "https://x/7", None), ("8", "https://x/8", None)], 9)
 
-    def fake_orphans(conn, source, scopes, seen, *, seen_key="native"):
-        cap["orphans"].append(([dict(sc) for sc in scopes], seen))
+    def fake_orphans(conn, source, scopes, unseen_since, *, seen_key="native"):
+        cap["orphans"].append(([dict(sc) for sc in scopes], unseen_since))
         return cap.get("orphan_rows", ([], 0))
 
     def fake_enqueue(conn, source, cm, ct, candidates, *, active_rows, subtype=None):
@@ -193,8 +206,9 @@ def test_index_walk_nominates_nothing_when_our_own_stop_fired(monkeypatch):
     p = _FakePortal(reached_end=False)
     _rc, agg = portal_runner.run_index_walk(p, dry_run=False)
     assert cap["candidates"] == [] and cap["queued"] == []
+    # the run walked its whole plan, so the cycle ends here, short of the end: its entry says so
     assert [(c["walk_reached_end"], c["collected"], c[portal_runner.DECLARED_TOTAL_KEY])
-            for c in agg["by_category"]] == [(False, 2, 2), (False, 2, 2)]
+            for c in agg["by_category"]] == [(False, 2, 2), (False, 2, 2), (False, 0, 0)]
 
 
 def test_index_walk_nominates_a_short_count_and_alarms_on_it(monkeypatch, caplog):
@@ -247,10 +261,11 @@ def test_walk_counts_from_reconcile_reach_by_category(monkeypatch):
         lambda _c, _s, ids: {n: stored[n] for n in ids if n in stored})
     monkeypatch.setattr(portal_runner.db, "touch_listings_by_id", lambda _c, ids: len(ids))
     monkeypatch.setattr(portal_runner.db, "enqueue_detail", lambda _c, _s, entries: len(entries))
+    monkeypatch.setattr(portal_runner.db, "rearm_sighted_given_up", lambda _c, _s, _ids: 0)
     p = _ReconcilingPortal(reached_end=False)
     _rc, agg = portal_runner.run_index_walk(p, dry_run=False)
     assert [(c["listings_found_new"], c["listings_enqueued"]) for c in agg["by_category"]] == [
-        (2, 2), (2, 3),
+        (2, 2), (2, 3), (0, 0),
     ]
     assert agg["listings_found_new"] == 4
 
@@ -268,7 +283,7 @@ def test_a_declared_scope_reaches_the_query_and_the_throttle(monkeypatch):
     cap2 = _nominations(monkeypatch)
     portal_runner.run_index_walk(p2, dry_run=False)
     assert cap2["scopes"] == [(None, "t", None)]           # one agenda: one nomination
-    assert cap2["orphans"] == [([{"category_type": "t"}], {1, 2})]
+    assert cap2["orphans"] == [([{"category_type": "t"}], START)]
 
 
 def test_index_walk_that_saw_nothing_nominates_nothing(monkeypatch):
@@ -295,13 +310,13 @@ def _indexless(reached_end: bool = True) -> _FakePortal:
 def test_an_indexless_portals_ads_are_all_orphans_of_its_empty_walk(monkeypatch, caplog):
     """`web` has no index: its walk sees nothing BY CONSTRUCTION, so the empty-seen refusal
     would mean its ads are never re-checked and never delisted. Its unit has no scope, so every
-    active ad is an orphan, nominated with no seen set (the query's empty-array guard stays)."""
+    active ad nothing sighted since the cycle's anchor is an orphan."""
     cap = _nominations(monkeypatch)
     cap["orphan_rows"] = ([("https://a.example/1", "https://a.example/1", None)], 1)
     with caplog.at_level("WARNING", logger="scraper.portal_runner"):
         rc, agg = portal_runner.run_index_walk(_indexless(), dry_run=False)
     assert rc == 0 and cap["candidates"] == []
-    assert cap["orphans"] == [([], None)]
+    assert cap["orphans"] == [([], START)]
     assert cap["queued"] == [(None, ["https://a.example/1"], 1)]
     assert cap["scopes"] == [(None, "", None)]
     assert agg["by_category"][0]["walk_reached_end"] is True
@@ -367,11 +382,13 @@ class _SlicedPortal(_FakePortal):
 
 def test_slices_sharing_a_scope_nominate_once_with_their_union(monkeypatch):
     """Nominating from ONE slice's seen set would nominate its sibling's whole population every
-    walk: the scope nominates once, on its last slice, excluding every id its slices saw."""
+    walk: the scope nominates once, on its last slice, excluding every id its slices saw. Siblings
+    are walked together, so a cut leaves at most one group half-walked."""
     cap = _nominations(monkeypatch)
-    _rc, agg = portal_runner.run_index_walk(
-        _SlicedPortal({"A1": {"a"}, "B1": {"b"}, "A2": {"c"}}), dry_run=False)
-    assert cap["candidates"] == [("B", {"b"}, "native"), ("A", {"a", "c"}, "native")]
+    p = _SlicedPortal({"A1": {"a"}, "B1": {"b"}, "A2": {"c"}})
+    _rc, agg = portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == ["A1", "A2", "B1"]
+    assert cap["candidates"] == [("A", {"a", "c"}, "native"), ("B", {"b"}, "native")]
     assert [c["listings_to_verify"] for c in agg["by_category"]] == [0, 2, 2, 0]   # + orphans
 
 
@@ -404,20 +421,20 @@ def test_an_all_null_seen_set_takes_the_saw_nothing_branch(monkeypatch, caplog):
                for m in caplog.messages)
     assert any(m.startswith("VERIFY skipped cm=A ct=t: the walk saw no listings")
                for m in caplog.messages)
-    assert "VERIFY orphans skipped: the walk saw no listings" in caplog.messages
+    assert "VERIFY orphans skipped: the cycle saw no listings" in caplog.messages
 
 
 def test_a_whole_end_reached_walk_nominates_the_ads_no_unit_covers(monkeypatch, caplog):
     """Rule #3 made total. A sighting is label-blind, a unit's nomination is not: an active ad
     whose label no unit walks (a NULL, an auction) is nominated once every unit reached the end,
-    against every id the walk saw, at the flip cap of a scope with no category."""
+    against what nothing sighted since the cycle's anchor, at the flip cap of a scope with no category."""
     cap = _nominations(monkeypatch)
     cap["orphan_rows"] = ([("9", "https://x/9", None)], 3)
     with caplog.at_level("INFO", logger="scraper.portal_runner"):
         _rc, agg = portal_runner.run_index_walk(_FakePortal(reached_end=True), dry_run=False)
     assert cap["orphans"] == [(
         [{"category_main": "A", "category_type": "t"}, {"category_main": "B", "category_type": "t"}],
-        {1, 2})]
+        START)]
     assert cap["queued"][-1] == (None, ["9"], 3) and cap["scopes"][-1] == (None, "", None)
     assert "VERIFY orphans candidates=1 queued=1 deferred=0 active=3" in caplog.messages
     # Recorded as one more by_category entry, NULL-labelled (an indexless unit's shape), so the
@@ -471,6 +488,191 @@ def test_null_ids_are_dropped_before_nomination(monkeypatch):
     p.walk_category = lambda c, conn, dry_run, limiter, deadline=None: ({"a", None}, {"found_new": 0, "enqueued": 0}, 2, 1, True)
     portal_runner.run_index_walk(p, dry_run=False)
     assert [seen for _cm, seen, _key in cap["candidates"]] == [{"a"}]
+
+
+# --- the walk cycle (#2020): a cut walk resumes as one cycle -----------------------------------------------------
+
+
+def _ledgered(agg: dict[str, Any]) -> list[dict[str, Any]]:
+    """A run's by_category as db.walk_ledger reads it back."""
+    return [{"scope": e["scope"], "reached": e["walk_reached_end"], "collected": e["collected"]}
+            for e in agg["by_category"]]
+
+
+def _unit(cat: str, reached: bool = True) -> dict[str, Any]:
+    return {"scope": {"category_main": cat, "category_type": "t"}, "reached": reached, "collected": 2}
+
+
+_END = {"scope": {}, "reached": True, "collected": 0}
+# _T1 and _T2 lie outside the fake's one-hour walk timeout; _OPEN inside it.
+_T1, _T2, _OPEN = START - timedelta(hours=12), START - timedelta(hours=6), START - timedelta(minutes=30)
+
+
+class _CutPortal(_FakePortal):
+    """The stop signal arrives inside `cut_at`, seen as a page loop sees it: the category returns short of the end."""
+
+    def __init__(self, cut_at: str | None, categories: list[str] | None = None) -> None:
+        super().__init__(categories=categories or ["A", "B", "C"])
+        self._cut_at = cut_at
+
+    def walk_category(self, c, conn, dry_run, limiter, deadline=None):
+        if c != self._cut_at:
+            return super().walk_category(c, conn, dry_run, limiter, deadline)
+        self.calls["walk"].append(c)
+        stop.EVENT.set()
+        return ({1}, {"found_new": 1, "enqueued": 1}, self._result_size, 1, False)
+
+
+def test_the_next_fragment_starts_at_the_stalest_group(monkeypatch, ledger):
+    """Least recently walked first, a group never walked before every other, whatever the outcome: the group that
+    ate the budget last time goes last, so the rotation covers the portal (idnes once walked 2 of 10 categories, run
+    after run), and a group that cannot finish in one run never starves the rest."""
+    _nominations(monkeypatch)
+    ledger += [(_T1, [_unit("A"), _unit("B"), _unit("C"), _END]),
+               (_T2, [_unit("B", reached=False), dict(_END, reached=False)])]
+    p = _FakePortal(categories=["A", "B", "C", "D"])
+    portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == ["D", "A", "C", "B"]
+
+
+def test_a_resumed_fragment_walks_what_the_cycle_has_not_reached_least_recently_walked_first(monkeypatch, ledger):
+    """Cut in B: the run after it skips A (it reached the end since the anchor) and walks C and D, last walked in
+    the cycle before, ahead of B, which it walked just now."""
+    _nominations(monkeypatch)
+    ledger += [(_T1, [_unit(c) for c in "ABCD"] + [_END]), (_OPEN, [_unit("A"), _unit("B", reached=False)])]
+    p = _FakePortal(categories=["A", "B", "C", "D"])
+    portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == ["C", "D", "B"]
+
+
+def test_a_cycle_older_than_the_walk_timeout_is_not_resumed(monkeypatch, ledger):
+    """A cycle is one walk's work: past the portal's walk timeout from its anchor it is left open, and the run
+    starts a fresh one, so a group no run can finish cannot hold the portal's cycle open for ever."""
+    cap = _nominations(monkeypatch)
+    ledger += [(_T1, [_unit("A"), _unit("B"), _END]), (_T2, [_unit("A"), _unit("B", reached=False)])]
+    p = _FakePortal(categories=["A", "B"])
+    portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == ["A", "B"]
+    assert cap["orphans"][-1][1] == START
+
+
+def test_a_fragment_that_does_not_close_the_cycle_nominates_no_orphans(monkeypatch):
+    """Cut by a deploy in B: A's group nominated (it reached the end), B's nominates nothing, and the cycle stays open:
+    no orphans and no cycle-end entry, so the next run resumes it."""
+    cap = _nominations(monkeypatch)
+    cap["orphan_rows"] = ([("9", "https://x/9", None)], 3)
+    _rc, agg = portal_runner.run_index_walk(_CutPortal("B"), dry_run=False)
+    assert [cm for cm, *_ in cap["queued"]] == ["A"]
+    assert cap["orphans"] == []
+    assert [(e["category_main"], e["walk_reached_end"], e["cycle_started_at"]) for e in agg["by_category"]] == [
+        ("A", True, START.isoformat()), ("B", False, START.isoformat())]
+
+
+def test_the_closing_fragment_resumes_the_cycle_and_nominates_over_all_scopes(monkeypatch, ledger):
+    """The run after the cut skips the groups that reached the end since the anchor, walks the rest (C, not yet
+    walked, before the B it cut) and closes the cycle: the orphans are judged over every scope, against what nothing
+    sighted since the cycle's first run began."""
+    cap = _nominations(monkeypatch)
+    cap["orphan_rows"] = ([("9", "https://x/9", None)], 3)
+    _rc, first = portal_runner.run_index_walk(_CutPortal("B"), dry_run=False)
+    stop.reset()
+    ledger.append((START, _ledgered(first)))
+    monkeypatch.setattr(portal_runner.db, "walk_ledger",
+                        lambda conn, source, run_id, days: (START + timedelta(minutes=40), list(ledger)))
+    p = _FakePortal(categories=["A", "B", "C"])
+    _rc, agg = portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == ["C", "B"]
+    assert cap["orphans"] == [([{"category_main": c, "category_type": "t"} for c in "ABC"], START)]
+    assert [(e["category_main"], e["scope"], e["walk_reached_end"], e["cycle_started_at"])
+            for e in agg["by_category"]][-1] == (None, {}, True, START.isoformat())
+
+
+def test_nominations_per_cycle_match_an_uncut_walk(monkeypatch, ledger):
+    """Two cuts and a closing run nominate what one uncut walk does: each group once, the orphans once."""
+    uncut = _nominations(monkeypatch)
+    uncut["orphan_rows"] = ([("9", "https://x/9", None)], 3)
+    _rc, whole = portal_runner.run_index_walk(_FakePortal(categories=["A", "B", "C"]), dry_run=False)
+    cap = _nominations(monkeypatch)
+    cap["orphan_rows"] = ([("9", "https://x/9", None)], 3)
+    fragments = []
+    for i, cut_at in enumerate(["B", "C", None]):
+        at = START + timedelta(minutes=20 * i)
+        monkeypatch.setattr(portal_runner.db, "walk_ledger",
+                            lambda conn, source, run_id, days, at=at: (at, list(ledger)))
+        _rc, agg = portal_runner.run_index_walk(_CutPortal(cut_at), dry_run=False)
+        stop.reset()
+        ledger.append((at, _ledgered(agg)))
+        fragments.append(agg)
+    def per_cycle(aggs: list[dict[str, Any]]) -> int:
+        return sum(e["listings_to_verify"] for agg in aggs for e in agg["by_category"])
+    assert per_cycle(fragments) == per_cycle([whole]) == 7
+    assert sorted(cm or "" for cm, *_ in cap["queued"]) == sorted(cm or "" for cm, *_ in uncut["queued"])
+    assert {e["cycle_started_at"] for agg in fragments for e in agg["by_category"]} == {START.isoformat()}
+
+
+def test_a_cycle_ended_short_starts_the_next_run_afresh(monkeypatch, ledger):
+    """A run that walked its whole plan ends the cycle even with a group short of the end (a portal error, not our
+    stop): no orphans, and the next run walks every group, so one failing category cannot starve the other nine."""
+    cap = _nominations(monkeypatch)
+    _rc, first = portal_runner.run_index_walk(_FakePortal(categories=["A", "B"], walk_fails={"A"}), dry_run=False)
+    assert cap["orphans"] == []
+    assert first["by_category"][-1]["scope"] == {} and first["by_category"][-1]["walk_reached_end"] is False
+    ledger.append((_T2, _ledgered(first)))
+    p = _FakePortal(categories=["A", "B"])
+    portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == ["A", "B"]
+    assert cap["orphans"] and cap["orphans"][-1][1] == START
+
+
+def test_a_cycle_whose_last_run_died_after_its_plan_closes_on_the_next(monkeypatch, ledger):
+    """A kill between the last unit and the cycle's end leaves every group reached and no end: the next run has
+    nothing left to walk and closes the cycle at its original anchor."""
+    cap = _nominations(monkeypatch)
+    cap["orphan_rows"] = ([("9", "https://x/9", None)], 3)
+    ledger += [(_T1, [_unit("A"), _unit("B"), _END]), (_OPEN, [_unit("A"), _unit("B")])]
+    p = _FakePortal(categories=["A", "B"])
+    _rc, agg = portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == []
+    assert cap["orphans"] == [([{"category_main": c, "category_type": "t"} for c in "AB"], _OPEN)]
+    assert [e["scope"] for e in agg["by_category"]] == [{}]
+
+
+def test_a_run_that_recorded_nothing_adds_nothing_to_the_cycle(monkeypatch, ledger):
+    """Runs from before the cycle (their entries carry no scope, so the ledger leaves them out) or killed before
+    their first unit ended hold no entry: they open no cycle, so the run anchors a fresh one at its own start."""
+    cap = _nominations(monkeypatch)
+    ledger += [(_T1, []), (_T2, [])]
+    p = _FakePortal(categories=["A", "B"])
+    portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == ["A", "B"]
+    assert cap["orphans"][-1][1] == START
+
+
+def test_an_unreadable_ledger_walks_every_group_and_nominates_no_orphans(monkeypatch, caplog):
+    cap = _nominations(monkeypatch)
+
+    def broken(*_a: Any, **_k: Any) -> Any:
+        raise psycopg.OperationalError("connection lost")
+
+    monkeypatch.setattr(portal_runner.db, "walk_ledger", broken)
+    p = _FakePortal(categories=["A", "B"])
+    _rc, agg = portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == ["A", "B"] and [cm for cm, *_ in cap["queued"]] == ["A", "B"]
+    assert cap["orphans"] == [] and [e["scope"] for e in agg["by_category"]] == [
+        {"category_main": "A", "category_type": "t"}, {"category_main": "B", "category_type": "t"}]
+    assert any(m.startswith("CYCLE ledger unreadable for fake") for m in caplog.messages)
+
+
+def test_a_narrowed_dispatch_walks_its_subset_whole_and_ends_no_cycle(monkeypatch, ledger):
+    """bazos --sale-type: the operator asked for those units, so none is skipped, and a subset proves nothing about
+    the rest of the portal, so the cycle stays as it was."""
+    cap = _nominations(monkeypatch)
+    ledger += [(_T1, [_unit("A"), _unit("B"), _END]), (_OPEN, [_unit("A")])]
+    p = _FakePortal(categories=["A", "B"])
+    p.narrowed = True
+    _rc, agg = portal_runner.run_index_walk(p, dry_run=False)
+    assert p.calls["walk"] == ["B", "A"]
+    assert cap["orphans"] == [] and {}  not in [e["scope"] for e in agg["by_category"]]
 
 
 def test_index_walk_dry_run_uses_no_connection(monkeypatch):
@@ -583,7 +785,7 @@ def test_every_by_category_entry_says_how_its_declared_total_reads(monkeypatch):
     _rc, agg = portal_runner.run_index_walk(counted, dry_run=False)
     # the failed category's entry carries them too
     assert [(c["total_is_count"], c["declared_is_upper_bound"]) for c in agg["by_category"]] == [
-        (True, True), (True, True)]
+        (True, True), (True, True), (True, True)]                    # and the cycle's end
 
 
 def test_an_upper_bound_denominator_logs_its_coverage_gap_at_info(monkeypatch, caplog):
@@ -679,6 +881,60 @@ def test_detail_drain_routes_gone_and_error(monkeypatch):
     assert agg["errors"] == 1 and agg["listings_inactive"] == 1
 
 
+class _ParsedPortal(_FakePortal):
+    """An HTML-family portal: fetch_detail hands the runner a parsed ScrapedListing."""
+
+    def __init__(self, listings, **kw):
+        super().__init__(**kw)
+        self._listings = listings
+
+    def fetch_detail(self, client, native_id, ref):
+        return DrainItem(native_id=native_id, kind="ok", payload={
+            "listing": self._listings[native_id], "html": "<html/>", "status": 200,
+            "url": f"https://fake/{native_id}"})
+
+
+def _scraped(native_id, **fields):
+    from scraper.scraped_listing import ScrapedListing
+    return ScrapedListing(source="fake", source_id_native=native_id,
+                          source_url=f"https://fake/{native_id}", **fields)
+
+
+def test_a_content_free_page_is_a_failed_fetch_not_a_write(monkeypatch):
+    """A page that parses to a ScrapedListing with no price, no area, no params, no images and
+    no description, written as the ad, would blank it, bump `last_seen_at` and complete the
+    queue row as written. Such a page is a failed attempt: no write, no completion, the
+    queue's attempts bump, and the portal's failure seam is told, exactly as a fetch error."""
+    cap = _patch_queue(monkeypatch, [[("ok", None, None, None), ("blank", None, None, None)]])
+    p = _ParsedPortal({
+        "ok": _scraped("ok", price_czk=4_500_000, usable_area=72.0, description="Byt 3+kk",
+                       raw={"params": {"Stav": "dobrý"}, "image_urls": ["https://img/1.jpg"]}),
+        "blank": _scraped("blank", raw={"params": {}, "image_urls": [],
+                                        "title": "Načítání stránky"}),
+    })
+    rc, agg = portal_runner.run_detail_drain(p, None, False, detail_workers=1, detail_rate=1.0)
+    assert rc == 0
+    assert p.calls["write"] == [["ok"]]
+    assert cap["complete"] == [["ok"]]
+    assert cap["fail"] == [["blank"]] and p.calls["failure"] == ["blank"]
+    assert agg["errors"] == 1 and agg["listings_scraped_new"] == 1
+
+
+def test_content_free_is_keyed_on_the_payloads_shape_not_the_portal():
+    """Only a parsed ScrapedListing can be judged content-free; sreality's API payload has
+    another shape and passes untouched. One stated fact of the five keeps a page."""
+    empty = {"params": {}, "image_urls": []}
+    assert portal_runner.content_free({"listing": _scraped("a", raw=empty)}) is True
+    assert portal_runner.content_free({"listing": _scraped("a", raw={})}) is True
+    assert portal_runner.content_free("2557083724") is False            # sreality: a FetchResult id
+    assert portal_runner.content_free({"listing": object()}) is False
+    for stated in ({"price_czk": 1}, {"usable_area": 1.0}, {"estate_area": 800.0},
+                   {"description": "Prodej"}, {"raw": {"params": {"k": "v"}}},
+                   {"raw": {"image_urls": ["u"]}}):
+        kw = {"raw": empty} | stated
+        assert portal_runner.content_free({"listing": _scraped("a", **kw)}) is False, stated
+
+
 def test_detail_drain_respects_max_claims(monkeypatch):
     cap = _patch_queue(monkeypatch, [[("1", None, None, None), ("2", None, None, None)]])
     p = _FakePortal()
@@ -699,7 +955,7 @@ def test_detail_drain_bumps_counts_per_chunk_without_double_count(monkeypatch):
     # the SUM of bumps must equal the final agg, NOT 2x (finalize won't re-write
     # them). A small batch size forces both in-loop and post-loop flushes.
     monkeypatch.setattr(portal_runner, "DETAIL_BATCH_SIZE", 2)
-    cap = _patch_queue(monkeypatch, [
+    _patch_queue(monkeypatch, [
         [("1", None, None, None), ("2", None, None, None), ("3", None, None, None)],
         [("4", None, None, None), ("5", None, None, None)],
     ])
@@ -794,6 +1050,67 @@ def test_detail_drain_hands_back_what_the_ledger_refused_and_stops(
     assert (agg["budget_refused"], agg["deadline_stopped"], agg["errors"]) == (
         refused, stopped, 0)
     assert line in caplog.messages
+
+
+def test_the_worker_deploy_stop_hands_back_a_drain_chunk_in_flight(monkeypatch, caplog):
+    """#2438: a deploy's SIGTERM, as the worker's event loop delivers it, reaches a drain pass parked in its limiter
+    mid-chunk. It hands back the claims it has not started, first, then flushes what it fetched and returns, instead
+    of fetching on until SIGKILL and stranding the chunk for the claim expiry."""
+    import asyncio
+    import threading
+
+    from scraper import realtime_worker as rw
+
+    cap = _patch_queue(monkeypatch, [
+        [("1", None, None, None), ("2", None, None, None), ("3", None, None, None)],
+        [("4", None, None, None)],
+    ])
+    events: list[str] = []
+    monkeypatch.setattr(portal_runner.db, "release_claims", lambda _c, _src, ids: (
+        events.append("release:" + ",".join(sorted(ids))) or len(ids)))
+
+    class _Paced(_FakePortal):
+        def make_client(self, limiter):
+            self.limiter = limiter
+            return object()
+
+        def fetch_detail(self, client, native_id, ref):
+            try:
+                self.limiter.acquire()  # every portal client paces here before its request
+            except stop.StopRequested as exc:  # and every fetch_detail turns a raise into an error item
+                return DrainItem(native_id=native_id, kind="error", error=str(exc))
+            return super().fetch_detail(client, native_id, ref)
+
+        def write_details(self, conn, items):
+            events.append("write:" + ",".join(sorted(it.native_id for it in items)))
+            return super().write_details(conn, items)
+
+    p = _Paced()
+    # One fetch every 5 s on one thread: the second claim's fetch waits in the limiter when the stop arrives.
+    monkeypatch.setattr(rw, "_load_config", lambda s: SimpleNamespace(
+        limits=SimpleNamespace(detail_workers=1, detail_rate=0.2)))
+    monkeypatch.setattr(rw, "_build_portal", lambda s, c: p)
+    monkeypatch.setattr(rw, "_read_drain_slice", lambda: 200)
+    monkeypatch.setattr(rw, "_read_drain_disabled_sources", lambda: set())
+    monkeypatch.setattr(rw, "_claimable_by_source", lambda: {"sreality": 4})
+    monkeypatch.setattr(rw, "_AUTODEDUP_STOPPING", threading.Event())
+    stop.arm()  # as the worker's boot does, before it takes its signals
+
+    async def deploy() -> tuple[dict[str, Any], float]:
+        stop_event, state = asyncio.Event(), rw._new_state()
+        asyncio.get_running_loop().call_later(0.2, rw._on_stop_signal, stop_event)
+        started = time.monotonic()
+        await rw._drain_pass(stop_event, state)
+        return state["lanes"]["drain"]["last"], time.monotonic() - started
+
+    with caplog.at_level("INFO", logger="scraper.portal_runner"):
+        last, took = asyncio.run(deploy())
+    assert took < 3.0, "the stop ends the limiter's 5 s wait at once"
+    assert events == ["release:2,3", "write:1"]
+    assert len(cap["claim_n"]) == 1 and cap["complete"] == [["1"]]
+    assert cap["fail"] == [] and p.calls["failure"] == []  # a handed-back claim spends no attempt
+    assert (last["new"], last["deadline_stopped"], last["budget_refused"], last["errors"]) == (1, 1, 0, 0)
+    assert "DRAIN stop signal mid-chunk; 2 claims handed back source=fake" in caplog.messages
 
 
 @pytest.mark.parametrize("max_claims,lease_n", [(3, 3), (200, 20), (None, 20)])
@@ -1432,3 +1749,62 @@ def test_a_clean_phase_keeps_its_own_return_code(monkeypatch):
     _PhaseRecorder(monkeypatch)
     assert portal_runner.run_phase(_FakePortal(), "index", lambda portal, dry_run, **kw: (1, {}), False) == 1
 
+
+# --- a walk that collected nothing --------------------------------------------
+
+
+class _EmptyWalkPortal(_FakePortal):
+    """Every category fetched `pages` pages and collected `ids`; the portal still declares a count,
+    as a page without listings can by echoing the site's meta text."""
+
+    def __init__(self, *, pages: int, ids: set[str] | None = None, **kw: Any) -> None:
+        super().__init__(categories=["A"], result_size=867, **kw)
+        self._pages = pages
+        self._ids = ids or set()
+
+    def walk_category(self, c, conn, dry_run, limiter, deadline=None):
+        return (set(self._ids), {}, self._result_size, self._pages, self._reached_end)
+
+
+def test_a_walk_of_100_pages_collecting_nothing_fails_despite_its_declared_count(monkeypatch, caplog):
+    cap = _nominations(monkeypatch)
+    rc, agg = portal_runner.run_index_walk(_EmptyWalkPortal(pages=100, reached_end=False), dry_run=False)
+    assert (rc, agg["errors"], agg["index_pages"]) == (1, 1, 100)
+    assert agg["by_category"][0]["sreality_result_size"] == 867
+    # Rule #3 is untouched: the walk did not reach the end, so it nominates nothing.
+    assert cap["candidates"] == [] and cap["queued"] == []
+    assert sum(c["listings_to_verify"] for c in agg["by_category"]) == 0
+    assert not agg["by_category"][0]["walk_reached_end"]
+    # The cell's reason line names the fault, not "exit code 1".
+    line = next(r.getMessage() for r in caplog.records if "empty_walk" in r.getMessage())
+    assert reason_line(f"2026-11-02 06:35:16,344 ERROR scraper.portal_runner {line}\n##[error]exit 1").endswith(
+        "CHECK empty_walk status=fail: fake collected 0 ads from 100 pages; failing the run")
+
+
+@pytest.mark.parametrize(("pages", "ids"), [(99, set()), (100, {"a"}), (0, set())])
+def test_a_small_empty_walk_or_one_that_collected_an_ad_stays_a_success(monkeypatch, pages, ids):
+    _nominations(monkeypatch)
+    rc, agg = portal_runner.run_index_walk(_EmptyWalkPortal(pages=pages, ids=ids), dry_run=False)
+    assert (rc, agg["errors"]) == (0, 0)
+
+
+def test_an_empty_walk_claiming_the_end_reads_red_and_still_nominates_nothing(monkeypatch):
+    """The runner's own guard already refuses an empty seen set (it would nominate the whole scope)."""
+    cap = _nominations(monkeypatch)
+    rc, _agg = portal_runner.run_index_walk(_EmptyWalkPortal(pages=100, reached_end=True), dry_run=False)
+    assert rc == 1
+    assert cap["queued"] == []
+
+
+def test_the_finished_empty_walk_still_finalizes_its_run(monkeypatch):
+    """It completed, so `ended_at` is stamped and the crash path stays out of it; only the exit is red."""
+    finalized: list[dict[str, Any]] = []
+    monkeypatch.setattr(portal_runner, "_finalize_run", lambda run_id, agg, drain=False: finalized.append(agg))
+    monkeypatch.setattr(portal_runner, "_record_run_crash", lambda *a, **k: pytest.fail("not a crash"))
+    monkeypatch.setattr(portal_runner.db, "connect", lambda *a, **k: _Conn())
+    monkeypatch.setattr(portal_runner.db, "scrape_run_start", lambda *a, **k: 1)
+    _nominations(monkeypatch)
+    rc = portal_runner.run_phase(
+        _EmptyWalkPortal(pages=149, reached_end=False), "index", portal_runner.run_index_walk, False)
+    assert rc == 1
+    assert finalized[0]["errors"] == 1

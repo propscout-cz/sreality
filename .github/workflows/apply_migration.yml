@@ -17,10 +17,13 @@ name: "Ops: apply one migration file"
 # subject to the transaction pooler's ~2-minute statement cap.
 #
 # dry_run=true (the default) only validates the filename, prints the objects
-# the file declares and checks connectivity. The real apply needs
+# the file declares and drops and checks connectivity. The real apply needs
 # dry_run=false AND confirm=APPLY. After a successful apply the receipt step
-# probes the LIVE catalog for every object the file declares (the same probe
-# verify_pipeline's migration_drift check uses) and fails if any is absent.
+# probes the LIVE catalog for every object the file declares or drops (the same
+# probe verify_pipeline's migration_drift check uses) and fails if a declared
+# one is absent or a dropped one, other than one the file re-creates, still
+# exists. It closes with one notice line: "receipt OK: N present, M
+# dropped-absent", or UNVERIFIABLE when the file holds nothing to probe.
 #
 # Required secrets: SUPABASE_DB_URL (SUPABASE_DB_SESSION_URL preferred when set).
 
@@ -131,6 +134,6 @@ jobs:
           echo "::error::gave up after 30 lock-timeout attempts"
           exit 1
 
-      - name: Receipt (probe the live catalog for every declared object)
+      - name: Receipt (probe the live catalog for every declared and dropped object)
         if: ${{ !inputs.dry_run }}
         run: python -m scripts.apply_migration_receipt --verify "migrations/$MIGRATION_FILE"

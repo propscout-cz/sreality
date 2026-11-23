@@ -13,7 +13,7 @@ def _ent(s: str) -> str:
 
 
 OID = "6644a3f8a7571b50b90a8d4a"
-_MAILTO = _ent(f"mailto:info@ibero-casa.com?subject=Dotaz na inzerát")
+_MAILTO = _ent("mailto:info@ibero-casa.com?subject=Dotaz na inzerát")
 
 PAGE = f"""
 <html><body>

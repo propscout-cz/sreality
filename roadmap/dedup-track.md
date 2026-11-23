@@ -100,7 +100,7 @@
 > reachable by NO pass.** Ranked causes, all measured:
 > 1. **`obec_id IS NULL` while `geom` is present — ~18.3k active rows, the single biggest cause.**
 >    18,290 of them are **idnes foreign listings** (Spain/Croatia; mean lon 3.2 / lat 39.7, only
->    106 inside the CZ bbox). `obec_id` is a PIP of the coordinate into `admin_boundaries`, which
+>    106 inside the CZ bbox). `obec_id` is a PIP of the coordinate into `admin_boundaries` (dropped 729), which
 >    is Czech-only, so a correct foreign pin yields NULL — and BOTH geo passes hard-require
 >    `obec_id`. This is a scope question, not a parser bug: either exclude foreign inventory from
 >    the dedup expectation, or give the geo passes a non-CZ blocking key. **Undecided — flagged.**

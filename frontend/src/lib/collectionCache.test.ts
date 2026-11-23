@@ -15,57 +15,20 @@ vi.mock('./queries', async (orig) => ({
 }));
 
 import { listCollections } from './api';
-import {
-  collectionLabel,
-  isMine,
-  revalidateCollections,
-  shareAudience,
-  useCollectionMembership,
-  useCollections,
-} from './collectionCache';
+import { useCollectionMembership, useCollections } from './collectionCache';
+import { tableReads } from './curationSync';
 import { browseKeys } from './browseKeys';
 import { curationKeys, fetchPropertyCollectionMemberSet } from './queries';
 import type { Collection } from './types';
+import { COLLECTION_KINDS } from './notifyKinds';
 
 const own = (over: Partial<Collection> = {}): Collection => ({
   id: 1, name: 'Šortlist', description: null, created_at: '2026-10-01T00:00:00Z',
   updated_at: '2026-10-01T00:00:00Z', listing_count: 1, monitoring_enabled: false,
-  is_system: false, owner_email: null, shared_with: [], ...over,
+  is_system: false, owner_email: null, shared_with: [], notify_kinds: COLLECTION_KINDS.map((k) => k.kind), ...over,
 });
 const sharedBy = (email: string, over: Partial<Collection> = {}): Collection =>
   own({ owner_email: email, shared_with: [{ account_id: 'me', email: null }], ...over });
-
-describe('mine vs shared: one predicate, one label, one audience', () => {
-  it('isMine is owner_email == null', () => {
-    expect(isMine(own())).toBe(true);
-    expect(isMine(sharedBy('petr@example.cz'))).toBe(false);
-    expect(isMine({ owner_email: null })).toBe(true);
-  });
-
-  it('collectionLabel names the owner of a shared collection only', () => {
-    expect(collectionLabel(own({ name: 'monitoring' }))).toBe('monitoring');
-    expect(collectionLabel(sharedBy('petr@example.cz', { name: 'monitoring' })))
-      .toBe('monitoring · petr@example.cz');
-  });
-
-  it('shareAudience: my recipients and the owners of what is shared with me, sorted, once each', () => {
-    const byId = new Map<number, Collection>([
-      [1, own({ id: 1, shared_with: [
-        { account_id: 'b', email: 'zuzana@example.cz' },
-        { account_id: 'c', email: 'adam@example.cz' },
-      ] })],
-      [2, sharedBy('petr@example.cz', { id: 2 })],
-      [3, sharedBy('adam@example.cz', { id: 3 })],
-      [4, own({ id: 4 })],
-    ]);
-    expect(shareAudience([1, 2, 3, 4], byId)).toEqual([
-      'adam@example.cz', 'petr@example.cz', 'zuzana@example.cz',
-    ]);
-    // An unshared collection, or an id the list does not know, has no audience.
-    expect(shareAudience([4, 99], byId)).toEqual([]);
-    expect(shareAudience([2], byId)).toEqual(['petr@example.cz']);
-  });
-});
 
 function wrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -148,34 +111,20 @@ describe('collection read hooks', () => {
 });
 
 describe('collection revalidation contract', () => {
-  it('invalidates exactly the two global keys when no collection is named', () => {
-    /* The shared member map is pinned first on purpose: every membership writer
-     * but the save menu had hand-typed a key list that omitted it, which is the
-     * drift this helper exists to end (docs/architecture.md rule 18). */
-    const invalidateQueries = vi.fn();
-    revalidateCollections({ invalidateQueries } as never);
-    expect(invalidateQueries.mock.calls.map(([arg]) => arg.queryKey)).toEqual([
-      curationKeys.propertyCollectionMembers,
-      curationKeys.collections,
-    ]);
-  });
-
-  it("adds the named collection's own page when the write touches one", () => {
-    const invalidateQueries = vi.fn();
-    revalidateCollections({ invalidateQueries } as never, { collection_id: 7 });
-    expect(invalidateQueries.mock.calls.map(([arg]) => arg.queryKey)).toEqual([
-      curationKeys.propertyCollectionMembers,
-      curationKeys.collections,
-      curationKeys.collection(7),
-    ]);
+  /* The shared member map is pinned on purpose: every membership writer but the
+   * save menu had hand-typed a key list that omitted it (docs/architecture.md
+   * rule 18). The list is lib/curationSync's map now. */
+  it('a membership write re-reads the member map, the list and every collection page', () => {
+    const keys = tableReads(['collection_properties'], null);
+    expect(keys).toContainEqual(curationKeys.propertyCollectionMembers);
+    expect(keys).toContainEqual(curationKeys.collections);
+    expect(keys).toContainEqual(curationKeys.anyCollection);
   });
 
   /* What a membership change does to Browse is the settle's (lib/curationSettle):
-   * revalidating the collection reads never re-reads a Browse surface. */
+   * the collection reads never re-read a Browse surface. */
   it('never re-reads a Browse surface', () => {
-    const invalidateQueries = vi.fn();
-    revalidateCollections({ invalidateQueries } as never, { collection_id: 7, shareChanged: true });
-    const roots = invalidateQueries.mock.calls.map(([arg]) => arg.queryKey[0]);
+    const roots = tableReads(['collections', 'collection_properties', 'collection_shares'], null).map(([r]) => r);
     for (const [root] of browseKeys.all) expect(roots).not.toContain(root);
   });
 });

@@ -1,4 +1,4 @@
-import type { Disposition } from './types';
+import type { Disposition, PipelineStage } from './types';
 import {
   BUILDING_MATERIAL_BUCKETS,
   CONDITION_CANONICAL,
@@ -21,7 +21,6 @@ import {
   normalizeScope,
   parseSetScope,
   scopeActive,
-  scopeWords,
   setScopeToParams,
   type CuratedSet,
   type SetScope,
@@ -56,58 +55,61 @@ export interface MapBounds {
   north: number;
 }
 
-/* Operator-set point + radius for the "dot + circle on the map" mode.
- * When `locationMode === 'center_radius'` the cohort is filtered by an
- * approximate bbox around (lat, lng) within `radius_m` metres; the
- * sidebar's <LocationControl> owns the point + radius UI and the main
- * map renders a dashed circle for visual context. Viewport bounds are
- * ignored in this mode. */
-export interface CenterRadius {
+/* The map circle (operator ruling 2026-10-30): a centre and a radius in metres,
+ * filtered as a TRUE circle by the database's one spatial predicate (`in_map_area`,
+ * migration 694) — exactly what the main map draws. A map area is a box (`bounds`,
+ * the viewport) or a circle, never both; the circle holds still while the map pans. */
+export interface MapCircle {
   lat: number;
   lng: number;
   radius_m: number;
 }
 
-export type LocationMode = 'viewport' | 'center_radius';
+/* The radius domain is the registry's (`radius_m`, the server's MapCircle bound);
+ * the slider steps by 100 m. */
+const RADIUS_LIMITS = filterById('radius_m')?.constraints ?? {};
+export const CIRCLE_RADIUS = {
+  min: Number(RADIUS_LIMITS.min ?? 100),
+  max: Number(RADIUS_LIMITS.max ?? 10_000),
+  step: 100,
+};
 
-/* A WGS84 bounding box roughly `km` kilometres across (half-extent each
- * side), centred on (lat, lng). Longitude degrees shrink with latitude so
- * the east/west extent scales by cos(lat). Used to frame the map AND seed
- * the viewport cohort when opening Browse focused on a single point (the
- * "Explore area" modal) — the same `bounds` value both fits the camera and
- * narrows the cohort, so no separate flyTo is needed. */
 const KM_PER_DEG = 111.32;
+const cosLat = (lat: number): number => Math.max(Math.cos((lat * Math.PI) / 180), 0.01);
 
-export const bboxAround = (lat: number, lng: number, km: number): MapBounds => {
-  const half = km / 2;
-  const dLat = half / KM_PER_DEG;
-  const dLng = half / (KM_PER_DEG * Math.max(Math.cos((lat * Math.PI) / 180), 0.01));
-  return { west: lng - dLng, south: lat - dLat, east: lng + dLng, north: lat + dLat };
-};
-
-/* THE box Browse filters on, from the location mode: viewport → the map's
- * `bounds` (or null); centre+radius → the square around the circle, through the
- * one box-around-a-point formula above. A circumscribed square admits a few
- * corner listings beyond the true radius — accepted since the mode shipped; the
- * main map still draws the exact circle. One rule, every reader: the list
- * (queries.applyFilters), both stats RPCs (`bbox_*`) and a watchdog saved from
- * Browse (filtersToWatchdogSpec), so what Browse shows is what a watchdog
- * watches (rule 16). */
-export const effectiveBbox = (f: ListingFilters): MapBounds | null => {
-  if (f.locationMode === 'center_radius') {
-    return f.centerRadius
-      ? bboxAround(f.centerRadius.lat, f.centerRadius.lng, (2 * f.centerRadius.radius_m) / 1000)
-      : null;
-  }
-  return f.bounds;
-};
-
-/* The box in words for a summary line: its extent in km and its centre. */
-export const mapAreaLabel = (b: MapBounds): string => {
+/* The circle a switch to centre + radius places: the middle of the map view and the
+ * largest radius that fits inside it (half its shorter side), on the slider's grid. */
+export const circleInView = (b: MapBounds): MapCircle => {
   const lat = (b.north + b.south) / 2;
-  const lng = (b.east + b.west) / 2;
-  const h = (b.north - b.south) * KM_PER_DEG;
-  const w = (b.east - b.west) * KM_PER_DEG * Math.cos((lat * Math.PI) / 180);
+  const h = (b.north - b.south) * KM_PER_DEG * 1000;
+  const w = (b.east - b.west) * KM_PER_DEG * 1000 * cosLat(lat);
+  const r = Math.round(Math.min(h, w) / 2 / CIRCLE_RADIUS.step) * CIRCLE_RADIUS.step;
+  return {
+    lat,
+    lng: (b.east + b.west) / 2,
+    radius_m: Math.min(CIRCLE_RADIUS.max, Math.max(CIRCLE_RADIUS.min, r)),
+  };
+};
+
+/* Prague, where the main map starts: the view a circle is placed in before any map was shown. */
+export const MAP_START_VIEW: MapBounds = { west: 14.22, south: 49.94, east: 14.71, north: 50.18 };
+
+/* The circle's bounding box, to frame the camera on it — never a filter. */
+export const circleBounds = (c: MapCircle): MapBounds => {
+  const dLat = c.radius_m / 1000 / KM_PER_DEG;
+  const dLng = c.radius_m / 1000 / (KM_PER_DEG * cosLat(c.lat));
+  return { west: c.lng - dLng, south: c.lat - dLat, east: c.lng + dLng, north: c.lat + dLat };
+};
+
+/* The map area in words for a summary line: a box's extent or a circle's radius, and the centre. */
+export const mapAreaLabel = (area: MapBounds | MapCircle): string => {
+  if ('radius_m' in area) {
+    return `circle ${(area.radius_m / 1000).toFixed(1)} km around ${area.lat.toFixed(4)}, ${area.lng.toFixed(4)}`;
+  }
+  const lat = (area.north + area.south) / 2;
+  const lng = (area.east + area.west) / 2;
+  const h = (area.north - area.south) * KM_PER_DEG;
+  const w = (area.east - area.west) * KM_PER_DEG * cosLat(lat);
   return `map area ≈ ${w.toFixed(1)} × ${h.toFixed(1)} km around ${lat.toFixed(4)}, ${lng.toFixed(4)}`;
 };
 
@@ -241,9 +243,7 @@ export interface ListingFilters {
    * categoryMain in (dum, komercni); see SUBTYPE_LABELS_BY_MAIN. */
   subtype: string[];
   buildingMaterial: BuildingMaterial[];
-  /* PENB letters A–G (registry `energy_rating_match`): a property matches when its
-   * rating — the first non-null across its ads in canonical order — is one of them;
-   * an unrated property never does. Empty = no constraint. */
+  /* PENB letters A–G (registry `energy_rating_match`). Empty = no constraint. */
   energyRatingMatch: string[];
   estateAreaMin: number | null;
   estateAreaMax: number | null;
@@ -281,8 +281,8 @@ export interface ListingFilters {
   pipeline: SetScope | null;
   /* Browse-only broker scope ("Explore this broker's listings"). Null = off.
    * A preset keeps it, a dashboard does not (DASHBOARD_EXCLUDED_KEYS); it is
-   * NOT in toolkit/filter_registry.py (must stay invisible to the agent /
-   * comparables / estimation agendas). Set by the explore-broker modal's seed,
+   * NOT in toolkit/filter_registry.py (must stay invisible to the agent and
+   * the comparables agenda). Set by the explore-broker modal's seed,
    * a `?broker=` URL param, or the sidebar's Advanced → Broker search
    * (filter-controls/BrokerFilterControl). A property-id allowlist (MS19): the
    * properties where one of this broker's ads is on the portals in the status
@@ -293,12 +293,10 @@ export interface ListingFilters {
   tags: SetScope | null;
   /* Browse-only collection scope (rule #18, lib/setScope; own + shared). Null = off. */
   collections: SetScope | null;
+  /* The map area, a box or a circle, never both: `bounds` follows the map's
+   * pan and zoom; a `circle` holds still while the map moves. */
   bounds: MapBounds | null;
-  /* `viewport` (default) = map pan/zoom emits bounds, those filter
-   * the cohort. `center_radius` = a sidebar-set point + radius drives
-   * the spatial predicate; bounds is ignored on the SQL side. */
-  locationMode: LocationMode;
-  centerRadius: CenterRadius | null;
+  circle: MapCircle | null;
   /* Phase QUAL — curated-city quality filters. Browse + Watchdog only;
    * intentionally not surfaced to the estimation agent / comparables
    * tool (the registry's agenda gating enforces that). The Browse
@@ -380,8 +378,7 @@ export const DEFAULT_FILTERS: ListingFilters = {
   tags: null,
   collections: null,
   bounds: null,
-  locationMode: 'viewport',
-  centerRadius: null,
+  circle: null,
   cityIndexRules: [],
   minCityPopulation: null,
   maxCityPopulation: null,
@@ -554,7 +551,7 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
   const [firstMin, firstMax] = parseRange(sp.get('first'));
   const [tomMin, tomMax] = parseRange(sp.get('tom'));
   const portalsExcluded = splitCsv(sp.get('portal_excl')).filter((v) => PORTAL_VALUES.includes(v));
-  return {
+  return floored({
     /* Absent `cat` = the default cohort (['byt']); an empty `cat=` token =
      * the deliberate "all categories" ([]). Otherwise CSV, filtered to the
      * known set (so an old ?cat=dum still parses, and junk is dropped). */
@@ -631,11 +628,9 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
     brokerId: parseIntOrNull(sp.get('broker')),
     tags: parseSetScope(sp, 'tags'),
     collections: parseSetScope(sp, 'collections'),
-    bounds: parseBounds(sp.get('bbox')),
-    locationMode: sp.get('locmode') === 'center_radius'
-      ? 'center_radius'
-      : 'viewport',
-    centerRadius: parseCenterRadius(sp.get('center')),
+    /* A link holds one map area; a circle wins over a stray box. */
+    bounds: parseCircle(sp.get('circle')) ? null : parseBounds(sp.get('bbox')),
+    circle: parseCircle(sp.get('circle')),
     cityIndexRules: parseCityIndexRules(sp.get('cq_rules')),
     minCityPopulation: parseIntOrNull(sp.get('cq_pop_min')),
     maxCityPopulation: parseIntOrNull(sp.get('cq_pop_max')),
@@ -648,7 +643,7 @@ export const fromSearchParams = (sp: URLSearchParams): ListingFilters => {
     nearOverall5kmMin: parseFloatOrNull(sp.get('no5')),
     nearOverall15kmMin: parseFloatOrNull(sp.get('no15')),
     priceGrowthRules: parsePriceGrowthRules(sp.get('pg')),
-  };
+  });
 };
 
 /* `cq_rules` URL shape: `indexName:value[:op],indexName:value[:op]`.
@@ -727,14 +722,15 @@ const parseBounds = (s: string | null): MapBounds | null => {
 
 const fmtBoundsCoord = (n: number): string => Number(n.toFixed(5)).toString();
 
-const parseCenterRadius = (s: string | null): CenterRadius | null => {
+/* The URL's `circle` as lat,lng,radius_m; the radius clamped into the slider's domain. */
+const parseCircle = (s: string | null): MapCircle | null => {
   if (!s) return null;
   const parts = s.split(',');
   if (parts.length !== 3) return null;
   const [lat, lng, radius] = parts.map(Number);
   if (![lat, lng, radius].every((x) => Number.isFinite(x))) return null;
   if (radius <= 0) return null;
-  return { lat, lng, radius_m: Math.trunc(radius) };
+  return { lat, lng, radius_m: Math.min(CIRCLE_RADIUS.max, Math.max(CIRCLE_RADIUS.min, Math.trunc(radius))) };
 };
 
 const fmtRange = (lo: number | null, hi: number | null): string =>
@@ -844,13 +840,9 @@ export const toSearchParams = (f: ListingFilters): URLSearchParams => {
       `${fmtBoundsCoord(west)},${fmtBoundsCoord(south)},${fmtBoundsCoord(east)},${fmtBoundsCoord(north)}`,
     );
   }
-  if (f.locationMode === 'center_radius') sp.set('locmode', 'center_radius');
-  if (f.centerRadius) {
-    const { lat, lng, radius_m } = f.centerRadius;
-    sp.set(
-      'center',
-      `${fmtBoundsCoord(lat)},${fmtBoundsCoord(lng)},${radius_m}`,
-    );
+  if (f.circle) {
+    const { lat, lng, radius_m } = f.circle;
+    sp.set('circle', `${fmtBoundsCoord(lat)},${fmtBoundsCoord(lng)},${radius_m}`);
   }
   if (f.cityIndexRules.length) {
     sp.set('cq_rules', fmtCityIndexRules(f.cityIndexRules));
@@ -901,54 +893,32 @@ const CATEGORY_TYPE_LABEL: Record<CategoryType, string> = {
 };
 
 /* "for sale" / "for rent" / … — empty when no deal type is constrained, so the
- * caller's sentence reads "12 apartments" rather than "12 apartments for null". */
+ * header reads "12 apartments" rather than "12 apartments for null". */
 export const categoryTypeLabel = (t: CategoryType | null): string =>
   t == null ? '' : CATEGORY_TYPE_LABEL[t];
 
-const fmtDaysRange = (lo: number | null, hi: number | null): string => {
-  if (lo == null && hi == null) return '';
-  if (lo != null && hi != null) return `${lo}–${hi} d`;
-  if (lo != null)               return `≥ ${lo} d`;
-  return `≤ ${hi} d`;
-};
+/* The one property type and deal a filter pins, or null when it spans several
+ * types or both deals: a Browse card of exactly that kind drops "Byt na prodej ·"
+ * from its title (ruling P05, 2026-10-27). */
+export interface CohortKind {
+  categoryMain: CategoryMain;
+  categoryType: CategoryType;
+}
 
-export const summarise = (f: ListingFilters, count: number | null): string => {
-  const bits: string[] = [];
-  bits.push(f.status === 'active' ? 'active' : f.status === 'inactive' ? 'inactive' : 'all');
-  const countStr = count == null ? '…' : count.toLocaleString('cs-CZ');
-  bits.push(`${countStr} ${categoryMainLabel(f.categoryMain)}`);
-  const dealLabel = categoryTypeLabel(f.categoryType);
-  if (dealLabel) bits.push(dealLabel);
-  if (f.districts.length) {
-    const shown = f.districts
-      .slice(0, 3)
-      .map((d) => {
-        const base = d.context ? `${d.name} · ${d.context}` : d.name;
-        return d.excluded ? `−${base}` : base;
-      })
-      .join(', ');
-    const extra = f.districts.length > 3 ? ` +${f.districts.length - 3}` : '';
-    bits.push(`in ${shown}${extra}`);
-  }
-  if (f.dispositions.length) {
-    bits.push(`(${f.dispositions.slice(0, 4).join(', ')}${f.dispositions.length > 4 ? '…' : ''})`);
-  }
-  const portalScope = portalScopeLabel(f.portals, f.portalsExcluded, f.portalsExcludedActiveOnly);
-  if (portalScope) bits.push(portalScope);
-  const seenLabel = fmtDaysRange(f.lastSeenMinDays, f.lastSeenMaxDays);
-  if (seenLabel) bits.push(`last seen ${seenLabel}`);
-  if (f.recentlyAddedDays != null) bits.push(`added ≤ ${f.recentlyAddedDays} d`);
-  if (f.recentlyChangedDays != null) bits.push(`changed ≤ ${f.recentlyChangedDays} d`);
-  const tomLabel = fmtDaysRange(f.tomDaysMin, f.tomDaysMax);
-  if (tomLabel) bits.push(`TOM ${tomLabel}`);
-  if (f.tomObservedOnly) bits.push('newly listed');
-  for (const name of CURATED_SET_NAMES) {
-    const words = scopeWords(name, f[name]);
-    if (words) bits.push(words);
-  }
-  if (f.brokerId != null) bits.push('for one broker');
-  if (f.bounds) bits.push('in this map area');
-  return `Showing ${bits.join(' ')}`;
+export function cohortKindOf(
+  f: Pick<ListingFilters, 'categoryMain' | 'categoryType'>,
+): CohortKind | null {
+  return f.categoryMain.length === 1 && f.categoryType != null
+    ? { categoryMain: f.categoryMain[0], categoryType: f.categoryType }
+    : null;
+}
+
+/* What Browse's header counts, after the number: "apartments for sale",
+ * "apartments / houses", "properties". Every filter is a pill under it
+ * (AppliedFilterPills, ruling P09), so nothing here names one. */
+export const countedWords = (f: Pick<ListingFilters, 'categoryMain' | 'categoryType'>): string => {
+  const deal = categoryTypeLabel(f.categoryType);
+  return deal ? `${categoryMainLabel(f.categoryMain)} ${deal}` : categoryMainLabel(f.categoryMain);
 };
 
 /* A short, human default name for a watchdog created from the current Browse
@@ -1017,7 +987,7 @@ export const browseTitleSummary = (f: ListingFilters): string | null => {
 /* Generic compare against DEFAULT_FILTERS so new fields can never be
  * forgotten here (the old hand-maintained &&-chain silently missed
  * priceGrowthRules). Arrays count as default when empty; object-valued
- * fields (bounds, centerRadius) default to null, so a
+ * fields (bounds, circle) default to null, so a
  * null-vs-set check is exact. */
 export const isDefault = (f: ListingFilters): boolean =>
   (Object.keys(DEFAULT_FILTERS) as Array<keyof ListingFilters>).every((k) => {
@@ -1057,6 +1027,13 @@ export interface PresetSpec {
   sort?: string | null;
 }
 
+/* What the pipeline view reads off a stage: its id, and whether it is closed. */
+export type PipelineViewStage = Pick<PipelineStage, 'id' | 'is_terminal'>;
+
+/* A pipeline scope over these stage ids; none = a card at any stage. */
+const stageScope = (ids: number[]): SetScope =>
+  ids.length ? { set: null, in: ids, out: [] } : { set: 'in', in: [], out: [] };
+
 /* The Pipeline lens as a COMPLETE view, not a modifier.
  *
  * The chip lives in the preset row, and every other chip in that row REPLACES
@@ -1073,15 +1050,25 @@ export interface PresetSpec {
  * `status` deliberately stays at its default `any`: a deal whose listing was
  * delisted mid-negotiation must not vanish from the pipeline view.
  *
+ * The scope is the board's LIVE stages, by id (operator 2026-11-01): a card in a
+ * closed stage is history, so the view leaves it out, and the sidebar adds a
+ * closed stage back with one click. Ids, not "any stage minus the closed ones":
+ * that would leave the closed stages excluded after the chip is turned off. A
+ * board with no closed stage, or no live one, gets the whole pipeline. `stages`
+ * is the board as READ: the chip never builds the view from a guess.
+ *
  * The modifier semantics are still available — the sidebar's Curation → Pipeline
  * control ANDs the scope onto the current filters without resetting anything.
  * Chip = view, sidebar control = modifier, exactly like preset chip vs sidebar. */
-export const pipelineViewFilters = (): ListingFilters => ({
-  ...DEFAULT_FILTERS,
-  categoryMain: [],
-  categoryType: null,
-  pipeline: { set: 'in', in: [], out: [] },
-});
+export const pipelineViewFilters = (stages: ReadonlyArray<PipelineViewStage>): ListingFilters => {
+  const live = stages.filter((s) => !s.is_terminal).map((s) => s.id);
+  return {
+    ...DEFAULT_FILTERS,
+    categoryMain: [],
+    categoryType: null,
+    pipeline: stageScope(live.length < stages.length ? live : []),
+  };
+};
 
 /* A preset keeps EVERY filter, the lenses included — the curated sets (tags,
  * collections, pipeline), the broker and the dismissed reveal: they are in what
@@ -1163,8 +1150,7 @@ function storedScope(name: CuratedSet, blob: Record<string, unknown>): SetScope 
   const o = v as Record<string, unknown>;
   if (name === 'pipeline' && 'stage_ids' in o) {
     const stages = idList(o.stage_ids);
-    if (!stages) return null;
-    return stages.length ? { set: null, in: stages, out: [] } : { set: 'in', in: [], out: [] };
+    return stages ? stageScope(stages) : null;
   }
   const inc = idList(o.in);
   const exc = idList(o.out);
@@ -1189,11 +1175,12 @@ export const readPresetSpec = (
   return { filters: coerceStoredFilters(filters), sort: sortToParam(parseSort(sort)) };
 };
 
-/* The area a saved filter puts in the map frame when it is loaded: the box it
- * filters on (effectiveBbox — a saved map area, or the square around a saved
- * centre+radius); null when it saved no area, and the camera stays put. */
-export const savedMapArea = (spec: PresetSpec | ListingFilters): MapBounds | null =>
-  effectiveBbox(readPresetSpec(spec).filters);
+/* The area a saved filter puts in the map frame when it is loaded: its saved box,
+ * or the box around its circle; null when it saved no area, and the camera stays put. */
+export const savedMapArea = (spec: PresetSpec | ListingFilters): MapBounds | null => {
+  const { bounds, circle } = readPresetSpec(spec).filters;
+  return circle ? circleBounds(circle) : bounds;
+};
 
 const canonicalParams = (sp: URLSearchParams): string =>
   [...sp.entries()]
@@ -1323,6 +1310,21 @@ const boolNullableToTri = (v: unknown): TriState => {
   return v ? 'yes' : 'no';
 };
 
+/* The registry's `min` is a domain floor every read that validates the
+ * registry refuses below (api/filter_args renders it as `ge`; its `max` is a
+ * slider axis, never a bound): a value under it, typed or linked, is held at
+ * it, so Browse and those reads (the broker board, a watchdog) judge one cohort. */
+const atFloor = (id: string, value: unknown): unknown => {
+  const floor = filterById(id)?.constraints?.min;
+  return typeof value === 'number' && typeof floor === 'number' && value < floor ? floor : value;
+};
+
+const floored = (f: ListingFilters): ListingFilters => {
+  const out: Record<string, unknown> = { ...f };
+  for (const [id, key] of Object.entries(REGISTRY_KEY_MAP)) out[key] = atFloor(id, out[key]);
+  return out as unknown as ListingFilters;
+};
+
 /** Project a `ListingFilters` onto the snake_case shape that
  *  `<FilterForm>` reads. Tri-state amenities convert to `bool | null`;
  *  an empty list becomes `null` (the registry's "no constraint"). */
@@ -1359,7 +1361,7 @@ export function applyRegistryUpdate(
   if (Array.isArray(DEFAULT_FILTERS[key])) {
     return { ...filters, [key]: value ?? [] } as ListingFilters;
   }
-  return { ...filters, [key]: value } as ListingFilters;
+  return { ...filters, [key]: atFloor(id, value) } as ListingFilters;
 }
 
 /** Apply a batch of `<FilterForm>` updates atomically. Loops
@@ -1414,10 +1416,10 @@ export function applySidebarUpdates(
  * clause for are NOT silently dropped: `filtersToWatchdogSpec` reports them in
  * `unsupported` so the UI can tell the operator what won't be watched.
  *
- * Honoured (mapped): category, disposition, district chips, THE map box
- * (`bounds` — effectiveBbox, rule 16: a centre+radius pick saves as the square
- * Browse filtered on, always; the viewport box unless the caller opts it out,
- * which is the create dialog's one checkbox), price / price-per-m² / MF-yield /
+ * Honoured (mapped): category, disposition, district chips, THE map area
+ * (rule 16: a circle always, the same true circle Browse filtered on; the
+ * viewport box unless the caller opts it out, which is the create dialog's one
+ * checkbox), price / price-per-m² / MF-yield /
  * area / usable / estate / garden bounds, building material, tri-state
  * amenities, furnished, ownership, both sides of the portal rule (MS19 +
  * migration 597), condition_match, parking-lots min, the price-history pair
@@ -1473,9 +1475,9 @@ export function filtersToWatchdogSpec(
 ): FiltersToWatchdogResult {
   const f = filters;
   const arr = <T>(xs: T[]): T[] | null => (xs.length === 0 ? null : xs);
-  /* A centre+radius pick is a sidebar filter, never a stale viewport, so it
-   * always rides along; the viewport box only when the caller keeps it. */
-  const bounds = f.locationMode === 'center_radius' || includeMapArea ? effectiveBbox(f) : null;
+  /* A circle is a filter the operator set, never a stale viewport, so it always
+   * rides along; the viewport box only when the caller keeps it. */
+  const bounds = includeMapArea ? f.bounds : null;
 
   const spec: WatchdogFilterSpec = {
     ...DEFAULT_WATCHDOG_FILTER_SPEC,
@@ -1486,6 +1488,7 @@ export function filtersToWatchdogSpec(
     dispositions: arr(f.dispositions),
     districts: arr(f.districts),
     bounds,
+    circle: f.circle,
     min_price_czk: f.priceMin,
     max_price_czk: f.priceMax,
     include_no_price: f.includeNoPrice,

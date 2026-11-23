@@ -12,20 +12,7 @@ from __future__ import annotations
 
 import importlib
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, TypedDict
-
-
-class ToolMetadata(TypedDict):
-    tool: str
-    filters_used: dict[str, Any]
-    result_count: int
-    queried_at: str
-    data_freshness: str | None
-
-
-class ToolResult(TypedDict):
-    data: Any
-    metadata: ToolMetadata
+from typing import TYPE_CHECKING, Any
 
 
 def _now_iso() -> str:
@@ -144,8 +131,6 @@ if TYPE_CHECKING:  # let type-checkers / IDEs see the lazily re-exported names
 __all__ = [
     "ComparableFilters",
     "TargetSpec",
-    "ToolMetadata",
-    "ToolResult",
     "analyze_distribution",
     "cluster_comparables",
     "compare_listing_images",

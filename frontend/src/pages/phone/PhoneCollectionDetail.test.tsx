@@ -2,21 +2,24 @@
  * the collection, and the card's bookmark opens the shared collection sheet,
  * where unchecking this collection is the removal — the desktop row's own
  * `removePropertyFromCollection` — and the card leaves the roll. */
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as api from '@/lib/api';
+import { collectionCardFilters } from '@/lib/collectionCards';
+import { familyTargets, revalidateTables } from '@/lib/curationSync';
 import * as queries from '@/lib/queries';
 import type { PipelineMembers } from '@/lib/queries';
+import { revalidate } from '@/lib/revalidate';
 import type { Collection, CollectionPropertyRow } from '@/lib/types';
 import { cardRow } from '@/test/cardRow';
 
 import CollectionDetail from '../CollectionDetail';
-import { collectionCardFilters } from './PhoneCollectionDetail';
-import { DESKTOP_ONLY_NOTE, VIEWER_NOTE } from './PhoneCollections';
+import { MANAGE_NOTE, VIEWER_NOTE } from './PhoneCollections';
+import { COLLECTION_KINDS } from '@/lib/notifyKinds';
 
 vi.mock('@/lib/phoneShell', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/phoneShell')>()),
@@ -52,6 +55,7 @@ const COLLECTION: Collection = {
   is_system: false,
   owner_email: null,
   shared_with: [],
+  notify_kinds: COLLECTION_KINDS.map((k) => k.kind),
 };
 
 const member = (property_id: number, extra: Partial<CollectionPropertyRow> = {}): CollectionPropertyRow => ({
@@ -102,15 +106,17 @@ afterEach(() => vi.clearAllMocks());
 
 function renderPage(path = '/collection/7') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
           <Route path="/collection/:id" element={<CollectionDetail />} />
+          <Route path="/collections" element={<p>Seznam sbírek</p>} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...view, qc };
 }
 
 const cardFor = (place: string) => screen.getByRole('link', { name: new RegExp(place) }).closest('article')!;
@@ -127,7 +133,7 @@ describe('<CollectionDetail> on the phone', () => {
     expect(filters.categoryType).toBeNull();
   });
 
-  it('heads the roll with the name, the count and the monitored mark; no edit controls', async () => {
+  it('heads the roll with the name, the count and the monitored mark', async () => {
     renderPage();
     const heading = await screen.findByRole('heading', { name: 'K prohlídce' });
     const header = heading.closest('header')!;
@@ -135,9 +141,6 @@ describe('<CollectionDetail> on the phone', () => {
     expect(text).toContain('3 nemovitosti');
     expect(text).toContain('založena 3. 10.');
     expect(within(header).getByText('sledováno')).toBeInTheDocument();
-    expect(screen.queryByRole('switch')).toBeNull();
-    expect(screen.queryByRole('button', { name: /delete|smazat|save/i })).toBeNull();
-    expect(screen.getByText('Přejmenování, smazání, sledování a sdílení nastavíte na počítači.')).toBeInTheDocument();
   });
 
   it('removes a property by unchecking this collection in the card sheet', async () => {
@@ -155,6 +158,55 @@ describe('<CollectionDetail> on the phone', () => {
     await waitFor(() => expect(api.removePropertyFromCollection).toHaveBeenCalledWith(7, 1));
     await waitFor(() => expect(screen.queryByRole('link', { name: /Místo 1/ })).toBeNull());
     expect(screen.getByRole('link', { name: /Místo 2/ })).toBeInTheDocument();
+  });
+
+  /* Ruling Q3(c) with the pointer hold (2026-11-01): a member removed on the
+   * desktop leaves the roll within one clock read, but never under a finger. */
+  it('drops a member removed elsewhere once the finger lifts, never under it', async () => {
+    const { qc } = renderPage();
+    const card = await screen.findByRole('link', { name: /Místo 2/ });
+    fireEvent.touchStart(card, { touches: [{ target: card }] });
+    const reads = vi.mocked(queries.fetchListingsForCards).mock.calls.length;
+    memberMap.delete(2);
+    vi.mocked(api.getCollection).mockResolvedValue({ collection: COLLECTION, properties: [member(1)] });
+    vi.mocked(queries.fetchListingsForCards).mockResolvedValue({ rows: [cardRow(1)], nextCursor: null });
+
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'collections', null));
+    });
+    await waitFor(() => expect(queries.fetchPropertyCollectionMemberSet).toHaveBeenCalledTimes(2)); // the marks at once
+    expect(queries.fetchListingsForCards).toHaveBeenCalledTimes(reads);
+    expect(screen.getByRole('link', { name: /Místo 2/ })).toBeInTheDocument();
+
+    fireEvent.touchEnd(card, { touches: [] });
+    await waitFor(() => expect(screen.queryByRole('link', { name: /Místo 2/ })).toBeNull());
+    expect(screen.getByRole('link', { name: /Místo 1/ })).toBeInTheDocument();
+  });
+
+  /* Review repair (W6): the header's count rides the collection's own read, and a
+   * count is never held, so that read lands under the finger; the "Bez karty"
+   * lines drawn from it wait in the view until the finger lifts. */
+  it('holds the "Bez karty" lines under a finger, never the count in the header', async () => {
+    const { qc } = renderPage();
+    const section = await screen.findByRole('region', { name: 'Bez karty' });
+    const line = within(section).getByRole('link', { name: /Bez polohy/ });
+    fireEvent.touchStart(line, { touches: [{ target: line }] });
+    memberMap.delete(3);
+    vi.mocked(api.getCollection).mockResolvedValue({
+      collection: { ...COLLECTION, listing_count: 2 },
+      properties: [member(1), member(2)],
+    });
+
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'collections', null));
+    });
+    const header = screen.getByRole('heading', { name: 'K prohlídce' }).closest('header')!;
+    await waitFor(() => expect(header.textContent?.replace(/\u00a0/g, ' ')).toContain('2 nemovitosti'));
+    expect(screen.getByRole('link', { name: /Bez polohy/ })).toBeInTheDocument();
+
+    fireEvent.touchEnd(line, { touches: [] });
+    await waitFor(() => expect(screen.queryByRole('link', { name: /Bez polohy/ })).toBeNull());
+    expect(screen.queryByRole('region', { name: 'Bez karty' })).toBeNull();
   });
 
   it('keeps a member Browse cannot serve reachable as a plain line', async () => {
@@ -197,8 +249,11 @@ describe('<CollectionDetail> on the phone', () => {
     expect(header?.textContent).toContain('sdílí jana@example.com · jen ke čtení');
     expect(header?.textContent).not.toContain('založena');
     expect(within(heading.closest('header') as HTMLElement).queryByText('sledováno')).toBeNull();
-    // The owner's footer promises management a viewer does not have.
-    expect(screen.queryByText(DESKTOP_ONLY_NOTE)).toBeNull();
+    // A viewer manages nothing: no switch, no sharing, no ⋯.
+    expect(within(header as HTMLElement).queryByRole('switch')).toBeNull();
+    expect(within(header as HTMLElement).queryByRole('button', { name: /Sdílet/ })).toBeNull();
+    expect(within(header as HTMLElement).queryByRole('button', { name: 'Další akce' })).toBeNull();
+    expect(screen.queryByText(MANAGE_NOTE)).toBeNull();
     expect(screen.getByText(VIEWER_NOTE)).toBeInTheDocument();
   });
 
@@ -231,5 +286,122 @@ describe('<CollectionDetail> on the phone', () => {
     const sheet = screen.getByRole('dialog', { name: 'Uložit do sbírky' });
     await within(sheet).findByRole('button', { name: /Archiv/ });
     expect(within(sheet).queryByRole('button', { name: /K prohlídce/ })).toBeNull();
+  });
+});
+
+/* Ruling P31, the phone following desktop (operator 2026-10-27): my collection's
+   header carries the Sledovat switch, "Sdílet · N" and ⋯ (Přejmenovat, Smazat
+   sbírku), each opening what the desktop's opens, over the same writes. */
+describe('<CollectionDetail> on the phone: the header actions (P31)', () => {
+  const header = async () =>
+    (await screen.findByRole('heading', { name: 'K prohlídce' })).closest('header') as HTMLElement;
+
+  it('carries Sledovat, Sdílet · N and ⋯, and no footer sends management to the desktop', async () => {
+    vi.mocked(api.getCollection).mockResolvedValue({
+      collection: { ...COLLECTION, shared_with: [{ account_id: 'a1', email: 'jana@example.com' }, { account_id: 'a2', email: 'petr@example.com' }] },
+      properties: [member(1)],
+    });
+    renderPage();
+    const h = await header();
+    expect(within(h).getByRole('switch', { name: 'Sledovat' })).toHaveAttribute('aria-checked', 'true');
+    expect(within(h).getByRole('button', { name: 'Sdílet · 2' })).toHaveAttribute('aria-expanded', 'false');
+    expect(within(h).getByRole('button', { name: 'Další akce' })).toHaveAttribute('aria-haspopup', 'menu');
+    expect(screen.queryByText(MANAGE_NOTE)).toBeNull();
+    expect(screen.queryByText(/na počítači/)).toBeNull();
+  });
+
+  it('switches monitoring off through the same write as the desktop', async () => {
+    vi.mocked(api.updateCollection).mockResolvedValue({ ...COLLECTION, monitoring_enabled: false });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(within(await header()).getByRole('switch', { name: 'Sledovat' }));
+    expect(api.updateCollection).toHaveBeenCalledWith(7, { monitoring_enabled: false });
+  });
+
+  it('opens the sharing card under the header', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const share = within(await header()).getByRole('button', { name: 'Sdílet' });
+    await user.click(share);
+    expect(share).toHaveAttribute('aria-expanded', 'true');
+    const panel = document.getElementById(share.getAttribute('aria-controls') as string) as HTMLElement;
+    expect(panel).not.toBeNull();
+    expect(within(panel).getByText('Sdílení')).toBeInTheDocument();
+  });
+
+  it('renames in place from ⋯ → Přejmenovat', async () => {
+    vi.mocked(api.updateCollection).mockResolvedValue({ ...COLLECTION, name: 'Na prohlídku' });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(within(await header()).getByRole('button', { name: 'Další akce' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Přejmenovat' }));
+    const name = screen.getByLabelText('Název');
+    expect(name).toHaveValue('K prohlídce');
+    expect(name).toHaveFocus();
+    await user.clear(name);
+    await user.type(name, 'Na prohlídku');
+    await user.click(screen.getByRole('button', { name: 'Uložit' }));
+    /* Only what the user changed (lib/useServerDraft): the description stays out. */
+    expect(api.updateCollection).toHaveBeenCalledWith(7, { name: 'Na prohlídku' });
+  });
+
+  /* D3 (lib/useServerDraft): the open editor follows the collection while a field is untouched. */
+  it('follows a rename made elsewhere while open, and writes nothing back over it', async () => {
+    vi.mocked(api.updateCollection).mockResolvedValue({ ...COLLECTION, description: 'Jen popis' });
+    const user = userEvent.setup();
+    const { qc } = renderPage();
+    await user.click(within(await header()).getByRole('button', { name: 'Další akce' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Přejmenovat' }));
+    const name = screen.getByLabelText('Název');
+    vi.mocked(api.getCollection).mockResolvedValue({
+      collection: { ...COLLECTION, name: 'Na prohlídku (jinde)' },
+      properties: [member(1)],
+    });
+    await act(async () => {
+      await revalidateTables(qc, ['collections']);
+    });
+    await waitFor(() => expect(name).toHaveValue('Na prohlídku (jinde)'));
+    expect(screen.getByRole('button', { name: 'Uložit' })).toBeDisabled();
+    const description = screen.getByLabelText('Popis');
+    await user.clear(description);
+    await user.type(description, 'Jen popis');
+    await user.click(screen.getByRole('button', { name: 'Uložit' }));
+    expect(api.updateCollection).toHaveBeenCalledWith(7, { description: 'Jen popis' });
+  });
+
+  it('clears the description alone', async () => {
+    vi.mocked(api.updateCollection).mockResolvedValue({ ...COLLECTION, description: null });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(within(await header()).getByRole('button', { name: 'Další akce' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Přejmenovat' }));
+    await user.clear(screen.getByLabelText('Popis'));
+    await user.click(screen.getByRole('button', { name: 'Uložit' }));
+    expect(api.updateCollection).toHaveBeenCalledWith(7, { description: null });
+  });
+
+  it('deletes after the two-step confirm from ⋯ → Smazat sbírku', async () => {
+    vi.mocked(api.deleteCollection).mockResolvedValue({ deleted: true });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(within(await header()).getByRole('button', { name: 'Další akce' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Smazat sbírku' }));
+    expect(api.deleteCollection).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Smazat „K prohlídce“' }));
+    await waitFor(() => expect(api.deleteCollection).toHaveBeenCalledWith(7));
+    // Gone, so back to the list, as on the desktop.
+    expect(await screen.findByText('Seznam sbírek')).toBeInTheDocument();
+  });
+
+  it('offers no delete for the default collection', async () => {
+    vi.mocked(api.getCollection).mockResolvedValue({
+      collection: { ...COLLECTION, is_system: true },
+      properties: [member(1)],
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(within(await header()).getByRole('button', { name: 'Další akce' }));
+    expect(screen.getByRole('menuitem', { name: 'Přejmenovat' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Smazat sbírku' })).toBeNull();
   });
 });

@@ -99,6 +99,7 @@ class OssProvider(OpenAICompatibleProvider):
         model: str,
         max_tokens: int = 4096,
         tool_choice: str | None = None,
+        timeout_s: float | None = None,
     ) -> Completion:
         if self._url_from_env:
             # RE-READ, never latch: the provider registry is a process singleton built at API
@@ -113,7 +114,7 @@ class OssProvider(OpenAICompatibleProvider):
             )
         completion = super().complete(
             system=system, messages=messages, tools=tools, model=model,
-            max_tokens=max_tokens, tool_choice=tool_choice,
+            max_tokens=max_tokens, tool_choice=tool_choice, timeout_s=timeout_s,
         )
         if completion.tool_calls or not tools:
             return completion

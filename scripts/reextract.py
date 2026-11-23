@@ -45,7 +45,7 @@ import logging
 import os
 import sys
 import time
-from typing import Callable
+from typing import Any, Callable
 
 from selectolax.parser import HTMLParser
 
@@ -95,7 +95,7 @@ _FIELDS: dict[str, FieldSpec] = {
     # enqueues on a content change or a broker-fingerprint change; a `raw_json` heal does
     # neither. The
     # daily full sweep enumerates resolve_brokers._BROKER_SOURCES, so remax is picked up
-    # there (or run resolve_brokers_full.yml to attribute immediately).
+    # there (or request the broker_sweep job to attribute immediately).
     "broker": FieldSpec(
         extractors={"remax": lambda html, _native: _remax_broker(HTMLParser(html))},
         missing_predicate="NOT (l.raw_json ? 'broker')",

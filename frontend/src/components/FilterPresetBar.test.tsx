@@ -7,7 +7,7 @@
  * name-scoped label, so N chips no longer expose N identical "⋯" buttons.
  *
  * The rest pins what the fold into SavedSetBar must not change: the Pipeline
- * chip leads the row, "Update preset" re-captures filters + sort (every filter,
+ * chip leads the row, the menu's "Save changes" re-captures filters + sort (every filter,
  * the curation lenses included — ruling 2026-10-22), a new preset
  * offers the map area only while one is applied (ticked for a new preset), and Edit
  * touches metadata only.
@@ -17,9 +17,9 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-import { filterPresetKeys, DEFAULT_SORT, sortToParam } from '@/lib/queries';
-import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
-import type { FilterPreset, FilterPresetGroup } from '@/lib/types';
+import { fetchPipelineStages, filterPresetKeys, DEFAULT_SORT, pipelineKeys, sortToParam } from '@/lib/queries';
+import { DEFAULT_FILTERS, type ListingFilters, type PipelineViewStage } from '@/lib/filters';
+import type { FilterPreset, FilterPresetGroup, PipelineStage } from '@/lib/types';
 
 const preset: FilterPreset = {
   id: 'p1',
@@ -46,6 +46,11 @@ vi.mock('@/lib/api', async (orig) => ({
   deleteFilterPresetGroup: vi.fn(),
 }));
 
+vi.mock('@/lib/queries', async (orig) => ({
+  ...(await orig<typeof import('@/lib/queries')>()),
+  fetchPipelineStages: vi.fn(),
+}));
+
 import {
   createFilterPreset, createFilterPresetGroup, deleteFilterPreset, deleteFilterPresetGroup, layoutFilterPresets,
   updateFilterPreset,
@@ -53,6 +58,16 @@ import {
 import FilterPresetBar, { PRESETS_EXPANDED_KEY } from './FilterPresetBar';
 
 const BOUNDS = { west: 14.3, south: 50.0, east: 14.5, north: 50.1 };
+const stage = (id: number, is_terminal: boolean): PipelineStage => ({
+  id, key: `s${id}`, label: `Stage ${id}`, position: id, color: null, is_terminal, is_entry: id === 1, code: null,
+});
+const STAGES = [stage(1, false), stage(9, true)];
+
+/* The dirty chip's menu: Save changes writes at once (no dialog, operator 2026-10-27). */
+const saveChanges = () => {
+  fireEvent.click(screen.getByRole('button', { name: 'Preset options: Praha 2+kk' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Save changes' }));
+};
 
 function renderBar({
   filters = {} as ListingFilters,
@@ -62,6 +77,7 @@ function renderBar({
   onActivePresetIdChange = vi.fn(),
   onLoad = vi.fn(),
   onLoadPipelineView = vi.fn(),
+  stages = [],
 }: {
   filters?: ListingFilters;
   activePresetId?: string | null;
@@ -69,10 +85,13 @@ function renderBar({
   groups?: FilterPresetGroup[];
   onActivePresetIdChange?: (id: string | null) => void;
   onLoad?: (p: FilterPreset) => void;
-  onLoadPipelineView?: () => void;
+  onLoadPipelineView?: (stages: ReadonlyArray<PipelineViewStage>) => void;
+  /* null = not read yet: the bar reads them through fetchPipelineStages. */
+  stages?: ReadonlyArray<PipelineViewStage> | null;
 } = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   qc.setQueryData(filterPresetKeys.all, { data: presets, total: presets.length, groups });
+  if (stages) qc.setQueryData(pipelineKeys.stages, stages);
   return render(
     <QueryClientProvider client={qc}>
       <FilterPresetBar
@@ -93,6 +112,7 @@ beforeEach(() => {
   vi.mocked(createFilterPreset).mockReset();
   vi.mocked(updateFilterPreset).mockReset();
   vi.mocked(deleteFilterPreset).mockReset();
+  vi.mocked(fetchPipelineStages).mockReset();
 });
 
 describe('<FilterPresetBar> chip names', () => {
@@ -111,13 +131,47 @@ describe('<FilterPresetBar> chip names', () => {
 });
 
 describe('<FilterPresetBar> behaviour', () => {
-  it('leads with the Pipeline chip, which loads its view', () => {
+  it('leads with the Pipeline chip, which loads its view over the board stages', () => {
     const onLoadPipelineView = vi.fn();
-    renderBar({ onLoadPipelineView });
+    renderBar({ onLoadPipelineView, stages: STAGES });
     const buttons = screen.getAllByRole('button');
     expect(buttons[0]).toHaveTextContent('Pipeline');
     fireEvent.click(buttons[0]);
     expect(onLoadPipelineView).toHaveBeenCalledTimes(1);
+    expect(onLoadPipelineView).toHaveBeenCalledWith(STAGES);
+  });
+
+  it('waits for the stage read when the chip is clicked before it lands', async () => {
+    vi.mocked(fetchPipelineStages).mockResolvedValue(STAGES);
+    const onLoadPipelineView = vi.fn();
+    renderBar({ onLoadPipelineView, stages: null });
+    fireEvent.click(screen.getAllByRole('button')[0]);
+    await waitFor(() => expect(onLoadPipelineView).toHaveBeenCalledWith(STAGES));
+    expect(onLoadPipelineView).toHaveBeenCalledTimes(1);
+  });
+
+  /* MS16: without the stages the view cannot leave the closed ones out, so a
+   * failed read is a retry, never the whole pipeline under a "bez uzavřených" title. */
+  it('turns into a retry when the stage read fails, and loads no view', async () => {
+    vi.mocked(fetchPipelineStages).mockRejectedValue(new Error('read failed'));
+    const onLoadPipelineView = vi.fn();
+    renderBar({ onLoadPipelineView, stages: null });
+    fireEvent.click(screen.getAllByRole('button')[0]);
+    const retry = await screen.findByRole('button', { name: /Fáze pipeline se nepodařilo načíst/ });
+    expect(onLoadPipelineView).not.toHaveBeenCalled();
+
+    vi.mocked(fetchPipelineStages).mockResolvedValue(STAGES);
+    fireEvent.click(retry);
+    expect(await screen.findByRole('button', { name: 'Pipeline' })).toHaveAttribute('aria-pressed', 'false');
+    expect(onLoadPipelineView).not.toHaveBeenCalled();
+  });
+
+  it('stays the chip while ON, so it can still be turned off with the stage read failed', async () => {
+    vi.mocked(fetchPipelineStages).mockRejectedValue(new Error('read failed'));
+    renderBar({ filters: { ...DEFAULT_FILTERS, pipeline: { set: 'in', in: [], out: [] } }, stages: null });
+    await waitFor(() => expect(fetchPipelineStages).toHaveBeenCalled());
+    expect(screen.getAllByRole('button')[0]).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByRole('button', { name: /se nepodařilo načíst/ })).toBeNull();
   });
 
   it('loads a preset on a chip click', () => {
@@ -146,40 +200,45 @@ describe('<FilterPresetBar> behaviour', () => {
     expect(screen.getByRole('button', { name: 'Brno 3+1' })).toBeInTheDocument();
   });
 
-  it('offers "Update preset" on a dirty preset and saves filters + sort back into it', async () => {
+  it('saves filters + sort back into a dirty preset from its menu, with no dialog', async () => {
     vi.mocked(updateFilterPreset).mockResolvedValue(preset);
     renderBar({ filters: DEFAULT_FILTERS });
-    fireEvent.click(screen.getByRole('button', { name: 'Update preset' }));
-    const dialog = screen.getByRole('dialog', { name: 'Update preset' });
-    expect(within(dialog).queryByRole('button', { name: /map area/ })).toBeNull();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Update preset' }));
+    saveChanges();
+    expect(screen.queryByRole('dialog')).toBeNull();
     await waitFor(() => expect(updateFilterPreset).toHaveBeenCalledTimes(1));
     const [id, patch] = vi.mocked(updateFilterPreset).mock.calls[0];
     expect(id).toBe('p1');
     expect(patch).toMatchObject({ name: 'Praha 2+kk', color: null, filter_spec: { sort: sortToParam(DEFAULT_SORT) } });
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
-  it('offers "Update preset" when a curation filter drifts, and saves it into the preset', async () => {
+  it('reverts a dirty preset by loading it again', () => {
+    const onLoad = vi.fn();
+    renderBar({ onLoad });
+    fireEvent.click(screen.getByRole('button', { name: 'Preset options: Praha 2+kk' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Revert to saved' }));
+    expect(onLoad).toHaveBeenCalledWith(preset);
+    expect(updateFilterPreset).not.toHaveBeenCalled();
+  });
+
+  it('saves a drifted curation filter into the preset', async () => {
     vi.mocked(updateFilterPreset).mockResolvedValue(preset);
     const outside = { set: 'out' as const, in: [], out: [] };
     renderBar({
       presets: [{ ...preset, filter_spec: { filters: DEFAULT_FILTERS, sort: null } }],
       filters: { ...DEFAULT_FILTERS, pipeline: outside, collections: outside },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Update preset' }));
-    const dialog = screen.getByRole('dialog', { name: 'Update preset' });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Update preset' }));
+    saveChanges();
     await waitFor(() => expect(updateFilterPreset).toHaveBeenCalledTimes(1));
     const saved = vi.mocked(updateFilterPreset).mock.calls[0][1].filter_spec?.filters;
     expect(saved?.pipeline).toEqual(outside);
     expect(saved?.collections).toEqual(outside);
   });
 
-  it('offers no update while the loaded preset is clean', () => {
+  it('offers no save while the loaded preset is clean', () => {
     renderBar({ presets: [{ ...preset, filter_spec: { filters: DEFAULT_FILTERS, sort: null } }], filters: DEFAULT_FILTERS });
     expect(screen.getByRole('button', { name: 'Praha 2+kk' })).toHaveAccessibleDescription('Load preset: Praha 2+kk');
-    expect(screen.queryByRole('button', { name: 'Update preset' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Preset options: Praha 2+kk' }));
+    expect(screen.queryByRole('menuitem', { name: 'Save changes' })).toBeNull();
   });
 
   it('saves a new preset with the map area by default, and selects it', async () => {
@@ -209,16 +268,24 @@ describe('<FilterPresetBar> behaviour', () => {
     expect(vi.mocked(createFilterPreset).mock.calls[0][0].filter_spec.filters.bounds).toBeNull();
   });
 
-  it('keeps a preset saved without the map area without it on update', async () => {
+  it('keeps a preset saved without the map area without it on save', async () => {
     vi.mocked(updateFilterPreset).mockResolvedValue(preset);
     renderBar({ filters: { ...DEFAULT_FILTERS, bounds: BOUNDS } });
-    fireEvent.click(screen.getByRole('button', { name: 'Update preset' }));
-    const dialog = screen.getByRole('dialog', { name: 'Update preset' });
-    const box = within(dialog).getByRole('button', { name: 'Include the current map area in this preset' });
-    expect(box).toHaveAttribute('aria-pressed', 'false');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Update preset' }));
+    saveChanges();
     await waitFor(() => expect(updateFilterPreset).toHaveBeenCalledTimes(1));
     expect(vi.mocked(updateFilterPreset).mock.calls[0][1].filter_spec?.filters.bounds).toBeNull();
+  });
+
+  it('keeps a preset saved with a map area with the current one on save', async () => {
+    vi.mocked(updateFilterPreset).mockResolvedValue(preset);
+    const before = { ...BOUNDS, north: 50.2 };
+    renderBar({
+      presets: [{ ...preset, filter_spec: { filters: { ...DEFAULT_FILTERS, bounds: before }, sort: null } }],
+      filters: { ...DEFAULT_FILTERS, bounds: BOUNDS },
+    });
+    saveChanges();
+    await waitFor(() => expect(updateFilterPreset).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(updateFilterPreset).mock.calls[0][1].filter_spec?.filters.bounds).toEqual(BOUNDS);
   });
 
   it('edits the name and colour only', async () => {

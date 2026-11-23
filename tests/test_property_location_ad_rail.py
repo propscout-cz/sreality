@@ -24,7 +24,7 @@ import pytest
 
 from location_data.claims_common import served_location_predicate
 from tests import sql_corpus
-from tests._live_property import REQUIRED_DB, cur  # noqa: F401 -- `cur` is the fixture
+from tests._live_property import REQUIRED_DB
 from toolkit import publication
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,6 +49,9 @@ CENSUS: dict[str, str] = {
                                       "its canonical ad, the comparable (price, area, snapshot_id: rule 8)",
     "scraper/db.py": "identity: a singleton is born with its one ad as canonical AND location ad; the refetch lane's "
                      "`listing_location` join is ad-grain (`ll.listing_id = l.id`, rule 25's town-less ads)",
+    "scripts/recompute_property_stats.py": "the rollup picks the canonical ad (price, photos, link); the stamper's "
+                                           "`listing_location` join is ad-grain (`ll.listing_id = l.id`: is this "
+                                           "ad inside the engine's scope), it places no property",
 }
 
 # Every call of the served rule (rule 25) and every read of its constant, by (module, scope, the listing-id key it is
@@ -65,6 +68,10 @@ SERVED_RULE_SITES: dict[tuple[str, str, str], tuple[str, str]] = {
         ("property", "the watchdog matcher over properties_public, served as browse_projection serves"),
     ("scripts/checks/publishing.py", "_STAGE_TAIL", "p.location_listing_ref_id"):
         ("property", "publishing's not-in-Browse stages, judged as browse_projection judges"),
+    ("scripts/recompute_property_stats.py", "_ENQUEUE_PUBLISHED_SQL", "p.location_listing_ref_id"):
+        ("property", "the maintenance pass queues what browse_projection serves and browse_list lacks"),
+    ("scripts/recompute_property_stats.py", "_SETTLE_SQL", "l.id"):
+        ("ad", "the stamper waits for an ad whose own place is undetermined: the engine's scope cannot be judged"),
 }
 
 # Bodies of the replayed schema allowed to key a place on the canonical ad: none (the two dead MF functions left in 631).
@@ -311,7 +318,7 @@ _REKEYED = ("browse_projection", "properties_public", "recompute_city_proximity(
 
 
 @REQUIRED_DB
-def test_no_view_or_function_body_places_a_property_at_its_canonical_ad(cur: Any) -> None:  # noqa: F811
+def test_no_view_or_function_body_places_a_property_at_its_canonical_ad(cur: Any) -> None:
     cur.execute(_BODIES_SQL)
     bodies = {name: body or "" for name, body in cur.fetchall()}
     for name in _REKEYED:
@@ -472,9 +479,9 @@ def test_the_modules_naming_both_ads_are_reviewed() -> None:
 # The scopes that place one ad's subject (ruling R7): each takes its place through the shared subject fragment. An
 # ad-keyed `LEFT JOIN listing_location ll ON ll.listing_id = l.id` passes arm 1, so this list is what pins them.
 R7_SUBJECT_SITES: dict[tuple[str, str], str] = {
-    ("api/estimation_runs.py", "_MATCH_BY_ID_SQL"): "an estimate's subject by listing id",
+    ("toolkit/subject.py", "_MATCH_BY_ID_SQL"): "an estimate's subject by listing id",
     ("api/estimation_runs.py", "_LIST_FROM"): "the /estimations list's place label (location only; facts diverge)",
-    ("api/estimation_runs.py", "_SUBJECT_MF_FACTS_SQL"): "the subject's MF reference-rent facts",
+    ("toolkit/subject.py", "_SUBJECT_MF_FACTS_SQL"): "the subject's MF reference-rent facts",
     ("toolkit/velocity.py", "_fetch_listing_for_velocity"): "the velocity subject",
 }
 _COHORT_CALL = "_shared_filter_where"
@@ -535,16 +542,24 @@ def test_every_cohort_counts_a_property_once_through_the_shared_cohort_shape() -
 # Every Python read of toolkit/publication.py, by (module, scope, what it renders): its grain and why. The rule is a
 # property's; browse_projection carries its text verbatim (tests/test_668_publication_gate.py), these render it.
 PUBLISHED_RULE_SITES: dict[tuple[str, str, str], tuple[str, str]] = {
+    ("scripts/photo_assessment_compare.py", "_SAMPLE_SQL", 'published_predicate("p")'):
+        ("property", "the two-model comparison samples only what Browse may serve"),
     ("api/notifications.py", "_build_match_clauses", 'published_property_predicate("l.property_id")'):
         ("property", "both watchdog producers over properties_public, published as browse_projection publishes"),
-    ("api/notifications.py", "match_once", 'visible_since_sql("pp")'):
-        ("property", "the 'new' window: a watchdog tells what became visible after it started"),
+    ("api/notifications.py", "_stale_listed_sql", 'visible_since_sql("rp")'):
+        ("property", "a newly-listed alert is withdrawn when the property it now names was published before the window"),
+    ("api/notifications.py", "_SLICE_SEED_SQL", 'visible_since_sql("p")'):
+        ("property", "a start's slice tells only what was published inside the window and after the watchdog started"),
+    ("api/notifications.py", "_ENTRY_SIGNAL", 'visible_since_sql("p")'):
+        ("property", "an entry into a slice is 'newly listed' when it became visible since the last pass"),
     ("scripts/recompute_property_stats.py", "_SETTLE_SQL", "CAP_SQL"):
-        ("property", "the stamper reads only properties the cap has not yet published"),
+        ("property", "the stamper's one bounded wait, for photos and an engine decision"),
+    ("scripts/recompute_property_stats.py", "_ENQUEUE_PUBLISHED_SQL", 'published_predicate("p")'):
+        ("property", "the maintenance pass queues what is published and browse_list lacks"),
+    ("scripts/recompute_property_stats.py", "_ENQUEUE_PUBLISHED_SQL", "CAP_SQL"):
+        ("property", "that queue reads properties first seen within the cap plus two hours"),
     ("scripts/checks/publishing.py", "_STAGE_TAIL", 'visible_since_sql("p")'):
         ("property", "publishing's 'unpublished' stage, judged at the newest rebuild's start"),
-    ("toolkit/property_identity.py", "_CARRY_SETTLED_SQL", "CAP_SQL"):
-        ("property", "a merge passes a stamp to the survivor only when that publishes it before its cap"),
 }
 _PUBLICATION_FILE = "toolkit/publication.py"
 _PUBLICATION_NAMES = {n: v for n, v in vars(publication).items() if not n.startswith("_")

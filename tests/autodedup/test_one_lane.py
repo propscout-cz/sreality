@@ -1816,6 +1816,38 @@ def test_the_re_claims_on_top_of_the_limit_fill_none_of_it() -> None:
     assert _measure_rate(429, 480.0, rate, bound) == (round(2.0 * rate, 6), True)
 
 
+def test_a_steady_clock_cut_claim_with_work_waiting_is_measured_however_small() -> None:
+    """E984, 2026-11-13: the stored rate 0.025404 gave a limit of 13; the feeds fed 12 (one ran
+    dry) in 221.1 s, under 20 and short of the limit, so nothing was measured and the rate stood
+    for days. On a steady pass with no re-claims, a feed that left work waiting fills the claim."""
+    from autodedup.incremental_lane import _measure_rate
+
+    rate = 0.025404
+    bound = {**_bound("time", int(525.0 * rate), 525.0), "building": False}
+    assert bound["limit"] == 13
+    assert _measure_rate(12, 221.1, rate, bound) == (None, False)
+    assert _measure_rate(12, 221.1, rate, {**bound, "cut": True}) == (round(2 * rate, 6), True)
+    assert _measure_rate(12, 600.0, rate, {**bound, "cut": True}) == (
+        round(0.5 * 12 / 600.0 + 0.5 * rate, 6), False)
+    assert _measure_rate(12, 221.1, rate, {**_bound("cap", 13, 525.0), "cut": True}) == (
+        None, False), "a cap is memory, not the clock"
+
+
+@pytest.mark.parametrize("extra", [
+    {"building": True},               # a build's seconds are the build's
+    {"stale": 5},                     # a re-claim's seconds are not the feeds' (E971)
+    {"building": True, "stale": 5},   # a build pass carrying re-claims
+])
+def test_work_waiting_never_doubles_a_build_or_a_pass_with_re_claims(extra: dict) -> None:
+    from autodedup.incremental_lane import _measure_rate
+
+    rate = 0.025404
+    bound = {**_bound("time", 13, 525.0), "cut": True, **extra}
+    claimed = 12 + int(extra.get("stale", 0))
+    rate_out, doubled = _measure_rate(claimed, 221.1, rate, bound)
+    assert doubled is False and (rate_out is None or rate_out < 2 * rate)
+
+
 class _LaneClock:
     """The lane's `time`, its pass `elapsed_s` seconds long: the first `perf_counter` (the
     pass's start) is real, every later one that start plus `elapsed_s`."""
@@ -1971,7 +2003,6 @@ def test_a_build_pass_its_pair_budget_refuses_reports_every_attempt(tmp_path,
     one's `wanted_pairs` and `pairs_to_decide`, `aborted` "pair_budget" — and nothing is
     written, the reject ledger included. With the budget back the next pass commits."""
     from autodedup import incremental_lane
-    from autodedup.incremental import bootstrap_key
     from tests.autodedup import lane_world
 
     made: list[int] = []
@@ -2062,6 +2093,12 @@ class _Session:
 
     def transaction(self):
         return self.world.transaction()
+
+    @property
+    def info(self) -> Any:
+        return self.world.info
+
+    autocommit = True
 
     def close(self) -> None:
         self.closed += 1
@@ -2163,7 +2200,7 @@ def test_a_raise_on_a_dead_connection_releases_the_lease_through_the_fresh_one(
     under the holder the pass took the lease with."""
     from autodedup import rt_lease
     from autodedup.incremental_lane import PASS_RATE_PER_S, pass_rate_key, run_incremental
-    from autodedup.incremental_sql import RT_LEASE_RELEASE_SQL
+    from scraper.job_lease import _END_LANE_SQL
     from tests.autodedup import lane_world
 
     world = lane_world.world()
@@ -2182,8 +2219,8 @@ def test_a_raise_on_a_dead_connection_releases_the_lease_through_the_fresh_one(
     assert fresh.closed == 1
     assert world.settings[pass_rate_key("rt")] == PASS_RATE_PER_S / 2.0
     assert rt_lease.current(world)["live"] is False, "released, not left to its TTL"
-    assert fresh.issued.count(RT_LEASE_RELEASE_SQL) == 1
-    assert RT_LEASE_RELEASE_SQL not in conn.issued
+    assert fresh.issued.count(_END_LANE_SQL) == 1
+    assert _END_LANE_SQL not in conn.issued
     assert any("released on the fresh one" in note for note in raised.value.__notes__)
 
 
@@ -2194,12 +2231,12 @@ def test_a_raise_on_a_live_connection_releases_the_lease_the_existing_way(
     also over the fresh one, and never a second time by the `finally`."""
     from autodedup import rt_lease
     from autodedup.incremental_lane import PASS_RATE_PER_S, pass_rate_key, run_incremental
-    from autodedup.incremental_sql import RT_LEASE_RELEASE_SQL
+    from scraper.job_lease import _END_LANE_SQL
     from tests.autodedup import lane_world
 
     world = lane_world.world()
     lane_world.seed_lane(world, tmp_path)
-    releases_before = world.statements.count(RT_LEASE_RELEASE_SQL)
+    releases_before = world.statements.count(_END_LANE_SQL)
     conn = _Session(world)
     fresh = _Session(world)
     _pass_that_raises(monkeypatch, RuntimeError("a Python error inside the pass"))
@@ -2209,9 +2246,9 @@ def test_a_raise_on_a_live_connection_releases_the_lease_the_existing_way(
 
     assert world.settings[pass_rate_key("rt")] == PASS_RATE_PER_S / 2.0
     assert rt_lease.current(world)["live"] is False
-    assert conn.issued.count(RT_LEASE_RELEASE_SQL) == 1
-    assert RT_LEASE_RELEASE_SQL not in fresh.issued
-    assert world.statements.count(RT_LEASE_RELEASE_SQL) == releases_before + 1, "once"
+    assert conn.issued.count(_END_LANE_SQL) == 1
+    assert _END_LANE_SQL not in fresh.issued
+    assert world.statements.count(_END_LANE_SQL) == releases_before + 1, "once"
     assert not any("rt_lease" in note for note in getattr(raised.value, "__notes__", []))
 
 
@@ -2274,7 +2311,7 @@ def test_a_restart_that_takes_both_connections_releases_on_a_new_one(monkeypatch
     assert clock.slept == [rt_lease.NEW_CONNECTION_DELAY_S], "a wait before the first one too"
     assert len(opened) == 1 and opened[0].closed
     assert _lease_notes(original) == [
-        "releasing autodedup.rt_lease for 'worker:1:1' failed (ConnectionError: server closed "
+        "releasing rt_lease for 'worker:1:1' failed (ConnectionError: server closed "
         "the connection unexpectedly); released on a new connection 20 s later (try 1)"]
 
     assert rt_lease.take(world, "rt_seed:other", 2_400)
@@ -2354,7 +2391,7 @@ def test_new_connections_that_never_come_leave_the_lease_to_its_ttl(monkeypatch)
     assert (rt_lease.NEW_CONNECTION_BUDGET_S, rt_lease.NEW_CONNECTION_DELAY_S) == (180.0, 20.0)
     assert calls == list(range(1, 10)) and clock.slept == [20.0] * 9 and clock.now == 180.0
     assert _lease_notes(original) == [
-        "releasing autodedup.rt_lease for 'worker:1:1' also failed (9 new connections over "
+        "releasing rt_lease for 'worker:1:1' also failed (9 new connections over "
         "180 s, the last with ConnectionError: connection refused (try 9)); it expires by "
         "itself"]
 
@@ -2413,12 +2450,12 @@ def test_a_run_that_succeeded_still_says_a_restart_forced_a_new_connection(
     world = FakePg()
     _no_wall_clock(monkeypatch)
     assert rt_lease.take(world, "rt_seed:1", 2_400)
-    with caplog.at_level(logging.WARNING, logger="autodedup.rt_lease"):
+    with caplog.at_level(logging.WARNING, logger="rt_lease"):
         assert rt_lease.release_after(_dead(world), "rt_seed:1", None,
                                       connect=world.other_session) is True
     assert rt_lease.current(world)["live"] is False
     assert [record.getMessage() for record in caplog.records] == [
-        "AUTODEDUP: releasing autodedup.rt_lease for 'rt_seed:1' failed (ConnectionError: "
+        "AUTODEDUP: releasing rt_lease for 'rt_seed:1' failed (ConnectionError: "
         "server closed the connection unexpectedly); released on a new connection 20 s later "
         "(try 1)"]
 
@@ -2430,7 +2467,7 @@ def test_a_restart_mid_pass_releases_the_lease_on_a_new_connection(tmp_path,
     so the next pass need not wait out the TTL."""
     from autodedup import rt_lease
     from autodedup.incremental_lane import run_incremental
-    from autodedup.incremental_sql import RT_LEASE_RELEASE_SQL
+    from scraper.job_lease import _END_LANE_SQL
     from tests.autodedup import lane_world
 
     world = lane_world.world()
@@ -2447,7 +2484,7 @@ def test_a_restart_mid_pass_releases_the_lease_on_a_new_connection(tmp_path,
 
     assert not queue and clock.slept == [20.0, 20.0], "a wait before each new connection"
     assert rt_lease.current(world)["live"] is False, "released, not left to its TTL"
-    assert live.issued.count(RT_LEASE_RELEASE_SQL) == 1
+    assert live.issued.count(_END_LANE_SQL) == 1
     assert (fresh.closed, starting.closed, live.closed) == (1, 1, 1)
     notes = _lease_notes(raised.value)
     assert len(notes) == 1 and "released on a new connection 40 s later (try 2)" in notes[0]
@@ -2459,7 +2496,7 @@ def test_a_restart_after_the_commit_releases_the_lease_on_a_new_connection(
     raise: the `finally` itself turns to the lane's factory."""
     from autodedup import incremental_lane, rt_lease
     from autodedup.incremental_lane import run_incremental
-    from autodedup.incremental_sql import RT_LEASE_RELEASE_SQL
+    from scraper.job_lease import _END_LANE_SQL
     from tests.autodedup import lane_world
 
     world = lane_world.world()
@@ -2467,17 +2504,17 @@ def test_a_restart_after_the_commit_releases_the_lease_on_a_new_connection(
     clock = _no_wall_clock(monkeypatch)
     conn, new = _Session(world), _Session(world)
 
-    def restart(_conn: object) -> int:
+    def restart(_conn: object, _generation: str, _bytes_now: int) -> None:
         conn.dead = True
         raise ConnectionError("terminating connection due to administrator command")
 
-    monkeypatch.setattr(incremental_lane, "phash_pop_rows", restart)
+    monkeypatch.setattr(incremental_lane, "record_storage", restart)
     with pytest.raises(ConnectionError, match="administrator command") as raised:
         run_incremental(lambda: conn, fresh_conn=lambda: new)
 
     assert clock.slept == [20.0]
     assert rt_lease.current(world)["live"] is False, "released, not left to its TTL"
-    assert new.issued.count(RT_LEASE_RELEASE_SQL) == 1 and new.closed == 1
+    assert new.issued.count(_END_LANE_SQL) == 1 and new.closed == 1
     assert any("released on a new connection 20 s later (try 1)" in note
                for note in _lease_notes(raised.value))
 
@@ -2555,7 +2592,7 @@ def test_a_shutdown_during_the_take_gives_the_lease_back(tmp_path) -> None:
     assert out["skipped"] == "stopping"
     row = rt_lease.current(world)
     assert (row["holder"], row["live"]) == ("worker:1:1", False), "taken, then given back"
-    assert world.transactions == transactions
+    assert world.transactions == transactions + 1, "the take's own, and nothing else"
 
 
 def test_a_pass_whose_lease_was_released_under_it_rolls_back_at_its_fence(
@@ -2567,7 +2604,7 @@ def test_a_pass_whose_lease_was_released_under_it_rolls_back_at_its_fence(
     from autodedup import incremental_lane, rt_lease
     from autodedup.incremental_lane import (LEASE_LOST, PASS_RATE_PER_S, pass_rate_key,
                                             run_incremental)
-    from autodedup.incremental_sql import RT_LEASE_HOLD_SQL, RT_LEASE_RELEASE_SQL
+    from scraper.job_lease import _END_LANE_SQL, _FENCE_SQL
     from tests.autodedup import lane_world
 
     world = lane_world.world()
@@ -2581,16 +2618,16 @@ def test_a_pass_whose_lease_was_released_under_it_rolls_back_at_its_fence(
         return result
 
     monkeypatch.setattr(incremental_lane, "run_pass_bounded", released_mid_pass)
-    releases = world.statements.count(RT_LEASE_RELEASE_SQL)
+    releases = world.statements.count(_END_LANE_SQL)
 
     out = run_incremental(lambda: world, holder="worker:1:1", stopping=lambda: False)
 
     assert out["aborted"] == LEASE_LOST and out["reconcile"] == {"skipped": "pass_lease_lost"}
     assert "worker:1:1" in out["reason"]
-    assert RT_LEASE_HOLD_SQL in world.statements_in_tx
+    assert _FENCE_SQL in world.statements_in_tx
     assert world.cursors == cursors and not world.rt_fp and not world.pairs
     assert rt_lease.current(world)["live"] is False, "the release stood"
-    assert world.statements.count(RT_LEASE_RELEASE_SQL) == releases + 1, "only the signal's"
+    assert world.statements.count(_END_LANE_SQL) == releases + 1, "only the signal's"
     assert world.settings[pass_rate_key("rt")] == PASS_RATE_PER_S / 2.0, "the half stands"
     assert out["peak_rss_mb"] is None or out["peak_rss_mb"] > 0
 
@@ -2623,7 +2660,7 @@ def test_a_lease_another_writer_took_is_never_committed_beside(tmp_path, monkeyp
 
 def test_a_live_lease_passes_the_fence_and_the_pass_commits(tmp_path) -> None:
     from autodedup.incremental_lane import run_incremental
-    from autodedup.incremental_sql import RT_LEASE_HOLD_SQL
+    from scraper.job_lease import _FENCE_SQL
     from tests.autodedup import lane_world
 
     world = lane_world.world()
@@ -2631,7 +2668,7 @@ def test_a_live_lease_passes_the_fence_and_the_pass_commits(tmp_path) -> None:
     out = run_incremental(lambda: world, holder="worker:1:1", stopping=lambda: False)
 
     assert out["aborted"] == "" and world.rt_fp, "decided and committed"
-    assert RT_LEASE_HOLD_SQL in world.statements_in_tx
+    assert _FENCE_SQL in world.statements_in_tx
 
 
 def test_a_shutdown_after_the_commit_starts_no_merge(tmp_path, monkeypatch) -> None:
@@ -2729,7 +2766,7 @@ def test_a_lease_lost_mid_reconcile_rolls_the_group_back_and_stops() -> None:
     def fence(conn) -> None:
         checks.append(conn)
         if len(checks) >= 2:
-            raise rt_lease.LeaseLost("autodedup.rt_lease is no longer held by 'worker:1:1'")
+            raise rt_lease.LeaseLost("rt_lease is no longer held by 'worker:1:1'")
 
     out = reconcile.run(db, RT, [], run_id="rt:test", deadline=10 ** 9, blocks=[BLOCK],
                         merge=db.merge(calls), clock=lambda: 0.0, now=lambda: db.now,
@@ -2875,14 +2912,14 @@ def test_a_signal_mid_pass_rolls_it_back_on_its_own_connection(tmp_path, monkeyp
     ends."""
     from autodedup import incremental_lane, rt_lease
     from autodedup.incremental_lane import PASS_RATE_PER_S, pass_rate_key, run_incremental
-    from autodedup.incremental_sql import RT_LEASE_RELEASE_SQL
+    from scraper.job_lease import _END_LANE_SQL
     from tests.autodedup import lane_world
 
     world = lane_world.world()
     lane_world.seed_lane(world, tmp_path)
     cursors = {k: dict(v) for k, v in world.cursors.items()}
     rolled_back = world.rolled_back
-    releases = world.statements.count(RT_LEASE_RELEASE_SQL)
+    releases = world.statements.count(_END_LANE_SQL)
     flag = {"stopping": False}
     original = incremental_lane.SqlFacts.facts
 
@@ -2891,10 +2928,9 @@ def test_a_signal_mid_pass_rolls_it_back_on_its_own_connection(tmp_path, monkeyp
         return original(self, *args, **kwargs)
 
     monkeypatch.setattr(incremental_lane.SqlFacts, "facts", signal_during_the_first_read)
-    from autodedup.incremental_sql import (RT_FP_COUNT_SQL, RT_PHASH_POP_COUNT_SQL,
-                                           RT_SCHEMA_SIZE_SQL)
+    from autodedup.incremental_sql import RT_FP_COUNT_SQL, RT_SCHEMA_SIZE_SQL
 
-    tail = (RT_FP_COUNT_SQL, RT_PHASH_POP_COUNT_SQL, RT_SCHEMA_SIZE_SQL)
+    tail = (RT_FP_COUNT_SQL, RT_SCHEMA_SIZE_SQL)
     before = [world.statements.count(sql) for sql in tail]
 
     out = run_incremental(lambda: world, holder="worker:1:1",
@@ -2902,16 +2938,15 @@ def test_a_signal_mid_pass_rolls_it_back_on_its_own_connection(tmp_path, monkeyp
 
     # Only the storage guard's schema read, before the pass: nothing between the rollback and
     # the release (the pass returns at once and its `finally` releases).
-    assert [world.statements.count(sql) for sql in tail] == [before[0], before[1],
-                                                               before[2] + 1]
-    assert world.statements[-1] == RT_LEASE_RELEASE_SQL
+    assert [world.statements.count(sql) for sql in tail] == [before[0], before[1] + 1]
+    assert world.statements[-1] == _END_LANE_SQL
 
     assert out["aborted"] == "stopping" and out["reconcile"] == {"skipped": "pass_stopping"}
     assert world.rolled_back == rolled_back + 1
     assert world.cursors == cursors and not world.rt_fp and not world.pairs
     row = rt_lease.current(world)
     assert (row["holder"], row["live"]) == ("worker:1:1", False), "released by the pass itself"
-    assert world.statements.count(RT_LEASE_RELEASE_SQL) == releases + 1
+    assert world.statements.count(_END_LANE_SQL) == releases + 1
     assert world.settings[pass_rate_key("rt")] == PASS_RATE_PER_S / 2.0
     assert world.settings_by[pass_rate_key("rt")].endswith(":halved_ahead"), "nothing after"
 
@@ -2920,13 +2955,13 @@ def test_the_fence_reads_the_clock_and_locks_its_row() -> None:
     """Offline half of tests/test_rt_lease_fence_live.py: `now()` is the transaction's START,
     which a release written mid-transaction is later than — only the clock sees it — and the
     row lock is what makes a release after the fence wait for the commit."""
-    from autodedup.incremental_sql import RT_LEASE_HOLD_SQL, RT_LEASE_RELEASE_SQL
+    from scraper.job_lease import _END_LANE_SQL, _FENCE_SQL
 
-    hold = " ".join(RT_LEASE_HOLD_SQL.lower().split())
+    hold = " ".join(_FENCE_SQL.lower().split())
     assert "expires_at > clock_timestamp()" in hold and "now()" not in hold
     assert hold.endswith("for update")
-    assert "holder = %(holder)s::text" in hold
-    assert "holder = %(holder)s::text" in " ".join(RT_LEASE_RELEASE_SQL.lower().split())
+    assert "lease_holder = %(holder)s" in hold
+    assert "lease_holder = %(holder)s" in " ".join(_END_LANE_SQL.lower().split())
 
 
 @pytest.mark.parametrize("raised", ["raise", "refusal"])

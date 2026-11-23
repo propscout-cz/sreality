@@ -64,7 +64,8 @@ from location_data.claims_common import SOURCES
 from scraper import egress, sreality_url
 from scraper.sreality_url import critical_segments
 from scripts.checks.clock import fetchall
-from scripts.checks.common import cell, result, wilson_lower
+from scripts.checks.common import cell, result
+from toolkit.measures import wilson_lower
 
 LOG = logging.getLogger(__name__)
 

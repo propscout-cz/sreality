@@ -42,14 +42,6 @@ def test_the_set_input_is_validated_like_every_other_free_text(lane: dict[str, A
     assert "suggest needs set=" in run
 
 
-def test_the_called_for_value_is_in_both_the_literal_and_the_check() -> None:
-    from api.llm_client import CalledFor
-    import typing
-    assert "suggest_exam_answer" in typing.get_args(CalledFor)
-    mig = (ROOT / "migrations" / "461_exam_letters_sets12_and_suggestions.sql").read_text()
-    assert "'suggest_exam_answer'" in mig
-
-
 def test_the_token_budget_leaves_room_for_reasoning() -> None:
     # The screen lane's lesson, measured twice: gpt-5-mini spends output tokens
     # on reasoning first, and a budget sized for the ~30-token answer returns an

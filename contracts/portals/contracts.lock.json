@@ -1,7 +1,7 @@
 {
   "bazos": {
-    "sha256": "d5eea3d9699055441715cc465eba90bad417def27c23232f7e77f3cac18d9008",
-    "version": 9
+    "sha256": "998e343f7457a992ec00353998f716ba49d9495bb9b29f3d51cc784eb28707a4",
+    "version": 10
   },
   "bezrealitky": {
     "sha256": "9214694fedad7ff5b9843f200c787d4404f86cdce962e143336aeb9d6c71b3d5",
@@ -12,8 +12,8 @@
     "version": 7
   },
   "idnes": {
-    "sha256": "ddd4b354b461c2fe07e0de413331b02b15688ae65b3b2a9837ee1298628fa380",
-    "version": 6
+    "sha256": "b556833550b3312c02ef45411ddb56dd7591c1419754b85e791d42b5d8e8727d",
+    "version": 7
   },
   "maxima": {
     "sha256": "9d4c8196194dc92576b7ee0461202b3aeab65ce84bc401005e4f13e1320f7e89",
@@ -24,8 +24,8 @@
     "version": 3
   },
   "realitymix": {
-    "sha256": "e7791226581822d514ce4ee9f1b262f95b670266681b7fc4ac374ecedea53102",
-    "version": 7
+    "sha256": "5835817d90640c7b98bd6dd528b68b9d597c3811c78ba1ad7e034087cbfb0e27",
+    "version": 9
   },
   "remax": {
     "sha256": "d843f5d940e0e2a7ca084c8820959370ab0cf2799b51a31be309c686de0bc188",

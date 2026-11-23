@@ -158,8 +158,10 @@ class _ScriptedProvider:
         model: str,
         max_tokens: int = 4096,
         tool_choice: str | None = None,
+        timeout_s: float | None = None,
     ) -> Completion:
         self.calls.append({
+            "timeout_s": timeout_s,
             "system": system,
             "messages": list(messages),
             "tools": list(tools),

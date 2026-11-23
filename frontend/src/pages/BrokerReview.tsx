@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
+import { brokerBoardPath } from '@/lib/browseState';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   dismissBrokerCandidate,
@@ -75,12 +76,11 @@ export default function BrokerReview() {
 
   return (
     <div className="px-6 py-8 max-w-4xl mx-auto text-[var(--color-ink)]">
-      <Link to={ROUTES.brokers.build()} className="text-xs text-[var(--color-ink-3)] hover:text-[var(--color-copper)]">
+      <Link to={brokerBoardPath()} className="text-xs text-[var(--color-ink-3)] hover:text-[var(--color-copper)]">
         ← Makléři
       </Link>
       <header className="mt-2">
-        <p className="text-xs tracking-[0.18em] uppercase text-[var(--color-ink-3)]">broker intelligence</p>
-        <h1 className="mt-1 text-2xl font-[family-name:var(--font-display)]">Sloučit duplicity</h1>
+        <h1 className="text-2xl font-[family-name:var(--font-display)]">Sloučit duplicity</h1>
         <p className="mt-1 text-sm text-[var(--color-ink-3)] max-w-2xl">
           Automat slučuje jen záznamy se shodným jménem — buď přes kontakt, který
           patří jedinému jménu, nebo přes společnou firmu u&nbsp;jména, které se
@@ -279,7 +279,7 @@ function BrokerRow({ b, checked, onToggle }: {
         </p>
       </div>
       <span className="shrink-0 text-xs font-[family-name:var(--font-mono)] tabular-nums text-[var(--color-ink-3)] text-right">
-        {fmtCount(b.active_property_count)}
+        {fmtCount(b.active_properties)}
         <span className="block text-[0.62rem] text-[var(--color-ink-4)]">aktivních</span>
       </span>
     </li>

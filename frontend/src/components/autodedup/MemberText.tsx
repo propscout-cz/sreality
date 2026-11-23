@@ -20,7 +20,7 @@
  * how a leak ships.
  */
 
-import { useState } from 'react';
+import Expandable from '@/components/Expandable';
 
 /* A Czech letter, for the word boundaries `\w` gets wrong: `\w` stops dead at
  * ř, so `patr\w*` never matches "patře" — the very word being hunted. */
@@ -61,17 +61,6 @@ export interface TextSegment {
   mark: boolean;
 }
 
-/* Long enough that collapsing it actually saves the operator something. Six
- * lines of ~60 characters, so a short advert is simply shown whole and carries
- * no toggle at all — a control that does nothing is worse than no control.
- * A character count and not a measured height on purpose: it answers the same
- * in jsdom, in a hidden dialog and on screen, and it is the thing tests pin. */
-export const COLLAPSE_OVER_CHARS = 360;
-
-export function isLongText(text: string | null | undefined): boolean {
-  return (text ?? '').length > COLLAPSE_OVER_CHARS;
-}
-
 /* The advert split into plain runs and token runs, in order. Concatenating
  * `segment.text` reproduces the input exactly — the marks never edit the text. */
 export function markUnitTokens(text: string): TextSegment[] {
@@ -107,15 +96,12 @@ export default function MemberText({
   headingLevel = 4,
   label,
 }: MemberTextProps) {
-  /* Per COMPONENT, which is per member: the dialog keeps its members mounted, so
-   * an advert the operator opened stays open while they read the next one, and
-   * closing the dialog is what forgets it. */
-  const [expanded, setExpanded] = useState(false);
+  /* The open state is per COMPONENT, which is per member: the dialog keeps its
+   * members mounted, so an advert the operator opened stays open while they read
+   * the next one, and closing the dialog is what forgets it. A short advert
+   * carries no toggle (components/Expandable measures the clamp). */
   const body = text ?? '';
   if (!title && !body) return null;
-
-  const long = isLongText(body);
-  const collapsed = long && !expanded;
   const Heading = headingLevel === 3 ? 'h3' : 'h4';
 
   return (
@@ -126,11 +112,14 @@ export default function MemberText({
         </Heading>
       )}
       {body && (
-        <p
-          className={
-            'text-[0.72rem] leading-relaxed text-[var(--color-ink-2)] whitespace-pre-line ' +
-            (collapsed ? 'line-clamp-6' : '')
-          }
+        <Expandable
+          as="p"
+          lines={6}
+          words={['zobrazit celý popis', 'skrýt']}
+          names={label ? [`zobrazit celý popis ${label}`, `skrýt ${label}`] : undefined}
+          className="space-y-1"
+          contentClassName="text-[0.72rem] leading-relaxed text-[var(--color-ink-2)] whitespace-pre-line"
+          toggleClassName="text-[0.7rem] text-[var(--color-copper-2)] underline decoration-dotted underline-offset-2"
         >
           {markUnitTokens(body).map((segment, index) =>
             segment.mark ? (
@@ -144,18 +133,7 @@ export default function MemberText({
               <span key={index}>{segment.text}</span>
             ),
           )}
-        </p>
-      )}
-      {long && (
-        <button
-          type="button"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((open) => !open)}
-          className="text-[0.7rem] text-[var(--color-copper-2)] underline decoration-dotted underline-offset-2"
-        >
-          {expanded ? 'skrýt' : 'zobrazit celý popis'}
-          {label && <span className="sr-only"> {label}</span>}
-        </button>
+        </Expandable>
       )}
     </div>
   );

@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from api.providers import (
     Message,
-    ProviderError,
     TextBlock,
     ToolResultBlock,
     ToolSchema,

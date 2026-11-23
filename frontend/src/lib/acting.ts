@@ -7,9 +7,10 @@
  * - EDIT AS OWNER is the property page's sticky switch (§8-10): on, it stays on
  *   across property pages until "Ukončit" or until the active board changes,
  *   which clears it.
- * - `<ActingAs share>` is the context two places mount (the Pipeline tab on a
- *   shared board, the property page while editing as the owner);
- *   `useActing()` answers the share or null.
+ * - `<ActingAs share>` is the context the boards mount on a shared board (the
+ *   desktop Pipeline tab, the phone's stage pages), the property page while
+ *   editing as the owner, and the new-property dialog opened from a shared
+ *   board; `useActing()` answers the share or null.
  * - Inside it every curation and pipeline hook prefixes its query keys with
  *   `actingKey` and hands `actAs` to its transport (lib/api `request`, lib/pgRead
  *   `setHeader`), so the owner's rows never land in the caller's own caches.
@@ -27,8 +28,8 @@ import type { PipelineShare, PipelineShareMode } from './types';
 export const ACTIVE_BOARD_KEY = 'sreality.pipeline.activeBoard';
 export const EDIT_AS_OWNER_KEY = 'sreality.pipeline.editAsOwner';
 
-/* The first segment of every acting key; never the first segment of an own key. */
-const ACTING_SEGMENT = 'acting';
+/** The first segment of every acting key; never the first segment of an own key. */
+export const ACTING_SEGMENT = 'acting';
 
 export type ActiveBoard = PipelineShare | null;
 

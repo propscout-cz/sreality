@@ -1,7 +1,7 @@
-"""Migration 622: the daily property sweep is a derived artifact, judged by the jobs check at today's 56 h line.
+"""Migrations 622 and 731: the daily property sweep is a derived artifact, judged by the jobs check at its 56 h line.
 
-The tests read the replayed row and run the file's own seed and post-condition (not copies), the producer's stamp and
-the jobs check's artifact read, inside a transaction that always rolls back. Runs in CI's migrations lane
+The tests read the replayed row and run 622's own seed (not a copy), the producer's stamp and the jobs check's artifact
+read, inside a transaction that always rolls back. Runs in CI's migrations lane
 (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED=1`); skipped locally.
 """
 
@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import datetime as _dt
 import os
-import re
 from pathlib import Path
 from typing import Any
 
@@ -50,7 +49,6 @@ def _statement(start: str, end: str) -> str:
 
 
 _SEED = _statement("update public.derived_artifacts", ";")
-_POST = _statement("do $post$", "$post$;")
 
 
 def _sweep(conn: Any) -> tuple[Any, ...]:
@@ -66,18 +64,22 @@ def _completed(conn: Any, at: str) -> None:
                  "on conflict (key) do update set value = excluded.value", (at,))
 
 
-def test_the_row_declares_the_workflows_own_cadence(conn):
+def test_the_row_names_its_runner_entry(conn):
+    """#2027 (migration 731): the row follows its job to the runner and names the registry entry, not a cron."""
+    from scraper import jobs
+
     row = conn.execute("select producer, host, cadence, staleness_budget, is_serving from derived_artifacts "
                        "where name = 'property_sweep'").fetchone()
-    cron = re.search(r'cron: "([^"]+)"',
-                     (_REPO / ".github/workflows/recompute_property_stats.yml").read_text(encoding="utf-8"))
-    assert row == ("scripts/recompute_property_stats.py", "github-actions", cron[1], _dt.timedelta(hours=38), True)
+    [entry] = [j for j in jobs.runner_jobs() if j.name == "property_sweep"]
+    assert (entry.every_s, f"{entry.argv[0].replace('.', '/')}.py") == (jobs.DAY, row[0])
+    assert row[1:] == (jobs.RUNNER, "daily (scraper/jobs.py property_sweep)", _dt.timedelta(hours=56), True)
 
 
 @pytest.mark.parametrize("age_h, status", [(55.9, "ok"), (56.1, "fail")])
-def test_the_jobs_check_fails_the_sweep_past_todays_56_hours(conn, age_h, status):
-    """38 h budget + GitHub's 18 h delivery slack = the retired property_maintenance alarm's fail line, which clears a
-    cycle split across two daily runs (48 h + the cron's late start) and stays under three days."""
+def test_the_jobs_check_fails_the_sweep_past_56_hours(conn, age_h, status):
+    """56 h, no delivery slack on the runner: the retired property_maintenance alarm's fail line, kept through the move
+    (622 spelled it 38 h + GitHub's 18 h slack). It clears a cycle split across two daily runs and stays under three
+    days."""
     from scripts.checks import platform as plat
     from scripts.verify_pipeline import THRESHOLDS
 
@@ -102,7 +104,6 @@ def test_the_seed_carries_the_last_completion_over_and_never_moves_it_back(conn)
     _completed(conn, (at + _dt.timedelta(days=1)).isoformat())   # a sweep between apply and deploy
     assert conn.execute(_SEED).rowcount == 1
     assert _sweep(conn)[:2] == (at + _dt.timedelta(days=1),) * 2
-    conn.execute(_POST)
 
 
 def test_the_producers_stamp_lands_on_the_row(conn):
@@ -118,12 +119,3 @@ def test_the_producers_stamp_lands_on_the_row(conn):
     assert abs(last_ok - through) < _dt.timedelta(milliseconds=1)
     assert last_ok >= started and through >= started
 
-
-def test_the_post_condition_refuses_a_loosened_budget(conn):
-    """The guard bites: a hand-made row with today's 56 h as its budget would fail only at 74 h."""
-    import psycopg
-
-    conn.execute("update derived_artifacts set staleness_budget = interval '56 hours' where name = 'property_sweep'")
-    with pytest.raises(psycopg.errors.RaiseException, match="622: the property_sweep artifact"):
-        with conn.transaction():
-            conn.execute(_POST)

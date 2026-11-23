@@ -120,10 +120,13 @@ describe('ppm2Basis and ppm2BasisFromToken agree', () => {
 describe('ppm2BasisOfCohort', () => {
   /* Rule 22: category_type is nullable and NULL means "no constraint" — the
    * Browse "Vše" pill and the Pipeline view both produce it. The canonical
-   * producer of the 'mixed' state is pipelineViewFilters(), and a mixed cohort
+   * producer of the 'mixed' state is pipelineViewFilters, and a mixed cohort
    * must never be given one blanket unit. */
   it('calls the Pipeline view cohort mixed', () => {
-    expect(ppm2BasisOfCohort(pipelineViewFilters())).toBe('mixed');
+    // Its stage scope moved to the live stages (2026-11-01); the cohort did not.
+    const stages = [{ id: 1, is_terminal: false }, { id: 9, is_terminal: true }];
+    expect(ppm2BasisOfCohort(pipelineViewFilters(stages))).toBe('mixed');
+    expect(ppm2BasisOfCohort(pipelineViewFilters([]))).toBe('mixed');
   });
 
   it('calls any deal-type-unconstrained cohort mixed', () => {

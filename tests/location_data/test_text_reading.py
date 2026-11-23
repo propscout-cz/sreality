@@ -176,3 +176,17 @@ def test_a_cottages_ev_claim_is_typed_by_the_resolver_and_a_cp_wins_over_it() ->
     assert house_number(normalize_house_number("č.ev. 13")) == (13, TYP_EV)
     both = _payload("offer", house_number_cp=("5", "č.p. 5"), house_number_ev=("13", "č.ev. 13"))
     assert _claims(both, ad_haystack("Chata", "č.ev. 13, č.p. 5")) == {"house_number_cp": "5"}
+
+
+def test_an_empty_location_block_is_a_failed_reading() -> None:
+    """W3 (ruling R2): no `ad_kind` (schema: always set) and no slot is the model failing,
+    which the text lane retries; any value at all is a reading, and so is no block."""
+    null = {"value": None, "evidence_quote": None}
+    empty = {"location": {slot: dict(null) for slot in ("ad_kind", "country", *tr.SLOTS)}}
+    assert tr.is_empty(empty)
+    assert tr.is_empty({"location": {}})
+    assert not tr.is_empty({"location": {**empty["location"], "ad_kind": {"value": "wanted"}}})
+    assert not tr.is_empty({"location": {**empty["location"], "country": {"value": "SK"}}})
+    assert not tr.is_empty({"location": {**empty["location"], "town": {"value": "Kolín"}}})
+    assert not tr.is_empty({"has_lift": {"value": True}})
+    assert not tr.is_empty(None)

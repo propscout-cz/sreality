@@ -1,6 +1,6 @@
 /* One card of the feed's roll, drawn as the W0 prototype draws it (#1762): a
  * full-width 4:3 photo strip — the 1080 px copies (#1765), opening on the cover
- * the Browse card would open on, up to eight photos a swipe apart
+ * the Browse card would open on, every photo a swipe apart and round again
  * (CardPhotoStrip) — with the margin of marks over its right edge and the stage
  * wash on every photo when the property is filed; under it three lines. Line 1 the price in
  * Fraunces and the price per m² in mono WITH ITS BASIS (rule 23: the server's
@@ -22,6 +22,7 @@ import { useCardPhotos } from '@/lib/hydration';
 import type { CoverTag } from '@/lib/imageTags';
 import { propertyPath } from '@/lib/listingUrl';
 import { areaKindOf, plotBesideArea, ppm2BasisFromToken } from '@/lib/measure';
+import { MF_YIELD_TITLE, mfYieldLine } from '@/lib/mfReference';
 import { portalShort } from '@/lib/portals';
 import type { CardRow } from '@/lib/queries';
 
@@ -82,24 +83,13 @@ export function feedDelta(pct: number | null | undefined): string | null {
 }
 
 /* The portals the chips name: those with a live ad, else every portal the
- * property ever had an ad on (MS19, the Browse badge's rule). */
+ * property ever had an ad on (MS19's portal rule). */
 export function feedPortals(r: Pick<CardRow, 'active_sources' | 'all_sources'>): string[] {
   return r.active_sources.length ? r.active_sources : r.all_sources;
 }
 
 export const portalsWord = (n: number): string =>
   `${n}${NBSP}${czPlural(n, 'portál', 'portály', 'portálů')}`;
-
-/* MF gross yield, sale flats only (the column is null elsewhere; the gate says so). */
-export function feedMfYield(
-  r: Pick<CardRow, 'mf_gross_yield_pct' | 'category_main' | 'category_type'>,
-): string | null {
-  if (r.mf_gross_yield_pct == null || r.category_main !== 'byt' || r.category_type !== 'prodej') return null;
-  return `MF ${r.mf_gross_yield_pct.toLocaleString('cs-CZ', {
-    minimumFractionDigits: 1,
-    maximumFractionDigits: 1,
-  })}${NBSP}%`;
-}
 
 export const feedDays = (tomDays: number | null): string | null =>
   tomDays == null || tomDays < 0 ? null : tomDays === 0 ? 'dnes' : fmtTomDays(tomDays);
@@ -115,7 +105,7 @@ export default function FeedCard({ r, coverTag }: { r: CardRow; coverTag: CoverT
   const portals = feedPortals(r);
   const days = feedDays(r.tom_days);
   const delta = feedDelta(r.total_price_change_pct);
-  const mf = feedMfYield(r);
+  const mf = mfYieldLine(r.mf_gross_yield_pct);
   const priceLabel = price.text ? `${price.text}${price.perMonth ? ' /měs' : ''}` : 'Cena na vyžádání';
 
   return (
@@ -124,14 +114,13 @@ export default function FeedCard({ r, coverTag }: { r: CardRow; coverTag: CoverT
         <CardPhotoStrip
           to={to}
           photos={strip.photos}
-          total={strip.total}
           pending={strip.pending}
           wash={member ? { color: accent.fg, badge, label: member.stage_label } : null}
           insetRight={MARGIN_PX}
         />
         <MarginMarks
           subject={{ property_id: r.property_id, text: line2, figure: price.text ? priceLabel : null }}
-          photoCount={strip.pending ? null : strip.total}
+          photoCount={strip.pending ? null : strip.photos.length}
         />
       </div>
       {/* `relative`: the price link's stretched hit area covers this text, not the strip. */}
@@ -181,7 +170,7 @@ export default function FeedCard({ r, coverTag }: { r: CardRow; coverTag: CoverT
           )}
           {mf && (
             <span
-              title="Hrubý výnos dle cenové mapy nájemného MF (nájem ÷ cena)"
+              title={MF_YIELD_TITLE}
               className="inline-flex h-5 items-center whitespace-nowrap rounded-[var(--radius-xs)] border border-[var(--color-rule-strong)] px-1 font-mono text-[11px] tabular-nums text-[var(--color-ink-2)]"
             >
               {mf}

@@ -1,11 +1,11 @@
 /* Browse's saved filter presets (migration 151) — the preset instance of THE
  * saved-set bar (components/SavedSetBar). A preset is a named filter set + sort
  * order: a chip click restores both (Browse owns the URL write, `onLoad`), and
- * editing either marks it dirty. A preset never fires a notification, unlike a
- * Watchdog. Presets sort into GROUPS (migration 672), boxes the bar draws after
+ * editing either marks it dirty: its ⋯ menu then saves the edits in or reverts
+ * them. A preset never fires a notification, unlike a Watchdog. Presets sort into GROUPS (migration 672), boxes the bar draws after
  * the loose chips. Without the API only the Pipeline chip that leads the row is drawn. */
 
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import {
@@ -13,13 +13,17 @@ import {
   listFilterPresets, reorderFilterPresets, updateFilterPreset, updateFilterPresetGroup,
 } from '@/lib/api';
 import { filterPresetKeys, DEFAULT_SORT, sortToParam, type SortSpec } from '@/lib/queries';
-import { filtersEqualForPreset, filtersForPreset, readPresetSpec, type ListingFilters } from '@/lib/filters';
+import {
+  filtersEqualForPreset, filtersForPreset, readPresetSpec, type ListingFilters, type PipelineViewStage,
+} from '@/lib/filters';
 import { normalizeScope, scopeIncludes } from '@/lib/setScope';
+import { usePipelineStages } from '@/lib/pipelineReads';
 import type { FilterPreset } from '@/lib/types';
 import SavedSetBar, {
   chipBase, useSavedSet, type SavedSetCopy, type SavedSetGroupCopy,
 } from '@/components/SavedSetBar';
 import PipelineMark from '@/components/PipelineMark';
+import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
 
 export interface FilterPresetBarProps {
   filters: ListingFilters;
@@ -29,9 +33,9 @@ export interface FilterPresetBarProps {
   onActivePresetIdChange: (id: string | null) => void;
   /* The Pipeline chip turning OFF is a plain filter edit… */
   onFiltersChange: (next: ListingFilters) => void;
-  /* …turning ON loads a whole view (neutral cohort + scope, preset deselected)
-   * — one atomic write, see browseState.loadPipelineView. */
-  onLoadPipelineView: () => void;
+  /* …turning ON loads a whole view (neutral cohort + the live stages, preset
+   * deselected) — one atomic write, see browseState.loadPipelineView. */
+  onLoadPipelineView: (stages: ReadonlyArray<PipelineViewStage>) => void;
 }
 
 /* Whether the preset chips are unfolded (the bar folds to the active chip). */
@@ -42,9 +46,10 @@ export const PRESET_COPY: SavedSetCopy = {
   empty: 'No saved presets yet.',
   save: '+ Save preset',
   saveHint: 'Save the current filters as a new preset',
-  updateHint: 'Save the current filter changes back into this preset',
-  dialog: { save: 'Save filters as a preset', update: 'Update preset', edit: 'Edit preset' },
-  submit: { save: 'Save preset', update: 'Update preset', edit: 'Save' },
+  saveChanges: 'Save changes',
+  revert: 'Revert to saved',
+  dialog: { save: 'Save filters as a preset', edit: 'Edit preset' },
+  submit: { save: 'Save preset', edit: 'Save' },
   nameLabel: 'Preset name',
   namePlaceholder: 'e.g. 2+kk Praha pod 6M',
   color: 'Color',
@@ -57,14 +62,14 @@ export const PRESET_COPY: SavedSetCopy = {
   dragHint: 'Drag to reorder',
   options: 'Preset options',
   edited: 'Edited since loaded',
-  editedHint: 'Edited since loaded — use Update to save changes',
+  editedHint: 'Edited since loaded — save or revert from ⋯',
   failed: 'Something went wrong.',
 };
 
 export const PRESET_GROUP_COPY: SavedSetGroupCopy = {
   kind: 'Preset group',
-  dialog: { save: 'New preset group', update: 'Edit group', edit: 'Edit group' },
-  submit: { save: 'Create group', update: 'Save', edit: 'Save' },
+  dialog: { save: 'New preset group', edit: 'Edit group' },
+  submit: { save: 'Create group', edit: 'Save' },
   nameLabel: 'Group name',
   namePlaceholder: 'e.g. Praha byty',
   color: 'Color',
@@ -94,6 +99,7 @@ export default function FilterPresetBar({
   onLoadPipelineView,
 }: FilterPresetBarProps) {
   const qc = useQueryClient();
+  const stagesQ = usePipelineStages();
   const { enabled, bar, groups } = useSavedSet(filterPresetKeys.all, listFilterPresets, reorderFilterPresets, {
     layout: layoutFilterPresets,
   });
@@ -141,8 +147,8 @@ export default function FilterPresetBar({
     onSuccess: () => invalidate(),
   });
 
-  /* Save / Update capture the current filters AND the current sort; Edit only
-   * touches metadata (name + colour), leaving the stored filters intact. */
+  /* Save and Save changes capture the current filters AND the current sort; Edit
+   * only touches metadata (name + colour), leaving the stored filters intact. */
   const specOf = (includeMapArea: boolean) => ({ filters: filtersForPreset(filters, includeMapArea), sort: sortParam });
 
   /* The Pipeline chip — "show me my deals" (rule #22) — leads the row, and
@@ -153,24 +159,41 @@ export default function FilterPresetBar({
    * nothing is saved or updated, and loading it deselects the active preset (a
    * preset stores its pipeline scope like any filter, so a preset left active
    * over the view would read as edited). OFF is a filter edit (drop the scope,
-   * keep the cohort since built); Back undoes the load. Per-stage narrowing lives in the
-   * sidebar's Curation → Pipeline control. */
+   * keep the cohort since built); Back undoes the load. ON scopes to the live stages
+   * (pipelineViewFilters). Per-stage narrowing, closed stages included, lives in
+   * the sidebar's Curation → Pipeline control. */
   const scope = filters.pipeline;
   const pipelineOn = scopeIncludes(scope);
-  const pipelineChip = (
+  /* The view is built from the stages as READ: still loading, the click waits for
+   * them; a failed read draws a retry in the chip's place (MS16), never a view
+   * that would show the closed stages it promises to leave out. */
+  const waiting = useRef(false);
+  const loadView = async () => {
+    if (waiting.current) return;
+    waiting.current = true;
+    try {
+      const stages = stagesQ.data ?? (await stagesQ.refetch()).data;
+      if (stages) onLoadPipelineView(stages);
+    } finally {
+      waiting.current = false;
+    }
+  };
+  const pipelineChip = !pipelineOn && readFailed(stagesQ) ? (
+    <ReadFailedMark what="Fáze pipeline" variant="header" onRetry={() => void stagesQ.refetch()} />
+  ) : (
     <button
       type="button"
       onClick={() =>
         pipelineOn
           ? // Off clears the in side the chip shows; an excluded stage stays.
             onFiltersChange({ ...filters, pipeline: normalizeScope({ set: null, in: [], out: scope?.out ?? [] }) })
-          : onLoadPipelineView()
+          : void loadView()
       }
       aria-pressed={pipelineOn}
       title={
         pipelineOn
           ? 'Zobrazují se jen nemovitosti v pipeline — kliknutím zrušíte'
-          : 'Zobrazit celou pipeline (zruší ostatní filtry; Zpět je vrátí)'
+          : 'Zobrazit pipeline bez uzavřených fází (zruší ostatní filtry; Zpět je vrátí)'
       }
       className={[
         chipBase,
@@ -212,7 +235,7 @@ export default function FilterPresetBar({
         onDelete: (g) => removeGroup.mutateAsync(g.id),
       }}
       /* A new preset takes the map area unless unticked (operator 2026-10-22);
-       * an update keeps the preset's own choice. */
+       * Save changes keeps the preset's own choice, with no dialog (2026-10-27). */
       checkbox={
         filters.bounds != null
           ? {

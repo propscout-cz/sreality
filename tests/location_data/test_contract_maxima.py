@@ -399,8 +399,7 @@ def test_maximas_archived_coordinate_rule_did_not_move():
     names ONE entry; a second coordinate-typed entry on this portal is refused
     'unrecognised_archived_coordinate_locator', and that is the point."""
     rule = claims_intake.ARCHIVED_COORDINATE_RULES["maxima"]
-    assert (rule.entry_id, rule.licence_class, rule.geocoded_licence_class) == (
-        "mx.det.map_features", "portal", None)
+    assert (rule.entry_id, rule.licence_class) == ("mx.det.map_features", "portal")
 
 
 def test_the_zoom_rail_is_executable_contract_data():

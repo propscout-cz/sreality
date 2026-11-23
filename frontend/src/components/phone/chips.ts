@@ -1,7 +1,11 @@
 /* The phone's chip language (#1762): a hairline pill in a row that scrolls
  * sideways, pressed = ink on inset, never colour (colour on these screens
- * means the stage). Shared by the feed's preset/portal rows and the brokers'
- * filter rows so the two read as one control. */
+ * means the stage). Shared by the feed's and Makléři's Filtry chips and the
+ * feed's preset/portal rows so they read as one control. A pick-one (Makléři's
+ * Řadit and horizon, the account sheet's Vzhled) is not a
+ * chip row but the one joined bar in its phone tone (`SegmentedBar
+ * tone="phone"`, system.md § Option groups), the same ink-on-inset rule; the
+ * feed's scope row stays chips by ruling (each chip loads a saved view). */
 
 export const CHIP =
   'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[var(--radius-sm)] border transition-colors';

@@ -69,7 +69,11 @@ describe('<PropertyPhotos>', () => {
     show();
     await waitFor(() => expect(tiles()).toHaveLength(2));
     expect(tiles().map((t) => t.getAttribute('aria-label'))).toEqual(['Otevřít b.jpg', 'Otevřít a.jpg']);
-    expect(screen.getByText('(2)')).toBeInTheDocument();
+    /* A section card: the title is the region's name, the count a bare number beside it (C6). */
+    const card = screen.getByRole('region', { name: 'Moje fotky' });
+    expect(within(card).getByRole('heading', { level: 2 })).toHaveTextContent(/^Moje fotky$/);
+    expect(within(card).getByText('2')).toBeInTheDocument();
+    expect(screen.queryByText('(2)')).toBeNull();
     await waitFor(() => expect(fetchAttachmentBlob).toHaveBeenCalledTimes(2));
     expect(fetchAttachmentBlob).toHaveBeenCalledWith(42, 4, { w: 1080, actAs: null });
     expect(fetchAttachmentBlob).toHaveBeenCalledWith(42, 1, { w: 1080, actAs: null });
@@ -96,10 +100,24 @@ describe('<PropertyPhotos>', () => {
   it('says so quietly when there is none, with the two buttons and no Vybrat', async () => {
     vi.mocked(listAttachments).mockResolvedValue({ data: [] });
     show();
-    expect(await screen.findByText('Zatím žádné vlastní fotky')).toBeInTheDocument();
+    expect(await screen.findByText('Zatím žádné vlastní fotky.')).toBeInTheDocument();
     expect(screen.getByLabelText('Vyfotit')).toBeInTheDocument();
     expect(screen.getByLabelText('Z knihovny')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Vybrat' })).toBeNull();
+  });
+
+  /* C10 (section cards, operator ruling 2026-10-28): the card stays, count 0, one muted line; the
+     desktop's Nahrát and its drop line sit in the title bar (C6), as the picture draws them. */
+  it('keeps its card when there is none on the desktop: count 0, one line, Nahrát in the title bar', async () => {
+    vi.mocked(listAttachments).mockResolvedValue({ data: [] });
+    show({ camera: false });
+    const card = await screen.findByRole('region', { name: 'Moje fotky' });
+    expect(await within(card).findByText('Zatím žádné vlastní fotky.')).toBeInTheDocument();
+    expect(within(card).getByText('0')).toBeInTheDocument();
+    const bar = within(card).getByRole('heading', { level: 2 }).parentElement as HTMLElement;
+    expect(within(bar).getByLabelText('Nahrát')).toHaveAttribute('type', 'file');
+    expect(within(bar).getByText('nebo je sem přetáhněte')).toBeInTheDocument();
+    expect(card.querySelector('.border-dashed')).toBeNull();
   });
 
   it('says a failed read out loud with a retry, never an empty roll', async () => {
@@ -108,7 +126,7 @@ describe('<PropertyPhotos>', () => {
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('se nepodařilo načíst');
     expect(within(alert).getByRole('button', { name: 'Zkusit znovu' })).toBeInTheDocument();
-    expect(screen.queryByText('Zatím žádné vlastní fotky')).toBeNull();
+    expect(screen.queryByText('Zatím žádné vlastní fotky.')).toBeNull();
   });
 
   it('uploads one by one with the counter, a capture under a dated name, then re-reads', async () => {

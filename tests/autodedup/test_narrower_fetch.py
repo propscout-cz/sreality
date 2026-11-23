@@ -38,7 +38,6 @@ from autodedup.incremental_lane import SqlFacts, SqlStore
 from autodedup.incremental_sql import RT_PAIR_UPSERT_SQL
 from autodedup.incremental_store import CohortFacts, MemoryStore, Schedule
 from autodedup.model import hand_initialised
-from autodedup.score_lane import families_of_bitmask
 from autodedup.settings import Settings
 from tests.autodedup import lane_world
 from tests.autodedup.fake_pg import LEDGER_KEY, FakePg, _Cursor

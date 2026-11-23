@@ -6,15 +6,18 @@
  * collapsed (tests never render a live map). */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
 import BrowseExperience, { type BrowseFeatures } from './BrowseExperience';
 import { NewPropertyProvider } from './NewPropertyProvider';
 import { useMemoryBrowseState } from '@/lib/browseState';
+import { familyTargets } from '@/lib/curationSync';
+import { revalidate } from '@/lib/revalidate';
 import { DEFAULT_FILTERS, type ListingFilters } from '@/lib/filters';
 import * as api from '@/lib/api';
+import * as auth from '@/lib/auth';
 import { fmtShortDate } from '@/lib/format';
 import * as queries from '@/lib/queries';
 import { DEFAULT_SORT, type CardRow, type SortSpec } from '@/lib/queries';
@@ -48,7 +51,14 @@ vi.mock('@/components/stats/StatsDashboard', () => ({
     </div>
   ),
 }));
-/* Only the "Nová nemovitost" provider asks who is signed in (admins only, v1). */
+vi.mock('@/components/brokers/BrokerBoard', () => ({
+  default: ({ filters, board }: { filters: ListingFilters; board: { horizonDays: number } }) => (
+    <div data-testid="broker-board" data-horizon={board.horizonDays}>
+      {filters.portals.join(',')}
+    </div>
+  ),
+}));
+/* Who is signed in: the "Nová nemovitost" provider (admins only, v1) and the Makléři tab's agenda gate. */
 vi.mock('@/lib/auth', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/auth')>()),
   useAuth: vi.fn(() => ({ isAdmin: true })),
@@ -122,13 +132,16 @@ beforeEach(() => {
 afterEach(() => localStorage.removeItem(MAP_COLLAPSED));
 
 describe('<BrowseExperience> one portal\'s "Newest first"', () => {
+  /* The header chip names the portal; the card keeps the day of its newest ad
+     there and names no portal (P01's note, 2026-10-27). */
   it('names the order in the header and dates each card on that portal', async () => {
     renderBrowse(['idnes']);
     const chip = await screen.findByText('newest on iDNES Reality');
     expect(chip.getAttribute('title')).toMatch(
       /^Newest first follows iDNES Reality: each property is placed by when its newest iDNES Reality ad was first seen/,
     );
-    expect(await lifespan()).toContain(`·iDNESod${fmtShortDate(IDNES_DAY)}`);
+    expect(await lifespan()).toContain(`·od${fmtShortDate(IDNES_DAY)}`);
+    expect(await lifespan()).not.toContain('iDNES');
   });
 
   it('names "Oldest first" the same way', async () => {
@@ -138,8 +151,120 @@ describe('<BrowseExperience> one portal\'s "Newest first"', () => {
 
   it('keeps the property\'s own order and dates with two portals', async () => {
     renderBrowse(['idnes', 'sreality']);
-    expect(await lifespan()).not.toContain('iDNES');
+    expect(await lifespan()).not.toContain(fmtShortDate(IDNES_DAY));
     expect(screen.queryByText(/^(newest|oldest) on /)).toBeNull();
+  });
+});
+
+/* Ruling Q3(c) with the pointer hold (2026-11-01, docs/design/curation-sync.md
+ * Decision 7b): a dismissal on another device moves the count at once and the
+ * cards once the pointer leaves them (lib/useListHold.test.tsx has every case). */
+describe('<BrowseExperience> a change made elsewhere', () => {
+  afterEach(() => vi.mocked(queries.fetchBrowseCount).mockResolvedValue(1));
+
+  it('re-reads the count at once, and the cards only once the pointer leaves them', async () => {
+    const OTHER = { ...ROW, property_id: 43, listing_id: 112, sreality_id: 901, display_label: 'Lipová 3, Praha' };
+    vi.mocked(queries.fetchListingsForCards).mockResolvedValue({ rows: [ROW, OTHER], nextCursor: null });
+    vi.mocked(queries.fetchBrowseCount).mockResolvedValue(2);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>
+          <Host filters={DEFAULT_FILTERS} sort={DEFAULT_SORT} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const card = await screen.findByText('Sadová 12, Praha');
+    await waitFor(() => expect(screen.getByText('2 of 2')).toBeInTheDocument());
+    fireEvent.pointerOver(card);
+    const cards = vi.mocked(queries.fetchListingsForCards).mock.calls.length;
+
+    vi.mocked(queries.fetchListingsForCards).mockResolvedValue({ rows: [OTHER], nextCursor: null });
+    vi.mocked(queries.fetchBrowseCount).mockResolvedValue(1);
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'dismissals', null));
+    });
+    await waitFor(() => expect(screen.getByText('2 of 1')).toBeInTheDocument());
+    expect(queries.fetchListingsForCards).toHaveBeenCalledTimes(cards);
+    expect(screen.getByText('Sadová 12, Praha')).toBeInTheDocument();
+
+    fireEvent.pointerLeave(card);
+    await waitFor(() => expect(screen.queryByText('Sadová 12, Praha')).toBeNull());
+    expect(screen.getByText('1 of 1')).toBeInTheDocument();
+  });
+});
+
+/* Ruling P09 (2026-10-27): the header keeps the count and what is counted; every
+ * filter beyond the defaults is a removable pill under it, × resetting that one. */
+describe('<BrowseExperience> the header', () => {
+  const headline = () =>
+    screen.getByText((_, el) => el?.tagName === 'P' && /apartments for sale$/.test(el.textContent ?? ''));
+  const pills = () => screen.queryByRole('list', { name: 'Applied filters' });
+  afterEach(() => vi.mocked(queries.fetchBrowseCount).mockResolvedValue(1));
+
+  it('says the count and what is counted, and the filters as pills under it', async () => {
+    vi.mocked(queries.fetchBrowseCount).mockResolvedValue(12_345);
+    renderBrowse(['idnes']);
+    const count = (12_345).toLocaleString('cs-CZ');
+    await waitFor(() => expect(headline().textContent).toBe(`${count} apartments for sale`));
+    expect(within(headline()).getByText(/^12\s345$/).className).toContain('tabular-nums');
+    expect(screen.queryByText(/^Showing/)).toBeNull();
+
+    fireEvent.click(within(pills()!).getByRole('button', { name: 'Source portal: on iDNES' }));
+    await waitFor(() => expect(pills()).toBeNull());
+    expect(queries.fetchBrowseCount).toHaveBeenLastCalledWith(
+      expect.objectContaining({ portals: [] }),
+      expect.anything(),
+    );
+  });
+
+  /* The map sets its area on the first pan: the line the pill lands on is kept
+   * on the defaults too, so the tabs, cards and map do not jump down under it. */
+  it('keeps the pills\' line when no filter is set', async () => {
+    renderBrowse([]);
+    await waitFor(() => expect(headline().textContent).toBe('1 apartments for sale'));
+    expect(pills()).toBeNull();
+    expect(screen.getByTestId('applied-filters-row').className).toMatch(/min-h-/);
+  });
+});
+
+/* Ruling P10 (2026-10-27): "Sloučit…" beside Cover and Sort above the cards opens
+ * the merge bar in its row under the tabs; Cancel brings the button back. */
+describe('<BrowseExperience> merge mode', () => {
+  function MergeHost() {
+    const view = useMemoryBrowseState({ filters: DEFAULT_FILTERS, sort: DEFAULT_SORT, tab: 'map' });
+    return (
+      <BrowseExperience
+        view={view}
+        layout="modal"
+        features={{ presetBar: false, watchdog: false, mergeMode: true, title: false, sidebar: false }}
+      />
+    );
+  }
+
+  it('is entered from the cards header, not the tab row', async () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <MergeHost />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const enter = await screen.findByRole('button', { name: 'Sloučit…' });
+    const sort = screen.getByRole('combobox', { name: /Sort/ });
+    expect(enter.parentElement).toBe(sort.closest('label')!.parentElement);
+    expect(screen.queryByRole('button', { name: 'Merge mode' })).toBeNull();
+
+    fireEvent.click(enter);
+    const letters = screen.getByRole('group', { name: 'Písmeno, které zapíše kliknutí' });
+    expect(letters).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sloučit…' })).toBeNull();
+    // Its own row under the tab strip's rule, never on the strip.
+    expect(screen.getByRole('tablist', { name: 'Zobrazení výsledků' }).parentElement).not.toContainElement(letters);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: 'Sloučit…' })).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Písmeno, které zapíše kliknutí' })).toBeNull();
   });
 });
 
@@ -160,7 +285,8 @@ describe('<BrowseExperience> the cards\' ad counts', () => {
 
 /* The Cover dropdown beside Sort (#1726) as the page wires it: the pick is this
  * browser's own (`sreality.browse.cardCoverTag`) and opens each card on that photo,
- * with the same card's portal badge, ad count and portal date still on it. */
+ * with the same card's ad count and newest-ad date still on it (the card names no
+ * portal: P01's note, 2026-10-27). */
 describe('<BrowseExperience> the cards\' cover photo', () => {
   const COVER_KEY = 'sreality.browse.cardCoverTag';
   const tagged = (id: number, clip_fine_tag: string) =>
@@ -187,11 +313,11 @@ describe('<BrowseExperience> the cards\' cover photo', () => {
 
     expect(await screen.findByText(counterIs('3 / 4'))).toBeInTheDocument();
     expect(localStorage.getItem(COVER_KEY)).toBe('kitchen');
-    const card = screen.getByTitle(/^Portály/).closest('li')!;
+    const card = screen.getByTitle(/^Aktivní/).closest('li')!;
     expect(within(card).getByText(counterIs('3 / 4'))).toBeInTheDocument();
-    expect(within(card).getByTitle(/^Portály/).textContent).toBe('iDNES Reality · Sreality');
+    expect(within(card).queryByTitle(/^Portály/)).toBeNull();
     expect(within(card).getByTitle(/^Nemovitost spojuje 2 inzeráty/)).toHaveTextContent(/^2\s*inzeráty$/);
-    expect(within(card).getByTitle(/^Aktivní/).textContent).toContain(`·iDNESod${fmtShortDate(IDNES_DAY)}`);
+    expect(within(card).getByTitle(/^Aktivní/).textContent).toContain(`·od${fmtShortDate(IDNES_DAY)}`);
   });
 
   it('opens on the stored pick when the page loads', async () => {
@@ -258,6 +384,129 @@ describe('<BrowseExperience> Stats tab', () => {
     /* The modal layout (no preset bar) still hands over the view and the lens: one Stats tab everywhere. */
     expect(board).toHaveAttribute('data-view', 'yes');
     expect(board).toHaveAttribute('data-market', 'filter');
+  });
+
+  /* Ruling S07 (2026-10-27): these two labels only; every other English word stays. */
+  it('names its tabs Nemovitosti and Statistiky', async () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <StatsHost filters={DEFAULT_FILTERS} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByRole('tab', { name: 'Statistiky' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /^Nemovitosti/ })).toHaveAttribute('aria-selected', 'false');
+    expect(screen.queryByRole('tab', { name: /^(Stats|Properties)/ })).toBeNull();
+  });
+});
+
+/* The Makléři tab: the board over Browse's own filters, gated as the /brokers
+ * nav entry is (the plan's `brokers` agenda), hidden with Statistiky by a scoped surface. */
+describe('<BrowseExperience> Makléři tab', () => {
+  function BoardHost({ features }: { features?: BrowseFeatures }) {
+    const view = useMemoryBrowseState({ filters: { ...DEFAULT_FILTERS, portals: ['idnes'] }, sort: DEFAULT_SORT, tab: 'brokers' });
+    return (
+      <BrowseExperience
+        view={view}
+        layout="modal"
+        features={{ presetBar: false, watchdog: false, mergeMode: false, title: false, sidebar: false, ...features }}
+      />
+    );
+  }
+  const renderAs = (who: { isAdmin: boolean; agendas?: Record<string, boolean> }, features?: BrowseFeatures) => {
+    vi.mocked(auth.useAuth).mockReturnValue(who as unknown as ReturnType<typeof auth.useAuth>);
+    return render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <BoardHost features={features} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  };
+  const tabNames = () => screen.getAllByRole('tab').map((t) => t.textContent?.replace(/\d/g, '').trim());
+  afterEach(() => vi.mocked(auth.useAuth).mockReturnValue({ isAdmin: true } as ReturnType<typeof auth.useAuth>));
+
+  it('names the tab Makléři after Statistiky for a plan with the agenda and renders the board of the current filters', async () => {
+    renderAs({ isAdmin: false, agendas: { brokers: true } });
+    expect(tabNames()).toEqual(['Nemovitosti', 'Statistiky', 'Makléři']);
+    const board = await screen.findByTestId('broker-board');
+    expect(board).toHaveTextContent('idnes');
+    expect(board).toHaveAttribute('data-horizon', '30');
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', screen.getByRole('tab', { name: 'Makléři' }).id);
+  });
+
+  it.each([
+    ['a plan without the agenda, a ?tab=brokers link opening the Properties tab', { isAdmin: false, agendas: { brokers: false } }, undefined, ['Nemovitosti', 'Statistiky']],
+    ['a surface that turns the aggregate tabs off', { isAdmin: true }, { stats: false }, ['Nemovitosti']],
+  ])('is not shown to %s', (_, who, features, tabs) => {
+    renderAs(who, features);
+    expect(tabNames()).toEqual(tabs);
+    expect(screen.getByRole('tab', { name: /^Nemovitosti/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByTestId('broker-board')).toBeNull();
+  });
+});
+
+/* The tab-strip ruling (2026-10-27, option A): one strip whose rule runs under the
+ * whole row, the toggles at its right end above the rule, one count pill, arrow keys. */
+describe('<BrowseExperience> tab strip', () => {
+  it('puts Map | Cards and the image size on the tab strip, above its rule', async () => {
+    renderBrowse([]);
+    const list = await screen.findByRole('tablist', { name: 'Zobrazení výsledků' });
+    const strip = list.parentElement!;
+    expect(strip.className.split(' ')).toEqual(expect.arrayContaining(['border-b', 'border-[var(--color-rule)]']));
+    for (const name of ['Properties layout', 'Card image size']) {
+      const group = screen.getByRole('group', { name });
+      expect(strip).toContainElement(group);
+      expect(list).not.toContainElement(group);
+    }
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Statistiky' }));
+    expect(screen.queryByRole('group', { name: 'Properties layout' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Card image size' })).toBeNull();
+  });
+
+  /* Map | Cards is the one joined bar (ruling 2026-10-27), drawn as its
+   * neighbour the image size is: hugging, at the reading size. */
+  it('draws Map | Cards as the hugging joined bar beside the image size', async () => {
+    renderBrowse([]);
+    const layout = await screen.findByRole('group', { name: 'Properties layout' });
+    const size = screen.getByRole('group', { name: 'Card image size' });
+    expect(layout.className).toBe(size.className);
+    expect((layout.firstElementChild as HTMLElement).className).toBe((size.firstElementChild as HTMLElement).className);
+    const map = within(layout).getByRole('button', { name: 'Map' });
+    const cards = within(layout).getByRole('button', { name: 'Cards' });
+    expect(map.parentElement).toBe(layout.firstElementChild);
+    expect(map).toHaveAttribute('title', 'Show the map beside the cards');
+    expect(map.querySelector('svg')).not.toBeNull();
+    expect(map).toHaveClass('shrink-0', 'px-2', 'py-1', 'text-xs');
+    /* The suite starts with the map folded away (no map engine in jsdom). */
+    expect(map).toHaveAttribute('aria-pressed', 'false');
+    expect(cards).toHaveAttribute('aria-pressed', 'true');
+    expect(cards).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+    expect(cards).toHaveAttribute('title', 'Hide the map — full-width cards');
+  });
+
+  it('shows the cohort total in the tab’s count pill', async () => {
+    vi.mocked(queries.fetchBrowseCount).mockResolvedValueOnce(12_345);
+    renderBrowse([]);
+    const tab = await screen.findByRole('tab', { name: /^Nemovitosti/ });
+    const pill = await within(tab).findByText(/^12\s345$/);
+    expect(pill.className.split(' ')).toEqual(expect.arrayContaining(['rounded-full', 'bg-[var(--color-inset)]']));
+  });
+
+  it('switches to Statistiky with ArrowRight, focus following, each tab naming its panel', async () => {
+    renderBrowse([]);
+    const cards = await screen.findByRole('tab', { name: /^Nemovitosti/ });
+    expect(document.getElementById(cards.getAttribute('aria-controls')!)).toHaveAttribute('role', 'tabpanel');
+
+    fireEvent.keyDown(cards, { key: 'ArrowRight' });
+    const stats = screen.getByRole('tab', { name: 'Statistiky' });
+    expect(stats).toHaveAttribute('aria-selected', 'true');
+    expect(document.activeElement).toBe(stats);
+    const panel = document.getElementById(stats.getAttribute('aria-controls')!);
+    expect(panel).toHaveAttribute('role', 'tabpanel');
+    expect(panel).toHaveAttribute('aria-labelledby', stats.id);
   });
 });
 

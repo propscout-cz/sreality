@@ -1,7 +1,7 @@
 """A9 — the real-time lane's reconcile: the live stream's groups onto production, in the pass.
 
 The worker's `autodedup` lane decides, groups AND merges in one pass under one lease
-(`autodedup.rt_lease`): after the pass's transaction commits, `run` takes the groups it
+(`rt_lease`): after the pass's transaction commits, `run` takes the groups it
 re-clustered plus a slice swept past the `rt_reconcile` cursor and hands them to THE apply
 path — `apply.plan_groups` (every refusal E903 names: operator negatives, categories, the scope,
 carry-along, spans-groups, refused-before) and `apply.apply_group`
@@ -436,6 +436,7 @@ def run(
     engine_since: str | None = None,
     waiting: Sequence[Sequence[int]] = (),
     building: bool = False,
+    unread_blocks: set[str] | None = None,
 ) -> dict[str, Any]:
     """Reconcile the pass's groups onto production. Returns the readout the pass summary and
     the worker's heartbeat carry; writes only through `apply.apply_group` and the ledger.
@@ -446,7 +447,10 @@ def run(
 
     `fence` (E941) is the lane's lease check, run last inside every group's transaction: a
     lease that ended under the reconcile — the worker's shutdown, a `release_lease=` dispatch —
-    rolls that group back and stops the run (`stopped` = `lease_lost`)."""
+    rolls that group back and stops the run (`stopped` = `lease_lost`).
+
+    `unread_blocks` (E987) is the pass's own answer to which blocks still hold an unread advert,
+    from its one scan of the snapshot; None reads the snapshot here."""
     scope, closed = read_scope(conn)
     if scope is None:
         # E960: no merge can follow a re-claim, so the queue goes too (no pass re-claims it).
@@ -490,7 +494,7 @@ def run(
     # — sits in a block the lane has not fully read, or is carried along and was never
     # fingerprinted (R2); during a build, in a block whose walk is complete, only while that
     # advert itself has no fingerprint (E977).
-    reads = A.rt_block_reads(conn, generation, blocks)
+    reads = A.rt_block_reads(conn, generation, blocks, unfingerprinted=unread_blocks)
     carried = _carried(conn, members_by)
     adverts = {m.listing_id: m for ms in members_by.values() for m in ms}
     riders = {c.listing_id for cs in carried.values() for c in cs} - set(adverts)

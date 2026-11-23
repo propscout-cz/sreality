@@ -1,9 +1,9 @@
 import { Fragment, Suspense, useRef, type ReactNode } from 'react';
 import { lazyChunk } from '@/lib/lazyChunk';
 import {
-  type CenterRadius,
+  CIRCLE_RADIUS,
   type ListingFilters,
-  type LocationMode,
+  type MapCircle,
   DEFAULT_FILTERS,
   isDefault,
   listingFiltersToRegistryView,
@@ -17,15 +17,15 @@ import {
   type FilterRow,
 } from '@/lib/filterLayout';
 import { FILTER_REGISTRY, type FilterDef } from '@/lib/filterRegistry.generated';
-import type { MapySuggestion } from '@/lib/maps';
-import { CollapsibleGroup, PickButton, SegmentedBar, Section } from '@/components/controls';
+import type { PlaceRow } from '@/lib/places';
+import { CollapsibleGroup, DecimalField, SegmentedBar, Section } from '@/components/controls';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { pgRead } from '@/lib/pgRead';
 import { fetchNoPriceCount } from '@/lib/queries';
 import { browseKeys } from '@/lib/browseKeys';
 import { useHiddenDismissed } from '@/lib/useHiddenDismissed';
-import { FilterForm, type CustomFilterWidget } from '@/components/FilterForm';
+import { BOOLEAN_OFF, FilterForm, RegistryBar, type CustomFilterWidget } from '@/components/FilterForm';
 import { PortalFilterControl } from '@/components/filter-controls/PortalFilterControl';
 import { PPM2_UNIT, ppm2BasisOfCohort } from '@/lib/measure';
 import CityIndexRulesPicker from '@/components/CityIndexRulesPicker';
@@ -33,26 +33,20 @@ import MarketGrowthFilter from '@/components/MarketGrowthFilter';
 import { LocationTypeahead, MultiselectChips } from '@/components/filter-controls';
 import { AccountCuratedSetFilter } from '@/components/filter-controls/CuratedSetFilter';
 import type { CuratedSet, SetScope } from '@/lib/setScope';
-/* Lazy: this is the only control here that draws a map, it renders only in
- * `center_radius` mode, and it carries maplibre-gl (~800 kB). Loading it with the
- * sidebar made every Browse first-visit pay for a map engine most sessions never open. */
 /* Lazy: it only mounts once the folded Advanced band opens. */
 const BrokerFilterControl = lazyChunk(() => import('@/components/filter-controls/BrokerFilterControl'));
-const LocationControl = lazyChunk(() =>
-  import('@/components/filter-controls/LocationControl').then((m) => ({
-    default: m.LocationControl,
-  })),
-);
 
 interface SidebarProps {
   filters: ListingFilters;
   onChange: (next: ListingFilters) => void;
+  /* Reset: the default filters, and Browse deselects its preset in the same write. */
+  onReset: () => void;
   /* Browse passes this so picking a place in the District typeahead
    * also re-centres the main map. The widget still updates the chip
    * filter via the normal onChange path; this is a side channel for
    * the map navigation. Optional so other consumers (Watchdog edit
    * form, etc.) can mount the sidebar without it. */
-  onLocationPick?: (s: MapySuggestion) => void;
+  onLocationPick?: (row: PlaceRow) => void;
   /* Operator-resizable width in px (Browse persists it). Optional so
    * other consumers keep the default 320px sidebar. */
   width?: number;
@@ -64,6 +58,9 @@ interface SidebarProps {
    * caller swaps in <FilterSidebarRail> while folded. Optional so the other
    * consumers (Watchdog edit form, etc.) get a sidebar that cannot fold. */
   onCollapse?: () => void;
+  /* The circle a switch to centre + radius places: in the middle of the main map's
+   * view, which Browse knows. */
+  placeCircle: () => MapCircle;
 }
 
 const bandActive = (
@@ -87,12 +84,14 @@ const bandActive = (
     return value !== def;
   });
 
-/* Price-section "include listings without a price" toggle. No-price listings
- * (price_czk IS NULL — RK / dohodou placeholders the scraper normalises to NULL)
- * are silently dropped by SQL the moment a min/max price bound is set; this
- * re-includes them. Disabled (greyed) until a bound is set, because with no
- * bound they're already shown — the toggle would be a no-op. The count of
- * affected listings is fetched lazily and degrades to nothing on error. */
+/* Price-section "include listings without a price" switch, the two-segment bar
+ * (operator ruling 2026-10-27). No-price listings (price_czk IS NULL — RK /
+ * dohodou placeholders the scraper normalises to NULL) are silently dropped by
+ * SQL the moment a min/max price bound is set; this re-includes them. Disabled,
+ * nothing lit, until a bound is set, because with no bound they're already
+ * shown — the choice would be a no-op. The on side is short: the caption over it
+ * says the rest, and a half-width segment cannot. The count of affected
+ * listings is fetched lazily and degrades to nothing on error. */
 export function IncludeNoPriceToggle({
   filters,
   onChange,
@@ -121,21 +120,19 @@ export function IncludeNoPriceToggle({
   const fmt = (n: number) => n.toLocaleString('cs-CZ');
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-center justify-between gap-2">
-        <span
-          className={`text-sm ${hasBound ? 'text-[var(--color-ink-2)]' : 'text-[var(--color-ink-3)]'}`}
-        >
-          Include listings without a price
-        </span>
-        <PickButton
-          on={hasBound && on}
-          disabled={!hasBound}
-          ariaLabel="Include listings without a price"
-          onClick={() => onChange({ ...filters, includeNoPrice: !on })}
-        >
-          {hasBound && on ? 'on' : 'off'}
-        </PickButton>
-      </div>
+      <span
+        className={`text-sm ${hasBound ? 'text-[var(--color-ink-2)]' : 'text-[var(--color-ink-3)]'}`}
+      >
+        Include listings without a price
+      </span>
+      <SegmentedBar
+        fill
+        label="Include listings without a price"
+        options={NO_PRICE_OPTS}
+        value={hasBound ? on : null}
+        disabled={!hasBound}
+        onChange={(v) => onChange({ ...filters, includeNoPrice: v === true })}
+      />
       <p className="text-[11px] leading-snug text-[var(--color-ink-3)]">
         {!hasBound
           ? 'Shown by default — set a price range to choose whether to keep them.'
@@ -183,6 +180,11 @@ export function ShowDismissedToggle({
     </div>
   );
 }
+
+const NO_PRICE_OPTS = [
+  { value: false, label: BOOLEAN_OFF.include_no_price },
+  { value: true, label: 'Include unpriced' },
+] as const;
 
 const DISMISSED_OPTS = [
   { value: true, label: 'Show dismissed' },
@@ -284,14 +286,16 @@ function ChevronGlyph({ direction }: { direction: 'left' | 'right' }) {
   );
 }
 
-export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, layout = 'page', onCollapse }: SidebarProps) {
+export function FilterSidebar({
+  filters, onChange, onReset, onLocationPick, width = 320, layout = 'page', onCollapse, placeCircle,
+}: SidebarProps) {
   // <FilterForm> reads snake_case registry ids; Browse keeps the
   // camelCase `ListingFilters` shape its queries / URL serialisation
   // already use. The adapter in lib/filters bridges both directions
   // (tri-state amenities pivot bool|null ↔ 'any'|'yes'|'no' inside it).
   const registryView = listingFiltersToRegistryView(filters);
-  // A location pick lands only after `/maps/resolve` answers, so it merges into
-  // the LATEST filters, never the ones the click closed over.
+  // A location pick merges into the LATEST filters, never the ones the click
+  // closed over.
   const latestFilters = useRef(filters);
   latestFilters.current = filters;
   const units = sidebarUnits(filters);
@@ -355,12 +359,11 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
         );
       case 'location_mode':
         return (
-          <LocationModeSection
+          <MapAreaSection
             label={b.label}
-            mode={filters.locationMode}
-            centerRadius={filters.centerRadius}
-            onModeChange={(mode) => onChange({ ...filters, locationMode: mode })}
-            onCenterRadiusChange={(cr) => onChange({ ...filters, centerRadius: cr })}
+            circle={filters.circle}
+            onChange={(circle) => onChange({ ...filters, bounds: null, circle })}
+            placeCircle={placeCircle}
           />
         );
     }
@@ -398,14 +401,14 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
     >
       {/* Pinned: Reset and the fold arrow stay in reach however far the filters scroll. */}
       <div className="sticky top-0 z-10 bg-[var(--color-paper)] px-5 py-4 flex items-center justify-between border-b border-[var(--color-rule-soft)]">
-        <h2 className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
+        <h2 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">
           Filters
         </h2>
         <div className="flex items-center gap-3">
           {!isDefault(filters) && (
             <button
               type="button"
-              onClick={() => onChange(DEFAULT_FILTERS)}
+              onClick={onReset}
               className="text-[0.7rem] tracking-wide uppercase text-[var(--color-ink-3)] hover:text-[var(--color-copper)] transition-colors"
             >
               Reset
@@ -465,9 +468,8 @@ export function FilterSidebar({ filters, onChange, onLocationPick, width = 320, 
 /* Phase QUAL — population-data status hint                                   */
 /*                                                                            */
 /* The `min_city_population` / `max_city_population` filters compare against  */
-/* the latest `city_population.population` reading. When `city_population` is */
-/* empty (the seed loaded the indexes but the population CSV was missing /    */
-/* the Wikidata fetcher hasn't run yet), every city's `c.population` resolves */
+/* the latest `obec_population` reading (migration 725). When it is empty     */
+/* (the population load has not run), every city's `c.population` resolves   */
 /* to NULL, so a `min ≥ 1` predicate excludes everything — counter-intuitive  */
 /* enough that the operator filed it as a bug. This banner detects the empty- */
 /* population state via a one-row count query and tells the operator how to  */
@@ -514,22 +516,18 @@ export function CityPopulationHint() {
         <strong className="text-[var(--color-copper)]">Pop. data nejsou nahraná</strong>
         {' '}({data.withPop}/{data.total} měst). Filtr min/max populace bude
         vždy 0 výsledků. Spusť workflow{' '}
-        <em className="font-mono not-italic">Refresh city populations from Wikidata</em>
-        {' '}a poté{' '}
-        <em className="font-mono not-italic">Seed curated cities</em>.
+        <em className="font-mono not-italic">Jobs: load obec population (manual)</em>.
       </p>
     </div>
   );
 }
 
 /* -------------------------------------------------------------------------- */
-/* Location mode: viewport vs centre+radius                                   */
+/* Map area: the viewport or a circle                                         */
 /*                                                                            */
-/* The pill toggles which spatial predicate drives the cohort. In `viewport`  */
-/* mode (default) the main map's pan/zoom emits the bbox; in `center_radius`  */
-/* mode an in-sidebar small map widget lets the operator drop a dot and       */
-/* dial a radius — the cohort filters to that circle (approximated as a       */
-/* bbox client-side; the main map still draws the precise circle overlay).    */
+/* The joined bar picks the map area. By default the main map's pan and zoom  */
+/* emit the box; a circle is placed in the middle of the main map, dragged    */
+/* there, and sized here. Either is tested in the database (`in_map_area`).   */
 /* -------------------------------------------------------------------------- */
 
 const rowClass = (r: FilterRow): string => {
@@ -544,11 +542,7 @@ const rowClass = (r: FilterRow): string => {
 
 const REGISTRY_DEF = new Map(FILTER_REGISTRY.filters.map((d) => [d.id, d]));
 
-/* An on/off filter in a line is a two-segment bar: its own label lights "on";
- * this names "off". The tip says what "on" hides when the label cannot. */
-const LINE_OFF: Readonly<Record<string, string>> = {
-  tom_observed_only: 'All ads',
-};
+/* The tip says what an on/off's "on" hides when its label cannot. */
 const LINE_TIPS: Readonly<Record<string, string>> = {
   tom_observed_only: 'Seen at birth: only ads we saw appear. Hides ads that were already live when we first scraped them.',
 };
@@ -569,27 +563,15 @@ function SegmentedLine({
   renderCustom: (b: CustomBlock) => ReactNode;
 }) {
   /* The first bar is named by the line's caption; the others name themselves. */
-  const formBar = (def: FilterDef, label: string, named: boolean): ReactNode =>
-    def.ui_control === 'boolean' ? (
-      <SegmentedBar
-        fill
-        label={named ? label : undefined}
-        options={[
-          { value: false, label: LINE_OFF[def.id] ?? 'Off' },
-          { value: true, label },
-        ]}
-        value={state[def.id] === true}
-        onChange={(v) => onChange([{ id: def.id, value: v }])}
-      />
-    ) : (
-      <SegmentedBar
-        fill
-        label={named ? label : undefined}
-        options={(def.enum_values ?? []).map((o) => ({ value: String(o.value), label: o.label_cs }))}
-        value={String(state[def.id] ?? '')}
-        onChange={(v) => onChange([{ id: def.id, value: v }])}
-      />
-    );
+  const formBar = (def: FilterDef, label: string, named: boolean): ReactNode => (
+    <RegistryBar
+      def={def}
+      label={label}
+      named={named}
+      value={state[def.id]}
+      onChange={(v) => onChange([{ id: def.id, value: v }])}
+    />
+  );
   const cells = blocks.flatMap((b, i): Array<{ key: string; label: string; tip?: string; node: ReactNode }> =>
     b.kind === 'form'
       ? b.ids.flatMap((id) => {
@@ -613,64 +595,63 @@ function SegmentedLine({
   );
 }
 
-function LocationModeSection({
+const MAP_AREA_MODES = [
+  { value: 'view', label: 'Map viewport' },
+  { value: 'circle', label: 'Centre + radius' },
+] as const;
+
+/* The map area: the view on screen, or a circle that holds still while the map moves.
+ * A switch to the circle places it in the middle of the main map (operator ruling
+ * 2026-10-30), where its centre is dragged; here, only its radius. */
+function MapAreaSection({
   label,
-  mode,
-  centerRadius,
-  onModeChange,
-  onCenterRadiusChange,
+  circle,
+  onChange,
+  placeCircle,
 }: {
   label: string;
-  mode: LocationMode;
-  centerRadius: CenterRadius | null;
-  onModeChange: (next: LocationMode) => void;
-  onCenterRadiusChange: (next: CenterRadius | null) => void;
+  circle: MapCircle | null;
+  onChange: (next: MapCircle | null) => void;
+  placeCircle: () => MapCircle;
 }) {
+  const setRadius = (radius: number | null) => {
+    if (!circle || radius == null) return;
+    const radius_m = Math.min(CIRCLE_RADIUS.max, Math.max(CIRCLE_RADIUS.min, Math.round(radius)));
+    if (radius_m !== circle.radius_m) onChange({ ...circle, radius_m });
+  };
   return (
     <Section label={label}>
-      <div className="inline-flex items-center gap-0.5 p-0.5 rounded-[var(--radius-sm)] bg-[var(--color-paper-2)] border border-[var(--color-rule)]">
-        {(['viewport', 'center_radius'] as const).map((m) => {
-          const on = mode === m;
-          return (
-            <button
-              key={m}
-              type="button"
-              onClick={() => onModeChange(m)}
-              aria-pressed={on}
-              className={[
-                'px-2.5 py-1 text-[0.7rem] rounded-[var(--radius-xs)] transition-colors',
-                on
-                  ? 'bg-[var(--color-copper)] text-white'
-                  : 'text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)]',
-              ].join(' ')}
-            >
-              {m === 'viewport' ? 'Map viewport' : 'Centre + radius'}
-            </button>
-          );
-        })}
-      </div>
-      {mode === 'center_radius' ? (
-        <div className="mt-3">
-          {/* Reserve the control's own height so switching to centre+radius doesn't
-            * jump the sidebar while the map chunk arrives. */}
-          <Suspense
-            fallback={
-              <div
-                className="h-[13.5rem] rounded-[var(--radius-sm)] bg-[var(--color-inset)]"
-                aria-busy="true"
-              />
-            }
-          >
-            <LocationControl
-              value={centerRadius}
-              onChange={onCenterRadiusChange}
-              hint={
-                'The cohort filters to listings inside the dashed circle. ' +
-                'Click the small map to set the centre or drag the marker. ' +
-                'The full-page map still shows the circle for context.'
-              }
+      <SegmentedBar
+        fill
+        options={MAP_AREA_MODES}
+        value={circle ? 'circle' : 'view'}
+        onChange={(mode) => onChange(mode === 'circle' ? placeCircle() : null)}
+      />
+      {circle ? (
+        <div className="mt-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min={CIRCLE_RADIUS.min}
+              max={CIRCLE_RADIUS.max}
+              step={CIRCLE_RADIUS.step}
+              value={circle.radius_m}
+              onChange={(e) => setRadius(Number(e.target.value))}
+              className="min-w-0 flex-1 accent-[var(--color-copper)]"
+              aria-label="Radius"
             />
-          </Suspense>
+            <DecimalField
+              label="Radius in metres"
+              value={circle.radius_m}
+              onChange={setRadius}
+              integer
+              suffix="m"
+              className="w-24 shrink-0"
+            />
+          </div>
+          <p className="text-[0.7rem] text-[var(--color-ink-4)]">
+            Filtering by the circle on the main map. Drag its centre to move it.
+          </p>
         </div>
       ) : (
         <p className="mt-2 text-[0.7rem] text-[var(--color-ink-4)]">

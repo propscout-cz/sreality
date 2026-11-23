@@ -137,17 +137,6 @@ def test_the_shadow_flag_and_its_queue_reason_go_together():
         assert f"'{kept}'" in check, kept
 
 
-def test_the_fingerprint_function_is_untouched():
-    """Migration 386's 23-argument function still takes every value the readers compute —
-    nine of which are no longer stored. Narrowing it would re-dialect 5 M fingerprints on
-    disk, and a re-dialected fingerprint does not conflict, it inserts."""
-    # The executable body starts at the lock_timeout line (statement autocommit since the
-    # 2026-09-12 deadlock — see the file's own header); everything above it is prose.
-    assert "location_claim_fingerprint" not in _SLIM.replace(
-        "-- ", "").split("set lock_timeout")[1], (
-        "the migration must not touch location_claim_fingerprint")
-
-
 # --------------------------------------------------------------- 2. the runtime corpus
 
 
@@ -175,16 +164,14 @@ def test_no_runtime_sql_names_a_dropped_claim_column():
     """Scoped to the statements that touch `location_claims`, because the dropped names are
     ordinary elsewhere (`snapshot_id` on listing_snapshots, `model` on llm_calls…).
 
-    The two claim WRITES are checked through their INSERT column list only: their input CTE
-    still parses the FULL row dict and still feeds the whole fingerprint tuple, which is
-    exactly what keeps every fingerprint already on disk valid.
+    The claim write is checked through its INSERT column list only.
     """
     dropped = _dropped_columns()
     offenders: list[str] = []
     for item in _corpus():
         if not _names_location_claims(item.sql):
             continue
-        inserts = re.findall(r"INSERT INTO location_claims \(([^)]*)\)", item.sql)
+        inserts = re.findall(r"INSERT INTO location_claims(?: AS \w+)? \(([^)]*)\)", item.sql)
         if inserts:
             for columns in inserts:
                 for column in (c.strip() for c in columns.replace("\n", " ").split(",")):
@@ -200,16 +187,16 @@ def test_no_runtime_sql_names_a_dropped_claim_column():
         + "\n  ".join(sorted(set(offenders))))
 
 
-def test_every_claim_write_inserts_exactly_the_kept_columns():
-    """`id` and `claim_fingerprint` are the two ends of the kept set that behave
-    differently: one is the serial the INSERT never names, the other is computed in SQL.
-    W3's readings write shares the intake's INSERT, and is held to it here."""
-    from location_data import claims_intake, operator_corrections
+def test_the_one_claim_write_inserts_exactly_the_kept_columns():
+    """Location W3: ONE statement writes every claim (the lane's three substrates and the
+    operator), and it names every kept column but the serial `id` and the fingerprint
+    nothing computes any more (migration 700 drops it)."""
+    from location_data import claims_store, operator_corrections
 
-    for label, sql in (("intake", claims_intake._CLAIM_WRITE_SQL),
-                       ("readings", claims_intake._READING_WRITE_SQL),
-                       ("operator", operator_corrections._OPERATOR_CLAIM_SQL)):
-        columns = re.search(r"INSERT INTO location_claims \(([^)]*)\)", sql)
-        assert columns, label
-        written = {c.strip() for c in columns.group(1).replace("\n", " ").split(",")}
-        assert written == KEPT_COLUMNS - {"id"}, (label, sorted(written))
+    columns = re.search(r"INSERT INTO location_claims AS c \(([^)]*)\)",
+                        claims_store._WRITE_CLAIMS_SQL)
+    assert columns
+    written = {c.strip() for c in columns.group(1).replace("\n", " ").split(",")}
+    assert written == KEPT_COLUMNS - {"id", "claim_fingerprint"}, sorted(written)
+    source = Path(operator_corrections.__file__).read_text(encoding="utf-8")
+    assert "INSERT INTO location_claims" not in source.upper().replace("\n", " ")

@@ -28,17 +28,17 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from api.providers import (
     Block,
     Completion,
     CompletionProvider,
+    HostedCode,
     ImageBlock,
     Message,
     ProviderError,
     TextBlock,
-    ToolCall,
     ToolResultBlock,
     ToolSchema,
     ToolUseBlock,
@@ -50,28 +50,6 @@ if TYPE_CHECKING:
     import psycopg
 
 LOG = logging.getLogger(__name__)
-
-
-CalledFor = Literal[
-    "parse_url",
-    "summarize_listing",
-    "compare_listing_images",
-    "agent_estimation",
-    "extract_building_units",
-    "read_floor_plan",
-    "refine_skill",
-    "discover_condition_markers",
-    "score_listing_condition",
-    "enrich_listing_description",
-    "screen_exam_image",
-    "suggest_exam_answer",
-    "review_exam_image",
-    "label_image_bulk",
-    # W2-10, migration 470. Annotation only — the DB CHECK is the enforcement, and this
-    # Literal has drifted from it before; keeping it honest costs nothing.
-    "extract_location_claims",
-    "location_llm_bakeoff",
-]
 
 
 DEFAULT_MODEL = "claude-sonnet-4-5"
@@ -152,9 +130,16 @@ class LLMClient:
         self,
         conn: "psycopg.Connection",
         providers: dict[str, CompletionProvider] | None = None,
+        *,
+        agent_run_id: int | None = None,
     ) -> None:
         self._conn = conn
         self._providers: dict[str, CompletionProvider] = providers or {}
+        self._agent_run_id = agent_run_id
+
+    @property
+    def agent_run_id(self) -> int | None:
+        return self._agent_run_id
 
     def register_providers(
         self, providers: dict[str, CompletionProvider]
@@ -174,7 +159,7 @@ class LLMClient:
     def call(
         self,
         *,
-        called_for: CalledFor,
+        called_for: str,
         messages: list[dict[str, Any]] | list[Message],
         system: str | None = None,
         tools: list[dict[str, Any]] | list[ToolSchema] | None = None,
@@ -183,6 +168,8 @@ class LLMClient:
         estimation_run_id: int | None = None,
         provider: str | None = None,
         tool_choice: str | None = None,
+        timeout_s: float | None = None,
+        hosted_code: HostedCode | None = None,
     ) -> LLMResponse:
         """Single API used by every LLM caller in the codebase.
 
@@ -192,7 +179,12 @@ class LLMClient:
         to neutral types before dispatch. `tool_choice` forces the named
         tool; it is forwarded only when set, so providers (and test
         fakes) that predate the parameter keep working for callers that
-        don't use it.
+        don't use it; `hosted_code` likewise, and only a code agent's loop
+        sets it; `timeout_s` likewise replaces the provider's own request
+        timeout, with no SDK retry under it (the HTTP client's connect and read
+        limits, not a stopwatch). `called_for` must be a value `llm_calls_called_for_check`
+        admits (the latest migration restating it holds the list); the
+        INSERT runs after the provider has billed.
         """
         # A caller that passes only a model (e.g. a dedup lane reading its
         # app_settings value) doesn't know the backend; derive it from the id so
@@ -205,6 +197,10 @@ class LLMClient:
         extra_kwargs: dict[str, Any] = {}
         if tool_choice:
             extra_kwargs["tool_choice"] = tool_choice
+        if timeout_s is not None:
+            extra_kwargs["timeout_s"] = timeout_s
+        if hosted_code is not None:
+            extra_kwargs["hosted_code"] = hosted_code
 
         mono_start = time.monotonic()
         try:
@@ -267,7 +263,7 @@ class LLMClient:
     def record_external_call(
         self,
         *,
-        called_for: CalledFor,
+        called_for: str,
         provider: str,
         model: str,
         usage: Usage,
@@ -348,7 +344,7 @@ class LLMClient:
     def _record_call(
         self,
         *,
-        called_for: CalledFor,
+        called_for: str,
         provider: str,
         model: str,
         usage: Usage,
@@ -361,8 +357,8 @@ class LLMClient:
             "INSERT INTO llm_calls "
             "(called_for, provider, model, input_tokens, output_tokens, "
             "cache_read_tokens, cache_write_tokens, cost_usd, "
-            "duration_ms, estimation_run_id, error) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "duration_ms, estimation_run_id, error, agent_run_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
             "RETURNING id"
         )
         with self._conn.transaction(), self._conn.cursor() as cur:
@@ -380,6 +376,7 @@ class LLMClient:
                     duration_ms,
                     estimation_run_id,
                     error,
+                    self._agent_run_id,
                 ),
             )
             row = cur.fetchone()
@@ -390,7 +387,7 @@ class LLMClient:
     def _record_failure(
         self,
         *,
-        called_for: CalledFor,
+        called_for: str,
         provider: str,
         model: str,
         duration_ms: int,

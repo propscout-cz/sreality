@@ -7,6 +7,88 @@ map, or scraper tracks. Operator-scoped (single shared identity, no
 per-user accounts — matches today's bearer-token model) *(superseded:
 per-user Supabase Auth is live — CLAUDE.md § out of scope)*.
 
+### Phase U-SYNC: Curation sync, every open window follows a curation change made anywhere (approved 2026-10-31; W0–W4 merged 2026-10-31, 696 applied; gate #2203 due 2026-11-07)
+
+Spec #2197, design `docs/design/curation-sync.md`, ADR-0008. One curation clock per (account, family), advanced only
+by database triggers at COMMIT; each signed-in window reads it every 5 s on the desktop and every 15 s on the phone
+while visible, and re-reads only what it holds through one table→read map and one read scheduler that its own writes
+use too. Rulings 2026-10-31: Q1 all curation plus the pipeline and collection shares (notifications, ad status and
+price, estimation runs out; Q1b re-ruled 2026-11-01: the notification bell and feed follow, W7); Q2 ≤ 5 s desktop,
+≤ 15 s phone, no Realtime doorbell (F7, only on a future ≈ 1 s
+ruling); Q3 (a), an open list keeps its rows, counts, map and stats until navigation and only the per-card marks
+follow, re-ruled (c) 2026-11-01: the list follows fully within one clock read, its rows held while the pointer is
+over it or a finger on it, its counts, map and stats never held (W6); Q4 the extension stays a sender; Q5
+last-writer-wins.
+
+- [x] **W0: the API commits before it answers (#2198, PR #2204, merged 2026-10-31).** `tenant_pool.TenantConn` (function
+      scope) on every tenant route and both account helpers, so a failed COMMIT answers 503 or 500, never a 200; the
+      charter (design doc, ADR-0008, three GLOSSARY terms).
+- [x] **W1: one table→read map and one read scheduler (#2199, SPA, PR #2205, merged 2026-10-31).** `lib/curationSync.ts` +
+      `lib/revalidate.ts` (owed reads, cache-enforced holds, patch ledger), the stale-side rule; closes D1, D2, D5.
+      What it built differently: the design's § 12 build ledger.
+- [x] **W2: curation editors follow the server (#2200, SPA, PR #2209, merged 2026-10-31).** `lib/useServerDraft.ts`
+      in the six editors; the kanban drag and phone pager holds (D3).
+- [x] **W3: the curation clock (#2201, DB, PR #2217, merged 2026-10-31).** Migration 696, applied through the apply
+      workflow before the merge (run 41204108856, 13:07Z), census `tests/test_curation_sync_census.py`, the live lane
+      `tests/test_curation_clock_live.py`, the `curation_sync` health alarm (`triggers`, `board_bumps`). What it built
+      differently: the design's § 12 build ledger.
+- [x] **W4: the clock reader in the SPA (#2202, PR #2224, merged 2026-10-31).**
+      `lib/curationSyncOwner.ts` (one owner per signed-in window, mounted by `AuthProvider` after the identity effect:
+      5 s / 15 s while visible, at once on show, focus / online / the same-browser nudge, back-off, permanent-error
+      mode, the first-answer age rule), `fetchCurationClock` (never acting) + its read-contract test, `isPhoneFrame()`,
+      `applySyncQueryDefaults` called in `main.tsx`, the `reads` and `load` cells of `curation_sync`. What it built
+      differently: the design's § 12 build ledger. After its deploy: the Railway status, the § 9 read-only check, the
+      operator's two-window recipe, and the gate clock starts.
+- [x] **Post-review fixes (#2244, PR #2249, merged 2026-11-01): the six W2–W4 reviews' findings.** The viewing day and
+      time as two drafts, the pager's stuck holds, the nudge on every committed write, migration 701 (the service role
+      reads the clock), census (e) TRUNCATE and (k); the design's § 12 entry "Post-review fixes (#2244)".
+- [x] **W6: an open list follows fully, held under the hand (#2303, SPA, PR #2306, merged 2026-11-01).** Ruling
+      Q3(c): `LENS_REREAD` `'now'` for lists and aggregates; `lib/useListHold.ts` over `parkReads` holds a list's
+      re-reads while the pointer or a finger is on it (Browse cards, the Feed roll with Skryté, the collection page,
+      the phone broker roll); counts, map and stats never held (the collection header's count included: its table's
+      rows hold in the view). The design's Decision 7b and § 12 "W6 (#2303), as built", item 9 the review repairs.
+      Owed: the operator's call on the self-echo's list refetch during a triage run (design § 3.8, follow-up F15).
+- [x] **F16 + F17: the clock read at 0.97 ms (#2308 PR #2309 migration 708; #2311 PR #2314 migration 709; both
+      applied and merged 2026-11-01).** Two audience evaluations per read, the primary key kept at scale (ruling
+      2026-11-01); the audience plpgsql, definer, one `current_account_ids()` call. Production delta after 709: 0.973 ms
+      and 18.3 buffers over 30 reads; the tickets' ≥ 100- and ≥ 500-read samples ride gate #2203's measurement.
+- [x] **Review 3 repairs (#2326, PR #2329, merged 2026-11-01): the third two-axis review's findings on #2249, #2306, F16 + F17.** The desktop collection
+      cards' "without a card" line held under the hand; the stale-side judge reads the row's page time; a hand parks
+      every refetch nobody asked for and spares the user's own; the artifact link's empty field and the viewing
+      pickers' cleared-both path; census (i) sees `ALTER FUNCTION`; a several-accounts live case; the GLOSSARY's
+      Hand and Park; the stale charter, tenancy and database-skill lines. The design's § 12 entry "Review 3 repairs".
+- [x] **W7: the notification bell follows the clock (#2327, PR #2334, migration 715, merged 2026-11-01).** Ruling Q1b re-ruled
+      2026-11-01 ("if I resolve a notification in another window or the app, I want the count to update everywhere"):
+      an eighth family `notifications` on `notification_dispatches` and `notification_subscriptions` (own-only); the
+      bell's count, the feed and the Watchdog list re-read on a mark-seen, a new event, a merge's re-point or a retired
+      watchdog made anywhere; the feed holds under the hand; the 30 s and 60 s polls are gone. The design's § 6 W7,
+      § 8 Q1b and § 12 "W7 (#2327), as built". After the deploy: the trigger count and the bell's reads on gate #2203.
+- [x] **A collection's description clears with `null` (#2208).** `PATCH /collections` tells an absent field from an
+      explicit null, a blank is stored as NULL, and both editors send `null` instead of W2's `''`. The note PATCH needed
+      nothing (`body` and `shared` are NOT NULL; `viewing_at` already tells them apart).
+- [ ] **Gate #2203**, due 2026-11-07, 7 days after W4's deploy: `curation_sync` healthy, the clock read ≤ 1 % of
+      statement time, no clock deadlocks, the API error rate at baseline. Its Browse map/stats/count RPC-calls line
+      was set under Q3(a); W6 puts those reads in the fan-out, so that line is re-baselined on the 7 days after W6
+      deploys. Whoever closes it sets the index row back to 🟢.
+
+### Phase U-PAGE-EDITS: four property-page edits, each one shared primitive (spec #2425, 2026-11-06)
+
+Operator ask: call and save the broker from the top of the phone page; header photos open the viewer;
+adding a viewing date offers the viewing stage, which the stage set-up can mark; a long notes section
+shows "show more". Rulings 2026-11-06: silent at or after the viewing stage; backfill where exactly one
+open stage label names a visit; notes cut by height only; the "Všech N fotek" tile opens the viewer.
+
+- [x] **Show more (#2426, PR #2431).** `components/Expandable` (measured, focus-aware); the notes list cut at
+      24rem; the four hand-rolled clamps moved onto it.
+- [x] **Photo viewer (#2427, PR #2432).** `listing-detail/PhotoViewer` `usePhotoViewer` for the mosaic, the Fotky
+      tab and the phone swiper; the last tile opens the viewer on its photo.
+- [x] **Call + save contact (#2428, PR #2433).** `phone/BrokerStrip` under the curation row; `lib/vcard`,
+      `lib/personName`, `lib/brokerContact`; one `SaveContactButton` on every broker card. Gate #2430: the
+      operator's iPhone check.
+- [x] **Viewing stage (#2429, migration 734).** `pipeline_stages.role` (`viewing`, one per account, never
+      closed, cleared on archive), backfilled 10/10 boards; `add_card {stage_id}`; `lib/viewingStage` +
+      `pipeline/ViewingStageOffer`; the stage set-up's calendar toggle.
+
 ### Phase U-AD-REFERENCE: the number a broker advertises under, on the broker card (2026-10-23)
 
 Operator ask: in the property page's Makléř section, show the ad id the broker advertises under, so it
@@ -77,6 +159,12 @@ account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, e
       harness over every payload shape; the landing `/n/:dispatchId` (mark-seen → `dispatchTarget`, `?d=` → `/push/opened`);
       `lib/push` + `usePush` and the sheet's switch "Oznámení na tomto iPhonu"; re-sync on sign-in and the hourly
       resume; binding follows identity (F18). Owed: the on-device proof (W5 gate, the operator's iPhone).
+- [x] **Push on by default (PR #2399, 2026-11-04; #2398)** — the operator's iPhone had never subscribed (0 rows), so the
+      feed now asks for Apple's one tap itself (`components/phone/PushNotice`: an off row that is the tap, a denied row with
+      the Settings hint), the re-sync subscribes by itself wherever notifications are already allowed (a sign-in after a
+      sign-out, a replaced subscription, a failed registration), and the switch's off holds per account
+      (`sreality.push.off`); one subscribe path, overlapping re-syncs share one run; the Notifications page is its own
+      chunk (first-visit JS 327,566 B). Owed: the on-device proof, now from the feed row.
 - [x] **The publication gate (this PR; migrations 668 + 669; operator rulings 2026-10-23 Q1–Q6; closes F13)** — a
       property is shown (Browse, the map, Stats) and told (the watchdog) only once published: `properties.settled_at`,
       stamped by the maintenance pass when its first photo is stored (or it has none) and the engine is done with its
@@ -87,6 +175,13 @@ account's iPhones (the installed PWA). Channels: the in-app feed, iPhone push, e
       badge and push (a tap still lands); the publishing check's `unpublished` stage ("not yet published", never a
       blocker). Apply: 668 before the merge, 669 promptly after the worker's rollout (it stamps `settled_at =
       first_seen_at` on the properties first seen in the 24 h before it, which were served ungated).
+- [x] **No clock publishes (this PR; migrations 747–749; operator ruling 2026-11-17)** — eight re-lists of held
+      properties were told as New match at their 6 h mark while the engine was braked for 10 h: the cap could not tell
+      "no duplicate found" from "not read yet". Now `settled_at` alone is publication and the maintenance pass alone
+      writes it: never while an in-scope ad is unread by the engine, otherwise once settled or 6 h old. The clock arm
+      left Browse, the scorecard, the watchdog, the health check and the merge carry. New alarms
+      `dedup:unread_arrivals` (red past 2 h, a brake not excused) and `dedup:held_unpublished` (past a day). Apply: 747 before the merge, 748 + 749 after the
+      rollout. The engine reading arrivals before its backlog is its owner's PR #2537.
 - [ ] **Next after the publication gate:** (a) the phone feed's day buckets and "Newest first" on the visible-since
       moment, not `first_seen_at` — needs a ruling; (b) drop `properties.published_at` + `publish_reason` + their three
       indexes (the autodedup session's owed drop, now moot for serving too); (c) a worker CLIP lane, so settlement
@@ -303,8 +398,9 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   prefilter's second read, the property page's private editor, the sidebar's include-only picker,
   the edit popover's stale `listing-tags` invalidation. Architecture § rule 18.
 - **Next (unscheduled):**
-  - Browse cards and the Chrome-extension panel show no tag and cannot assign one; when they do,
+  - Browse cards ~~and the Chrome-extension panel~~ show no tag and cannot assign one; when they do,
     their writes settle through `settleTagWrite` (the `cohortScoped` knob is gone, U-CURATED-SCOPE).
+    (The extension half is done 2026-10-28: the side sheet's Moje card shows and assigns tags.)
   - ~~"Not in collection" on Browse~~ — done 2026-10-19 in U-CURATED-SCOPE ("V žádné kolekci",
     judged in SQL by migration 629, not by `property_ids_excluded`).
 
@@ -384,12 +480,10 @@ status=inactive filter at merge time. AUTODEDUP confirmed (2026-10-20) that all 
   The kanban's shape (drag to move, own trash + two-step confirm to remove) stays sanctioned.
 - **Owed (not built):** the board tints column headers + stage-editor swatches with its own
   `stageColor` (grey fallback) instead of `stageAccent` (copper) — converge, or record the
-  grey fallback as deliberate. The extension hand-copies the funnel SVG (forced: no React)
-  plus `stageBadge` and `stageAccent` (not forced: pure TS it could import from
-  `frontend/src/lib/pipelineStage.ts`, as it already imports `lib/brand`) — import it; since
-  Phase U-EXT-INDEX the copies live in ONE file, `chrome-extension/src/glyphs.ts`. Then
-  rule #22 (CLAUDE.md + architecture) drops the remaining exceptions (origin: Phase U-PIPE
-  3i below).
+  grey fallback as deliberate. Then rule #22 (CLAUDE.md + architecture) drops the remaining
+  exception (origin: Phase U-PIPE 3i below). Done 2026-10-28: the extension imports
+  `stageBadge` / `stageAccent` from `frontend/src/lib/pipelineStage.ts` (only the funnel SVG
+  stays a copy, forced: no React).
 
 ### Phase U2.6: Collections + tags + notes (done)
 Operator watchlists, freeform coloured tags, and per-listing journal
@@ -646,7 +740,7 @@ Vertical ordering the operator controls, plus two data signals on the card.
 - **Civic index strip** — four fixed cells (celkové hodnocení, přírůstek obyvatel,
   stěhování mladých, nabídka práce) underscored by a 2px rule in the shared
   city-index scale's band colour, repeating the column header's motif at card
-  scale. Joined `properties.obec_id = curated_cities.admin_boundary_id`, an
+  scale. Joined `properties.obec_id = curated_cities.admin_boundary_id` (`obec_kod` since 726), an
   integer equi-join that reproduces the SQL predicate's `ST_Covers` arm (all 206
   curated cities have a boundary, so its radius arm is dead). No migration.
   ~52% of properties resolve to a curated city; the rest render no strip.
@@ -704,7 +798,7 @@ from Browse, not just from the board.
   operator with 45 deals saw 1. It now loads a VIEW: neutral cohort + scope,
   active preset deselected, one atomic write, Back as the undo. That required
   `category_type` to become nullable ("Vše"), which every backend consumer
-  already supported — see architecture rule 21b — and which incidentally fixes
+  already supported — see architecture rule 22 — and which incidentally fixes
   a control that lied: clicking the selected deal-type pill wrote `deal=null`
   and silently snapped back to `pronajem`.
 - Next: nothing queued here; a "days in stage" signal is the obvious follow-up if
@@ -729,8 +823,8 @@ to advance a deal without opening the listing page. It now opens a shared menu.
   with the Table tab, 2026-10-20) AND the listing header — which drops its own `<select>` + bare ✕. Adding stays
   one click into the entry stage: cheap and reversible. The kanban keeps
   drag-to-move (rule #22) and its existing trash confirm; the Chrome extension
-  keeps its `<select>` and gains the same confirm on ✕ via a generic
-  `buildConfirmRow` — one destructive-confirm shape for the whole panel.
+  kept its `<select>` and gained the same confirm on ✕ (since 2026-10-28 its side
+  sheet: a step bar or the `<select>`, removal under "Uzavřít ▾" behind the confirm).
 - **`AnchoredPopover`** — the missing primitive. The funnel sits inside an
   `overflow-hidden` card AND inside the card's `<Link>`, so the app's existing
   `absolute` popovers would be clipped and every click inside one would
@@ -1036,6 +1130,10 @@ Phase U-NOTIFY-PUSH, ruling R10)*.
   through the create dialog's checkbox (ticked); `MapAreaControl` edits the box on
   `/watchdog/:id/edit` ("Use current view"); the two map controls paint through
   `lib/mapShape`. 0 stored specs carried a circle, so nothing was migrated.
+- ✅ Filter availability matrix removed (2026-10-29 ruling, cleanup/filter-availability-matrix): no
+  surface read `filter_visibility`, so the Settings section, its three `/admin` routes and the two
+  agendas only it showed (NEIGHBORHOOD, DEFAULTS) are gone; migration 688 drops the table once that
+  PR is live, with the operator's OK and a backup.
 
 **Next (filter definition, tracked from C4)**
 
@@ -1046,7 +1144,6 @@ Phase U-NOTIFY-PUSH, ruling R10)*.
 - M7: integer area params in the browse RPCs. M11: canonical-advert row vs property rollup.
 - Browse's TS dispatch switches to `sql_kind` (drops `isMinId`/`isMaxId` + the duplicated
   dispatch).
-- The NEIGHBORHOOD agenda over-declares ~30 filters `toolkit/neighborhoods.py` never reads.
 
 **What's deferred**
 

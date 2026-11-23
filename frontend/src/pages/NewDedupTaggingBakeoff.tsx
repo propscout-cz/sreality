@@ -20,6 +20,7 @@ import {
 import ErrorBanner from '@/components/ErrorBanner';
 import ImageLightbox from '@/components/ImageLightbox';
 import ImageSizeToggle from '@/components/ImageSizeToggle';
+import { SegmentedBar, type SegmentOption } from '@/components/controls';
 import Spinner from '@/components/Spinner';
 import { imageSrc } from '@/lib/imageUrl';
 import { bareImage, type ImagePublic } from '@/lib/types';
@@ -142,10 +143,11 @@ const SPLIT_HELP: Record<BakeoffSplit, string> = {
   cv: 'Every training photo, scored by a copy of the head that never saw it (grouped folds, so one listing’s photos never straddle the divide). Big numbers, but the labels are your own.',
   exam: 'The sealed 250-photo holdout, scored by the head refit on everything. Thin per head, but it is the only material the head never consumed.',
 };
+const SPLIT_OPTIONS = SPLITS.map((v) => ({ value: v, label: SPLIT_LABEL[v], title: SPLIT_HELP[v] }));
 
 const OUTCOMES: readonly BakeoffOutcome[] = ['tp', 'fp', 'fn', 'tn'];
-/* Plain words lead, the code follows in small type — the operator thinks in
- * "wrongly caught", the API and the ledger think in "fp". */
+/* Plain words lead, the code follows — the operator thinks in "wrongly
+ * caught", the API and the ledger think in "fp". */
 const OUTCOME_WORD: Record<BakeoffOutcome, string> = {
   tp: 'Caught',
   fp: 'Wrongly caught',
@@ -158,6 +160,16 @@ const OUTCOME_HELP: Record<BakeoffOutcome, string> = {
   fn: 'The model said no and you said yes. These are the ones it would quietly lose.',
   tn: 'The model said no and you said no.',
 };
+/* '' = any. An outcome is one head's verdict, so with every head on show its
+ * hover box says to pick one instead of what it means. */
+const outcomeOptions = (live: boolean): ReadonlyArray<SegmentOption<BakeoffOutcome | ''>> => [
+  { value: '', label: 'any' },
+  ...OUTCOMES.map((o) => ({
+    value: o,
+    label: `${OUTCOME_WORD[o]} ${o}`,
+    title: live ? OUTCOME_HELP[o] : 'Pick one head first — an outcome is one head’s verdict.',
+  })),
+];
 const OUTCOME_COLOR: Record<BakeoffOutcome, string> = {
   tp: 'var(--color-sage)',
   fp: 'var(--color-brick)',
@@ -447,11 +459,13 @@ function ScoreHistogram({
 
 /* ------------------------------------------------------------- small controls */
 
+/* The pick-several chip (arms, training modes) and the lone retired / widen
+ * switches; every pick-one row is a SegmentedBar. */
 function Chip({
-  on, onClick, children, title, disabled = false, testId,
+  on, onClick, children, title, testId,
 }: {
   on: boolean; onClick: () => void; children: ReactNode;
-  title?: string; disabled?: boolean; testId?: string;
+  title?: string; testId?: string;
 }) {
   return (
     <button
@@ -459,14 +473,11 @@ function Chip({
       title={title}
       data-testid={testId}
       aria-pressed={on}
-      disabled={disabled}
       onClick={onClick}
       className={`px-2 py-1 text-xs rounded-[var(--radius-sm)] border transition-colors ${
-        disabled
-          ? 'border-[var(--color-rule)] text-[var(--color-ink-4)] opacity-50 cursor-not-allowed'
-          : on
-            ? 'border-[var(--color-copper)] bg-[var(--color-copper-soft)] text-[var(--color-copper)]'
-            : 'border-[var(--color-rule)] text-[var(--color-ink-3)] hover:text-[var(--color-ink)] hover:border-[var(--color-rule-strong)]'
+        on
+          ? 'border-[var(--color-copper)] bg-[var(--color-copper-soft)] text-[var(--color-copper)]'
+          : 'border-[var(--color-rule)] text-[var(--color-ink-3)] hover:text-[var(--color-ink)] hover:border-[var(--color-rule-strong)]'
       }`}
     >
       {children}
@@ -499,6 +510,25 @@ const PAGE_B = 24;
  * cell is one scroll. */
 const SCORE_PAGE_SIZES = [50, 100, 500, 2000, 10000] as const;
 type ScorePageSize = (typeof SCORE_PAGE_SIZES)[number];
+const SCORE_PAGE_OPTIONS = SCORE_PAGE_SIZES.map((n) => ({ value: n, label: String(n) }));
+
+const VIEW_OPTIONS = [
+  {
+    value: 'photos' as const,
+    label: 'Photos, across arms',
+    title: 'A page of photographs, each carrying what every selected arm said about it.',
+  },
+  {
+    value: 'buckets' as const,
+    label: 'By head: right and wrong',
+    title: 'One head under one arm, split into what it caught, wrongly caught, missed and correctly rejected.',
+  },
+  {
+    value: 'scores' as const,
+    label: 'All photos by score',
+    title: 'The same head, arm and mode as the buckets — but every photo it scored in one ranked list instead of four columns.',
+  },
+];
 const DEFAULT_SCORE_PAGE: ScorePageSize = 50;
 
 export default function NewDedupTaggingBakeoff() {
@@ -816,19 +846,15 @@ export default function NewDedupTaggingBakeoff() {
           {cellArms.map((a) => <option key={a.id} value={a.id}>{a.arm}</option>)}
         </select>
       </span>
-      <span className="flex flex-wrap items-center gap-1" role="group" aria-label="Training mode to inspect">
+      <span className="flex flex-wrap items-center gap-1">
         <Caption>trained on</Caption>
-        {cellModes.map((m) => (
-          <Chip
-            key={m}
-            testId={`bmode-${m}`}
-            on={bMode === m}
-            onClick={() => { rewind(); patch({ bmode: m, ...REWIND }); }}
-            title={MODE_HELP[m]}
-          >
-            {MODE_LABEL[m]}
-          </Chip>
-        ))}
+        <SegmentedBar
+          hug
+          label="Training mode to inspect"
+          options={cellModes.map((m) => ({ value: m, label: MODE_LABEL[m], title: MODE_HELP[m] }))}
+          value={bMode}
+          onChange={(m) => { rewind(); patch({ bmode: m, ...REWIND }); }}
+        />
       </span>
       <span className="text-[0.7rem] text-[var(--color-ink-3)]" data-testid="bucket-scope">
         One cell at a time: <b>{headName(tagId)}</b> on <b>{armName(bArmId)}</b>, trained{' '}
@@ -947,19 +973,15 @@ export default function NewDedupTaggingBakeoff() {
             </Chip>
           </span>
 
-          <span className="flex flex-wrap items-center gap-1" role="group" aria-label="Which numbers">
+          <span className="flex flex-wrap items-center gap-1">
             <Caption>numbers from</Caption>
-            {SPLITS.map((s) => (
-              <Chip
-                key={s}
-                testId={`split-${s}`}
-                on={split === s}
-                onClick={() => { rewind(); patch({ split: s, ...REWIND }); }}
-                title={SPLIT_HELP[s]}
-              >
-                {SPLIT_LABEL[s]}
-              </Chip>
-            ))}
+            <SegmentedBar
+              hug
+              label="Which numbers"
+              options={SPLIT_OPTIONS}
+              value={split}
+              onChange={(s) => { rewind(); patch({ split: s, ...REWIND }); }}
+            />
           </span>
         </div>
       </header>
@@ -1046,30 +1068,7 @@ export default function NewDedupTaggingBakeoff() {
 
       {/* ------------------------------------------------------- view switch */}
       <div className="mt-6 flex flex-wrap items-center gap-2 border-b border-[var(--color-rule)] pb-2">
-        <Chip
-          testId="view-photos"
-          on={view === 'photos'}
-          onClick={() => patch({ view: 'photos' })}
-          title="A page of photographs, each carrying what every selected arm said about it."
-        >
-          Photos, across arms
-        </Chip>
-        <Chip
-          testId="view-buckets"
-          on={view === 'buckets'}
-          onClick={() => patch({ view: 'buckets' })}
-          title="One head under one arm, split into what it caught, wrongly caught, missed and correctly rejected."
-        >
-          By head: right and wrong
-        </Chip>
-        <Chip
-          testId="view-scores"
-          on={view === 'scores'}
-          onClick={() => patch({ view: 'scores' })}
-          title="The same head, arm and mode as the buckets — but every photo it scored in one ranked list instead of four columns."
-        >
-          All photos by score
-        </Chip>
+        <SegmentedBar hug label="View" options={VIEW_OPTIONS} value={view} onChange={(v) => patch({ view: v })} />
 
         <span className="ml-2 flex items-center gap-1">
           <Caption>head</Caption>
@@ -1094,26 +1093,14 @@ export default function NewDedupTaggingBakeoff() {
         <section className="mt-4">
           <div className="flex flex-wrap items-center gap-2">
             <Caption>outcome</Caption>
-            <Chip
-              testId="outcome-any"
-              on={!outcome}
+            <SegmentedBar
+              hug
+              label="Outcome"
               disabled={!outcomeOk}
-              onClick={() => { rewind(); patch({ outcome: null, ...REWIND }); }}
-            >
-              any
-            </Chip>
-            {OUTCOMES.map((o) => (
-              <Chip
-                key={o}
-                testId={`outcome-${o}`}
-                on={outcome === o}
-                disabled={!outcomeOk}
-                title={outcomeOk ? OUTCOME_HELP[o] : 'Pick one head first — an outcome is one head’s verdict.'}
-                onClick={() => { rewind(); patch({ outcome: o, ...REWIND }); }}
-              >
-                {OUTCOME_WORD[o]} <span className="text-[0.6rem] text-[var(--color-ink-4)]">{o}</span>
-              </Chip>
-            ))}
+              options={outcomeOptions(outcomeOk)}
+              value={outcome}
+              onChange={(o) => { rewind(); patch({ outcome: o || null, ...REWIND }); }}
+            />
             {!outcomeOk && (
               <span className="text-[0.7rem] text-[var(--color-ink-3)]" data-testid="outcome-needs-tag">
                 Pick one head to filter by outcome &mdash; an outcome is one head&rsquo;s verdict, so
@@ -1476,20 +1463,15 @@ export default function NewDedupTaggingBakeoff() {
                 * page-size change restarts at the top — an offset is a position
                 * in pages of ONE size, so it does not carry across. */}
               <div className="mt-4 flex flex-wrap items-center justify-center gap-3 text-xs">
-                <span className="flex items-center gap-1" role="group" aria-label="per page">
+                <span className="flex items-center gap-1">
                   <span className="mr-0.5 text-[0.65rem] uppercase tracking-[0.1em] text-[var(--color-ink-4)]">per page</span>
-                  {SCORE_PAGE_SIZES.map((n) => (
-                    <button
-                      key={n}
-                      type="button"
-                      data-testid={`score-per-page-${n}`}
-                      aria-pressed={scorePageSize === n}
-                      onClick={() => patch({ n: String(n), soff: null })}
-                      className={`rounded-[var(--radius-sm)] border px-2 py-1 ${scorePageSize === n ? 'border-[var(--color-ink-2)] text-[var(--color-ink)]' : 'border-[var(--color-rule)] text-[var(--color-ink-3)] hover:text-[var(--color-ink)]'}`}
-                    >
-                      {n}
-                    </button>
-                  ))}
+                  <SegmentedBar
+                    hug
+                    label="per page"
+                    options={SCORE_PAGE_OPTIONS}
+                    value={scorePageSize}
+                    onChange={(n) => patch({ n: String(n), soff: null })}
+                  />
                 </span>
                 <button
                   type="button"

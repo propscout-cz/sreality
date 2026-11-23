@@ -6,12 +6,13 @@ carrying every property-anchored operator-state row through
 (migration 589); `detach_listings` moves a set of adverts back to their ledger origins, or to new
 records through the one birth path (`_born`), under one lock taken up front, and routes the
 curation they take (`property_carriers.curation_plan` / `route_curation`). Both finish with
-`properties_changed` once per call (rollup, Browse row, broker queue). Callers: `api.property_merge`
-and `toolkit.property_split` (the operator), `autodedup.apply` and `autodedup.reconcile` (merge,
-inside `app_settings.autodedup_apply_scope`), `autodedup.apply.unapply` and
-`autodedup.legacy_retire` (detach, one call per group). An operator merge is also a ruling (MS12:
-"same" over the canonical pairs and every negative between its members); a detach never rules,
-and a split writes its own "different" across letters (`toolkit.property_split`).
+`properties_changed` once per call (rollup, broker book, Browse row). Callers:
+`api.property_merge` and `toolkit.property_split` (the operator), `autodedup.apply` and
+`autodedup.reconcile` (merge, inside `app_settings.autodedup_apply_scope`),
+`autodedup.apply.unapply` and `autodedup.legacy_retire` (detach, one call per group). An operator
+merge is also a ruling (MS12: "same" over the canonical pairs and every negative between its
+members); a detach never rules, and a split writes its own "different" across letters
+(`toolkit.property_split`).
 """
 
 from __future__ import annotations
@@ -26,10 +27,10 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from autodedup import ui_sql as usql
+from location_data import operator_corrections
 from scraper.db import create_singleton_properties
 from scripts.recompute_property_stats import properties_changed
 from toolkit import property_carriers as carriers
-from toolkit.publication import CAP_SQL
 from toolkit.property_carriers import MergeSource, Route  # re-exported: callers read them here
 from toolkit.room_taxonomy import category_main_compatible
 
@@ -147,15 +148,12 @@ VALUES (%(group)s, %(table)s, %(row_key)s, %(row_at)s, %(account_id)s, %(from_pr
         %(survivor)s, %(kind)s, %(snapshot)s)
 """
 
-# Publication never regresses on a merge, and never moves later (migration 668): a settled retired
-# property's stamp passes to a survivor not yet settled, only when that publishes the survivor
-# before its own cap would (the survivor is the oldest record, so the cap may have published it long
-# ago; a stamp younger than that would move its visibility forward, and tell a watchdog a property
-# it could already see).
+# Publication never regresses on a merge or a split (migrations 668/747): a published retired
+# property's stamp passes to a survivor not yet published, a published property's to the one a
+# split bears from it.
 _CARRY_SETTLED_SQL = (
     "UPDATE properties s SET settled_at = r.settled_at FROM properties r "
-    "WHERE s.id = %s AND r.id = %s AND s.settled_at IS NULL AND r.settled_at IS NOT NULL "
-    f"AND r.settled_at < s.first_seen_at + {CAP_SQL}"
+    "WHERE s.id = %s AND r.id = %s AND s.settled_at IS NULL AND r.settled_at IS NOT NULL"
 )
 
 # One statement touching `status` and `is_active` together: a retired property is never left
@@ -278,6 +276,37 @@ def resolve_active_property_id(
 ) -> int | None:
     """Single-id `resolve_active_property_ids`; None if no active survivor."""
     return resolve_active_property_ids(conn, [property_id]).get(property_id)
+
+
+# merged_at is its merge transaction's start, so a merge begun just before `since` can still have carried a row written after it.
+# The margin outlasts any merge transaction: the cost of a false hit is only that a caller holds back.
+_MERGED_SINCE_SQL = (
+    "SELECT p.id FROM properties p WHERE p.id = ANY(%(ids)s) AND p.merged_at >= %(since)s::timestamptz - interval '1 hour' "
+    "UNION SELECT p.merged_into FROM properties p WHERE p.merged_into = ANY(%(ids)s) "
+    "AND p.merged_at >= %(since)s::timestamptz - interval '1 hour'"
+)
+
+
+def merged_since(conn: "psycopg.Connection", ids: Iterable[int], since: datetime) -> set[int]:
+    """Those of `ids` a merge has touched since `since`, retired or surviving: what the operator state on them says about whose
+    it was may have changed. Read-only; safe inside a caller txn."""
+    ids = list(ids)
+    if not ids:
+        return set()
+    with conn.cursor() as cur:
+        cur.execute(_MERGED_SINCE_SQL, {"ids": ids, "since": since})
+        return {int(r[0]) for r in cur.fetchall()}
+
+
+def canonical_advert(conn: "psycopg.Connection", property_id: int) -> int | None:
+    """The canonical ad of the property's live survivor (a merged-away id follows its survivor), or None."""
+    survivor = resolve_active_property_id(conn, property_id)
+    if survivor is None:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(_CANONICAL_ADVERTS_SQL, {"ids": [survivor]})
+        row = cur.fetchone()
+    return int(row[0]) if row else None
 
 
 def lock_properties(conn: psycopg.Connection, ids: list[int]) -> dict[int, tuple[str, int | None]]:
@@ -590,6 +619,8 @@ def merge_property_set(
                     "cluster_key": key, "generation": gen, "member_ids": members,
                     "verdict": "same", "note": f"operator merge {group}", "reasons": [],
                     "decided_by": str(decided_by)} for key, gen, members in sets])
+        # Inside this transaction on purpose: the return stamp (migration 754's trigger) tells a merge
+        # from a return by the retired record's `merged_at = now()`, this transaction's start.
         properties_changed(conn, [survivor, *retired])
 
     return {
@@ -805,6 +836,7 @@ def _born(
     (born,) = create_singleton_properties(conn, [listing_id])
     group = str(uuid.uuid4())
     with conn.cursor() as cur:
+        cur.execute(_CARRY_SETTLED_SQL, (born, current))
         cur.execute(_INGEST_GROUPING_SQL, {
             "group": group, "left": current, "born": born, "by": decided_by,
             "listing": listing_id, "reason": "split_new" if live else "ingest_grouping",
@@ -901,8 +933,10 @@ def detach_listings(
     named in `new`, go to a NEW record (`_born`). Every property the steps lock is locked first,
     in id order. The curation the adverts take is planned before anything moves (`curation`,
     else `property_carriers.curation_plan` per property left, along `merge_group_id`'s carry
-    rows when given) and routed after (`route_curation`), counted in `curation`. Idempotent,
-    each `outcome` saying why nothing moved. A detach writes no ruling (`rulings_written` stays
+    rows when given) and routed after (`route_curation`), counted in `curation`. A moved advert
+    leaves the operator's address pick behind (`operator_corrections.clear`, W3b ruling R1: it
+    was split off because it is another place). Idempotent, each `outcome` saying why nothing
+    moved. A detach writes no ruling (`rulings_written` stays
     0; `reason` is unused since a split writes its own); then `properties_changed` ONCE over
     every property left and reached. An unknown advert refuses the set before anything moves;
     an empty set is a no-op. Callers: `toolkit.property_split`; `autodedup.apply.unapply` and
@@ -940,6 +974,7 @@ def detach_listings(
                     routed = carriers.route_curation(cur, plan, left=left, landed=landed)
                     for key, n in routed.items():
                         counts[key] = counts.get(key, 0) + n
+            operator_corrections.clear(conn, [d.listing_id for d in moved])
             properties_changed(conn, [p for d in moved for p in (d.left, d.target)])
 
     return {

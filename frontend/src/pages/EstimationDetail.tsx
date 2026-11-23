@@ -18,7 +18,6 @@ import { buildRerunPayload, type RerunInput } from '@/lib/rerun';
 import { ListingOverview } from '@/components/listing-detail/ListingOverview';
 import { ConfidencePill, RunBody, SourceBadge } from '@/components/estimation/RunPanel';
 import type { EstimationRun, ListingPublic } from '@/lib/types';
-import { Hairline } from '@/components/section';
 
 export default function EstimationDetail() {
   const { id: idParam } = useParams();
@@ -90,10 +89,11 @@ export default function EstimationDetail() {
     <Page>
       <Crumb />
       <div className="mt-1 flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5">
+        {/* No small-caps label above the title (P26): the run's id is plain metadata. */}
         <div className="flex items-center gap-3 min-w-0">
-          <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-            Estimation · run #{run.id}
-          </p>
+          <span className="font-mono tabular-nums text-[0.72rem] text-[var(--color-ink-3)]">
+            Run #{run.id}
+          </span>
           <span
             className="text-[0.72rem] text-[var(--color-ink-4)]"
             title={fmtAbsolute(run.created_at)}
@@ -116,15 +116,17 @@ export default function EstimationDetail() {
           No subject listing details available.
         </p>
       )}
-      <Hairline />
-      <RunBody
-        key={run.id}
-        run={run}
-        subject={null}
-        onRerun={(overrides) => rerunMut.mutate({ run, overrides })}
-        rerunPending={rerunMut.isPending}
-        rerunError={rerunMut.error}
-      />
+      {/* The run's sections are section cards, 16 px apart (system.md § Section cards). */}
+      <div className="mt-4">
+        <RunBody
+          key={run.id}
+          run={run}
+          subject={null}
+          onRerun={(overrides) => rerunMut.mutate({ run, overrides })}
+          rerunPending={rerunMut.isPending}
+          rerunError={rerunMut.error}
+        />
+      </div>
     </Page>
   );
 }

@@ -31,7 +31,8 @@ from location_data.resolver import fill as step_fill
 from location_data.resolver import grade as step_grade
 from location_data.resolver import normalize as step_normalize
 from location_data.resolver import serialize
-from location_data.resolver.types import Claim, Resolution, ResolverContext
+from location_data.resolver.composite import WHOLE_LEVELS
+from location_data.resolver.types import Binding, Claim, Resolution, ResolverContext
 
 
 def resolve(
@@ -53,12 +54,11 @@ def resolve(
     # so the pin and its declared precision are read off the first.
     first_pass = step_normalize.normalize_all(ordered)
     first = _admissible(ordered, first_pass)
-    pin_claim = step_bind.elect_pin(first)
-    pin_claim_id = pin_claim.id if pin_claim else None
-    declared = step_bind.read_declared_precision(first, coordinate_claim_id=pin_claim_id)
+    pin_claim = step_bind.the_pin(first)
+    declared = step_bind.read_declared_precision(first)
     pin_is_precise = bool(declared.label) and not declared.blurred
     towns = step_bind.constraining_towns(
-        step_bind.collect_constraints(first, first_pass, pin_claim_id=pin_claim_id),
+        step_bind.collect_constraints(first, first_pass),
         ctx.registry, pin_is_precise=pin_is_precise)[0]
     obec_kods = tuple(sorted({u.code for u in towns}))
     normalized = step_normalize.normalize_all(
@@ -74,35 +74,39 @@ def resolve(
     # ---- 1. BIND. A street claim S1 refused as a place name may still name the PART (1c).
     binding, constraints = step_bind.bind(
         admissible, normalized, ctx, pin_is_precise=pin_is_precise,
-        pin_blurred=declared.blurred, pin_claim_id=pin_claim_id,
-        place_lines=tuple(
+        pin_blurred=declared.blurred,
+        place_line=next((
             str(c.value_text) for c in ordered
             if c.claim_type == "street_name" and step_bind.admissible(c, None) is None
-            and normalized[c.id].rejections == ("town_as_street",)),
+            and normalized[c.id].rejections == ("town_as_street",)), None),
     )
-    position = step_bind.place(binding, pin_claim, declared=declared)
+    # ONE containment read, two readers: `place()` lets a pin place the row only inside the town
+    # the words bound (v5.10), CHECK records that the pin disagreed.
+    pin_inside_obec = step_bind.pin_inside_bound_obec(binding, pin_claim, ctx.registry)
+    position = step_bind.place(
+        binding, pin_claim, declared=declared, pin_inside_bound_obec=pin_inside_obec)
 
     # ---- 2. FILL. It answers the hierarchy AND the position the hierarchy implies: a row
     # the claims could not place is placed at the finest bound unit's own registry point, so
-    # a listing that knows its town always has one (W2-a3). It cannot move a grade or a
-    # verdict — GRADE reads a position only to ask whether a PIN corroborates an address
-    # point, CHECK only to ask where a PIN is.
-    filled = step_fill.fill(
-        binding, constraints, ctx.registry,
-        operator=step_bind.operator_fields(admissible),
-    )
+    # a listing that knows its town always has one (W2-a3). Its keys are the grain; its point
+    # cannot move a grade or a verdict — GRADE reads a position only to ask whether a PIN
+    # corroborates an address point, CHECK only to ask where a PIN is.
+    filled = step_fill.fill(binding, constraints, ctx.registry, place=not position.has_position)
     if not position.has_position:
         position = step_fill.position(filled, binding)
 
-    # ---- 3. GRADE.
-    graded = step_grade.grade(binding, position, declared=declared)
-
-    # ---- 4. CHECK.
+    # ---- 3/4. CHECK, then GRADE: the grain is the row's finest key (`grain_of`, W5), the one
+    # writer, and reads the verdict only for the country.
     verdict = step_check.check(
-        ordered, normalized, binding, filled, position, graded.granularity,
-        registry=ctx.registry, rank=ctx.granularity_rank, pin_claim=pin_claim,
+        ordered, normalized, binding, filled, position,
+        registry=ctx.registry, pin_claim=pin_claim, pin_inside_bound_obec=pin_inside_obec,
     )
-    granularity = verdict.granularity or graded.granularity
+    if verdict.country_status == "foreign" and position.origin == "admin_centroid":
+        # FILL's point is the Czech region CHECK just refused. Words that bound no town leave
+        # the row where every foreign row stands: its own pin, if it has one.
+        position = step_bind.place(
+            Binding(target_kind="none", rung="none"), pin_claim, declared=declared)
+    granularity = step_grade.grain_of(filled, verdict)
     czech = verdict.country_status == "cz"
 
     return Resolution(
@@ -126,7 +130,8 @@ def resolve(
         ulice_kod=filled.ulice_kod if czech else None,
         ruian_adm_kod=filled.ruian_adm_kod if czech else None,
         katastr_kod=filled.katastr_kod if czech else None,
-        match_confidence=("low" if not czech else graded.match_confidence),
+        match_confidence=(step_grade.confidence(binding, position, blurred=declared.blurred)
+                          if czech else "low"),
         granularity=granularity,
         uncertainty_radius_m=step_grade.radius_m(granularity, floor_m=position.extent_m),
         country_status=verdict.country_status,
@@ -147,7 +152,7 @@ def _admissible(
 
 def _is_place_name(key: str, ctx: ResolverContext) -> bool:
     return bool(
-        ctx.registry.admin_units_by_name(key, levels=("obec", "cast_obce", "momc", "zsj"))
+        ctx.registry.admin_units_by_name(key, levels=WHOLE_LEVELS)
     )
 
 

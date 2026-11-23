@@ -6,11 +6,8 @@ importing the pure should_flush helper is clean.
 
 from __future__ import annotations
 
-from scripts.submit_condition_batch import (
-    MAX_BATCH_BYTES,
-    MAX_BATCH_REQUESTS,
-    should_flush,
-)
+from scripts.submit_condition_batch import should_flush
+from toolkit.batch_submit import MAX_BATCH_BYTES, MAX_BATCH_REQUESTS
 
 
 def test_caps_sit_safely_under_the_api_limit():

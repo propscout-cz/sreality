@@ -119,7 +119,7 @@ function ExploreBrokerModal({
             * (lib/useCloseOnNavigation.ts), so no onClick belongs here. */}
           <Link
             to={browseHref}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors"
             title="Open the full Browse page scoped to this broker"
           >
             <span>Go to Browse</span>

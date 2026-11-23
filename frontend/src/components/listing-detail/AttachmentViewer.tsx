@@ -16,7 +16,7 @@ import { bareImage, type Attachment } from '@/lib/types';
 export const PHOTO_WORDS = {
   en: {
     title: 'My photos',
-    empty: 'No photos of your own yet',
+    empty: 'No photos of your own yet.',
     camera: 'Take photo',
     library: 'From library',
     upload: 'Upload',
@@ -46,7 +46,7 @@ export const PHOTO_WORDS = {
   },
   cs: {
     title: 'Moje fotky',
-    empty: 'Zatím žádné vlastní fotky',
+    empty: 'Zatím žádné vlastní fotky.',
     camera: 'Vyfotit',
     library: 'Z knihovny',
     upload: 'Nahrát',

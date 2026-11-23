@@ -54,9 +54,9 @@ estimate ≈ −7,260 / +2,860 LOC, −30 files, −2 tables, −8 workflows, 0 
       gate and hash assertion (now derived, over all 27 healable columns) plus its
       `description` arm;
       deletes four area heals, their four workflows and three test files. **Two of the six
-      named backfills survive, with evidence:** `backfill_unit_price_masquerade` QUARANTINES
-      a price (`price_czk → NULL`), which never-blank forbids by design, and 794 realitymix
-      rows still await it; `backfill_idnes_brokers` writes `raw_json`, which the seam does
+      named backfills survived, with evidence:** `backfill_unit_price_masquerade` QUARANTINES
+      a price (`price_czk → NULL`), which never-blank forbids by design (its last write ran
+      2026-11-01, then #2018 deleted it); `backfill_idnes_brokers` writes `raw_json`, which the seam does
       not, and 637 of the 20,000 oldest idnes rows still carry no broker block.
 - [x] **W4 — close every structured gap the census proves.** ceskereality `parkování` +
       `balkóny` (has_parking/garage/terrace, 0.0% → real on 48,620 rows), remax

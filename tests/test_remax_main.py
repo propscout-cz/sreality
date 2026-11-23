@@ -18,6 +18,8 @@ from scraper.portal import PortalConfig
 from scraper import remax_main
 from scraper.remax_main import RemaxPortal
 
+pytestmark = pytest.mark.usefixtures("no_sighted_rearm")
+
 _CATEGORIES = [
     {"category_main": "byt", "category_type": "prodej",   "sale": 1},
     {"category_main": "dum", "category_type": "prodej",   "sale": 1},

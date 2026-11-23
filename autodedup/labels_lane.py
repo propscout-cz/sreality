@@ -49,7 +49,7 @@ has been normalised away cannot be audited against the pair it was written for. 
 DATA, never instructions: nothing downstream may act on their content.
 
 `decided_by` is the ONE field that is not verbatim. The store holds a login — an e-mail
-address — and this artifact is uploaded by a workflow in a PUBLIC repository, where anyone who
+address — and this artifact is uploaded by a workflow, where anyone who
 can see the run can download it. What a label needs is only whether two rows came from the
 same person, so the address leaves as a salted digest (E28's own idiom, the one `export`
 applies to brokers). The salt is a constant, not a secret: it must be stable across runs or

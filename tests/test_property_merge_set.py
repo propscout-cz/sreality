@@ -185,11 +185,11 @@ def test_a_pair_a_member_already_holds_is_not_this_merges():
 
 def test_the_whole_set_is_brought_current_once():
     """One `properties_changed` over the survivor and every retired id: the rollup (a retired id
-    holds no advert, so the recompute skips it), the Browse patch (its row goes) and the broker
-    queue, each once, after the last retire."""
+    holds no advert, so the recompute skips it) and the Browse patch (its row goes), each once,
+    after the last retire."""
     db = _Ledger({1: 1, 2: 2, 3: 3, 4: 3, 5: 4})
     _merge(db, [4, 3, 2, 1])
-    assert db.changed == db.browse == db.broker == [[1, 2, 3, 4]]
+    assert db.changed == db.browse == [[1, 2, 3, 4]]
     assert db.sql("status = 'merged_away'") == [(1, 2), (1, 3), (1, 4)]
     order = [s for s, _p in db.log]
     last_retire = max(i for i, s in enumerate(order) if "status = 'merged_away'" in s)
@@ -214,7 +214,7 @@ def test_a_refusal_on_a_later_pair_rolls_the_whole_set_back(monkeypatch):
         _merge(db, [3, 7, 9])
     assert any(step.retired == 7 for s, step in db.log if s.startswith("carrier:"))
     assert db.listings == {1: 3, 2: 7, 3: 9} and db.events == []
-    assert db.carried == [] and db.changed == db.browse == db.broker == []
+    assert db.carried == [] and db.changed == db.browse == []
     assert db.props == {3: "active", 7: "active", 9: "active"}
     assert db.sql("WITH batch AS") == []
 
@@ -273,6 +273,15 @@ def test_each_step_writes_its_carry_rows_after_every_carrier_and_before_its_reti
     quiet = _Ledger({1: 3, 2: 7})
     _merge(quiet, [3, 7])
     assert quiet.carries == [] and quiet.sql("property_merge_carries") == []
+
+
+def test_a_split_passes_the_publication_stamp_to_the_property_it_bears():
+    """A property split off a published one is published: unstamped, the stamper would publish it as new."""
+    import inspect
+
+    body = inspect.getsource(pi._born)
+    assert body.index("create_singleton_properties(conn, [listing_id])") < body.index(
+        "cur.execute(_CARRY_SETTLED_SQL, (born, current))")
 
 
 def test_each_step_carries_the_publication_stamp_after_its_carriers_and_before_its_retire():

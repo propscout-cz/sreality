@@ -332,7 +332,7 @@ def test_the_modelled_price_and_area_reach_neither_a_column_nor_raw():
 
 
 def test_seller_and_broker_identity_is_dropped_at_parse_time():
-    """This repo is public and so is the fixture. The identity is not masked, it is
+    """Git history is permanent, and so is the fixture. The identity is not masked, it is
     removed — from the row, from `raw`, and from the committed bytes."""
     for row in _page().rows:
         assert not set(row.raw) & {"sellerDetails", "companyDetails"}

@@ -24,13 +24,9 @@ import type { QueryClient } from '@tanstack/react-query';
 import { actingKey, actOpts, useActAs } from '@/lib/acting';
 import { addPipelineCard, movePipelineCard, removePipelineCard } from '@/lib/api';
 import { settlePatches, settleRereads } from '@/lib/curationSettle';
+import { tableReads } from '@/lib/curationSync';
 import { dismissalKeys } from '@/lib/queries';
-import {
-  cachedStage,
-  dropCard,
-  pipelineRevalidate,
-  placeCard,
-} from '@/lib/pipelineCache';
+import { cachedStage, dropCard, placeCard } from '@/lib/pipelineCache';
 import type { PipelineStage } from '@/lib/types';
 import { useOptimisticWrite } from '@/lib/useOptimisticWrite';
 
@@ -47,8 +43,9 @@ export interface PipelineMove {
  * entries only: Browse never acts, so it neither settles nor re-reads. */
 const land = (qc: QueryClient, propertyId: number, stage: PipelineStage | null, actAs: string | null) =>
   stage ? [...placeCard(propertyId, stage, actAs), ...settlePatches(qc, propertyId, 'pipeline', actAs)] : [];
+/* The tables a card write touches: the card, and the dismissal a live stage lifts. */
 const reread = (qc: QueryClient, propertyId: number, failed: boolean, actAs: string | null) => [
-  ...pipelineRevalidate(actAs),
+  ...tableReads(['property_pipeline', 'property_dismissals'], actAs),
   ...settleRereads(qc, propertyId, 'pipeline', failed, actAs),
 ];
 /* A card at a live stage lifts the caller's dismissal (api/dismissals.py), so
@@ -81,6 +78,21 @@ export function usePipelineCard({ onAddError }: { onAddError?: (error: Error) =>
     pendingKey: (property_id) => property_id,
   });
 
+  /* A card added straight at a named live stage (the viewing prompt, lib/viewingStage):
+   * one write and one ledger event there, never an add at the entry stage plus a move. */
+  const addAt = useOptimisticWrite({
+    mutationKey: actingKey(actAs, ['write', 'pipeline', 'add-at']),
+    mutationFn: ({ propertyId, stageId }: PipelineMove) =>
+      addPipelineCard(propertyId, { actAs: actAs ?? undefined, stage_id: stageId }),
+    onError: onAddError,
+    patch: ({ propertyId, stageId }, qc) => land(qc, propertyId, cachedStage(qc, stageId, actAs), actAs),
+    revalidate: ({ propertyId, stageId }, failed, qc) => {
+      const stage = cachedStage(qc, stageId, actAs);
+      return reread(qc, propertyId, failed || stage == null || lifts(qc, propertyId, stage, actAs), actAs);
+    },
+    pendingKey: ({ propertyId }) => propertyId,
+  });
+
   const remove = useOptimisticWrite({
     mutationKey: actingKey(actAs, ['write', 'pipeline', 'remove']),
     mutationFn: (property_id: number) => removePipelineCard(property_id, ...actOpts(actAs)),
@@ -110,9 +122,13 @@ export function usePipelineCard({ onAddError }: { onAddError?: (error: Error) =>
 
   return {
     add,
+    addAt,
     remove,
     move,
     pending: (property_id: number) =>
-      add.pendingFor(property_id) || remove.pendingFor(property_id) || move.pendingFor(property_id),
+      add.pendingFor(property_id) ||
+      addAt.pendingFor(property_id) ||
+      remove.pendingFor(property_id) ||
+      move.pendingFor(property_id),
   };
 }

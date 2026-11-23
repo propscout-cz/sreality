@@ -12,3 +12,6 @@ version so a property is judged once, callable by agents on at most 10 propertie
 parked, cohort statistics keep using the condition the portal states, and Browse shows no facet until a further ruling.
 The facet list and wording live in a versioned reference file the operator edits. Operator ruling Q17, Q30, Q33 of
 2026-10-25.
+
+Amended 2026-11-01, operator ruling: "10 properties per run" means 10 paid assessments. A cached answer does not count
+against the ten.

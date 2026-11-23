@@ -17,9 +17,14 @@ from api.providers.base import (
     Block,
     Completion,
     CompletionProvider,
+    HostedCode,
+    HostedCodeProvider,
+    HostedFile,
+    HostedFileInfo,
     ImageBlock,
     Message,
     ModelPrice,
+    OpaqueBlock,
     ProviderError,
     TextBlock,
     ToolCall,
@@ -28,6 +33,7 @@ from api.providers.base import (
     ToolUseBlock,
     Usage,
     compute_cost_usd,
+    is_transient,
 )
 
 __all__ = [
@@ -38,9 +44,14 @@ __all__ = [
     "Block",
     "Completion",
     "CompletionProvider",
+    "HostedCode",
+    "HostedCodeProvider",
+    "HostedFile",
+    "HostedFileInfo",
     "ImageBlock",
     "Message",
     "ModelPrice",
+    "OpaqueBlock",
     "ProviderError",
     "TextBlock",
     "ToolCall",
@@ -49,4 +60,5 @@ __all__ = [
     "ToolUseBlock",
     "Usage",
     "compute_cost_usd",
+    "is_transient",
 ]

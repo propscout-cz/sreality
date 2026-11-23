@@ -9,14 +9,16 @@
 # Leaving (operator rulings 2026-09-30): `bzs.det.obec_slug` — the href names the POST
 # OFFICE's town (35 of 137 sampled adverts in the wrong town, 33 by postcode; the PSČ stays
 # and decides when a reading names no town) — and `bzs.det.street_cue`, the whole headline.
-# A mined reading supersedes the listing's older claims of its types; a listing with no
-# reading (a delisted advert with no text) keeps its v7 town.
+# A listing with no reading (a delisted advert with no text) keeps its v7 town.
 # v9 (text-reader W4) changes no entry: the reader's rules changed (a value standing in the
 # advert is its own quote, initials ground a name, a not_property advert keeps its town), so
 # every stamped reading is re-mined under them.
+# v10 (location W3): the blur marker states its ABSENCE (`absent: retract`). A maps link
+# whose title no longer says "Přibližná lokalita" retracts the stored declaration; a page
+# with no maps link says nothing. Until W3 a blur, once stated, was never cleared.
 
 portal: bazos
-contract_version: 9
+contract_version: 10
 
 persistence:
   # What this portal's body carries that changes without the listing changing —
@@ -74,7 +76,8 @@ extractions:
     extraction_method: portal_declared_quality
     page_kind: detail
     locator: {reader: html_marker, css: "a[href*='/place/']", attr: title,
-              contains: "Přibližná lokalita", value_label: approximate_location}
+              contains: "Přibližná lokalita", value_label: approximate_location,
+              absent: retract}
     claim_type: precision_declaration
     licence_class: portal
     blur_evidence: declared
@@ -83,7 +86,8 @@ extractions:
       position_source_max: portal_pin_blurred
       blurred_labels: [approximate_location]
     subject_scope: {subject_scoped: true}
-    notes: "The maps link's title — bazos declaring its own pin approximate."
+    notes: "The maps link's title — bazos declaring its own pin approximate. A link whose
+      title does not say so retracts the declaration (W3)."
 
   - id: bzs.det.link_pin
     locator_kind: html_selector

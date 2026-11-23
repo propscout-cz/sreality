@@ -267,9 +267,8 @@ function V2Layout({
       <StrategyPanel summary={summary} />
 
       <div>
-        <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium mb-3">
-          Selection rounds
-        </p>
+        {/* A group of the trace: an L3 title (system.md § Section cards), never small caps. */}
+        <h3 className="mb-3 text-sm leading-5 font-semibold text-[var(--color-ink)]">Selection rounds</h3>
         <div className="space-y-2">
           {groups.map((group, idx) => (
             <RoundBlock
@@ -403,9 +402,7 @@ function StrategyPanel({ summary }: { summary: SelectionSummary }) {
   return (
     <div className="rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-4 py-4">
       <div className="flex items-baseline justify-between gap-4 flex-wrap">
-        <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)] font-medium">
-          Strategy
-        </p>
+        <h3 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">Strategy</h3>
         <p className="text-[0.78rem] text-[var(--color-ink-3)]">
           <span className="font-mono tabular-nums text-[var(--color-ink)]">
             {summary.n_rounds}

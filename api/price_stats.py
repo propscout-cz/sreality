@@ -108,10 +108,8 @@ def dataset_city_metrics(conn: "psycopg.Connection", dataset_id: int) -> dict[st
     return analysis.dataset_city_metrics(conn, dataset_id)
 
 
-def dataset_city_series(
-    conn: "psycopg.Connection", dataset_id: int, entity_type: str, entity_id: int
-) -> dict[str, Any]:
-    return analysis.dataset_city_series(conn, dataset_id, entity_type, entity_id)
+def dataset_city_series(conn: "psycopg.Connection", dataset_id: int, obec_id: int) -> dict[str, Any]:
+    return analysis.dataset_city_series(conn, dataset_id, obec_id)
 
 
 def run_dataset_now(conn: "psycopg.Connection", dataset_id: int) -> dict[str, Any]:
@@ -132,7 +130,7 @@ def run_dataset_now(conn: "psycopg.Connection", dataset_id: int) -> dict[str, An
             "(repo Actions: read+write) as GH_DISPATCH_TOKEN; the dataset will "
             "otherwise scrape on the next scheduled run.",
         )
-    repo = os.environ.get("GH_REPO", "waiff/sreality")
+    repo = os.environ.get("GH_REPO", "propscout-cz/sreality")
     try:
         resp = requests.post(
             f"https://api.github.com/repos/{repo}/actions/workflows/{_DISPATCH_WORKFLOW}/dispatches",

@@ -2,7 +2,7 @@
 
 W5 made this the ONE production path (E914): the always-on worker's `autodedup` lane
 (`scraper/realtime_worker.py`) is its only caller and its interval (0 = stop) its only switch.
-One pass, under the lane's lease (`autodedup.rt_lease`), claims what moved, decides it with the
+One pass, under the lane's lease (`rt_lease`), claims what moved, decides it with the
 batch engine's own functions (`incremental.run_pass_bounded`), re-clusters under the relation
 and the operator's rulings the batch pass clusters under (F2, E909; E910), commits, and then
 RECONCILES production (`autodedup/reconcile.py`, A9): the groups it re-clustered become merges
@@ -137,6 +137,7 @@ from autodedup.incremental_sql import (
     RT_CUT_SCOPE_IDS_SQL,
     RT_FLIPPED_LISTINGS_SQL,
     RT_EVIDENCE_CANDIDATES_SQL,
+    RT_EVIDENCE_ACTIVE_SQL,
     RT_EVIDENCE_HELD_COUNT_SQL,
     RT_EVIDENCE_PROBE_SQL,
     RT_EVIDENCE_RELEASE_SQL,
@@ -149,7 +150,6 @@ from autodedup.incremental_sql import (
     RT_FRESH_CLUSTERS_SQL,
     RT_FRESH_CURSORS_SQL,
     RT_FRESH_FP_KEY_SQL,
-    RT_FRESH_LEASE_SQL,
     RT_FRESH_SETTINGS_SQL,
     RT_FRESH_PAIRS_SQL,
     RT_FRESH_REJECT_LEDGER_SQL,
@@ -164,7 +164,6 @@ from autodedup.incremental_sql import (
     RT_GENERATION_BYTES_SQL,
     RT_IDLE_GUARD_SQL,
     RT_LOCK_GUARD_SQL,
-    RT_PHASH_POP_COUNT_SQL,
     RT_PHASH_POP_SQL,
     RT_PHASH_POP_WRITE_SQL,
     RT_KEY_DELETE_SQL,
@@ -195,7 +194,7 @@ from autodedup.incremental_sql import (
     RT_SCOPE_BACKLOG_SQL,
     RT_SCOPE_BLOCK_SQL,
     RT_SCOPE_BUILD_ENTRANTS_SQL,
-    RT_SCOPE_ENTRANTS_SQL,
+    RT_SCOPE_UNREAD_SQL,
     RT_SCOPE_IDS_DELETE_SQL,
     RT_SCOPE_IDS_OF_BLOCKS_SQL,
     RT_SCOPE_IDS_PRUNE_BLOCKS_SQL,
@@ -231,6 +230,7 @@ from autodedup.model import LogisticModel
 from autodedup.score_sql import CLUSTER_CONFLICT_INSERT_SQL
 from autodedup.settings import Settings
 from autodedup.text_facts import body_cache_entries, clear_body_caches
+from scraper.cgroup import memory_ceiling_mb
 
 LOG = logging.getLogger(__name__)
 
@@ -351,6 +351,23 @@ PAGE_STALL_PAGES: int = 16
 # buffers, 14 MB) and the day costs ~259,000 buffers, 2.0 GB — the same order as the entrant
 # feed's 1.6 GB after W9e cut it 7.8x.
 EVIDENCE_SLICE: int = 400
+# E980: how many ACTIVE rows still marked incomplete the evidence sweep probes on every pass,
+# newest first decision first, ahead of its round-robin. 1,916 qualified on 2026-10-26; at 12
+# buffers a listing 1,000 is ~12,000 buffers (~94 MB) a pass, and the oldest beyond it are
+# still the round-robin's.
+EVIDENCE_ACTIVE_SLICE: int = 1000
+# E980: how long a row the lane just wrote stays out of that arm. It bounds a row whose probe
+# disagrees with its decision for ever (an undecodable image stamped by the CLIP job) to one
+# re-decision an hour; an arrival's vectors land hours after its first decision, so the gate
+# does not delay the case the arm is for.
+EVIDENCE_ACTIVE_RECHECK_MINUTES: int = 60
+# E980b: how many of the arm's moved rows one pass re-decides, and the arm is OFF in a build.
+# A re-decided active advert drags its whole built neighbourhood through retrieval and
+# re-scoring: on 2026-10-26 a build pass that took 28 of them claimed 275 in 1,022 s against
+# ~750 without, and two passes that took 57-80 overran PASS_DEADLINE_S and rolled back (#2091,
+# reverted by #2096). A build pass already runs at 89-97 % of the deadline, so there the feed is
+# E92's round-robin alone; outside a build the passes are short and 15 fit.
+EVIDENCE_ACTIVE_REDECIDE_MAX: int = 15
 # How long after its FIRST decision a listing's photographs are still expected. The producers
 # are hourly (dHash at :20, CLIP at :40) and measured p90 4.51 h to a first tag, so 48 h is
 # ~10x the observed tail rather than a guess at it — and it is the bound on how long a merge
@@ -422,6 +439,12 @@ PASS_RATE_ALPHA: float = 0.5
 # database is no slower (2 s to spare at the threshold); the margin is E71's neighbourhood
 # saturating (2026-10-10: 62/125/250 adverts in 331/395/450 s, x1.14-1.19 a doubling).
 RAMP_HEADROOM: float = 0.5
+# E987's fairness: an unread snapshot advert resolved this long ago is read before any block
+# order, oldest first, so no block waits for ever behind a supply of smaller ones. Measured
+# from `rt_scope_ids.resolved_at` (the location's resolution, about the advert's arrival), not
+# from its entry into the snapshot: 11-17's backlog was resolved 11-16 23:58Z to 11-17 09Z, 16 h
+# old at deploy, and at 24 h this tier would have taken every slot from the next morning on.
+ENTRANT_MAX_WAIT_S: float = 72 * 3600.0
 # E951: a build's pass budget as a share of the deadline: a build's pass need not finish fast
 # for latency, and its fixed cost is spread over more adverts. The margin is 4/3, not 2, so most
 # deadline hits a build meets come from here: each rolls back, halves the rate, costs ~18 min.
@@ -483,6 +506,12 @@ MAX_RETIRE_FRACTION: float = 0.05
 # double it. `rt_scope = all` is gated by `CORPUS_PROJECTION_MB` (17,000) through
 # `guard_agrees`, and this budget stays below it, so raising it never enables the corpus.
 #
+# 14,000 MB since 2026-10-30, raised to its projection for E964's next batch: the operator's
+# widening to kraje 86, 94 and 108 (14 okresy, 95,343 adverts the store does not hold). On the
+# schema's 8,334 MB its seed projects 1,963 MB of build and cut plus 27 MB of snapshot (~10,324
+# MB), and the 16,055 Liberecký adverts still unread bring both builds to ~10,700 MB, leaving
+# ~3,300 MB for arrivals. The database is 146.6 GB, so the raise is ~3 % of it.
+#
 # 10,000 MB since E940 (2026-10-17; 6,000 since E946, 1,500 since E941, 800 since E916, 400
 # before that; MB here are MiB, as the guard computes them), sized for the re-seed that lists
 # Prague whole and kraj 27 (E939 S4, E961): seven towns (25,527 located adverts), obec:554782
@@ -500,7 +529,7 @@ MAX_RETIRE_FRACTION: float = 0.05
 # eight towns plus all 157 Prague quarters (~170,000, ~3,700 MB projected) and E941's 1,500 for
 # S1's 38,000. A DELETE never shrinks a file, so the schema's size is a high-water mark that
 # pruned generations leave behind.
-MAX_SCHEMA_MB: float = 10000.0
+MAX_SCHEMA_MB: float = 14000.0
 # What the build writes for ONE in-scope advert — its rt_fp row, its fp_key rows, its share of
 # the stored pairs and of the groups — at what the live store costs, not at E916's row bytes:
 # on 2026-10-09 generation `rt` held 129.2 MB for 7,298 adverts, 18.1 KiB an advert (its
@@ -532,14 +561,15 @@ SNAPSHOT_BYTES_PER_ROW: int = 300
 # review of E962): 43.9 entries, 8.06 kB of RSS and 678 B of payload an advert; a seed of mostly
 # villages ~9-10 kB all in. Plus the population (120 B a hash at its peak, 7.08 hashes an
 # advert: 0.85 kB), libpq's copy of its rows and the payload's two serialisations: 12 kB with
-# headroom. The seed runs on GitHub's ubuntu-latest, 16 GiB, and a cut past it is OOM-killed,
-# stranding `rt_lease` for SEED_LEASE_TTL_S (the lease is taken before the transaction and
-# SIGKILL runs no release). So right after its walk, before the cut, the seed refuses a scope
-# whose peak would pass HALF the runner — the rule a widened scope's gate holds the worker to
-# (E939) — 8,192 MiB / 12 kB = 699,050 adverts (E940's whole cut: 56 kB, ~149,800), though
-# MAX_SCHEMA_MB binds first, above ~470k. The 323,128 of the re-seed: ~3.7 GiB.
+# headroom. The seed runs on a GitHub-hosted runner (16 GiB public, 7 GiB private), and a cut
+# past it is OOM-killed, stranding `rt_lease` for SEED_LEASE_TTL_S (the lease is taken before the
+# transaction and SIGKILL runs no release). So right after its walk, before the cut, the seed
+# refuses a scope whose peak would pass HALF of what the container may use — the rule a widened
+# scope's gate holds the worker to (E939) — measured at import (#2016): 8,192 MiB / 12 kB =
+# 699,050 adverts on a public runner (E940's whole cut: 56 kB, ~149,800), though MAX_SCHEMA_MB
+# binds first, above ~660k. The 323,128 of the re-seed: ~3.7 GiB.
 CUT_PEAK_BYTES_PER_LISTING: int = 12 * 1024
-SEED_MEMORY_MB: float = 8192.0
+SEED_MEMORY_MB: float = memory_ceiling_mb() / 2
 # How many `phash_pop` rows one `executemany` carries. The trial cohort's 41,791 hashes are
 # 9 chunks; the number is the score lane's, for the same reason (bound-parameter size).
 POP_CHUNK: int = 5_000
@@ -1341,6 +1371,7 @@ class SqlWork:
                  max_enter_scans_per_day: int = MAX_ENTER_SCANS_PER_DAY,
                  evidence_slice: int = EVIDENCE_SLICE,
                  evidence_horizon_hours: float = EVIDENCE_HORIZON_HOURS,
+                 evidence_active_slice: int = EVIDENCE_ACTIVE_SLICE,
                  bootstrap: bool = False,
                  pass_budget_s: float = PASS_BUDGET_S,
                  rate_per_s: float = PASS_RATE_PER_S,
@@ -1363,6 +1394,7 @@ class SqlWork:
         self.max_enter_scans_per_day = int(max_enter_scans_per_day)
         self.evidence_slice = int(evidence_slice)
         self.evidence_horizon_hours = float(evidence_horizon_hours)
+        self.evidence_active_slice = int(evidence_active_slice)
         self.bootstrap = bool(bootstrap)
         self.pass_budget_s = float(pass_budget_s)
         self.rate_per_s = float(rate_per_s)
@@ -1385,6 +1417,8 @@ class SqlWork:
         # What bound this pass's claim — the count, the cap or the clock — and the re-claims
         # riding on top of it (`stale`), for the run summary and the rate's measurement.
         self.claim_bound: dict[str, Any] = {}
+        # E987: this pass's one read of the snapshot's unread adverts, outside a build.
+        self._unread_scan: list[tuple[str, int, Any, bool, float | None]] | None = None
         self.parents = dict(parents or {})
         self.districts = dict(districts or {})
         self.enter_blocks = walk_blocks(scope, self.parents, self.districts)
@@ -1441,12 +1475,14 @@ class SqlWork:
         # a build or a steady pass did before E964.
         reserved = len(self.stale_claims) if self.bootstrap and self.attempt == 0 else 0
         enter_share = max(share, limit - reserved) if self.bootstrap else share
-        self.claim_bound["enter"] = enter_share
+        self.claim_bound.update(enter=enter_share, building=bool(self.bootstrap))
         scope = self.scope.params()
         items: list[WorkItem] = []
         self._pending = {}
         self.windows = {}
         self._claimed = {}
+        self._unread_scan = None
+        cut = False
 
         after_new = cursors[CURSOR_NEW][0]
         # The straggler sweep FIRST: a row that committed after the cursor passed its id is
@@ -1457,12 +1493,24 @@ class SqlWork:
                     "after_id": after_new, "window": self.straggler_window,
                     "generation": self.generation, "limit": share, **scope}):
                 items.append(WorkItem(int(row[0]), "straggler", _epoch(row[1]), None))
+            cut = len(items) >= share
 
         end, size, ids, stamps = _window(self._query(RT_NEW_LISTINGS_SQL, {
             "after_id": after_new, "lag": self.lag, "window": self.window, **scope}), after_new)
         self.windows["new"] = size
+        # E988: a row the lane already holds (the entrant feed read it first, the walk listing
+        # it before this cursor reached it) is passed over, not re-claimed; the window and the
+        # cursor are as before, so the cursor still crosses it.
+        if ids:
+            known = {int(row[0]) for row in self._query(RT_KNOWN_SQL, {
+                "generation": self.generation, "ids": [int(i) for i in ids]})}
+            if known:
+                kept = [(i, s) for i, s in zip(ids, stamps) if int(i) not in known]
+                ids, stamps = [i for i, _ in kept], [s for _, s in kept]
+                self.claim_bound["new_known"] = len(known)
         if size:
             taken = min(len(ids), share)
+            cut = cut or taken < len(ids)
             self._pending[CURSOR_NEW] = (int(ids[taken - 1]) if taken < len(ids) else int(end))
             for listing_id, stamp in zip(ids[:taken], stamps[:taken]):
                 items.append(WorkItem(int(listing_id), "new", _epoch(stamp), None))
@@ -1474,6 +1522,7 @@ class SqlWork:
         self.windows["changed"] = size
         if size:
             taken = min(len(ids), share)
+            cut = cut or taken < len(ids)
             self._pending[CURSOR_CHANGED] = (int(snapshot_ids[taken - 1])
                                              if taken < len(ids) else int(end))
             for listing_id, stamp in zip(ids[:taken], stamps[:taken]):
@@ -1486,6 +1535,7 @@ class SqlWork:
         self.windows["flipped"] = size
         if size:
             taken = min(len(ids), share)
+            cut = cut or taken < len(ids)
             self._pending[CURSOR_FLIPPED] = ((stamps[taken - 1], int(ids[taken - 1]))
                                              if taken < len(ids)
                                              else (stamp_end, int(id_end)))
@@ -1504,6 +1554,7 @@ class SqlWork:
             # short slice taken whole is the end of the sweep, so the cursor wraps and the next
             # pass starts the cycle again.
             taken = min(len(revived), share)
+            cut = cut or taken < len(revived)
             self._pending[CURSOR_REVIVE] = (int(revived[taken - 1]) if taken < len(revived)
                                             else 0 if slice_size < self.revive_slice
                                             else slice_max)
@@ -1524,6 +1575,7 @@ class SqlWork:
                  list(rows[0][3] or ()))
                 if rows else (after_scope, 0, [], []))
             retiring = [int(value) for value in departed[:share]]
+            cut = cut or len(retiring) < len(departed)
             self._guard_retirement(departed, len(retiring))
             moving = [int(value) for value in relocated[:share - len(retiring)]]
             self.windows["relocated"] = len(relocated)
@@ -1544,8 +1596,8 @@ class SqlWork:
             pointer = self.refresh_scope_ids(cursors[CURSOR_ENTER][1])
             if self.bootstrap:
                 # E976: a build reads the LIVE adverts first, under no id cursor (two keys are
-                # no keyset): the `rt_fp` anti-join advances it, so its id half stays 0 and the
-                # feed outside the build starts again at the snapshot's first id.
+                # no keyset): the `rt_fp` anti-join advances it, so its id half stays 0; outside
+                # the build no id cursor either (E987).
                 # E979: the operator's blocks first, in their category order; empty: E978's.
                 rows = self._query(RT_SCOPE_BUILD_ENTRANTS_SQL, {
                     "generation": self.generation, "lag": self.lag, "limit": enter_share,
@@ -1553,14 +1605,22 @@ class SqlWork:
                     "priority_cats": self.priority_cats})
                 self._pending[CURSOR_ENTER] = (0, pointer)
             else:
-                after_enter = cursors[CURSOR_ENTER][0]
-                rows = self._query(RT_SCOPE_ENTRANTS_SQL, {
-                    "generation": self.generation, "after_id": after_enter,
-                    "lag": self.lag, "limit": enter_share})
-                # Short of the share means the snapshot is walked out: the cursor wraps so the
-                # next cycle re-offers whatever the settle lag held back this time.
-                self._pending[CURSOR_ENTER] = (
-                    (int(rows[-1][0]), pointer) if len(rows) >= enter_share else (0, pointer))
+                # E987: outside a build the feed completes BLOCKS. The reconcile merges nothing
+                # in a block whose snapshot holds an unread advert (`apply.rt_block_reads`); this
+                # feed read the snapshot in id order behind its own cursor, not block by block,
+                # so after a brake every block held until the whole backlog was read
+                # (2026-11-17: 4,120 unread in 32 of 32 blocks, no merge from 12:58Z). One scan
+                # of the snapshot's unread, handed on to the reconcile, orders them
+                # (`entrant_order`); the `rt_fp` anti-join advances it, so its id half stays 0.
+                self._unread_scan = [
+                    (str(row[0]), int(row[1]), row[2], bool(row[3]),
+                     None if row[4] is None else float(row[4]))
+                    for row in self._query(RT_SCOPE_UNREAD_SQL, {
+                        "generation": self.generation, "lag": self.lag})]
+                rows = entrant_order(self._unread_scan, enter_share)
+                offered = {lid for _b, lid, _at, settled, _w in self._unread_scan if settled}
+                cut = cut or len(rows) < len(offered)
+                self._pending[CURSOR_ENTER] = (0, pointer)
             self.windows["entered"] = len(rows)
             for row in rows:
                 items.append(WorkItem(int(row[0]), "entered", _epoch(row[1]), None))
@@ -1592,9 +1652,27 @@ class SqlWork:
             self.claim_bound["stale"] = len(taken)
             items.extend(WorkItem(listing_id, "stale", None, None, redecide=True)
                          for listing_id in taken)
+        # E984: a feed left work waiting, so a pass the clock cut measured the claim's size even
+        # where the feeds that ran dry kept it short of the limit.
+        self.claim_bound["cut"] = cut
         for item in items:
             self._claimed.setdefault(item.feed, set()).add(item.listing_id)
         return items
+
+    def unread_blocks_after(self) -> set[str] | None:
+        """E987: the reconcile's unfingerprinted half (`apply.rt_block_reads`) from this pass's one
+        scan: each block the scan found holding an advert that still holds no `rt_fp` row. Exact,
+        as nothing but the claim's walk writes the snapshot and `rt_fp` only grows, unless the
+        pass retired a row; then, and when the pass took no scan (a build), None: the reconcile
+        reads the snapshot itself."""
+        if self._unread_scan is None or self._claimed.get("drifted"):
+            return None
+        ids = sorted({lid for _block, lid, *_rest in self._unread_scan})
+        if not ids:
+            return set()
+        known = {int(row[0]) for row in self._query(RT_KNOWN_SQL, {
+            "generation": self.generation, "ids": ids})}
+        return {block for block, lid, *_rest in self._unread_scan if lid not in known}
 
     def _measure_bootstrap(self, taken: int) -> None:
         """Does this pass end the phase (E98)? Two conditions, both read inside `autodedup`.
@@ -1624,17 +1702,25 @@ class SqlWork:
         `image_clip_tags` on every row (72,171 each, 0 disagreements), at a fourteenth of the
         buffers the two joins cost."""
         horizon = {"horizon_hours": int(round(self.evidence_horizon_hours))}
+        # E980: the active arm first, so the share below takes its moved rows before the
+        # round-robin's; the cursor still follows the round-robin's rows alone.
+        active = self._query(RT_EVIDENCE_ACTIVE_SQL, {
+            "generation": self.generation, "limit": self.evidence_active_slice,
+            "recheck_minutes": EVIDENCE_ACTIVE_RECHECK_MINUTES,
+        }) if self.evidence_active_slice > 0 and not self.bootstrap else []
         rows = self._query(RT_EVIDENCE_CANDIDATES_SQL, {
             "generation": self.generation, "after_id": int(after_id),
             "limit": self.evidence_slice, **horizon})
-        recorded = {int(row[0]): (row[1], row[2], row[3], row[4]) for row in rows}
+        recorded: dict[int, tuple[Any, Any, Any, Any]] = {}
+        for row in [*active, *rows]:
+            recorded.setdefault(int(row[0]), (row[1], row[2], row[3], row[4]))
         probed: dict[int, tuple[int, int, int]] = {}
         if recorded:
             probed = {int(row[0]): (int(row[1]), int(row[2]), int(row[3]))
                       for row in self._query(RT_EVIDENCE_PROBE_SQL,
                                              {"ids": sorted(recorded)})}
         moved: list[int] = []
-        for listing_id, (images, phash, clip, tags) in sorted(recorded.items()):
+        for listing_id, (images, phash, clip, tags) in recorded.items():
             live = probed.get(listing_id, (0, 0, 0))
             # A NULL count is a row written before migration 540 — unmeasured, not zero, so
             # it is re-decided once and then carries real counts.
@@ -1651,23 +1737,42 @@ class SqlWork:
             released.extend((int(row[0]), int(row[1])))
         held_total = int(self._query(RT_EVIDENCE_HELD_COUNT_SQL, {
             "generation": self.generation, "reason": EVIDENCE_HOLD_REASON})[0][0] or 0)
-        # A short slice is the end of the sweep, so the cursor wraps — the same round-robin
-        # the drift sweep uses, and the reason a candidate cut by `share` is re-offered.
-        self._pending[CURSOR_EVIDENCE] = (
-            0 if len(rows) < self.evidence_slice else max(recorded, default=int(after_id)))
         self.windows["evidence"] = len(rows)
         self.evidence = {
-            "candidates": len(rows), "listings_probed": len(recorded),
+            "candidates": len(rows), "active_candidates": len(active),
+            "listings_probed": len(recorded),
             "images_probed": sum(row[0] for row in probed.values()),
             "moved": len(moved), "release_candidates": len(set(released)),
             "held_pairs": held_total,
             "horizon_hours": self.evidence_horizon_hours, "slice": self.evidence_slice,
         }
         gone = set(retiring or ())
+        arm_ids = {int(row[0]) for row in active}
+        # E980b: the arm's re-decides are bounded by a count of their own, the round-robin's
+        # by the share as before.
+        arm_moved = [listing_id for listing_id in moved if listing_id in arm_ids]
+        robin_moved = [listing_id for listing_id in moved if listing_id not in arm_ids]
+        arm_taken = min(len(arm_moved), share, EVIDENCE_ACTIVE_REDECIDE_MAX)
+        taken_moved = (arm_moved[:arm_taken] + robin_moved)[:share]
         wanted: list[int] = []
-        for listing_id in moved[:share] + sorted(set(released)):
+        for listing_id in taken_moved + sorted(set(released)):
             if listing_id not in wanted and listing_id not in gone:
                 wanted.append(listing_id)
+        # A short slice is the end of the sweep, so the cursor wraps — the same round-robin
+        # the drift sweep uses. E980b: the cursor stops just before a round-robin mover only
+        # when the ARM's slots displaced it (one E92 would have taken), as E970's revive feed
+        # does; a mover E92 itself cut beyond the share is stepped past as before. In a build
+        # the arm takes nothing, so the cursor is E92's exactly and the round-robin never hands
+        # on more than one share a slice (review of #2101).
+        cut = [listing_id for listing_id in robin_moved[max(0, share - arm_taken):share]
+               if listing_id not in gone]
+        if cut:
+            self._pending[CURSOR_EVIDENCE] = min(cut) - 1
+        else:
+            self._pending[CURSOR_EVIDENCE] = (
+                0 if len(rows) < self.evidence_slice
+                else max((int(row[0]) for row in rows), default=int(after_id)))
+        self.evidence["cut"] = len(cut)
         return [WorkItem(listing_id, "evidence", None, None, redecide=True)
                 for listing_id in wanted]
 
@@ -2368,8 +2473,9 @@ def schema_bytes(conn: Any) -> int:
 
 
 def rt_rows(conn: Any, generation: str, scope: Scope) -> dict[str, int]:
-    """What the generation holds, by table. Exact while the scope is small — which is the
-    point of a scope — and the planner's estimate when there is none to keep it cheap."""
+    """What the generation holds, by table: `rt_fp` and `rt_block_cell` exact and the
+    report-only `fp_key` and `pairs` estimated while the scope is bounded, every table the
+    planner's estimate when there is none."""
     sql = RT_ROW_ESTIMATE_SQL if scope.whole_corpus else RT_ROW_CENSUS_SQL
     params = None if scope.whole_corpus else {"generation": generation}
     return {str(row[0]): int(row[1] or 0) for row in _rows(conn, sql, params)}
@@ -2532,14 +2638,14 @@ RESET_TABLES: tuple[tuple[str, str], ...] = (
 )
 
 
-def reset_generation(conn: Any, generation: str, *, holder: str) -> dict[str, int]:
+def reset_generation(conn: Any, generation: str) -> dict[str, int]:
     """Empty ONE generation and nothing else (E97), counting what went.
 
     A DELETE of this generation's rows, never a TRUNCATE, run inside the seed's transaction: a
     seed that refuses after this point leaves the store exactly as it found it. The ledger of
     production merges (`autodedup.applied_merges`) is NOT here: a rebuild changes what the lane
-    will decide, never what it has already merged. `holder` is the seed's own lease, which the
-    reset keeps: the seed holds it so no pass can write into the generation while it empties."""
+    will decide, never what it has already merged. The seed holds the lane's lease throughout, so
+    no pass can write into the generation while it empties."""
     deleted: dict[str, int] = {}
     for name, sql in RESET_TABLES:
         rows = _rows(conn, sql, {"generation": generation})
@@ -2551,8 +2657,6 @@ def reset_generation(conn: Any, generation: str, *, holder: str) -> dict[str, in
                  reconcile.tried_key(generation), reconcile.budget_key(generation),
                  pages_key(generation)]})
     deleted["settings"] = int(rows[0][0] or 0) if rows else 0
-    rows = _rows(conn, RT_FRESH_LEASE_SQL, {"name": LANE_NAME, "holder": holder})
-    deleted["rt_lease"] = int(rows[0][0] or 0) if rows else 0
     return deleted
 
 
@@ -2614,10 +2718,6 @@ def pass_config(recorded: Any, model_version: Any, generation: str
             f"generation {generation!r} carries settings this build cannot read ({exc}) — "
             "re-seed it.") from exc
     return settings, model_of_version(str(model_version) if model_version else None)
-
-
-def phash_pop_rows(conn: Any) -> int:
-    return int(_rows(conn, RT_PHASH_POP_COUNT_SQL)[0][0] or 0)
 
 
 def _stamp(value: Any) -> datetime | None:
@@ -2835,8 +2935,8 @@ def seed_memory(scope_listings: int, memory_mb: float = SEED_MEMORY_MB) -> dict[
             f"rt_seed refused: the calibration cut (streamed, E962) holds "
             f"~{CUT_PEAK_BYTES_PER_LISTING // 1024} kB an advert at its peak, so the "
             f"{int(scope_listings):,} adverts the walk listed would peak at ~{peak_mb:,.0f} MiB, "
-            f"over SEED_MEMORY_MB {float(memory_mb):,.0f} (half the runner's 16 GiB): the "
-            "runner would kill the seed mid-cut and strand autodedup.rt_lease for "
+            f"over SEED_MEMORY_MB {float(memory_mb):,.0f} (half the container's memory limit): the "
+            "runner would kill the seed mid-cut and strand rt_lease for "
             f"{SEED_LEASE_TTL_S:,} s. Narrow rt_scope. Nothing was written.")
     return report
 
@@ -2985,6 +3085,36 @@ def cut_calibration(conn: Any, settings: Settings, model_version: str | None,
     return write_cut(conn, cut, settings, model_version, generation)
 
 
+def entrant_order(scan: Sequence[tuple[str, int, Any, bool, float | None]], limit: int,
+                  max_wait_s: float = ENTRANT_MAX_WAIT_S) -> list[tuple[int, Any]]:
+    """E987: the entrant feed's pick outside a build, from the snapshot's unread adverts as
+    (block, listing, resolved_at, settled, seconds since resolved): the settled ones only;
+    an advert waiting `max_wait_s` or more (or never resolved) first, oldest first; then the
+    blocks with the fewest unread adverts first, ids ascending inside a block. An advert in two
+    blocks counts in both and is taken once, at its first place."""
+    unread_in: dict[str, int] = {}
+    for block, *_rest in scan:
+        unread_in[block] = unread_in.get(block, 0) + 1
+
+    def place(row: tuple[str, int, Any, bool, float | None]) -> tuple[Any, ...]:
+        block, listing_id, _at, _settled, waited = row
+        if waited is None or waited >= max_wait_s:
+            return (0, -(float("inf") if waited is None else waited), listing_id)
+        return (1, unread_in[block], block, listing_id)
+
+    out: list[tuple[int, Any]] = []
+    seen: set[int] = set()
+    for _block, listing_id, at, _settled, _waited in sorted(
+            (row for row in scan if row[3]), key=place):
+        if listing_id in seen:
+            continue
+        seen.add(listing_id)
+        out.append((listing_id, at))
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _measure_rate(claimed: int, elapsed_s: float, previous: float,
                   bound: Mapping[str, Any]) -> tuple[float | None, bool]:
     """The rate a pass stores (E98's blend, E951's doubling) and whether the doubling won."""
@@ -2994,8 +3124,12 @@ def _measure_rate(claimed: int, elapsed_s: float, previous: float,
     # a filled claim at a limit of ~230 and double the rate the feeds' shares are cut from. A
     # build's sit inside its limit (E964) and still fill none: such a pass blends, never doubles.
     limit = int(bound.get("limit") or 0)
-    fed = claimed - int(bound.get("stale") or 0)
-    saturated = bound.get("bound_by") == "time" and limit > 0 and fed >= limit
+    stale = int(bound.get("stale") or 0)
+    fed = claimed - stale
+    # E984: a feed left waiting fills the claim too, but only on a steady pass with no re-claims:
+    # a build's or a re-claim's seconds are not the feeds' (E971).
+    waiting = bool(bound.get("cut")) and not bound.get("building") and not stale
+    saturated = bound.get("bound_by") == "time" and limit > 0 and (fed >= limit or waiting)
     if elapsed_s <= 0 or (claimed < PASS_RATE_MIN_CLAIM and not saturated):
         return None, False
     start = max(1e-6, previous)
@@ -3139,7 +3273,7 @@ def _release_predecessor(conn: Any, generation: str, cap: dict[str, Any], booted
         if halve:
             cap = halve_claim_cap(before, died, booted_epoch, limit_mb)
             _write_claim_cap(conn, generation, cap, "halved")
-    LOG.warning("AUTODEDUP: a predecessor of this container died holding autodedup.rt_lease: "
+    LOG.warning("AUTODEDUP: a predecessor of this container died holding rt_lease: "
                 "%s; released, and the claim cap %s", died,
                 f"halved from {before['cap']} to {cap['cap']} (E948)" if halve else
                 f"kept at {cap['cap']}: it died inside a re-cut (E944)" if died == re_cutting else
@@ -3372,8 +3506,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                 conn, generation, cap, booted_epoch, limit_mb, halve=not grew,
                 re_cutting=(stamped.get("cutting") if isinstance(stamped, Mapping) else None))
         if not take_lease(conn, holder):
-            held_by = ("another writer holds autodedup.rt_lease" if kept is None else
-                       "a dead predecessor of this container holds autodedup.rt_lease, left to "
+            held_by = ("another writer holds rt_lease" if kept is None else
+                       "a dead predecessor of this container holds rt_lease, left to "
                        f"its TTL at the claim cap's floor ({CLAIM_CAP_FLOOR}; E948)")
             return {"skipped": "leased", "reason": f"{held_by}: {rt_lease.describe(conn)}",
                     "predecessor_released": predecessor, "predecessor_kept": kept,
@@ -3575,7 +3709,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                 # E941: every group's transaction ends with the pass's lease check, so a lease
                 # released after the pass committed stops the merges at the next group.
                 fence=lambda group_conn: rt_lease.hold(group_conn, holder),
-                engine_since=engine_since, waiting=handed, building=bootstrap)
+                engine_since=engine_since, waiting=handed, building=bootstrap,
+                unread_blocks=work.unread_blocks_after())
             # What the reconcile cost inside the pass, so G2's rate is read with it in (B3).
             summary["reconcile"]["seconds"] = round(time.perf_counter() - reconcile_started, 3)
         elapsed = time.perf_counter() - started
@@ -3599,7 +3734,6 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         coverage = (None if not facts.images_with_phash else round(
             1.0 - facts.images_unmeasured / float(facts.images_with_phash), 6))
         summary["population"] = {
-            "phash_pop_rows": phash_pop_rows(conn),
             "images_with_phash": facts.images_with_phash,
             "images_unmeasured": facts.images_unmeasured,
             "hashes_unmeasured": len(facts.hashes_unmeasured),
@@ -3969,7 +4103,7 @@ def run_rt_seed(
                     if str(args.get(rt_lease.RELEASE_ARG) or "").strip() else None)
         if not take_lease(conn, holder, ttl=SEED_LEASE_TTL_S):
             raise SystemExit(
-                f"rt_seed refused: autodedup.rt_lease is {rt_lease.describe(conn)}. Set "
+                f"rt_seed refused: rt_lease is {rt_lease.describe(conn)}. Set "
                 "app_settings.realtime_autodedup_interval_seconds to 0, wait for the lease to "
                 "clear, and seed again. Nothing was written.")
         leased = True
@@ -4000,7 +4134,7 @@ def run_rt_seed(
         reset: dict[str, int] = {}
         with _transaction(conn):
             if fresh:
-                reset = reset_generation(conn, generation, holder=holder)
+                reset = reset_generation(conn, generation)
             # E940: EVERY block of the scope, each read to its end (a page a statement) and under
             # no daily cap — the cut, A10's re-cut refusal above RECUT_MAX_LISTINGS and E941's
             # second storage check are all taken over what the walk listed, so a block cut to

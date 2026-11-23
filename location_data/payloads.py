@@ -407,6 +407,11 @@ def plan_placement(
 # gains one the moment an anchored fetch of the SAME body arrives, and an anchored row
 # is never re-anchored by a later unanchored sighting.
 #
+# A REVERTED body is mined again (location W3). A -> B -> A appends no third row: it bumps A,
+# which was mined (stamped) before B. The claim store holds B's value now and changes only when
+# a body is mined, so a body that was NOT the key's latest detail body before this sighting
+# loses its stamp (`contract_version` NULL), and the lane re-mines it as the latest.
+#
 # The RETURNING list is the stored row, not the fetch: see PayloadRef.
 _APPEND_SQL = """
 INSERT INTO portal_raw_payloads
@@ -437,7 +442,16 @@ ON CONFLICT (source, source_id_native, page_kind, payload_sha256) DO UPDATE
        fetched_at        = least(EXCLUDED.fetched_at,
                                  portal_raw_payloads.fetched_at),
        snapshot_id       = coalesce(portal_raw_payloads.snapshot_id,
-                                    EXCLUDED.snapshot_id)
+                                    EXCLUDED.snapshot_id),
+       contract_version  = CASE WHEN EXISTS (
+           SELECT 1 FROM portal_raw_payloads newer
+            WHERE newer.source = portal_raw_payloads.source
+              AND newer.source_id_native = portal_raw_payloads.source_id_native
+              AND newer.page_kind = portal_raw_payloads.page_kind
+              AND (newer.http_status IS NULL OR newer.http_status BETWEEN 200 AND 299)
+              AND (newer.last_observed_at, newer.id)
+                  > (portal_raw_payloads.last_observed_at, portal_raw_payloads.id))
+           THEN NULL ELSE portal_raw_payloads.contract_version END
 RETURNING id, version_seq, (xmax = 0) AS inserted, payload_sha256, body_sha256,
           byte_size, content_encoding, body_r2_key,
           coalesce(stored_byte_size, octet_length(body)) AS stored_bytes

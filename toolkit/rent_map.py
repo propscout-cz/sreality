@@ -19,12 +19,12 @@ reads only the ingested cells and the stored obec/KÚ codes, never geometry.
 
 from __future__ import annotations
 
-import hashlib
 import io
 import logging
 import re
 import unicodedata
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING, Any
@@ -84,10 +84,6 @@ class ParsedRentMap:
     values: list[RentValue]
     adjustments: list[RentAdjustment]
     source_date: date | None
-
-
-def sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
 
 
 def source_date_from_filename(name: str) -> date | None:
@@ -213,7 +209,7 @@ def _parse_values(cells: dict[tuple[int, int], str]) -> list[RentValue]:
         elif "kod obce" in n:
             col_code = col
 
-    def cols_for(predicate) -> list[int]:
+    def cols_for(predicate: Callable[[str], bool]) -> list[int]:
         return sorted(
             c for c, text in headers.items() if predicate(_norm(text))
         )

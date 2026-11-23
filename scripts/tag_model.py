@@ -30,11 +30,14 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 from toolkit import tag_head_bakeoff as bo
 from toolkit import tag_heads as th
 from toolkit import tag_models as tm
+
+if TYPE_CHECKING:
+    import psycopg
 
 LOG = logging.getLogger("tag_model")
 
@@ -48,7 +51,7 @@ def _split_ids(raw: str | None) -> list[int]:
     return [int(part.strip()) for part in (raw or "").split(",") if part.strip()]
 
 
-def _report_status(conn, args: argparse.Namespace) -> int:
+def _report_status(conn: psycopg.Connection, args: argparse.Namespace) -> int:
     models = tm.list_models(conn, limit=args.limit)
     if not models:
         LOG.info("TAGMODEL no model versions exist yet")
@@ -79,7 +82,7 @@ def _report_status(conn, args: argparse.Namespace) -> int:
     return 0
 
 
-def _do_promote(conn, args: argparse.Namespace) -> int:
+def _do_promote(conn: psycopg.Connection, args: argparse.Namespace) -> int:
     if args.dry_run:
         run = None
         try:
@@ -138,7 +141,7 @@ def _do_promote(conn, args: argparse.Namespace) -> int:
     return 0
 
 
-def _do_score(conn, args: argparse.Namespace) -> int:
+def _do_score(conn: psycopg.Connection, args: argparse.Namespace) -> int:
     model = tm.get_model(conn, version=args.version)
     if model is None:
         LOG.error("TAGMODEL no model version %r", args.version)
@@ -166,7 +169,7 @@ def _do_score(conn, args: argparse.Namespace) -> int:
     return 0
 
 
-def _do_activate(conn, args: argparse.Namespace) -> int:
+def _do_activate(conn: psycopg.Connection, args: argparse.Namespace) -> int:
     if args.dry_run:
         model = tm.get_model(conn, version=args.version)
         if model is None:

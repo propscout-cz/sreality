@@ -53,6 +53,21 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from autodedup import apply_sql as S
 from autodedup import legacy_retire, rt_lease
+from autodedup.apply_scope import (  # the scope predicate's neutral home (wave shadow)
+    DEFAULT_MAX_CLUSTERS_PER_RUN as DEFAULT_MAX_CLUSTERS_PER_RUN,
+    OUT_BLOCKS as OUT_BLOCKS,
+    OUT_CATEGORY as OUT_CATEGORY,
+    OUT_LISTING_IDS as OUT_LISTING_IDS,
+    OUT_NO_LOCATION as OUT_NO_LOCATION,
+    OUT_OF_SCOPE_REASONS as OUT_OF_SCOPE_REASONS,
+    SCOPE_KEYS,
+    SCOPE_SETTING,
+    Member,
+    Scope,
+    _truthy,
+    normalize_block as normalize_block,
+    scope_fields,
+)
 from autodedup.census import write_json
 from autodedup.incremental import GENERATION
 from autodedup.incremental_scope import GRAIN_OF, ScopeError, contains, parse_scope
@@ -74,7 +89,6 @@ from toolkit.property_identity import (
 )
 from toolkit.room_taxonomy import category_main_compatible
 
-SCOPE_SETTING: str = "autodedup_apply_scope"
 # The worker lane's one switch (migrations 557/568): 0 = stopped. A live apply or unapply runs
 # only while it is 0 (`_Writer`).
 LANE_INTERVAL_SETTING: str = "realtime_autodedup_interval_seconds"
@@ -86,13 +100,12 @@ EXTERNAL_UNDO: str = "external"
 # `properties.merged_at` (the chokepoint) and the ledger's `applied_at` are both now() of one
 # group's transaction; a wider gap is another merge of the same pair, after an undo (E905).
 SAME_MERGE_TOLERANCE: timedelta = timedelta(seconds=1)
-DEFAULT_MAX_CLUSTERS_PER_RUN: int = 200
 SUMMARY_LIST_CAP: int = 200
 ID_CHUNK: int = 5000
+# ENGINE_MERGES_SQL's array: up to 150 ids it stays on the ledger's partial GIN index (EXPLAIN
+# 2026-11-14, the 150 most-merged adverts included); ~1,000 flips it to a scan of the whole ledger.
+MERGES_CHUNK: int = 150
 
-SCOPE_KEYS: tuple[str, ...] = (
-    "category_types", "blocks", "listing_ids", "all_blocks", "max_clusters_per_run",
-)
 # `retire_legacy`: A2's pre-step (autodedup/legacy_retire.py), temporary; alone under
 # `generation=rt` (W8, E953).
 APPLY_ARGS: frozenset[str] = frozenset({"generation", "dry_run", "retire_legacy",
@@ -100,20 +113,6 @@ APPLY_ARGS: frozenset[str] = frozenset({"generation", "dry_run", "retire_legacy"
 # What `unapply` selects by: a generation (and one of its groups), a run, a time window.
 UNAPPLY_SELECTORS: tuple[str, ...] = ("generation", "cluster_key", "run", "since", "until")
 UNAPPLY_ARGS: frozenset[str] = frozenset({"dry_run", rt_lease.RELEASE_ARG, *UNAPPLY_SELECTORS})
-
-# A scope block, spelled as the export lane spells it: `town:<code>` (an advert's
-# listing_location.obec_kod) / `quarter:<code>` (its cast_obce_kod) — and `district:<code>`
-# (its okres_kod, E961), which the export lane has no block for: the real-time lane's `okres:`.
-GRAINS: tuple[str, ...] = ("town", "quarter", "district")
-
-# E904 — why a group is outside the scope, counted per reason in the run summary. Order is the
-# order a group's reason is picked in when its members fall outside for several.
-OUT_CATEGORY = "category_outside_scope"
-OUT_BLOCKS = "member_outside_blocks"
-OUT_NO_LOCATION = "member_without_location"
-OUT_LISTING_IDS = "member_outside_listing_ids"
-OUT_OF_SCOPE_REASONS: tuple[str, ...] = (OUT_CATEGORY, OUT_BLOCKS, OUT_NO_LOCATION,
-                                         OUT_LISTING_IDS)
 
 # E903 — why a group is refused. Order is the order they are checked and reported in.
 SKIP_UNATTACHED = "unattached_member"
@@ -150,121 +149,6 @@ PARTIAL_RESULT_ATTR: str = "autodedup_apply_result"
 # ------------------------------------------------------------------ scope
 
 
-@dataclass(frozen=True)
-class Scope:
-    """Which groups a run may touch. `None` = unrestricted on that axis; an EMPTY set admits
-    nothing (a narrowing that intersected to nothing must not read as 'no filter')."""
-
-    category_types: frozenset[str] | None = None
-    blocks: frozenset[str] | None = None
-    listing_ids: frozenset[int] | None = None
-    all_blocks: bool = False
-    max_clusters_per_run: int = DEFAULT_MAX_CLUSTERS_PER_RUN
-
-    def to_json(self) -> dict[str, Any]:
-        return {
-            "category_types": sorted(self.category_types) if self.category_types is not None
-            else None,
-            "blocks": sorted(self.blocks) if self.blocks is not None else None,
-            "listing_ids": len(self.listing_ids) if self.listing_ids is not None else None,
-            "all_blocks": self.all_blocks,
-            "max_clusters_per_run": self.max_clusters_per_run,
-        }
-
-    def live_problems(self) -> list[str]:
-        """Why this scope may not drive a LIVE run; empty when it may. An empty list names
-        nothing, like an absent key: no deal types or no area merges nothing (E904)."""
-        problems: list[str] = []
-        if not self.category_types:
-            problems.append("the live scope names no category_types")
-        if not self.blocks and not self.listing_ids and not self.all_blocks:
-            problems.append(
-                "the live scope names no area: set blocks, listing_ids, or all_blocks=true"
-            )
-        return problems
-
-    def outside(self, listing: "Member") -> str | None:
-        """Why one advert is outside the scope, None when it is inside (E904). Inside the blocks
-        means LOCATED in one: its live obec_kod names a `town:` of the scope, its cast_obce_kod
-        a `quarter:` or its okres_kod a `district:` (legacy_retire.AREA_SQL's area); an advert
-        with none of the three codes is in none."""
-        if self.category_types is not None and listing.category_type not in self.category_types:
-            return OUT_CATEGORY
-        if self.blocks is not None:
-            if (listing.obec_kod is None and listing.cast_obce_kod is None
-                    and listing.okres_kod is None):
-                return OUT_NO_LOCATION
-            if (f"town:{listing.obec_kod}" not in self.blocks
-                    and f"quarter:{listing.cast_obce_kod}" not in self.blocks
-                    and f"district:{listing.okres_kod}" not in self.blocks):
-                return OUT_BLOCKS
-        if self.listing_ids is not None and listing.listing_id not in self.listing_ids:
-            return OUT_LISTING_IDS
-        return None
-
-    def group_outside(self, members: Sequence["Member"]) -> str | None:
-        """Why a group is outside the scope (the first of OUT_OF_SCOPE_REASONS any member
-        gives), None when every member is inside; the advert its merge would carry along is
-        `_set_reasons`' (SKIP_CARRIES_OUT_OF_SCOPE)."""
-        found = {self.outside(m) for m in members}
-        return next((why for why in OUT_OF_SCOPE_REASONS if why in found), None)
-
-
-def normalize_block(raw: Any) -> str:
-    """`town:563510` / `quarter:490245` / `district:3209`; anything else is refused."""
-    grain, _, code = str(raw).strip().lower().partition(":")
-    if grain not in GRAINS or not code.isdigit():
-        raise ValueError(
-            f"block {raw!r}: expected town:<code>, quarter:<code> or district:<code>")
-    return f"{grain}:{int(code)}"
-
-
-def _words(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [w for w in value.replace("/", " ").split() if w]
-    if isinstance(value, (list, tuple, set, frozenset)):
-        return [str(w).strip() for w in value if str(w).strip()]
-    return [str(value).strip()]
-
-
-def _truthy(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if text in ("1", "true", "yes", "on"):
-        return True
-    if text in ("0", "false", "no", "off", ""):
-        return False
-    raise ValueError(f"expected a boolean, got {value!r}")
-
-
-def scope_fields(raw: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Validate and normalise the scope keys present in `raw` (a setting or lane args). A key
-    set to null is absent: the seeded setting spells every key so the operator sees them."""
-    raw = raw or {}
-    unknown = sorted(set(raw) - set(SCOPE_KEYS))
-    if unknown:
-        raise ValueError(f"unknown scope key(s): {', '.join(unknown)}")
-    raw = {key: value for key, value in raw.items() if value is not None}
-    out: dict[str, Any] = {}
-    if "category_types" in raw:
-        out["category_types"] = frozenset(w.lower() for w in _words(raw["category_types"]))
-    if "blocks" in raw:
-        out["blocks"] = frozenset(normalize_block(w) for w in _words(raw["blocks"]))
-    if "listing_ids" in raw:
-        out["listing_ids"] = frozenset(int(w) for w in _words(raw["listing_ids"]))
-    if "all_blocks" in raw:
-        out["all_blocks"] = _truthy(raw["all_blocks"])
-    if "max_clusters_per_run" in raw:
-        value = int(raw["max_clusters_per_run"])
-        if value < 1:
-            raise ValueError(f"max_clusters_per_run must be >= 1, got {value}")
-        out["max_clusters_per_run"] = value
-    return out
-
-
 def effective_scope(
     setting: Mapping[str, Any] | None, override: Mapping[str, Any] | None, *, live: bool
 ) -> Scope:
@@ -294,31 +178,6 @@ def effective_scope(
 
 
 # ------------------------------------------------------------------ plan
-
-
-def _int(value: Any) -> int | None:
-    return int(value) if value is not None else None
-
-
-@dataclass(frozen=True)
-class Member:
-    """One advert as the plan reads it: its property, deal type and category, and where it IS
-    (its live listing_location codes, all None without a row)."""
-
-    listing_id: int
-    property_id: int | None
-    category_type: str | None
-    category_main: str | None
-    obec_kod: int | None = None
-    cast_obce_kod: int | None = None
-    okres_kod: int | None = None
-
-    @classmethod
-    def read(cls, row: Sequence[Any]) -> "Member":
-        """A row of PROPERTY_LISTINGS_SQL / LOCK_PROPERTY_LISTINGS_SQL, or of MEMBERS_SQL
-        after its cluster_key."""
-        lid, pid, ctype, cmain, obec, cast, okres = row
-        return cls(int(lid), _int(pid), ctype, cmain, _int(obec), _int(cast), _int(okres))
 
 
 @dataclass
@@ -540,15 +399,16 @@ class EngineMerge:
 
 
 def _engine_merges(conn: Any, listing_ids: Iterable[int]) -> list[EngineMerge]:
-    ids = sorted(set(listing_ids))
-    if not ids:
-        return []
-    return [
-        EngineMerge(str(gen), int(key), str(group), int(surv) if surv is not None else None,
-                    frozenset(int(x) for x in (members or ())))
+    # Every ledger row of a group carries its one member set (`_rows_for`), so a group read
+    # through two chunks is the same merge twice.
+    merges: dict[str, EngineMerge] = {}
+    for chunk in _chunks(listing_ids, MERGES_CHUNK):
         for gen, key, group, surv, members in _rows(
-            conn, S.ENGINE_MERGES_SQL, {"listing_ids": ids})
-    ]
+                conn, S.ENGINE_MERGES_SQL, {"listing_ids": chunk}):
+            merges.setdefault(str(group), EngineMerge(
+                str(gen), int(key), str(group), int(surv) if surv is not None else None,
+                frozenset(int(x) for x in (members or ()))))
+    return [merges[group] for group in sorted(merges)]
 
 
 def _set_reasons(
@@ -696,10 +556,6 @@ def plan_groups(
         listing_group = {**dict(group_of(every_listing)), **listing_group}
     negatives = Negatives.read(conn, every_listing,
                                [int(c["cluster_key"]) for c, _m in everyone])
-    merges_by_listing: dict[int, list[EngineMerge]] = {}
-    for merge in _engine_merges(conn, every_listing):
-        for lid in merge.member_ids:
-            merges_by_listing.setdefault(lid, []).append(merge)
     held: set[int] = set()
     if generation == GENERATION:
         held = {int(lid) for (lid,) in _rows(conn, S.RT_FINGERPRINTED_SQL, {
@@ -710,10 +566,11 @@ def plan_groups(
     refused_sets: set[frozenset[int]] = set()
     if candidates:
         refused_sets = {frozenset(int(x) for x in (members or ())) for (members,) in _rows(
-            conn, S.LEDGER_HISTORY_SQL, {"generation": generation,
-                                         "listing_ids": sorted(every_listing)})}
+            conn, S.LEDGER_HISTORY_SQL, {"generation": generation, "listing_ids": sorted(
+                {m.listing_id for _c, ms in candidates for m in ms})})}
 
     groups: list[GroupPlan] = []
+    ruled: list[tuple[GroupPlan, int]] = []
     for cluster, members in settled:
         # Already one property: nothing to merge. But an operator negative over what that
         # property holds means production and the operator disagree — reported, with the
@@ -726,13 +583,33 @@ def plan_groups(
         if not hit_reasons:
             counts["already_one_property"] += 1
             continue
-        behind = sorted({mg for lid in member_ids for mg in merges_by_listing.get(lid, ())
+        detail.update(negatives=hit_reasons)
+        counts[RULED_AFTER_MERGE] += 1
+        group = _group_plan(cluster, members, [pid], pid, [], [RULED_AFTER_MERGE], detail,
+                            extended)
+        groups.append(group)
+        ruled.append((group, pid))
+
+    # A merge moves EVERY listing of a property, so every check below reads the whole set it
+    # would put on the survivor.
+    extended_of: dict[int, set[int]] = {}
+    for cluster, members in candidates:
+        extended = {m.listing_id for m in members}
+        for pid in {m.property_id for m in members if m.property_id is not None}:
+            extended |= children.get(pid, set())
+        extended_of[int(cluster["cluster_key"])] = extended
+    # Only the engine merges a group below consults: those naming a listing a candidate's merge
+    # would put on its survivor, or a member of a group ruled different after it merged.
+    merges_by_listing: dict[int, list[EngineMerge]] = {}
+    for merge in _engine_merges(conn, set().union(
+            *extended_of.values(), *(group.member_ids for group, _pid in ruled))):
+        for lid in merge.member_ids:
+            merges_by_listing.setdefault(lid, []).append(merge)
+    for group, pid in ruled:
+        behind = sorted({mg for lid in group.member_ids for mg in merges_by_listing.get(lid, ())
                          if mg.survivor_id == pid},
                         key=lambda mg: (mg.generation, mg.cluster_key))
-        detail.update(negatives=hit_reasons, engine_merges=[mg.to_json() for mg in behind])
-        counts[RULED_AFTER_MERGE] += 1
-        groups.append(_group_plan(cluster, members, [pid], pid, [], [RULED_AFTER_MERGE],
-                                  detail, extended))
+        group.detail["engine_merges"] = [mg.to_json() for mg in behind]
 
     for cluster, members in candidates:
         key = int(cluster["cluster_key"])
@@ -748,11 +625,7 @@ def plan_groups(
         if inactive:
             reasons.append(SKIP_INACTIVE_PROPERTY)
             detail["inactive_property_ids"] = inactive
-        # A merge moves EVERY listing of a property, so every check below reads the whole
-        # set it would put on the survivor.
-        extended = set(member_set)
-        for pid in property_ids:
-            extended |= children.get(pid, set())
+        extended = extended_of[key]
         carried = extended - member_set
 
         hit_reasons, hit_detail = negatives.hits(extended, key)
@@ -1601,7 +1474,7 @@ def lane_interval(conn: Any) -> int:
 
 
 class _Writer:
-    """THE lane's lease (`autodedup.rt_lease`), held by a live dispatch: one writer of
+    """THE lane's lease (`rt_lease`), held by a live dispatch: one writer of
     production merges at a time (A9). The worker's lane reconciles under it, so a live apply or
     unapply takes it for its run and refuses while a pass holds it — and refuses outright while
     the lane is RUNNING (its interval above 0): an unapply would be re-merged by the lane's next
@@ -1636,7 +1509,7 @@ class _Writer:
             self.released = rt_lease.release_stale(self.conn, self.release)
         if not rt_lease.take(self.conn, self.holder, rt_lease.DISPATCH_TTL_S):
             raise SystemExit(
-                f"refused: autodedup.rt_lease is {rt_lease.describe(self.conn)}. Set "
+                f"refused: rt_lease is {rt_lease.describe(self.conn)}. Set "
                 f"app_settings.{LANE_INTERVAL_SETTING} to 0, wait for the lease to clear, and "
                 "run again. Nothing was written.")
         self.held = True
@@ -1753,16 +1626,18 @@ def _retire_legacy(
                                  stream=GENERATION if generation == GENERATION else None))
 
 
-def rt_block_reads(conn: Any, generation: str, blocks: Iterable[str]
-                   ) -> tuple[set[str], set[str]]:
+def rt_block_reads(conn: Any, generation: str, blocks: Iterable[str], *,
+                   unfingerprinted: set[str] | None = None) -> tuple[set[str], set[str]]:
     """The live stream's two reasons a block (`obec:` / `cast_obce:` / `okres:` key) is not fully
     read, apart (E977): the `blocks` never read to their end — never walked, or inside their first
     cycle of pages (E940), so their snapshot may lack adverts — and every block whose snapshot,
-    whole, still holds an advert with no fingerprint."""
+    whole, still holds an advert with no fingerprint (`unfingerprinted` when the caller read it
+    already, E987)."""
     walked = {str(row[0]) for row in _rows(conn, RT_SCOPE_SCAN_SEEN_SQL,
                                            {"generation": generation})}
-    unfingerprinted = {str(row[0]) for row in _rows(conn, S.RC_UNREAD_BLOCKS_SQL,
-                                                    {"generation": generation})}
+    if unfingerprinted is None:
+        unfingerprinted = {str(row[0]) for row in _rows(conn, S.RC_UNREAD_BLOCKS_SQL,
+                                                        {"generation": generation})}
     return {block for block in blocks if block not in walked}, unfingerprinted
 
 

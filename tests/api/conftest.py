@@ -13,5 +13,5 @@ from api import dependencies as deps
 @pytest.fixture(autouse=True)
 def jwks(monkeypatch) -> None:
     _jwt = pytest.importorskip("tests.api._jwt")  # PyJWT + cryptography (api extra)
-    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_URL", _jwt.PROJECT_URL)
     monkeypatch.setattr(deps, "_jwks_client", lambda _url: _jwt.JwksClient())

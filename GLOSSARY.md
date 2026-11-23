@@ -39,6 +39,36 @@ the most precise location whatever the ad's status, ties by the canonical order 
 Often the canonical ad, not always. A surface about one ad keeps that ad's own location.
 _Avoid_: place, pin ad, anchor ad, located ad, representative location
 
+**RÚIAN door**:
+One address point in the state RÚIAN register: one building entrance, known by its kód ADM and its
+house number. It is a building's door, not a unit inside it, so the flats of one building share it,
+a house normally has its own, and a plot of land has none of its own. An ad has a RÚIAN door only
+when that door is certain; everything else stands at a coarser level and says so.
+_Avoid_: address point (in prose), house number, door (alone, where a physical door could be meant)
+
+**Place** (UI: "Lokalita"):
+One named area of the Czech register that a search, a watchdog or the map can be limited to: a kraj,
+an okres, a town (obec), a quarter (část obce), a settlement unit (not built yet) or a street. A
+property is in a place only when its location ad is known to lie inside it. It is never assumed to be
+in a smaller place inside the one it is known at.
+_Avoid_: location (for the area), area, region, locality
+
+**Place shortcut** (UI: "zkratka lokality"):
+One pick that stands for several places at once, such as Praha 6 for every quarter inside it, or (not
+built yet) every settlement unit of one town whose name matches what was typed. Choosing it adds each
+of those places; nothing is ever limited by the shortcut itself.
+_Avoid_: alias, place group, district (for Praha 6)
+
+**Settlement unit** (UI: "Sídelní jednotka"):
+One of the named areas the state register divides every town into (officially "základní sídelní
+jednotka"), such as Barrandov or Spořilov in Praha. The register ties each to one cadastral area (KÚ)
+of one town, not to a quarter, and a small town is often a single one. A property is in a settlement
+unit only when the most precise location its location ad has (its RÚIAN door, or else its street,
+quarter or town) lies wholly inside that one settlement unit, and a portal's map pin alone never
+places it. A property known only at a place that spans several settlement units is in none of them.
+Not built yet (ADR 0009, ruled 2026-11-06): no search, watchdog or map can be limited to one today.
+_Avoid_: quarter or čtvrť (a quarter is a část obce), neighbourhood, district, unit (alone), ZSJ (in UI)
+
 **Duplicate**:
 Two ads that advertise the same unit and therefore belong in one property.
 _Avoid_: dupe, match, twin
@@ -72,8 +102,9 @@ _Avoid_: native id (in prose), hash id, listing id
 The number the advertiser prints on the ad for callers, kept exactly as printed: "ID zakázky" on
 Sreality, "Číslo zakázky" on iDNES, RE/MAX and Realitymix, "ID nemovitosti" on České reality. On a
 broker portal it is the broker's own order number; on an agency's own site (Maxima, M&M) it is the
-portal id. An ad may print none (a private seller). Shown beside the broker's contact so it can be
-quoted on a call; never replaced by another number when it is missing.
+portal id. An ad may print none (a private seller). Shown beside the broker's contact, and written
+into a saved contact's note, so it can be quoted on a call; never replaced by another number when it
+is missing.
 _Avoid_: reference number, order number, advert code, zakázka (in English prose)
 
 **Snapshot**:
@@ -88,18 +119,32 @@ _Avoid_: backfill day, horizon, go-live day
 An ad first seen on an ordinary day, not in a sweep, so its time on market counts from the day it appeared. An ad first seen in a sweep was already on the market, and its time on market is a lower bound.
 _Avoid_: uncensored ad, fresh ad, left-censored (for the opposite)
 
+**Broker spell**:
+The time one broker's ads ran on one property, on every portal the broker is on: from the first of them being first
+seen until the last of them was last seen, and open while one still runs. The broker book holds one per property and
+canonical broker, kept by property maintenance; an ad whose portal account is not yet resolved to a broker has none.
+_Avoid_: listing period, mandate, tenure
+
+**Left the market within N days** (UI: "Opustilo trh do N dní"):
+A broker spell that ended within N days of its start while its property left the market and stayed off: sold or
+withdrawn, not necessarily a sale. Judged only for followed spells: newly listed, begun on or after 2026-09-08, with
+N + 7 days behind them.
+_Avoid_: sold, sale speed, time to sell
+
 **Settled**:
 A property the pipeline is done with: its first photo is stored (or it has none), and the engine has
 read every one of its ads, holds no pending question about them and keeps none of them in a group
-that also holds an ad on another property, or on none yet. Stamped once, by property maintenance; a
-merge passes a settled property's stamp to the survivor only when that publishes the survivor
-earlier, so publication never regresses, and never moves later.
+that also holds an ad on another property, or on none yet. Settled is one of the two ways a property
+becomes published; it has no stamp of its own.
 _Avoid_: evaluated, checked, dedup-checked
 
 **Published**:
-A property Browse, the map, Stats and the watchdog serve: from the moment it is settled, or 6 hours
-after it was first seen, whichever comes first. The 6 hours are the cap, so a slow engine can delay
-a property but never hide it. Its page opens by its link either way.
+A property Browse, the map, Stats and the watchdog serve: from the moment the maintenance pass
+stamps it. The pass never stamps it before the engine has read every ad on it that lies in the
+engine's scope; after that it stamps it once settled, or 6 hours after it was first seen and after
+the engine first read its ads (the cap, which also is the whole wait outside the scope). Stamped
+once; a merge or a split passes the stamp on, so publication never regresses. Its page opens by its
+link either way.
 _Avoid_: gated-in, live (for this)
 
 **Valuo valuation**:
@@ -173,6 +218,66 @@ fixed time (40 minutes for a pass, 5 hours for a seed or a batch run) and releas
 one its holder never released blocks the engine until that time runs out.
 _Avoid_: lock (alone), mutex, claim, latch
 
+### Inside the engine
+
+**Pair** (UI: "pár"):
+Two ads the engine compares; every engine decision is about exactly one pair.
+_Avoid_: candidate, edge, match (for the pair itself)
+
+**Score** (UI: "skóre"):
+The engine's number from 0 to 1 for how much a pair looks like one unit.
+_Avoid_: probability, confidence, similarity
+
+**Grey band** (UI: "šedé pásmo"):
+The score range in which the engine does not decide on its own: a pair there waits for a ruling unless a
+certificate proves the unit.
+_Avoid_: band, zone, grey zone, undecided, residual (for the range)
+
+**Certificate** (UI: "důkaz"):
+One of the few facts that prove two ads are one unit, so the engine may merge a pair out of the grey band:
+an identical photo, one text contained in the other, a shared order code.
+_Avoid_: proof, evidence (alone), demonstrate, warrant
+
+**Blocker** (UI: "blokace"):
+A fact that says "two units" and holds a pair in the grey band even when it has a certificate: a different
+street, two printed areas, floors two apart.
+_Avoid_: gate, distinguishing fact, d43 fact, wall
+
+**Promotion** (UI: "povýšení"):
+The engine's move of a pair from the grey band into a merge, allowed only with a certificate and no blocker.
+_Avoid_: warrant, upgrade, auto-merge
+
+**Disqualifier** (UI: "diskvalifikátor"):
+A check run before scoring that discards a pair outright, so it never gets a score: areas more than 8 % apart,
+floors two apart, a category clash.
+_Avoid_: veto, guard, pre-filter
+
+**Nominator** (UI: "nominátor"):
+A shared trait by which the engine picks which ads to compare at all: the same photo, the same text, the same
+place. Two ads with no shared nominator never form a pair.
+_Avoid_: key, blocking key, block key, probe
+
+**Attribute** (UI: "atribut"):
+A structured fact of an ad: disposition, area, floor, price, category.
+_Avoid_: column, field, feature
+
+**Parameter** (UI: "parametr"):
+Any measurable trait of a pair that research tests as a possible certificate, such as a shared order code.
+_Avoid_: signal, feature, indicator, flag
+
+**Order code** (UI: "kód zakázky"):
+The advertiser's own number for an offer, printed in the ad and the same on every portal.
+_Avoid_: reference, ad reference, ID zakázky, code (alone)
+
+**Truth** (UI: "pravda"):
+The set of the operator's rulings, same and different, against which every engine rule is measured.
+_Avoid_: labels, ground truth, gold set, calibration set
+
+**Engine area** (UI: "oblast enginu"):
+The towns and districts whose ads the engine reads and decides on; the apply scope is the part of it where it
+may also merge.
+_Avoid_: scope, rt scope, coverage
+
 ### What users add
 
 **Curation**:
@@ -196,8 +301,15 @@ _Avoid_: deal, card (alone)
 One step of one account's pipeline, drawn as a board column; every account gets its own copy of the default board at signup.
 _Avoid_: fáze (in code), column
 
+**Viewing stage** (UI: "Fáze prohlídky"):
+The one stage an account marks as where a property waits for its viewing, whatever the stage is
+called; never a closed stage. Adding a viewing to a property that is off the board, at an earlier
+stage or closed offers to put its card there.
+_Avoid_: visit stage, the stage's key or label as its meaning
+
 **Collection**:
-A named set of properties an account keeps, optionally watched for changes. It may be shared
+A named set of properties an account keeps, optionally watched: its owner is told the property
+events it chose about the properties in it. It may be shared
 read-only with other accounts. As a filter: in any chosen collection, in none of the excluded
 ones, or in no collection at all ("V žádné kolekci"); own and shared-with-me count alike.
 _Avoid_: list, folder, favourites, saved list
@@ -280,9 +392,84 @@ What a merge writes down about each item of curation it moved or folded, so a sp
 back where it came from.
 _Avoid_: carry log, curation ledger, snapshot
 
+**Curation sync**:
+The catching-up of every open window of a signed-in user with a change to that user's curation, or to
+the shares that decide who sees it, made anywhere else (another window, the phone, the extension, a
+delegate, a merge). It is a re-read prompted by the curation clock, never a render from its signal.
+_Avoid_: live sync, live update, Realtime, push (alone), operator state sync
+
+**Curation clock**:
+One counter per account and family (the board, dismissals, collections, tags, notes, links, shares, and
+since 2026-11-01 notifications), advanced only by the database, once per committed change. It is a change
+signal compared only for inequality: it holds no content and is not history.
+_Avoid_: version, tick, revision, change log
+
+**Clock read**:
+One window's read of the curation clock, on a cadence while the window is visible and at once when it is
+shown again (the cadence: `docs/design/curation-sync.md` § 3.5).
+_Avoid_: probe, tick, poll (alone), heartbeat
+
+**Curation sync owner**:
+The one part of a signed-in window that does its clock reads and, when a counter moved, has that window
+re-read what the change touched. A window signed out has none.
+_Avoid_: poller, sync engine, listener, watcher
+
+**Nudge**:
+A content-free note one browser tab sends its sibling tabs after a write committed, so they take a clock
+read now instead of at their next one. It says only "read the clock", never what changed.
+_Avoid_: ping, push, broadcast (alone), doorbell
+
+**Hand (on a list)**:
+The pointer resting over a list, or a finger down on it; while it lasts the rows the user sees stay where
+they are, and the counts, map and stats beside them follow at once. Keyboard focus is no hand.
+_Avoid_: hover (alone), focus, interaction lock, freeze
+
+**Park (of a read)**:
+A read a list owes that waits while a hand is on the list and is taken the moment the hand leaves;
+the list's own reads never park.
+_Avoid_: hold (a write's hold, which paints and expires), pause, suspend, throttle
+
 **Watchdog**:
-A saved filter that alerts an account when a property newly matches it or drops its price.
+A saved filter that watches its slice of the market, the properties on the market that match it, and
+tells its account the property events the account chose about any property in that slice. Editing it
+starts it afresh.
 _Avoid_: alert (for the saved filter), subscription, notification
+
+**Velocity filter**:
+A filter on how a property has moved on the market over time: its time on market, when it was first
+or last seen, and how often or how much its price changed.
+_Avoid_: speed filter, TOM filter (alone)
+
+**Notification**:
+One notice in an account's feed: one property event from one watchdog or one watched collection,
+or one share. It names the watchdog or collection it came from.
+_Avoid_: alert (alone), message, dispatch (in prose)
+
+**Property event**:
+Something that happens to a property which a watchdog or a watched collection can be set to tell:
+a new match, a price drop, a price rise, left the market, back on the market, or a new portal.
+_Avoid_: change kind, alert kind, event (alone)
+
+**New match** (UI: "Nová shoda"):
+A property event: a property enters a watchdog's slice because something about it changed (newly
+listed, its price, a new ad, an ad's facts, its place) or, for a watchdog with a velocity
+filter, because time passed. It names why; a property that leaves and later re-enters is a new match
+again, except on its return to the market, which is back on the market.
+_Avoid_: new listing, new ad (for this)
+
+**Left the market** (UI: "Opustilo trh"):
+A property event: every ad of the property became inactive and stayed so for a day. Sold or
+withdrawn; the platform cannot tell which, and an ad may still come back.
+_Avoid_: delisted, withdrawn, sold, removed
+
+**Back on the market** (UI: "Znovu na trhu"):
+A property event: a property off the market for a day or more has an active ad again, by a revival
+or a re-list. A watchdog and a watched collection tell it alike, each when set to.
+_Avoid_: relisted, reactivated
+
+**New portal** (UI: "Nový portál"):
+A property event: a portal that had no ad on the property now has one.
+_Avoid_: new source
 
 **Broker contact record**:
 A broker's email and phone that one account captured from one ad's portal page after showing
@@ -321,6 +508,20 @@ _Avoid_: function, endpoint, capability (in prose)
 One execution of a workflow, with its inputs and its result. A run usually concerns one property.
 _Avoid_: job, execution, session
 
+**Agent worker**:
+The always-on service, separate from the realtime worker and the job runner, where the platform itself
+runs a workflow a user starts from the app or the extension. It holds the executor, which takes each
+queued run, runs the agent's loop with the platform's skills and tools, and records every step. The
+alternative is a workflow run in the user's own assistant.
+_Avoid_: runner (alone, which means the job runner), agent (for the place), server run
+
+**Monthly dollar budget**:
+The most the platform pays for one account's AI use in a month, in dollars, set by the account's plan.
+Each run reserves its cost ceiling against it when admitted, so every run the account starts draws on
+it, scheduled runs and chat included. Not built yet: until runs open beyond the allowlist, a per-run
+spending cap and a platform-wide daily ceiling bound spend instead.
+_Avoid_: allowance, credits, quota (a monthly count of runs, as the agent-estimation quota is today)
+
 **Area takeoff**:
 The workflow that measures a property's rentable floor areas from its plans.
 _Avoid_: offtake, area offtake
@@ -336,6 +537,13 @@ _Avoid_: crawl, scan, index run
 One property type and deal that a portal lists, such as flats for sale, as a walk covers it; a walk
 may reach the end of one unit and not of another.
 _Avoid_: category pair, category (alone); a slice or scope is one part of a unit, never a unit
+
+**Walk cycle**:
+One pass over every unit of a portal, which a deploy or a time limit may split into several walks: the
+walk after a cut picks up the units not yet finished, least recently walked first, for as long as one walk
+may run. The cycle starts with its first walk (its anchor) and ends with the first walk that gets through
+all it set out to do; only a cycle in which every unit reached the end may nominate the ads no unit covers.
+_Avoid_: round, full walk, fragment (alone)
 
 **Declared total**:
 The number of ads a portal itself says a unit holds, read from its own pages during a walk. Where a
@@ -444,7 +652,7 @@ _Avoid_: unknown (in prose), skipped, pending, OK
 
 **Watcher**:
 A check that judges whether the rest of the health system is alive: the realtime worker's
-heartbeat, every alarm measured on time, the API's background loops, every measured Problem given an
+heartbeat, every check measured on time, the API's background loops, every measured Problem given an
 incident. It runs on the database's own scheduler, outside the worker and the API it judges; the one
 watcher is the liveness check, shown as "Watchers".
 _Avoid_: monitor, meta-check, dead-man switch, heartbeat check
@@ -480,6 +688,25 @@ _Avoid_: signature, error summary, failure reason
 
 ### Where users meet the platform
 
+**Sign-up**:
+Creating an account on the platform. Joining the waitlist is not a sign-up.
+_Avoid_: registration; sign-up for a waitlist entry
+
+**Waitlist entry**:
+One person's place on the waitlist: their email address and the consent they gave. It holds no
+account and grants no access.
+_Avoid_: sign-up, lead, subscriber
+
+**Waitlist invitation**:
+The permission for the person behind a waitlist entry to create an account under that entry's email
+address, and the message that tells them. It decides nothing about plans. Always the full term, so it
+is never taken for a share.
+_Avoid_: invite (alone)
+
+**Introductory price**:
+The price reserved for people with a waitlist entry; "zaváděcí cena" on every Czech surface.
+_Avoid_: founder's price, zakladatelská cena
+
 **Extension**:
 The platform's Chrome extension, which shows a property's data and actions on portal pages.
 _Avoid_: plugin, add-on
@@ -508,8 +735,10 @@ the user signed in on it, ended when that user signs out or another signs in.
 _Avoid_: device token, subscriber, push subscription (in prose)
 
 **Switch**:
-"Oznámení na tomto iPhonu" in the phone app's account sheet: turns this phone into a push device
-for the signed-in user, or stops it being one. There is no other push setting.
+"Oznámení na tomto iPhonu" in the phone app's account sheet: stops this phone being a push device
+for the signed-in user, or makes it one again. Push is on by default: the phone becomes a push
+device as soon as notifications are allowed (the feed asks for that one tap) and stays one for
+whoever signs in, until they switch it off. There is no other push setting.
 _Avoid_: push preference, channel picker, opt-in
 
 **Reference overlay**:
@@ -517,6 +746,12 @@ A map layer drawn from an outside public dataset — metro routes, flood zones, 
 rent map, university sites — that a user switches on or off; it changes what the map shows around properties, never
 which properties.
 _Avoid_: data layer, overlay data, map data, GIS layer
+
+**Sreality Datasets**:
+The monthly price statistics sreality publishes per town, which the platform fetches and stores
+under RÚIAN town codes. They are sreality's numbers, not computed from ads, and they feed the
+Datasets page. Fetching a town needs sreality's own number for it, translated to its RÚIAN code.
+_Avoid_: town statistics, price stats, statistics (alone)
 
 **Count mark**:
 The number a map shows for one world tile when more properties are in view than the pin limit (a

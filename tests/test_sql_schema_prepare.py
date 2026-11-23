@@ -53,9 +53,11 @@ _PREPARABLE = {"SELECT", "INSERT", "UPDATE", "DELETE", "WITH", "VALUES", "TABLE"
 # (origin-substring, sql-substring) pair with a documented reason. Keep tiny.
 _ALLOWLIST: list[tuple[str, str, str]] = [
     (
-        "load_obec_population",
-        "_obec_pop",
-        "references a session-local TEMP TABLE created earlier in the same script",
+        "location_data/ruian_buildings.py",
+        "stage_",
+        "the building load COPYs one obec into two temp tables it creates in its own transaction "
+        "(stage_buildings, stage_links); the replayed schema can't see them. These statements run "
+        "for real in tests/location_data/test_ruian_buildings_live.py",
     ),
     (
         "backfill_listing_surrogate_id.py",
@@ -71,6 +73,15 @@ _ALLOWLIST: list[tuple[str, str, str]] = [
         "`cron` schema, not in migrations, so the replayed schema can't see them; "
         "the jobs and capacity checks read them (verified read-only against "
         "production) and read Not measured when they cannot",
+    ),
+    (
+        "scripts/checks/platform.py",
+        "pg_stat_statements",
+        "the pg_stat_statements extension is the platform's (Supabase preloads "
+        "it), not a migration's, so the replayed schema has neither "
+        "pg_stat_statements nor pg_stat_statements_info; the curation_sync "
+        "check's reads and load cells read them and are Not measured when "
+        "they cannot (docs/design/curation-sync.md § 3.9)",
     ),
 ]
 

@@ -88,16 +88,6 @@ def test_exactly_one_phase_per_run(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _run(monkeypatch, ["--cohort", "e"]) == 1
 
 
-def test_the_called_for_value_is_in_both_the_literal_and_the_check() -> None:
-    # The DB CHECK is a drop-and-add: a value missing from the newest migration is
-    # silently removed from the vocabulary, and the insert fails at write time.
-    from api.llm_client import CalledFor
-    import typing
-    assert "screen_exam_image" in typing.get_args(CalledFor)
-    mig = (ROOT / "migrations" / "459_exam_screening.sql").read_text()
-    assert "'screen_exam_image'" in mig
-
-
 def test_the_check_restates_every_value_it_inherited() -> None:
     # migrations/234 is the previous statement of this CHECK and carries five values
     # the Python literal never had. Dropping one here would break a live caller.

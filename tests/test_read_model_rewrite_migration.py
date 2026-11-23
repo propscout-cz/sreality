@@ -262,7 +262,13 @@ def test_the_receipt_probes_only_what_outlives_the_apply() -> None:
         "relation:browse_projection", "relation:properties_public", "relation:pipeline_board_public",
         "function:public.portal_status_matches", "function:public.browse_list_visible",
         "function:public.properties_map_visible", "function:public.rebuild_browse_list",
-        "function:public.browse_stats_properties", "function:public.browse_map_cells"]
+        "function:public.browse_stats_properties", "function:public.browse_map_cells",
+        "column:browse_list.all_sources", "column:browse_list.active_sources", "column:browse_list.source_count",
+        "column:browse_list.newest_ad_at_sreality", "column:browse_list.newest_ad_at_bazos",
+        "column:browse_list.newest_ad_at_idnes", "column:browse_list.newest_ad_at_maxima",
+        "column:browse_list.newest_ad_at_ceskereality", "column:browse_list.newest_ad_at_bezrealitky",
+        "column:browse_list.newest_ad_at_mmreality", "column:browse_list.newest_ad_at_remax",
+        "column:browse_list.newest_ad_at_realitymix"]
 
 
 # --- grants, cascade, dynamic DDL, post-conditions -----------------------------------------

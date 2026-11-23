@@ -108,7 +108,7 @@ describe('<ExploreAreaButton>', () => {
     expect(fromMap).toEqual(fromTile);
     expect(fromMap).toMatchObject({
       market: 'all',
-      filters: { buildingMaterial: ['cihla'], centerRadius: { radius_m: 1000 } },
+      filters: { buildingMaterial: ['cihla'], circle: { radius_m: 1000 } },
     });
   });
 

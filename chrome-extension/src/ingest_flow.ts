@@ -1,8 +1,8 @@
 /* The panel's "Přidat do databáze" flow, free of the DOM and of `chrome` so it
  * runs under `node --test`: POST /listings/ingest, then poll its GET until the
  * ad is held with a property, a refusal sentence, an API error, or the poll
- * budget is spent. The transport is the caller's (content.ts `call`, which goes
- * through the background worker like every other request). */
+ * budget is spent. The transport is the caller's (panel.ts: the store's `call`,
+ * which goes through the background worker like every other request). */
 
 import type { ApiMessage, ApiResult, IngestState } from './types';
 

@@ -6,6 +6,7 @@
  * curation write against `queryKey[1]`. No namespace prefix — the roots ARE the namespace, and
  * none of them may equal lib/hydration's (hydration.test.ts pins that). */
 
+import type { BoardOptions } from '@/lib/brokerBoard';
 import type { ListingFilters } from '@/lib/filters';
 import type { SortSpec } from '@/lib/queries';
 import type { StatsSpec } from '@/lib/stats';
@@ -16,10 +17,13 @@ const root = {
   stats: 'stats',
   count: 'browse-count',
   noPriceCount: 'no-price-count',
+  brokers: 'broker-board',
 } as const;
 
 export const browseKeys = {
   cards: (f: ListingFilters, s: SortSpec) => [root.cards, f, s] as const,
+  /** One cohort's cards in every order (by prefix): a page whose sort lives below it. */
+  cohortCards: (f: ListingFilters) => [root.cards, f] as const,
   /* The pin limit is the server's point budget, so it decides the answer's SHAPE
    * (points or counts) and must be in the key. */
   map: (f: ListingFilters, pinLimit: number) => [root.map, f, pinLimit] as const,
@@ -32,10 +36,13 @@ export const browseKeys = {
   statsAll: [root.stats] as const,
   count: (f: ListingFilters) => [root.count, f] as const,
   noPriceCount: (f: ListingFilters) => [root.noPriceCount, f] as const,
+  /* The Makléři tab: the cohort (its lenses at their defaults, lib/brokerBoard
+   * marketFilters) and the tab's options. */
+  brokers: (f: ListingFilters, o: BoardOptions) => [root.brokers, f, o] as const,
   /** The paged lists: patched in place by a curation settle, never refetched for one. */
   lists: [[root.cards]] as const,
   /** Every other read of the browse read model. */
-  aggregates: [[root.map], [root.stats], [root.count], [root.noPriceCount]] as const,
+  aggregates: [[root.map], [root.stats], [root.count], [root.noPriceCount], [root.brokers]] as const,
   /** Every Browse read surface: what a merge / split / link / restore sweeps. */
   all: Object.values(root).map((r) => [r] as const),
 };

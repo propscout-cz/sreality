@@ -1,6 +1,6 @@
 """No lane artifact carries the operator's identity.
 
-Every lane uploads `out/` to a GitHub Actions artifact of a PUBLIC repository, so anything a
+Every lane uploads `out/` to a GitHub Actions artifact, so anything a
 lane writes is readable by anyone who can see the run. Advert-side PII has had a rail since
 W2 (`export_sql`'s broker columns, E28). The OPERATOR's own identity did not: `mode=labels`
 shipped `autodedup.verdicts.decided_by` — a login, which is an e-mail address — verbatim in
@@ -35,6 +35,8 @@ LANE_WRITERS: tuple[str, ...] = (
     "rt_lease.py", "score_lane.py",
     "score_sql.py",
     "seals.py",
+    # The wave shadow: scorer.json / shadow.json and the exports it drives are a workflow artifact.
+    "shadow.py",
 )
 
 # Columns and claim names that identify a PERSON — the operator or a broker.
@@ -92,7 +94,7 @@ def test_the_lane_writer_census_covers_the_package() -> None:
     """A new module under autodedup/ that writes an artifact must join the list rather than
     quietly sit outside the rail. Modules that only compute are listed as exempt."""
     exempt = {
-        "__init__.py", "agreement.py", "blocking.py", "body_align.py", "candidates.py",
+        "__init__.py", "agreement.py", "apply_scope.py", "blocking.py", "body_align.py", "candidates.py",
         "calibration_cut.py", "category_splits.py", "cluster.py",
         "cohort.py", "dataset.py", "decide.py", "demonstrate.py", "development.py",
             "family.py", "features.py",

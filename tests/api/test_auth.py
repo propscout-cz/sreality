@@ -9,7 +9,6 @@ the tests below delenv it to exercise the gate.
 from __future__ import annotations
 
 import contextlib
-from typing import Any
 
 import pytest
 
@@ -22,12 +21,12 @@ from api import dependencies as deps
 from tests.api._jwt import mint
 from api import feedback as api_feedback
 from api import main as api_main
-from api import maps as api_maps
 from api import pipeline as api_pipeline
 from api import saved_sets as api_saved_sets
 from api import shares as api_shares
 from api.routes import stats_dashboards as api_stats_dashboards
 from api import tenant_pool
+from location_data import place_search
 
 
 @pytest.fixture()
@@ -58,30 +57,11 @@ def client(monkeypatch):
     def fake_find(conn, target, filters):
         return {"data": {"listings": []}, "metadata": {"tool": "find_comparables"}}
 
-    def fake_dist(listings, field):
-        return {"data": {"n": 0}, "metadata": {"tool": "analyze_distribution"}}
-
     def fake_verify(conn, c, sid, max_age):
         return {"data": {"sreality_id": sid}, "metadata": {"tool": "verify_listing_freshness"}}
 
     def fake_compare(conn, sid, since, listing_id=None):
         return {"data": {"snapshot_count": 0}, "metadata": {"tool": "compare_snapshots"}}
-
-    def fake_estimate(conn, target, filters, purchase_price_czk=None, **_kw):
-        return {"data": {"sample_size": 0}, "metadata": {"tool": "estimate_yield"}}
-
-    def fake_neighborhood(conn, **_kw):
-        return {"data": {}, "metadata": {"tool": "describe_neighborhood"}}
-
-    def fake_outliers(conn, listings, **_kw):
-        return {"data": {"outliers": []}, "metadata": {"tool": "find_distribution_outliers"}}
-
-    def fake_market_vel(conn, target, filters, lifecycle, trend_split_days):
-        return {"data": {"cohort_size": 0}, "metadata": {"tool": "compute_market_velocity"}}
-
-    def fake_listing_vel(conn, sreality_id, **_kw):
-        return {"data": {"sreality_id": sreality_id, "found": False},
-                "metadata": {"tool": "compute_listing_velocity"}}
 
     def fake_anchors(conn, **_kw):
         return {"data": {"categories": {}, "from_cache": {}},
@@ -102,14 +82,8 @@ def client(monkeypatch):
         return {"id": run_id, "status": "success"}
 
     monkeypatch.setattr(api_main, "find_comparables", fake_find)
-    monkeypatch.setattr(api_main, "analyze_distribution", fake_dist)
     monkeypatch.setattr(api_main, "verify_listing_freshness", fake_verify)
     monkeypatch.setattr(api_main, "compare_snapshots", fake_compare)
-    monkeypatch.setattr(api_main, "estimate_yield", fake_estimate)
-    monkeypatch.setattr(api_main, "describe_neighborhood", fake_neighborhood)
-    monkeypatch.setattr(api_main, "find_distribution_outliers", fake_outliers)
-    monkeypatch.setattr(api_main, "compute_market_velocity", fake_market_vel)
-    monkeypatch.setattr(api_main, "compute_listing_velocity", fake_listing_vel)
     monkeypatch.setattr(api_main, "find_anchor_amenities", fake_anchors)
     monkeypatch.setattr(api_main, "create_estimation_run", fake_create_run)
     monkeypatch.setattr(api_main, "get_estimation_run", fake_get_run)
@@ -267,12 +241,9 @@ def client(monkeypatch):
         lambda conn, charts, *, account_id: {"charts": charts, "updated_at": "t"},
     )
 
-    monkeypatch.setattr(api_maps, "suggest", lambda *a, **kw: {"items": []})
-    monkeypatch.setattr(
-        api_maps,
-        "resolve",
-        lambda *a, **kw: {"level": None, "id": None, "name": None, "context": None},
-    )
+    # Own place search opens its connection in the route, not as a dependency (a refused one is its own 503).
+    monkeypatch.setattr(deps, "open_background_conn", lambda: contextlib.nullcontext(object()))
+    monkeypatch.setattr(place_search, "suggest", lambda *a, **kw: [])
 
     yield TestClient(api_main.app)
     api_main.app.dependency_overrides.clear()
@@ -280,17 +251,10 @@ def client(monkeypatch):
 
 _CAT = {"category_main": "byt", "category_type": "pronajem"}
 _FIND_BODY = {"target": {"lat": 50.0, "lng": 14.0}, **_CAT}
-_DIST_BODY = {"listings": [], "field": "price_per_m2"}
 _VERIFY_BODY = {"sreality_id": 1, "max_age_hours": 24}
 _COMPARE_BODY = {"sreality_id": 1}
-_ESTIMATE_BODY = {"target": {"lat": 50.0, "lng": 14.0, "area_m2": 50.0}, **_CAT}
-_NEIGHBORHOOD_BODY = {"lat": 50.0, "lng": 14.0, **_CAT}
-_OUTLIERS_BODY = {"listings": []}
-_MARKET_VEL_BODY = {"target": {"lat": 50.0, "lng": 14.0}, **_CAT}
-_LISTING_VEL_BODY = {"sreality_id": 1}
 _ANCHORS_BODY = {"lat": 50.0, "lng": 14.0}
 _CREATE_ESTIMATION_BODY = {"spec": {"lat": 50.0, "lng": 14.0, "area_m2": 50.0}}
-_RESOLVE_BODY = {"lat": 50.0, "lng": 14.0, "type": "regional.municipality", "name": "x"}
 _CREATE_COLLECTION_BODY = {"name": "test"}
 _PATCH_COLLECTION_BODY = {"name": "renamed"}
 _ADD_PROPERTIES_BODY = {"property_ids": [1]}
@@ -306,18 +270,11 @@ _DASHBOARD = "66666666-6666-6666-6666-666666666666"
 def _gated_calls(client) -> list:
     return [
         ("POST", "/tools/find_comparables", _FIND_BODY),
-        ("POST", "/tools/analyze_distribution", _DIST_BODY),
         ("POST", "/tools/verify_listing_freshness", _VERIFY_BODY),
         ("POST", "/tools/compare_snapshots", _COMPARE_BODY),
-        ("POST", "/tools/describe_neighborhood", _NEIGHBORHOOD_BODY),
-        ("POST", "/tools/find_distribution_outliers", _OUTLIERS_BODY),
-        ("POST", "/tools/compute_market_velocity", _MARKET_VEL_BODY),
-        ("POST", "/tools/compute_listing_velocity", _LISTING_VEL_BODY),
         ("POST", "/tools/find_anchor_amenities", _ANCHORS_BODY),
-        ("POST", "/estimate_yield", _ESTIMATE_BODY),
         ("GET", "/estimations", None),
-        ("GET", "/maps/suggest?query=foo", None),
-        ("POST", "/maps/resolve", _RESOLVE_BODY),
+        ("POST", "/places/suggest", {"query": "Brno"}),
     ]
 
 

@@ -35,6 +35,7 @@ Rule 22 makes a mixed cohort one click away, so this is not a theoretical arm.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -63,9 +64,8 @@ PPM2_BASES: tuple[str, ...] = (
 # ways a set of rows can fail to have one, and both must be rendered as a gap.
 #   mixed   — the rows disagree; one blanket unit would be a lie (rule 22: the
 #             default Browse cohort is sale+rent).
-#   unknown — nothing said. Client-supplied rows (POST /tools/analyze_distribution
-#             takes caller-provided listings) carry no basis at all; the honest
-#             answer is "unknown", never a default of sale.
+#   unknown — nothing said: rows that carry no basis label; the honest answer
+#             is "unknown", never a default of sale.
 BASIS_MIXED = "mixed"
 BASIS_UNKNOWN = "unknown"
 
@@ -170,6 +170,42 @@ def tom_observed_sql(alias: str) -> str:
         f"measure_tom_observed({alias}.source, {alias}.category_main, "
         f"{alias}.category_type, {alias}.first_seen_at)"
     )
+
+
+# The speed measure's two constants, as migration 691's body spells them (tests/test_measure_tom_days.py pins both): E0,
+# rule 3's structural end gate (an exit before it is untrustworthy), and M, the follow-up / handover margin W0 calibrated.
+EXIT_CLEAN_SINCE = "2026-09-08"
+EXIT_MARGIN_DAYS = 7
+
+
+def exit_within_sql(spell: str, prop: str, days: str) -> str:
+    """THE "left the market within N days" measure (migration 691) over a
+    `broker_book`-shaped alias (692) and its `properties`-shaped alias; `days` is an SQL
+    expression (a literal or a bound parameter). 'exited' | 'not_exited' | 'unknown', NULL when
+    the spell is not followed (left-censored, before the end gate, or its window not over)."""
+    return (
+        f"measure_exit_within({spell}.tom_observed, {spell}.started_at, {spell}.ended_at, "
+        f"{prop}.is_active, {prop}.last_seen_at, {days})"
+    )
+
+
+# --- a share's lower bound (the broker board's rank, every health gauge's judgement) ----------
+
+
+def wilson_lower(hits: int, n: int, z: float = 1.96) -> float | None:
+    """The Wilson score interval's lower bound of hits / n; None when nothing was counted."""
+    if n == 0:
+        return None
+    p, z2 = hits / n, z * z
+    centre = p + z2 / (2 * n)
+    margin = z * math.sqrt(p * (1 - p) / n + z2 / (4 * n * n))
+    return max(0.0, (centre - margin) / (1 + z2 / n))
+
+
+def wilson_upper(hits: int, n: int, z: float = 1.96) -> float | None:
+    """The Wilson score interval's upper bound of hits / n (one minus the misses' lower bound)."""
+    low = wilson_lower(n - hits, n, z)
+    return None if low is None else 1.0 - low
 
 
 # --- the Python mirror ----------------------------------------------------
@@ -464,7 +500,7 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         measure="ppm2",
         kind=KIND_LABELS,
         why="The `unit` string on min_price_per_m2 and max_price_per_m2 — the "
-        "agent-facing label, read verbatim through GET /admin/filter-schema. "
+        "label the generated registry carries to every filter form. "
         "Both rows also carry `basis=BASIS_DEPENDS_ON_CATEGORY`, because the "
         "unit alone is ~300x ambiguous between a sale and a rental cohort.",
     ),
@@ -510,10 +546,12 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         hits=2,
         measure="ppm2",
         kind=KIND_GUARDS,
-        why="`is_per_area_price()` (W1) — the one guard, shared by nine "
-        "portals, that stops a per-m² NOTE in a price string being stored as the "
-        "price. It has to spell the unit in order to detect it; storing a rate "
-        "as a total is what made mmreality dum read ~5 700 CZK per m².",
+        why="`is_per_area_price()` (W1) — the guard, shared by the text portals "
+        "that still refuse a rate, that stops a per-m² NOTE in a price string being "
+        "stored as the price (remax, realitymix and bezrealitky convert a rate to a "
+        "total instead: scraper/price_reading.py, #2355). It has to spell the unit "
+        "in order to detect it; storing a rate as a total is what made mmreality "
+        "dum read ~5 700 CZK per m².",
     ),
     # -- Python: heal, watch, consume ---------------------------------------
     # `scripts/backfill_idnes_areas.py` was registered here until the one re-parse
@@ -568,7 +606,7 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         "over its calc_area, forwarded verbatim; `result_basis` labels them with "
         "the REQUEST's basis and its docstring names both units. Nothing divides.",
     ),
-    # -- Frontend + extension: the label half --------------------------------
+    # -- Frontend: the label half (the extension imports it) -----------------
     RegisteredSite(
         path="frontend/src/lib/measure.ts",
         arm="unit",
@@ -605,19 +643,6 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         "rendered through fmtMeasuredPricePerM2 with the row's published "
         "`price_per_m2_basis`. These two name a column and a cohort; neither "
         "labels a number.",
-    ),
-    RegisteredSite(
-        path="chrome-extension/src/content.ts",
-        arm="unit",
-        hits=1,
-        measure="ppm2",
-        kind=KIND_LABELS,
-        why="`CZK_PER_M2_MONTH` — a third territory that can import neither "
-        "the Python nor the SPA module, so the rent-basis string is copied "
-        "VERBATIM from PPM2_UNIT_CS['rent_monthly_czk_m2']. One constant "
-        "labels both monthly per-m² figures the panel renders (the MF "
-        "reference rent and the fond rate); the bare capital unit would "
-        "misname either by a factor of twelve.",
     ),
     # -- Frontend: the tests that pin the vocabulary -------------------------
     RegisteredSite(
@@ -862,6 +887,18 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         "reads the rent-basis string from the shared map.",
     ),
     RegisteredSite(
+        path="chrome-extension/src/panel_agents.ts",
+        arm="vocab",
+        hits=1,
+        measure="fond_per_m2",
+        kind=KIND_LABELS,
+        why="The side sheet's Výnos editor, its fond oprav + SVJ input: RunPanel's "
+        "twin, the suffix PPM2_UNIT.rent imported from the SPA's measure.ts (no "
+        "copy). The number is the operator's rate or the server's served default "
+        "(`fond_per_m2_czk_default`); the header's per-m² goes through "
+        "fmtMeasuredPricePerM2 with the lookup's basis.",
+    ),
+    RegisteredSite(
         path="frontend/src/pages/Datasets.tsx",
         arm="vocab",
         hits=1,
@@ -928,5 +965,15 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         kind=KIND_GUARDS,
         why="Pins that the choropleth legend still reads the shared value "
         "labels rather than a local copy of them.",
+    ),
+    RegisteredSite(
+        path="frontend/src/lib/listingPopupHtml.test.ts",
+        arm="vocab",
+        hits=1,
+        measure="ppm2",
+        kind=KIND_GUARDS,
+        why="The map popup test's fixture row carries the server's published "
+        "basis token, so the popup's per-m² line is pinned to that basis, never "
+        "a client ratio or a bare 'sale' literal.",
     ),
 )

@@ -297,6 +297,7 @@ def test_rollup_ignores_failed_children():
 def client(monkeypatch):
     api_main.app.dependency_overrides[deps.get_db_conn] = lambda: object()
     api_main.app.dependency_overrides[deps.require_token] = lambda: None
+    api_main.app.dependency_overrides[deps.require_admin] = lambda: {"sub": "operator", "is_admin": True}
     api_main.app.dependency_overrides[deps.get_sreality_client] = lambda: object()
     api_main.app.dependency_overrides[deps.get_llm_client] = lambda: object()
     from starlette.background import BackgroundTasks

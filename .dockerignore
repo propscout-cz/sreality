@@ -11,6 +11,6 @@ CLAUDE.md
 migrations
 .dockerignore
 Dockerfile
-railway.json
+.railway
 .venv
 venv

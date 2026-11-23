@@ -1,8 +1,8 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { useSpaLinkDelegation } from '@/lib/linkGestures';
+import { useNewTabProps, useSpaLinkDelegation } from '@/lib/linkGestures';
 import { YmPicker, YM_SELECT_CLS } from '@/components/YmPicker';
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
-import { createMap } from '@/lib/basemap';
+import { addBasemapLayers, createMap, useBasemapPicks } from '@/lib/basemap';
 import type { HaloPoint } from '@/lib/hoverSync';
 import { haloFeatures, useMapFeatureHover } from '@/lib/useMapFeatureHover';
 import {
@@ -16,13 +16,12 @@ import {
   useCountLevel,
 } from '@/lib/mapCounts';
 import type { CityIndexDefinition, CuratedCity, MapCounts, MapRow } from '@/lib/queries';
-import type { CenterRadius, MapBounds } from '@/lib/filters';
+import type { MapBounds, MapCircle } from '@/lib/filters';
 import { groupForPicker, indexLabel, pinnedFirst } from '@/lib/cityIndexes';
 import { legendGradient, mapRampStops, normalizeIndexValue } from '@/lib/cityIndexScale';
-import { czPlural, fmtCzk, fmtArea, fmtMeasuredPricePerM2, fmtRelative, fmtAbsolute } from '@/lib/format';
-import { PPM2_UNIT, areaKindOf, ppm2BasisFromToken } from '@/lib/measure';
+import { czPlural } from '@/lib/format';
+import { PPM2_UNIT, ppm2BasisFromToken } from '@/lib/measure';
 import { PIN_LIMIT_MAX, PIN_LIMIT_MIN, parsePinLimit, type PriceMetric } from '@/lib/browseState';
-import { listingKindLabel } from '@/lib/enums';
 import type { PriceStatDataset, PriceStatGrowthRow, PriceStatGrowthShape } from '@/lib/priceStats';
 import {
   GROWTH_METRICS,
@@ -35,46 +34,38 @@ import {
   type HoverData,
 } from '@/lib/growthChoropleth';
 import HoverChart from '@/components/HoverChart';
-import MapOverlayControls, { MapOverlayLegends } from '@/components/MapOverlayControls';
-import { MapLegendCard, OverlayChip, OverlayPanel } from '@/components/OverlayChip';
+import { SegmentedBar, type SegmentOption } from '@/components/controls';
+import MapOverlayControls, { MapOverlayLegends, TONE_ROW } from '@/components/MapOverlayControls';
+import { MapLegendCard, MapLegendDock, OverlayChip, OverlayPanel } from '@/components/OverlayChip';
+import ErrorBanner from '@/components/ErrorBanner';
+import type { ReadGroupFailure } from '@/lib/readGroup';
 import {
-  LabelIcon, LayersIcon, MinusIcon, PlusIcon, RailButton, RailFlyout, RailGroup, ShowAllIcon, SlidersIcon, useRailPanel,
+  LayersIcon, MinusIcon, PlusIcon, RailButton, RailFlyout, RailGroup, ShowAllIcon, SlidersIcon, useRailPanel,
 } from '@/components/MapRail';
 import { escapeHtml } from '@/lib/escapeHtml';
-import { usePersistedFlag } from '@/lib/persistedFlag';
 import { circleRing } from '@/lib/geoRing';
-import { propertyPath } from '@/lib/listingUrl';
+import { listingPopupHtml } from '@/lib/listingPopupHtml';
 import {
-  overlayFillIds,
-  overlayClickOwner,
-  overlayPopupHtml,
+  overlayPopupAt,
   useMapOverlays,
   useMapZoom,
+  useOverlayCursor,
+  useOverlayPlacesAtCenter,
 } from '@/lib/mapOverlayDraw';
-import { parseLayers, type MapOverlayRegistry } from '@/lib/mapOverlays';
-import {
-  drawnUncertaintyRadiusM,
-  isPinExact,
-  pinPrecisionLabel,
-  uncertaintyPixelsAtZoom0,
-} from '@/lib/uncertaintyCircle';
+import { layerGroupsOn, registrySectionsOn, type MapOverlayRegistry } from '@/lib/mapOverlays';
+import { isPinExact } from '@/lib/pinPrecision';
 
 const psgLayerId = (m: GrowthMetric) => `psg-${m}`;
-
-/* Whether the map's layer keys are folded to their button (per browser). */
-const LEGENDS_FOLDED_KEY = 'sreality.browse.mapLegendsFolded';
 
 /* The reference overlays sit under the growth choropleth's first layer — so
  * under the city polygons and the listings too — where the MF rent map and the
  * kraj borders were always drawn. */
 const OVERLAY_BEFORE_ID = psgLayerId(GROWTH_METRIC_ORDER[0]);
 
-const centerRadiusPolygon = (
-  cr: CenterRadius,
-): GeoJSON.Feature<GeoJSON.Polygon> => ({
+const circlePolygon = (c: MapCircle): GeoJSON.Feature<GeoJSON.Polygon> => ({
   type: 'Feature',
   properties: {},
-  geometry: { type: 'Polygon', coordinates: [circleRing(cr.lat, cr.lng, cr.radius_m)] },
+  geometry: { type: 'Polygon', coordinates: [circleRing(c.lat, c.lng, c.radius_m)] },
 });
 
 const emptyCenterCircle: GeoJSON.Feature<GeoJSON.Polygon> = {
@@ -83,14 +74,10 @@ const emptyCenterCircle: GeoJSON.Feature<GeoJSON.Polygon> = {
   geometry: { type: 'Polygon', coordinates: [[]] },
 };
 
-/* Fallback shape for a curated city that has no municipality boundary
- * (every city has one today, but a future operator upload might add one
- * before its admin_boundary link is backfilled). */
-const circlePolygonGeom = (
-  lat: number,
-  lng: number,
-  radiusM: number,
-): GeoJSON.Polygon => ({ type: 'Polygon', coordinates: [circleRing(lat, lng, radiusM)] });
+const viewBounds = (map: maplibregl.Map): MapBounds => {
+  const b = map.getBounds();
+  return { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() };
+};
 
 const PRAGUE = { lng: 14.4378, lat: 50.0755, zoom: 9.5 };
 
@@ -128,7 +115,7 @@ const formatPriceLabel = (r: MapRow, metric: PriceMetric): string => {
   return `${czPriceCompact.format(r.price_per_m2)}\u00a0${PPM2_UNIT[basis]}`;
 };
 
-/* `pin_exact` picks the pin's black outer contour (lib/uncertaintyCircle.isPinExact):
+/* `pin_exact` picks the pin's black outer contour (lib/pinPrecision.isPinExact):
  * present for a pin placed on a building, absent for anything coarser. Baked per
  * feature so the rule stays in TypeScript, where it is tested, and the paint
  * expression only reads a boolean. `is_active` picks the fill: the pin colour, or white and
@@ -171,27 +158,6 @@ const toFeatureCollection = (rows: MapRow[], metric: PriceMetric): FC => ({
     },
   })),
 });
-
-/* The one uncertainty circle on the map: the pin whose popup is open. Empty
- * otherwise — including for a pin with no circle to draw (building level, or
- * unresolved), whose popup says why in words. */
-const pinPrecisionArea = (
-  row: MapRow | null,
-  at: [number, number] | null,
-): GeoJSON.FeatureCollection<GeoJSON.Point, { px_z0: number }> => {
-  const radiusM = row ? drawnUncertaintyRadiusM(row) : null;
-  return {
-    type: 'FeatureCollection',
-    features:
-      radiusM == null || at == null
-        ? []
-        : [{
-            type: 'Feature',
-            geometry: { type: 'Point', coordinates: at },
-            properties: { px_z0: uncertaintyPixelsAtZoom0(radiusM, at[1]) },
-          }],
-  };
-};
 
 /* Imperative "fly to this place" command. `ts` is a monotonic stamp
  * (Date.now() at the originating event) so back-to-back picks of the
@@ -298,10 +264,12 @@ interface Props {
   bounds: MapBounds | null;
   /* Fires on user-driven pan/zoom (we ignore programmatic moves).
    * `null` means "the operator cleared the map area" (Reset-view).
-   * Suppressed when `locationMode === 'center_radius'`: the
-   * spatial predicate comes from the sidebar's centre+radius
-   * widget, not the viewport. */
+   * Suppressed while a circle is the map area: the circle holds still
+   * while the map moves. */
   onBoundsChange?: (b: MapBounds | null) => void;
+  /* Every settled view, user-driven or programmatic: where a switch to
+   * centre + radius places its circle. */
+  onViewChange?: (b: MapBounds) => void;
   /* Cross-source hover sync. Listings whose ids appear here render
    * with the highlight paint expressions; the map pushes its own
    * mouseenter/mouseleave events outward through onHover. */
@@ -310,12 +278,11 @@ interface Props {
   /* The locator halo's points: the hovered cards' own rows (HoverTarget), so the
    * halo lands even when the map holds no row for the property. */
   haloPoints: ReadonlyArray<HaloPoint>;
-  /* When set (i.e. the operator chose centre+radius mode in the
-   * sidebar) the map renders a dashed copper circle around the
-   * point so the cohort's geographic scope is visible. The circle
-   * is purely visual — the cohort filtering happens client-side
-   * via the circumscribed square in filters.effectiveBbox. */
-  centerCircle: CenterRadius | null;
+  /* The circle map area: a dashed copper ring with a draggable centre. The
+   * cohort is this exact circle, filtered in the database (`in_map_area`). */
+  circle: MapCircle | null;
+  /* A drag of the circle's centre ends here; without it the centre stays put. */
+  onCircleMove?: (next: MapCircle) => void;
   /* Latest "fly to this place" command from outside (e.g. a District
    * typeahead pick). The map watches the prop's identity and animates
    * to (lat, lng, zoom) when it changes. Programmatic moves don't
@@ -354,6 +321,10 @@ interface Props {
    * detail when a pin is clicked. */
   cityIndexValuesAll?: Map<string, number>;
   cityIndexDefinitions?: CityIndexDefinition[];
+  /* Set while a read the city layer needs (the towns, their outlines, the
+   * indexes or their values) has failed: the layer would stay empty with no
+   * word of why, so the map says so with a retry instead of the city key. */
+  cityLoadFailure?: ReadGroupFailure | null;
   onToggleShowCities?: (next: boolean) => void;
   onColorByIndexChange?: (indexName: string | null) => void;
   /* What the pin labels show — the total price or the per-m² measure. The
@@ -370,10 +341,12 @@ interface Props {
    * budget the map query was fetched with). */
   pinLimit: number;
   onPinLimitChange?: (next: number) => void;
-  /* Reference overlays (lib/mapOverlays) — the MF rent choropleth among them:
-   * the registry, the canonical `layers` selection, and where a change goes
-   * (the URL + the remembered selection — MapOverlayState.layers). Drawn under
-   * the growth choropleth, the city polygons and the listings. */
+  /* Reference overlays (lib/mapOverlays) — the MF rent choropleth among them —
+   * and the basemap picks (ČÚZK's aerial photo, relief, contours): the registry,
+   * the canonical `layers` selection, and where a change goes (the URL + the
+   * remembered selection — MapOverlayState.layers). The overlays draw under the
+   * growth choropleth, the city polygons and the listings; the basemap picks
+   * under every layer of ours. */
   overlayRegistry?: MapOverlayRegistry;
   overlayLayers?: string;
   onOverlayLayersChange?: (next: string) => void;
@@ -412,7 +385,9 @@ export default function ListingMap({
   hoveredIds,
   onHover,
   haloPoints,
-  centerCircle,
+  circle,
+  onCircleMove,
+  onViewChange,
   flyTo,
   frame,
   anchor = null,
@@ -429,6 +404,7 @@ export default function ListingMap({
   cityIndexValues,
   cityIndexValuesAll,
   cityIndexDefinitions,
+  cityLoadFailure = null,
   onToggleShowCities,
   onColorByIndexChange,
   overlayRegistry,
@@ -478,8 +454,9 @@ export default function ListingMap({
   useEffect(() => {
     setColorByMin(null);
   }, [colorByIndex?.index_name]);
-  /* The map fits to results exactly once — the first time a non-empty
-   * row set arrives after the map is ready. Subsequent filter changes
+  /* The map fits to results at most once — the first time a non-empty
+   * row set arrives after the map is ready, unless the operator has
+   * already moved it (the moveend handler). Subsequent filter changes
    * never re-zoom, so the operator stays anchored on whatever area
    * they're examining. The Reset-view control offers an explicit
    * opt-in if they want to widen back to the full cohort. */
@@ -516,13 +493,23 @@ export default function ListingMap({
    * callback without rebinding. */
   const onHoverRef = useRef(onHover);
   onHoverRef.current = onHover;
-  /* When centre+radius mode is active the `moveend` handler must
-   * skip emitting bounds — the cohort filters by the dashed circle,
-   * not the viewport. Suppression flag rather than removing the
-   * listener so toggling the mode at runtime doesn't require a
-   * map remount. */
-  const suppressBoundsRef = useRef(centerCircle != null);
-  suppressBoundsRef.current = centerCircle != null;
+  /* And for the popup's "View details →": a new tab on the desktop, like the
+   * Browse card beside the map (lib/linkGestures `useNewTabProps`). */
+  const newTab = useNewTabProps();
+  const newTabRef = useRef(newTab);
+  newTabRef.current = newTab;
+  /* While a circle is the map area the `moveend` handler must skip
+   * emitting bounds — the cohort is the circle, not the viewport. A flag
+   * rather than removing the listener, so the switch needs no remount. */
+  const suppressBoundsRef = useRef(circle != null);
+  suppressBoundsRef.current = circle != null;
+  const circleRef = useRef(circle);
+  circleRef.current = circle;
+  const onCircleMoveRef = useRef(onCircleMove);
+  onCircleMoveRef.current = onCircleMove;
+  const onViewChangeRef = useRef(onViewChange);
+  onViewChangeRef.current = onViewChange;
+  const centreMarkerRef = useRef<maplibregl.Marker | null>(null);
   /* Initial bbox from URL captured once at mount time — applying it
    * on the load event is what restores a shared link's exact viewport.
    * Reading the live `bounds` prop instead would refit every time the
@@ -542,6 +529,7 @@ export default function ListingMap({
     mapRef.current = map;
 
     map.on('load', () => {
+      addBasemapLayers(map);
       /* Price-stats growth overlay — one fill layer per metric, all hidden
        * until the data-effect flips the active one on. Added FIRST: a
        * background layer, below the listing dots + city pins; the reference
@@ -730,41 +718,6 @@ export default function ListingMap({
         data: { type: 'FeatureCollection', features: [] },
       });
 
-      /* HOW FAR OFF THIS PIN MAY BE — for the ONE pin whose popup is open (see
-       * lib/uncertaintyCircle for why it is no longer drawn under every pin). Its
-       * own source holding zero or one point, fed by the `point`
-       * click handler and emptied when that popup closes. A `circle` layer, not
-       * a polygon ring like `center-circle`: the radius interpolates on zoom with
-       * an exponential base of exactly 2, which is EXACT (web-Mercator metres per
-       * pixel halve per zoom level). Added before `point` so the pin always sits
-       * on top of its own circle. */
-      map.addSource('pin-precision', {
-        type: 'geojson',
-        data: pinPrecisionArea(null, null),
-      });
-      map.addLayer({
-        id: 'pin-precision-area',
-        type: 'circle',
-        source: 'pin-precision',
-        paint: {
-          'circle-radius': [
-            'interpolate', ['exponential', 2], ['zoom'],
-            0, ['get', 'px_z0'],
-            20, ['*', ['get', 'px_z0'], 2 ** 20],
-          ],
-          'circle-color': PIN_COLOR,
-          'circle-opacity': 0.08,
-          'circle-stroke-color': PIN_COLOR,
-          'circle-stroke-width': 1.5,
-          'circle-stroke-opacity': 0.6,
-          /* A footprint on the ground, so it stays a circle around the pin when
-             the map is pitched rather than a disc facing the camera. It is never
-             a hit target: no handler binds to this layer, and listingUnderCursor
-             queries ['point', 'counts'] by name. */
-          'circle-pitch-alignment': 'map',
-        },
-      });
-
       /* The black outer contour of an exact pin (building / address). A layer of
        * its own because a circle has ONE stroke, and the white (active) or pin-coloured
        * (inactive) one is taken. A stroke is drawn OUTSIDE the radius, so this
@@ -885,49 +838,67 @@ export default function ListingMap({
       map.on('mouseleave', COUNTS, () => {
         map.getCanvas().style.cursor = '';
       });
-      map.on('mouseenter', 'point', (e) => {
+      /* Every pin answers a pointer (operator ruling 2026-10-30): its preview on the map,
+       * the popup a click opens, and its card lit when the card is loaded. Followed per pin
+       * under the cursor (`mousemove`, not the layer's one `mouseenter`), so moving across
+       * touching pins follows the cursor and pins stacked on one point light together. A
+       * click keeps the preview open; while one is open, hovering adds no second. */
+      let preview: maplibregl.Popup | null = null;
+      let previewId: string | number | undefined;
+      const hidePreview = () => {
+        preview?.remove();
+        preview = null;
+        previewId = undefined;
+      };
+      map.on('mousemove', 'point', (e) => {
         map.getCanvas().style.cursor = 'pointer';
-        const f = e.features?.[0];
-        const id = f?.id as number | undefined;
-        if (typeof id === 'number') onHoverRef.current?.([id]);
+        const features = e.features ?? [];
+        const ids = [...new Set(features.map((f) => f.id).filter((id): id is number => typeof id === 'number'))];
+        onHoverRef.current?.(ids.length > 0 ? ids : null);
+        const top = features[0];
+        if (!top || top.geometry.type !== 'Point' || popupRef.current?.isOpen()) {
+          hidePreview();
+          return;
+        }
+        if (top.id === previewId) return;
+        preview?.remove();
+        previewId = top.id;
+        preview = new maplibregl.Popup({
+          closeButton: false,
+          closeOnClick: false,
+          maxWidth: '280px',
+          className: 'listing-popup',
+        })
+          .setLngLat(top.geometry.coordinates as [number, number])
+          .setHTML(listingPopupHtml(top.properties as unknown as MapRow, newTabRef.current))
+          .addTo(map);
       });
       map.on('mouseleave', 'point', () => {
         map.getCanvas().style.cursor = '';
         onHoverRef.current?.(null);
+        hidePreview();
       });
-
-      const setPinPrecisionArea = (row: MapRow | null, at: [number, number] | null) => {
-        (map.getSource('pin-precision') as GeoJSONSource | undefined)
-          ?.setData(pinPrecisionArea(row, at));
-      };
 
       map.on('click', 'point', (e) => {
         const f = e.features?.[0];
         if (!f || f.geometry.type !== 'Point') return;
         const props = f.properties as unknown as MapRow;
         const at = f.geometry.coordinates as [number, number];
-        /* Removing the previous popup fires its `close`, which clears the
-         * previous circle before this one is drawn. */
+        hidePreview();
         popupRef.current?.remove();
-        const popup = new maplibregl.Popup({
+        popupRef.current = new maplibregl.Popup({
           closeButton: true,
           closeOnClick: true,
           maxWidth: '280px',
           className: 'listing-popup',
         })
           .setLngLat(at)
-          .setHTML(popupHtml(props));
-        /* The circle lives exactly as long as the popup that explains it: its
-         * ×, a click elsewhere on the map, or the next popup replacing it all
-         * end in `close`. */
-        popup.on('close', () => setPinPrecisionArea(null, null));
-        setPinPrecisionArea(props, at);
-        popupRef.current = popup.addTo(map);
+          .setHTML(listingPopupHtml(props, newTabRef.current))
+          .addTo(map);
       });
 
-      /* Centre+radius overlay. The polygon source carries an empty
-       * ring when the operator hasn't picked a centre yet; the
-       * effect below populates it when `centerCircle` is non-null. */
+      /* The circle map area. The polygon source carries an empty ring
+       * while the area is a box; the effect below draws the circle. */
       map.addSource('center-circle', {
         type: 'geojson',
         data: emptyCenterCircle,
@@ -989,20 +960,11 @@ export default function ListingMap({
        * always has. Registered after the city handler, so this popup replaces
        * the city's inside any other area. */
       map.on('click', (e) => {
-        const registry = overlayRegistryRef.current;
-        if (!registry) return;
-        const fills = overlayFillIds(registry).filter((id) => map.getLayer(id));
-        if (fills.length === 0) return;
-        const top = map.queryRenderedFeatures(e.point, {
-          layers: [...LISTING_HIT_LAYERS, ...fills],
-        })[0];
-        const owner = overlayClickOwner(
-          registry,
-          top?.layer.id ?? null,
-          () => map.queryRenderedFeatures(e.point, { layers: ['city-fill'] }).length > 0,
-        );
-        if (!top || !owner) return;
-        const variant = parseLayers(overlayLayersRef.current).get(owner.layer.key) ?? null;
+        const html = overlayPopupAt(map, e.point, overlayRegistryRef.current, overlayLayersRef.current, {
+          above: LISTING_HIT_LAYERS,
+          cityHit: () => map.queryRenderedFeatures(e.point, { layers: ['city-fill'] }).length > 0,
+        });
+        if (!html) return;
         popupRef.current?.remove();
         popupRef.current = new maplibregl.Popup({
           closeButton: true,
@@ -1011,7 +973,7 @@ export default function ListingMap({
           className: 'listing-popup overlay-popup',
         })
           .setLngLat(e.lngLat)
-          .setHTML(overlayPopupHtml(owner.section.label, top.properties, owner.layer, variant))
+          .setHTML(html)
           .addTo(map);
       });
 
@@ -1092,6 +1054,7 @@ export default function ListingMap({
       });
 
       setReady(true);
+      onViewChangeRef.current?.(viewBounds(map));
 
       /* Restore the exact viewport captured in the URL on mount.
        * Marks the initial-fit ref so the rows effect doesn't fight us
@@ -1113,24 +1076,22 @@ export default function ListingMap({
      * fitBounds / easeTo calls produce events with `originalEvent ===
      * undefined`, which we skip — otherwise the initial-fit refit and
      * the Reset-view animation would both write to the URL.
-     * Also skip when centre+radius mode is on; the dashed circle owns
-     * the spatial predicate in that mode. */
+     * Also skip while a circle is the map area; it holds still.
+     * Any user move, in either mode, voids a still-pending fit to results:
+     * an empty first cohort (a small circle) leaves it pending, and the next
+     * non-empty one (the switch back to the viewport) zoomed out over them. */
     map.on('moveend', (e) => {
+      onViewChangeRef.current?.(viewBounds(map));
       if (e.originalEvent == null) return;
+      didInitialFitRef.current = true;
       if (suppressBoundsRef.current) return;
-      const cb = onBoundsChangeRef.current;
-      if (!cb) return;
-      const b = map.getBounds();
-      cb({
-        west:  b.getWest(),
-        south: b.getSouth(),
-        east:  b.getEast(),
-        north: b.getNorth(),
-      });
+      onBoundsChangeRef.current?.(viewBounds(map));
     });
 
     return () => {
       popupRef.current?.remove();
+      centreMarkerRef.current?.remove();
+      centreMarkerRef.current = null;
       map.remove();
       mapRef.current = null;
     };
@@ -1166,9 +1127,9 @@ export default function ListingMap({
    * by-index, the boundary polygons, or the underlying data. The shared
    * `interpolate` paint expression reads `properties.value`, so a change
    * of colorByIndex is implemented as a fresh setData with new values +
-   * labels. Geometry is the municipality boundary (JSON.parsed from the
-   * ST_AsGeoJSON string), falling back to a radius circle if a city has
-   * no boundary. */
+   * labels. Geometry is the RÚIAN render polygon of the town (JSON.parsed
+   * from the ST_AsGeoJSON string); a city the register cannot draw is not
+   * drawn. */
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
@@ -1185,7 +1146,7 @@ export default function ListingMap({
      * that case (or when no index is selected) so no figure is drawn. */
     const fc: CityFC = {
       type: 'FeatureCollection',
-      features: list.map((c) => {
+      features: list.flatMap((c) => {
         let geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon | null = null;
         const raw = polys.get(c.city_id);
         if (raw) {
@@ -1198,9 +1159,7 @@ export default function ListingMap({
             geometry = null;
           }
         }
-        if (!geometry) {
-          geometry = circlePolygonGeom(c.lat, c.lng, c.default_radius_m);
-        }
+        if (!geometry) return [];
         const v = idxVals.get(c.city_id);
         const hasReading = typeof v === 'number' && Number.isFinite(v);
         /* Below the operator's min threshold → treat as "no reading" so
@@ -1222,8 +1181,8 @@ export default function ListingMap({
         const value = norm ?? -1;
         const valueLabel =
           colorByIndex && passesMin ? (v as number).toFixed(1) : '';
-        return {
-          type: 'Feature',
+        return [{
+          type: 'Feature' as const,
           id: c.city_id,
           geometry,
           properties: {
@@ -1235,7 +1194,7 @@ export default function ListingMap({
             value_label: valueLabel,
             popup_html: cityPopupHtml(c, allDefs, allVals, colorByIndex ?? null),
           },
-        };
+        }];
       }),
     };
     src.setData(fc);
@@ -1262,19 +1221,51 @@ export default function ListingMap({
     ready,
   ]);
 
-  // Sync the centre+radius overlay polygon whenever the prop changes.
-  // No-op until the map's `load` event has run — until then there's
-  // no `center-circle` source to call setData on.
+  /* Draw the circle and its draggable centre whenever the prop changes. No-op until
+   * the map's `load` has run (no `center-circle` source before it). The ring follows
+   * a drag live; the drop commits the new centre (the radius stays). */
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
-    const src = map.getSource('center-circle') as
-      | GeoJSONSource | undefined;
-    if (!src) return;
-    src.setData(
-      centerCircle ? centerRadiusPolygon(centerCircle) : emptyCenterCircle,
-    );
-  }, [centerCircle, ready]);
+    const ring = (c: MapCircle | null) =>
+      (map.getSource('center-circle') as GeoJSONSource | undefined)?.setData(
+        c ? circlePolygon(c) : emptyCenterCircle,
+      );
+    ring(circle);
+    if (!circle || !onCircleMoveRef.current) {
+      centreMarkerRef.current?.remove();
+      centreMarkerRef.current = null;
+      return;
+    }
+    if (!centreMarkerRef.current) {
+      const marker = new maplibregl.Marker({ color: '#b58438', draggable: true });
+      const at = (): MapCircle | null => {
+        const c = circleRef.current;
+        if (!c) return null;
+        const { lat, lng } = marker.getLngLat();
+        return { ...c, lat, lng };
+      };
+      marker.on('drag', () => ring(at()));
+      marker.on('dragend', () => {
+        const next = at();
+        if (next) onCircleMoveRef.current?.(next);
+      });
+      centreMarkerRef.current = marker;
+    }
+    centreMarkerRef.current.setLngLat([circle.lng, circle.lat]).addTo(map);
+  }, [circle, ready]);
+
+  /* Leaving the circle hands the map area back to the viewport: emit the view on
+   * screen, so the cohort is what the map shows without a pan (the URL's bbox is
+   * absent — no move writes it under a circle). */
+  const prevCircleRef = useRef(circle);
+  useEffect(() => {
+    const had = prevCircleRef.current != null;
+    prevCircleRef.current = circle;
+    const map = mapRef.current;
+    if (!ready || !map || !had || circle != null) return;
+    onBoundsChangeRef.current?.(viewBounds(map));
+  }, [circle, ready]);
 
   /* ONE data effect for both lanes. The cohort arrives as points (`rows`, up to
    * the pin limit, every one a pin at any zoom) or as the server's tile cells
@@ -1295,9 +1286,7 @@ export default function ListingMap({
 
     /* The view the cohort was fetched for (the viewport is a filter), so an edge
      * tile's mark lands on the part of the tile that is on screen. */
-    const b = map.getBounds();
-    const view = { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() };
-    const { pins, marks } = marksFor(rows, counts, level, view);
+    const { pins, marks } = marksFor(rows, counts, level, viewBounds(map));
     pinSource.setData(toFeatureCollection(pins, priceMetric));
     countSource.setData(toCountFeatureCollection(marks));
 
@@ -1318,6 +1307,8 @@ export default function ListingMap({
     if (!ready || !map?.getLayer('point-price')) return;
     map.setLayoutProperty('point-price', 'visibility', priceLabels ? 'visible' : 'none');
   }, [priceLabels, ready]);
+
+  useBasemapPicks(mapRef.current, ready, overlayLayers);
 
   /* Imperative flyTo on each new command (identity-based via ts).
    * Marks didInitialFitRef so the rows-effect doesn't subsequently
@@ -1363,7 +1354,7 @@ export default function ListingMap({
   }, [ready]);
 
   /* The listing popup's "View details →" is a raw <a> in a MapLibre-owned HTML
-   * string (see popupHtml below), so <Link> cannot reach it and a plain click
+   * string (lib/listingPopupHtml), so <Link> cannot reach it and a plain click
    * used to do a FULL DOCUMENT LOAD — discarding the bundle, the react-query
    * cache, the viewport and the active filter cohort, with Back re-downloading
    * all of it. Delegated on the CONTAINER (MapLibre parents every popup to
@@ -1381,28 +1372,9 @@ export default function ListingMap({
   useMapFeatureHover(mapRef.current, ready, 'listings', hoveredIds, rows);
 
   useMapOverlays(mapRef.current, ready, overlayRegistry, overlayLayers, OVERLAY_BEFORE_ID);
+  const overlayPlaces = useOverlayPlacesAtCenter(mapRef.current, ready, overlayRegistry, overlayLayers);
 
-  /* A reference area answers a click (the popup above), so it shows the
-   * pointer — over the whole country while the rent map is on, as it always
-   * has. MapLibre skips the ids of sections not drawn yet. */
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !ready || !overlayRegistry) return;
-    const ids = overlayFillIds(overlayRegistry);
-    if (ids.length === 0) return;
-    const enter = () => {
-      map.getCanvas().style.cursor = 'pointer';
-    };
-    const leave = () => {
-      map.getCanvas().style.cursor = '';
-    };
-    map.on('mouseenter', ids, enter);
-    map.on('mouseleave', ids, leave);
-    return () => {
-      map.off('mouseenter', ids, enter);
-      map.off('mouseleave', ids, leave);
-    };
-  }, [ready, overlayRegistry]);
+  useOverlayCursor(mapRef.current, ready, overlayRegistry);
 
   /* Locator halo data: the hovered rows' own points, whatever the map holds. */
   useEffect(() => {
@@ -1451,14 +1423,51 @@ export default function ListingMap({
   };
 
   const rail = useRailPanel<'layers' | 'pins'>();
+  const overlaySectionsOn = registrySectionsOn(overlayLayers, overlayRegistry);
   /* The rail's badge: every layer group that is drawn. */
-  const overlaySectionsOn = useMemo(() => {
-    const sel = parseLayers(overlayLayers);
-    return (overlayRegistry?.sections ?? []).filter((s) => s.layers.some((l) => sel.has(l.key))).length;
-  }, [overlayRegistry, overlayLayers]);
-  const layersOn = (cities && cities.length > 0 && showCities ? 1 : 0) + (showGrowth ? 1 : 0) + overlaySectionsOn;
-  const cityKey = cities && cities.length > 0 && showCities ? colorByIndex ?? null : null;
-  const legendsFolded = usePersistedFlag(LEGENDS_FOLDED_KEY, false);
+  const layersOn =
+    (cities && cities.length > 0 && showCities ? 1 : 0) +
+    (showGrowth ? 1 : 0) +
+    layerGroupsOn(overlayLayers, overlayRegistry);
+  const cityFailure = showCities ? cityLoadFailure : null;
+  const cityKey = !cityFailure && cities && cities.length > 0 && showCities ? colorByIndex ?? null : null;
+  const keysOn = showGrowth || cityKey != null || overlaySectionsOn > 0;
+  /* Browse's own two layers, rows of the Vrstvy list. */
+  const browseRows = (
+    <>
+      {cities && cities.length > 0 && (
+        <div className={TONE_ROW.web}>
+          <CityMapControls
+            showCities={showCities}
+            onToggleShowCities={onToggleShowCities}
+            colorByIndex={colorByIndex ?? null}
+            cityIndexDefinitions={cityIndexDefinitions ?? []}
+            onColorByIndexChange={onColorByIndexChange}
+            colorByMin={colorByMin}
+            onColorByMinChange={setColorByMin}
+            cityCount={cities.length}
+          />
+        </div>
+      )}
+      <div className={TONE_ROW.web}>
+        <GrowthMapControls
+          showGrowth={showGrowth}
+          datasets={growthDatasets ?? []}
+          datasetId={growthDatasetId}
+          metric={growthMetric}
+          from={growthFrom}
+          to={growthTo}
+          onToggle={onToggleShowGrowth}
+          onDatasetChange={onGrowthDatasetChange}
+          onMetricChange={onGrowthMetricChange}
+          onFromChange={onGrowthFromChange}
+          onToChange={onGrowthToChange}
+          chartOnHover={growthChartOnHover}
+          onToggleChartOnHover={onToggleGrowthChartOnHover}
+        />
+      </div>
+    </>
+  );
   const countText = isLoading
     ? 'Načítání…'
     : total == null
@@ -1515,9 +1524,12 @@ export default function ListingMap({
             <span
               className="font-normal text-[var(--color-ink-2)]"
               title={
-                `V záběru je víc než ${pinLimit.toLocaleString('cs-CZ')} nemovitostí, mapa je proto počítá `
-                + 'po dlaždicích: každá odpovídající nemovitost je právě v jednom čísle, nic se neusekne. '
-                + 'Přibližte mapu (výřez je součást filtru) nebo zvyšte limit pinů a piny se vrátí.'
+                `${circle ? 'V kruhu' : 'V záběru'} je víc než ${pinLimit.toLocaleString('cs-CZ')} nemovitostí, `
+                + 'mapa je proto počítá po dlaždicích: každá odpovídající nemovitost je právě v jednom čísle, '
+                + 'nic se neusekne. '
+                + (circle
+                  ? 'Zmenšete kruh nebo zvyšte limit pinů a piny se vrátí.'
+                  : 'Přibližte mapu (výřez je součást filtru) nebo zvyšte limit pinů a piny se vrátí.')
               }
             >
               · po dlaždicích
@@ -1549,13 +1561,6 @@ export default function ListingMap({
               <span className="text-[0.62rem] font-semibold leading-none">za m²</span>
             </RailButton>
             <RailButton
-              label={priceLabels ? 'Popisky cen u pinů: zapnuté' : 'Popisky cen u pinů: vypnuté'}
-              pressed={priceLabels}
-              onClick={() => onPriceLabelsChange?.(!priceLabels)}
-            >
-              <LabelIcon />
-            </RailButton>
-            <RailButton
               label="Piny a ceny"
               expanded={rail.open === 'pins'}
               onClick={() => rail.toggle('pins')}
@@ -1581,49 +1586,20 @@ export default function ListingMap({
         </div>
         {rail.open === 'layers' && (
           <RailFlyout title="Vrstvy" onClose={rail.close}>
-            <div className="flex flex-col divide-y divide-[var(--color-rule)]">
-              {cities && cities.length > 0 && (
-                <div className="py-1">
-                  <CityMapControls
-                    showCities={showCities}
-                    onToggleShowCities={onToggleShowCities}
-                    colorByIndex={colorByIndex ?? null}
-                    cityIndexDefinitions={cityIndexDefinitions ?? []}
-                    onColorByIndexChange={onColorByIndexChange}
-                    colorByMin={colorByMin}
-                    onColorByMinChange={setColorByMin}
-                    cityCount={cities.length}
-                  />
-                </div>
-              )}
-              <div className="py-1">
-                <GrowthMapControls
-                  showGrowth={showGrowth}
-                  datasets={growthDatasets ?? []}
-                  datasetId={growthDatasetId}
-                  metric={growthMetric}
-                  from={growthFrom}
-                  to={growthTo}
-                  onToggle={onToggleShowGrowth}
-                  onDatasetChange={onGrowthDatasetChange}
-                  onMetricChange={onGrowthMetricChange}
-                  onFromChange={onGrowthFromChange}
-                  onToChange={onGrowthToChange}
-                  chartOnHover={growthChartOnHover}
-                  onToggleChartOnHover={onToggleGrowthChartOnHover}
-                />
-              </div>
-              {onOverlayLayersChange && (
-                <div className="py-1">
-                  <MapOverlayControls
-                    registry={overlayRegistry}
-                    selection={overlayLayers}
-                    onChange={onOverlayLayersChange}
-                    zoom={zoomLevel}
-                  />
-                </div>
-              )}
-            </div>
+            {/* Every map's one list (the basemap, the registry, the terrain), Browse's
+                own two layers inside it under the base. */}
+            {onOverlayLayersChange ? (
+              <MapOverlayControls
+                registry={overlayRegistry}
+                selection={overlayLayers}
+                onChange={onOverlayLayersChange}
+                zoom={zoomLevel}
+              >
+                {browseRows}
+              </MapOverlayControls>
+            ) : (
+              <div className="flex flex-col divide-y divide-[var(--color-rule)]">{browseRows}</div>
+            )}
           </RailFlyout>
         )}
         {rail.open === 'pins' && (
@@ -1641,32 +1617,30 @@ export default function ListingMap({
           </RailFlyout>
         )}
       </div>
-      {/* Bottom-left, over the scale: the key to every layer that is on, so a
-          choropleth reads with the panel closed. It folds to one button (and
-          stays folded in this browser) when the map is too narrow to spare it. */}
-      {(showGrowth || cityKey || overlaySectionsOn > 0) && (
-        <div className="pointer-events-none absolute z-[3] bottom-9 left-2 flex flex-col gap-1.5 items-start max-h-[45%] max-w-[calc(100%-4rem)]">
-          {!legendsFolded.value && (
-            <div className="pointer-events-auto flex flex-col gap-1.5 items-start min-h-0 overflow-y-auto">
+      {/* Bottom-left, over the scale: the key to every layer that is on (and the
+          point an area card reads, while one is on the map). */}
+      {(keysOn || cityFailure) && (
+        <MapLegendDock
+          centreMark={overlayPlaces.size > 0}
+          alert={cityFailure && <CityLoadAlert failure={cityFailure} />}
+        >
+          {keysOn ? (
+            <>
               {showGrowth && <GrowthLegend metric={growthMetric} rowCount={growthRows?.length ?? 0} />}
               {cityKey && <CityIndexLegend index={cityKey} />}
-              <MapOverlayLegends registry={overlayRegistry} selection={overlayLayers} />
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={legendsFolded.toggle}
-            aria-expanded={!legendsFolded.value}
-            className="pointer-events-auto shrink-0 inline-flex items-center gap-1 px-2 py-0.5 text-[0.7rem] rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] shadow-[0_2px_6px_rgba(0,0,0,0.04)]"
-          >
-            {legendsFolded.value ? 'Ukázat legendu' : 'Skrýt legendu'}
-          </button>
-        </div>
+              <MapOverlayLegends
+                registry={overlayRegistry}
+                selection={overlayLayers}
+                places={overlayPlaces}
+                onChange={onOverlayLayersChange}
+              />
+            </>
+          ) : null}
+        </MapLegendDock>
       )}
     </div>
   );
 }
-
 
 /* The settings of the "Růst cen a nájmů" layer in the Vrstvy panel; its key is
  * GrowthLegend, on the map. */
@@ -1842,6 +1816,20 @@ function CityMapControls({
   );
 }
 
+/* The city layer could not be read, so it draws nothing: said on the map, where the
+ * outlines are missing, in place of their key. The retry re-reads only what failed and
+ * gives way to a "trying again" line while it runs. */
+export function CityLoadAlert({ failure }: { failure: ReadGroupFailure }) {
+  return (
+    <ErrorBanner
+      flush
+      title={null}
+      message={failure.retrying ? 'Města se načítají znovu…' : 'Města se nepodařilo načíst.'}
+      onRetry={failure.retrying ? undefined : failure.retry}
+    />
+  );
+}
+
 /* The city colouring's key. Same stops as the choropleth, from the one shared
  * scale — the gradient used to be a hand-written copy of the ramp and could
  * drift from it silently. The end labels are the definition's real bounds,
@@ -1862,59 +1850,44 @@ function CityIndexLegend({ index }: { index: CityIndexDefinition }) {
   );
 }
 
-/* The "Ceny" segmented control — the pin label switches between the total price
- * and the per-m² measure. Two buttons rather than a dropdown because there are
- * exactly two states and the current one has to be readable at a glance while
- * the operator is reading pins. It does NOT recolour anything: per-basis colour
- * ramps are a separate problem (a sale ramp and a rent ramp cannot share a
- * domain) and are deliberately not in this wave. The rail's "za m²" button is
- * the same switch. */
-function PriceMetricControls({
+/* The "Ceny" pick-one — the pin label switches between the total price and the
+ * per-m² measure: the one joined bar (operator ruling 2026-10-27), its chosen
+ * segment copper like every pick-one's. Two segments rather than a dropdown
+ * because there are exactly two states and the current one has to be readable
+ * at a glance while the operator is reading pins. It does NOT recolour
+ * anything: per-basis colour ramps are a separate problem (a sale ramp and a
+ * rent ramp cannot share a domain) and are deliberately not in this wave. The
+ * rail's "za m²" button is the same switch. */
+export function PriceMetricControls({
   priceMetric,
   onPriceMetricChange,
 }: {
   priceMetric: PriceMetric;
   onPriceMetricChange?: (next: PriceMetric) => void;
 }) {
-  const opts: ReadonlyArray<{ value: PriceMetric; label: string }> = [
-    { value: 'total', label: 'Celkem' },
-    /* A basis-FREE word, deliberately not PPM2_UNIT.sale. This control picks a
-       metric, not a basis: the default Browse cohort is `pronajem`, so borrowing
-       the sale unit would print "Kč/m²" on a button whose every pin reads
-       "Kč/m²/měs". It would also couple the button to the sale unit string, so
-       editing that string later would silently rewrite this label. */
-    { value: 'per_m2', label: 'Za m²' },
-  ];
-  const hint = 'Popisky pinů: celková cena nebo cena za m²';
   return (
     <div className="flex items-center gap-2 text-[0.75rem]">
       <span className="text-[var(--color-ink-2)]">Ceny na pinech</span>
-      <div
-        role="group"
-        aria-label="Popisky pinů"
-        className="inline-flex gap-0.5 p-0.5 rounded-[var(--radius-sm)] border border-[var(--color-rule)]"
-      >
-        {opts.map((o) => (
-          <button
-            key={o.value}
-            type="button"
-            aria-pressed={priceMetric === o.value}
-            title={hint}
-            onClick={() => onPriceMetricChange?.(o.value)}
-            className={[
-              'px-2 py-0.5 text-[0.72rem] rounded-[var(--radius-xs)] transition-colors',
-              priceMetric === o.value
-                ? 'bg-[var(--color-ink)] text-[var(--color-paper)]'
-                : 'bg-[var(--color-paper-2)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)]',
-            ].join(' ')}
-          >
-            {o.label}
-          </button>
-        ))}
-      </div>
+      <SegmentedBar
+        label="Popisky pinů"
+        options={PRICE_METRIC_OPTS}
+        value={priceMetric}
+        onChange={(v) => onPriceMetricChange?.(v)}
+      />
     </div>
   );
 }
+
+const PRICE_METRIC_HINT = 'Popisky pinů: celková cena nebo cena za m²';
+const PRICE_METRIC_OPTS: ReadonlyArray<SegmentOption<PriceMetric>> = [
+  { value: 'total', label: 'Celkem', title: PRICE_METRIC_HINT },
+  /* A basis-FREE word, deliberately not PPM2_UNIT.sale. This control picks a
+     metric, not a basis: the default Browse cohort is `pronajem`, so borrowing
+     the sale unit would print "Kč/m²" on a button whose every pin reads
+     "Kč/m²/měs". It would also couple the button to the sale unit string, so
+     editing that string later would silently rewrite this label. */
+  { value: 'per_m2', label: 'Za m²', title: PRICE_METRIC_HINT },
+];
 
 /* The two view knobs: how many properties in view are drawn pin by pin before
  * the map counts them by tile (it IS the server's point budget, so changing it
@@ -1960,7 +1933,7 @@ function MapViewControls({
           />
         </label>
         <span className="text-[0.65rem] text-[var(--color-ink-3)]">
-          Do tohoto počtu nemovitostí v záběru se kreslí každá zvlášť; nad ním mapa počítá po dlaždicích ({PIN_LIMIT_MIN} až {PIN_LIMIT_MAX}).
+          Do tohoto počtu nemovitostí v záběru se kreslí každá zvlášť; nad ním mapa počítá po dlaždicích ({PIN_LIMIT_MIN} až {PIN_LIMIT_MAX}). Tento prohlížeč si číslo pamatuje.
         </span>
       </div>
       <label className="inline-flex items-center gap-1.5 cursor-pointer">
@@ -1987,8 +1960,7 @@ function Pill({ children }: { children: React.ReactNode }) {
 const PIN_FACES_HINT =
   'Černý obrys: poloha ověřená na budovu nebo adresu. Bez něj je poloha jen přibližná '
   + '(ulice, část obce, obec…). Purpurový bod je aktivní nabídka, průhledný bílý s purpurovým '
-  + 'obrysem neaktivní. Klikněte na pin: mapa ukáže okruh, ve kterém '
-  + 'nemovitost leží, a popisek řekne, jak je velký.';
+  + 'obrysem neaktivní.';
 
 /* The key to the pin's faces, inside the count pill: the swatches and their
  * counts, the words only on a map wide enough to hold them (the full key is in
@@ -2016,7 +1988,7 @@ function PinPrecisionLegend({ exact, approx, inactive }: { exact: number; approx
 }
 
 /* The same key in full, for the Piny a ceny panel. */
-function PinPrecisionKey({ exact, approx, inactive }: { exact: number; approx: number; inactive: number }) {
+export function PinPrecisionKey({ exact, approx, inactive }: { exact: number; approx: number; inactive: number }) {
   const faces = [
     { exact: true, active: true, label: 'Přesná poloha', n: exact },
     { exact: false, active: true, label: 'Přibližná poloha', n: approx },
@@ -2055,49 +2027,6 @@ function PinSwatch({ exact, active }: { exact: boolean; active: boolean }) {
       }}
     />
   );
-}
-
-function popupHtml(r: MapRow): string {
-  const price = fmtCzk(r.price_czk);
-  /* The popup has room, so it says what the m² MEASURES: a pozemek's area_m2 is
-   * its plot, not a floor plan (the Option-A fork keeps the column polymorphic). */
-  const area = fmtArea(r.area_m2, areaKindOf(r.category_main));
-  /* The server measure with its own basis suffix — the popup is where a pin's
-   * label can be read next to the figure it was derived from. */
-  const ppm = fmtMeasuredPricePerM2(
-    r.price_per_m2,
-    ppm2BasisFromToken(r.price_per_m2_basis),
-  );
-  const disposition = listingKindLabel(r) ?? '—';
-  /* The ONE label (migration 503). `lp-district` stays the style hook -- it is a
-   * class name in globals.css, not a claim about what the string is. */
-  const place = r.display_label ?? '';
-  /* Directly under the place it qualifies: "Nádražní 12, Hradec Králové" and
-   * "Přibližná poloha: obec, ±1 km" are one statement. It names the radius the
-   * circle drawn behind this popup shows, and the TRUE one where that circle is
-   * capped. */
-  const precision = pinPrecisionLabel(r);
-  const seen = fmtRelative(r.last_seen_at);
-  const seenAbs = fmtAbsolute(r.last_seen_at);
-  const inactive = !r.is_active;
-  return `
-    <div class="lp">
-      <div class="lp-row">
-        <p class="lp-price">${escapeHtml(price)}</p>
-        ${inactive ? '<span class="lp-inactive">Inactive</span>' : ''}
-      </div>
-      <p class="lp-meta">
-        <span class="lp-mono">${escapeHtml(disposition)}</span>
-        <span class="lp-sep">·</span>
-        <span class="lp-mono">${escapeHtml(area)}</span>
-        ${ppm === '—' ? '' : `<span class="lp-sep">·</span><span class="lp-mono">${escapeHtml(ppm)}</span>`}
-      </p>
-      ${place ? `<p class="lp-district">${escapeHtml(place)}</p>` : ''}
-      <p class="lp-precision">${escapeHtml(precision)}</p>
-      <p class="lp-seen" title="${escapeHtml(seenAbs)}">last seen ${escapeHtml(seen)}</p>
-      <a href="${propertyPath(r.property_id, r.listing_id)}" class="lp-link">View details →</a>
-    </div>
-  `;
 }
 
 function cityPopupHtml(

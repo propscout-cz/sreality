@@ -82,6 +82,8 @@ class WebPortal(portal_runner.PortalDefaults):
     """Any site as a Portal: no index, one agenda-wide descriptor, the page decides."""
 
     source = SOURCE
+    walk_every_s = 6 * 3600
+    walk_timeout_s = 15 * 60
     indexless = True
     index_rate = 1.0
 

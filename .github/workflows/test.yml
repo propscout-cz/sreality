@@ -1,9 +1,9 @@
 name: "CI: tests"
 
-# CI test suite, runs on every pull request and on every push to main. Two parallel jobs:
-# a Python job (verifies the filter-registry and workflow-docs codegen are
-# fresh, then runs pytest) and a frontend job (TypeScript type-check + vitest
-# pure-function tests). This is the build gate for every branch.
+# CI test suite, runs on every pull request and on every push to main. Three parallel jobs:
+# a Python job (verifies the filter-registry and workflow-docs codegen are fresh, runs
+# pytest, then lints with ruff), a frontend job (TypeScript type-check + vitest
+# pure-function tests) and a secret scan of the new commits. This is the build gate for every branch.
 #
 # A branch push without a PR runs nothing: a push-triggered twin of the pull_request run
 # carried the same check name, and a cancelled twin read as a failed required check.
@@ -12,11 +12,15 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The merge queue's run on the PR merged onto main; the queue merges only on these checks.
+  merge_group:
 
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    timeout-minutes: 9
+    # The suite takes 8–9 min on ubuntu-latest (2026-10-31: 8m12s, 8m22s, 8m23s, 9m03s); at 9 the
+    # job was cancelled mid-run on #2212 and read as a failed required check.
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v6
 
@@ -32,6 +36,7 @@ jobs:
         run: pip install -e . && python -c "import scripts.verify_pipeline, scripts.record_workflow_failures, scripts.health_canary"
 
       - name: Install
+        id: install
         run: pip install -e ".[dev,api,geo]"
 
       # -m, not a script path: invoking by path puts scripts/ on sys.path[0] and
@@ -59,6 +64,11 @@ jobs:
       - name: Run pytest
         run: pytest -q
 
+      # Last, and run even after a failed check above: one run reports lint and tests together.
+      - name: Lint (ruff)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: ruff check --output-format=github .
+
   vitest:
     # Frontend tests (vitest, jsdom — see frontend/vite.config.ts).
     # Covers filter state plumbing, the registry adapter, the centre+radius
@@ -68,7 +78,7 @@ jobs:
     # `@ts-expect-error` cases fail the BUILD if a basis-blind
     # fmtMeasuredPricePerM2 call ever starts compiling.
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v6
 
@@ -89,3 +99,32 @@ jobs:
       - name: Run vitest
         working-directory: frontend
         run: npm test
+
+  secrets:
+    # gitleaks over exactly the commits this PR (or this push to main) adds, a merge by what it changed beyond the
+    # automatic merge, then over the fixtures as they stand, through the one pinned binary the .githooks run too
+    # (#2035). GitHub's own secret scanning stops when the repository goes private.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # A scan that cannot see a fresh token would pass every PR: prove it still bites before trusting it.
+      - name: The scanner finds a planted token
+        run: |
+          token="ghp_$(head -c 96 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 36)"
+          rc=0
+          printf 'token = "%s"\n' "$token" | scripts/gitleaks.sh stdin --exit-code 3 || rc=$?
+          [ "$rc" = 3 ] || { echo "::error::gitleaks did not report the planted token (exit $rc)"; exit 1; }
+
+      - name: Scan the new commits
+        env:
+          RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || github.event_name == 'merge_group' && format('{0}..{1}', github.event.merge_group.base_sha, github.event.merge_group.head_sha) || format('{0}..{1}', github.event.before, github.sha) }}
+        run: scripts/gitleaks.sh git --log-opts="--remerge-diff $RANGE"
+
+      # The commit scan never re-reads a fixture line a scrub left alone, and the fixture census judges the scrub by
+      # the scrub's own regex: an independent detector over today's tree catches a key shape both miss.
+      - name: The committed fixtures carry no credential
+        run: scripts/gitleaks.sh dir tests/fixtures

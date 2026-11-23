@@ -16,11 +16,10 @@
 import { useCallback, useId, useRef, useState } from 'react';
 
 import CollectionMark from '@/components/CollectionMark';
-import CollectionSaveMenu, {
-  COLLECTION_SAVE_LABEL,
-} from '@/components/CollectionSaveMenu';
+import CollectionSaveMenu from '@/components/CollectionSaveMenu';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
 import { useCollectionMembership } from '@/lib/collectionCache';
+import { COLLECTION_SAVE_LABEL } from '@/lib/collectionRules';
 
 export default function CollectionSaveToggle({
   property_id,

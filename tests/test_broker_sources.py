@@ -11,9 +11,9 @@ property/substring check would not do: a mutation sweep over an earlier draft
 left every substring assertion green, because a substring test only sees what it
 names.
 
-Nine of the sixteen statements come out byte-identical. The other seven differ in
-exactly three documented, verified-equivalent ways, each pinned below to the
-statements it may explain:
+Three of the sixteen statements come out byte-identical. The other thirteen differ
+in five documented, verified-equivalent ways, each pinned below to the statements
+it may explain:
 
   1. sreality's two contact statements are wrapped in `WITH chunk AS NOT
      MATERIALIZED (...)`. NOT MATERIALIZED forces Postgres to inline a
@@ -29,6 +29,11 @@ statements it may explain:
      `test_null_column_deltas_only_add_columns` proves token by token.
   3. ceskereality's 420-normalisation moved from the INSERT + GROUP BY into the
      chunk CTE. Same value, same grouping key.
+  4. Broker Unify W4: every identity statement captures agency_name.
+  5. Broker board W1 (migration 691): every link statement is its pre-registry
+     UPDATE verbatim, RETURNING the advert's property into the repo's one
+     same-statement `dirty_properties` enqueue (rule 20) — the broker book folds
+     the identity to its broker, so a re-attributed advert's property must be recomputed.
 
 Portals onboarded AFTER the refactor (mmreality, D3) have no pre-registry SQL, so
 the transcript cannot speak for them: they are held to the properties every
@@ -51,6 +56,7 @@ from toolkit.broker_sources import (
     BROKER_FINGERPRINT_KEYS,
     BROKER_SOURCE_NAMES,
     BROKER_SOURCES,
+    IDENTITY_REPOINT_DIRTY_SQL,
     BrokerSource,
     attribution_statements,
 )
@@ -90,6 +96,9 @@ _DELTA_NORMALISE_IN_CTE = {("ceskereality", "phone")}
 # null-columns delta; sreality's identity leaves the byte-identical set here.
 _DELTA_AGENCY_CAPTURE = {(s, "identity") for s in
                          ("sreality", "idnes", "ceskereality", "realitymix", "remax")}
+# Deviation 5 (broker board W1): every link enqueues its advert's property.
+_DELTA_LINK_DIRTY = {(s, "link") for s in
+                     ("sreality", "idnes", "ceskereality", "realitymix", "remax")}
 
 _BY_SOURCE = {c.source: c for c in BROKER_SOURCES}
 _KEYS = [(src, kind) for src, kinds in _FAMILIES.items() for kind in kinds]
@@ -141,16 +150,46 @@ def test_the_generated_statements_are_exactly_the_pre_registry_families() -> Non
 
 
 def test_the_set_of_statements_that_deviate_is_frozen() -> None:
-    """Eight statements are byte-identical to the pre-registry SQL and must stay
-    that way; the other eight are each claimed by at least one documented
+    """Three statements are byte-identical to the pre-registry SQL and must stay
+    that way; the other thirteen are each claimed by at least one documented
     deviation (deviation 4 — W4's agency capture — deliberately overlaps
     deviation 2 on four identities). A statement silently leaving or joining
     the identical set is the refactor breaking its own equivalence argument."""
     deviating = {k for k in _KEYS if _norm(PRE_REGISTRY_SQL[k].format(sel=SEL)) != _one(*k)}
-    assert len(_KEYS) - len(deviating) == 8
+    assert len(_KEYS) - len(deviating) == 3
     assert deviating == set(REGISTRY_DELTAS)
     assert deviating == (_DELTA_INLINED_CTE | _DELTA_NULL_COLUMNS
-                         | _DELTA_NORMALISE_IN_CTE | _DELTA_AGENCY_CAPTURE)
+                         | _DELTA_NORMALISE_IN_CTE | _DELTA_AGENCY_CAPTURE | _DELTA_LINK_DIRTY)
+
+
+@pytest.mark.parametrize("source", sorted(_ALL_FAMILIES))
+def test_every_link_dirties_its_property_in_the_same_statement(source: str) -> None:
+    """Deviation 5, every portal (the post-registry ones included). The link's UPDATE
+    is untouched — for a migrated portal its pre-registry text survives verbatim —
+    and only its RETURNING feeds the enqueue: NULL property skipped (a new advert has
+    none until its birth), ids in ascending order (listing_write's lock order), and
+    the same ON CONFLICT re-stamp every dirty_properties writer uses."""
+    from scraper.listing_write import _DIRTY_PROPERTIES_SQL
+
+    link = _one(source, "link")
+    update = link.removeprefix("WITH linked AS ( ").split(" RETURNING l.property_id )")[0]
+    if source in _FAMILIES:
+        assert update == _norm(PRE_REGISTRY_SQL[(source, "link")].format(sel=SEL))
+    assert update.startswith("UPDATE listings l SET broker_identity_id = bi.id")
+    assert link.endswith(
+        " RETURNING l.property_id ) INSERT INTO dirty_properties (property_id) "
+        "SELECT DISTINCT property_id FROM linked WHERE property_id IS NOT NULL ORDER BY 1 "
+        "ON CONFLICT (property_id) DO UPDATE SET marked_at = now()")
+    assert _norm(_DIRTY_PROPERTIES_SQL).endswith(
+        "ORDER BY 1 ON CONFLICT (property_id) DO UPDATE SET marked_at = now()")
+
+
+def test_a_broker_re_point_dirties_like_the_link() -> None:
+    """The re-point's enqueue (migration 692): its adverts locked in id order (listing_write's lock order) before the
+    unborn are skipped, and the link's re-stamp, so a re-point committed after a drain slice read survives the dequeue."""
+    sql = _norm(IDENTITY_REPOINT_DIRTY_SQL)
+    assert "ORDER BY l.id FOR SHARE OF l )" in sql
+    assert sql.endswith("WHERE property_id IS NOT NULL ORDER BY 1 ON CONFLICT (property_id) DO UPDATE SET marked_at = now()")
 
 
 @pytest.mark.parametrize(("source", "kind"), sorted(_DELTA_NULL_COLUMNS))

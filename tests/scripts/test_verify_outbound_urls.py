@@ -360,7 +360,7 @@ def test_the_design_figure_reads_ok_on_the_lower_bound_where_the_raw_share_watch
 
 def test_the_10_18_run_reads_ok_once_the_probe_stops_misreading_its_answers() -> None:
     """10-18 20:24Z: 6 of 44 links non-conforming, a lower bound of 6.4 %: Watch. Two were sreality
-    301s to a bare path that kept the page, two were bot walls (mmreality and ceskereality 403);
+    301s to a bare path that kept the page, two were refused HEADs (mmreality and ceskereality);
     the two 404s left are scattered delistings."""
 
     def week(fixed: bool) -> list[tuple[mod.Sample, str]]:
@@ -484,6 +484,13 @@ def test_the_check_judges_what_its_budget_reached_once_that_is_half_the_draw(
     clock, timeouts = _Clock(), []
     monkeypatch.setattr(mod, "time", clock)
     monkeypatch.setattr(mod.egress, "safe_session", _slow_portal(clock, timeouts, answer_s=3.0))
+    # The shuffle follows the ISO week, and in some weeks the budget reaches every portal.
+    class _Week37(_dt.datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> _dt.datetime:
+            return _dt.datetime(2026, 9, 7, tzinfo=tz)
+
+    monkeypatch.setattr(mod._dt, "datetime", _Week37)
     out = mod.check_outbound_url_conformance(_SampleConn(per_cb=3, crawlers=True), T)
     run = _cells(out)["sample"]["facts"]
     drawn = 3 * len(run["codes"]) + len(mod.CRAWLER_SOURCES)

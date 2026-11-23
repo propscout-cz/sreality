@@ -1,8 +1,17 @@
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useAgentRunOptions } from '@/lib/agentRunOptions';
 import { useAuth } from '@/lib/auth';
+import { lazyChunk } from '@/lib/lazyChunk';
 import { ROUTES } from '@/lib/routes';
 import { readDesktopView, switchDesktopView } from '@/lib/phoneShell';
+import { COLOR_SCHEMES, THEME_MODES } from '@/lib/appearance';
+import { useScheme, useTheme } from '@/lib/theme';
+import SchemeSwatch from './SchemeSwatch';
+import { SegmentedBar } from './controls';
+
+const AgentLimitDialog = lazyChunk(() => import('./runs/AgentLimitDialog'));
+const CuzkLoginDialog = lazyChunk(() => import('./account/CuzkLoginDialog'));
 
 /* Additive UI only — does not gate anything. Anonymous users see a "Sign in"
  * link; logged-in users see who they are + a sign-out affordance. */
@@ -13,6 +22,12 @@ export default function AccountMenu() {
   /* Set from the phone shell's account sheet ("Desktopová verze"); this is the
    * way back, and it shows only on a device that took that switch. */
   const [desktopView] = useState(readDesktopView);
+  const [scheme, setScheme] = useScheme();
+  const [mode, setMode] = useTheme();
+  /* The API's one gate decides, the answer the nav's Runs link reads: no agents, no limit to set. */
+  const { data: runOptions } = useAgentRunOptions({ enabled: user != null });
+  const [limitOpen, setLimitOpen] = useState(false);
+  const [cuzkOpen, setCuzkOpen] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -29,7 +44,7 @@ export default function AccountMenu() {
     return (
       <Link
         to={ROUTES.login.build()}
-        className="inline-block px-3 py-1.5 text-sm tracking-wide rounded-[var(--radius-xs)] border border-[var(--color-rule)] text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)]"
+        className="inline-block px-3 py-1.5 text-sm tracking-wide rounded-[var(--radius-xs)] border border-[var(--color-chrome-ink-2)]/40 text-[var(--color-chrome-ink-2)] hover:text-[var(--color-chrome-ink)] hover:bg-[var(--color-chrome-active)]"
       >
         Sign in
       </Link>
@@ -49,9 +64,10 @@ export default function AccountMenu() {
         title={label}
         className={[
           'flex items-center justify-center w-8 h-8 rounded-full transition-colors',
+          /* It sits on the top bar, so it draws in the bar's own tokens. */
           open
-            ? 'bg-[var(--color-copper)] text-white'
-            : 'bg-[var(--color-copper-soft)] text-[var(--color-copper)] hover:bg-[var(--color-copper)] hover:text-white',
+            ? 'bg-[var(--color-chrome-accent)] text-[var(--color-chrome)]'
+            : 'bg-[var(--color-chrome-active)] text-[var(--color-chrome-ink)] hover:bg-[var(--color-chrome-accent)] hover:text-[var(--color-chrome)]',
         ].join(' ')}
       >
         <UserIcon />
@@ -59,12 +75,72 @@ export default function AccountMenu() {
       {open ? (
         <div
           role="menu"
-          className="absolute right-0 top-[calc(100%+4px)] z-30 min-w-[12rem] rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper)] py-1 shadow-lg"
+          className="absolute right-0 top-[calc(100%+4px)] z-30 w-[15.5rem] rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-paper)] py-1 shadow-lg"
         >
           <div className="px-3 py-1.5 text-[0.7rem] tracking-wide text-[var(--color-ink-4)] truncate">
             Signed in as {label}
           </div>
           <div className="my-1 h-px bg-[var(--color-rule)]" aria-hidden />
+          {/* Every account picks its own look; the choice follows the user (lib/theme). */}
+          <div role="group" aria-label="Colour scheme" className="px-3 pt-1 pb-1.5">
+            <p className="text-[0.7rem] tracking-wide text-[var(--color-ink-3)]">Colour scheme</p>
+            <div className="mt-1.5 grid grid-cols-3 gap-1">
+              {COLOR_SCHEMES.map((s) => (
+                <button
+                  key={s.value}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={scheme === s.value}
+                  onClick={() => setScheme(s.value)}
+                  className={[
+                    'flex flex-col items-center gap-1 rounded-[var(--radius-sm)] border px-1 py-1.5 text-[0.75rem]',
+                    scheme === s.value
+                      ? 'border-[var(--color-copper)] bg-[var(--color-copper-soft)] text-[var(--color-copper)] font-medium'
+                      : 'border-[var(--color-rule)] text-[var(--color-ink-2)] hover:border-[var(--color-rule-strong)] hover:text-[var(--color-ink)]',
+                  ].join(' ')}
+                >
+                  <SchemeSwatch colors={s.swatch} />
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {/* The one pick-one bar; inside a menu its segments are menuitemradios. */}
+          <div className="px-3 pb-2">
+            <SegmentedBar
+              fill
+              segmentRole="menuitemradio"
+              label="Light or dark"
+              options={THEME_MODES}
+              value={mode}
+              onChange={setMode}
+            />
+          </div>
+          <div className="my-1 h-px bg-[var(--color-rule)]" aria-hidden />
+          {runOptions?.start.allowed && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                setLimitOpen(true);
+              }}
+              className="block w-full px-3 py-1.5 text-left text-[0.8rem] text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)] hover:text-[var(--color-ink)]"
+            >
+              Agent spending limit
+            </button>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              setCuzkOpen(true);
+            }}
+            className="block w-full px-3 py-1.5 text-left text-[0.8rem] text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)] hover:text-[var(--color-ink)]"
+          >
+            ČÚZK login
+          </button>
           {desktopView && (
             <button
               type="button"
@@ -88,6 +164,16 @@ export default function AccountMenu() {
           </button>
         </div>
       ) : null}
+      {cuzkOpen && (
+        <Suspense fallback={null}>
+          <CuzkLoginDialog onClose={() => setCuzkOpen(false)} />
+        </Suspense>
+      )}
+      {limitOpen && (
+        <Suspense fallback={null}>
+          <AgentLimitDialog onClose={() => setLimitOpen(false)} />
+        </Suspense>
+      )}
     </div>
   );
 }

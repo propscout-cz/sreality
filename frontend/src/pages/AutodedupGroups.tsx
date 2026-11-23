@@ -603,7 +603,7 @@ function GroupDialog({
           <SplitRow members={data.members} split={split} generation={generation} notesOpen />
 
           <section>
-            <h3 className="text-[0.6rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
+            <h3 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">
               Edges
             </h3>
             <div className="mt-1 overflow-x-auto">
@@ -659,7 +659,7 @@ function GroupDialog({
 
           {data.conflicts.length > 0 && (
             <section>
-              <h3 className="text-[0.6rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
+              <h3 className="text-sm leading-5 font-semibold text-[var(--color-ink)]">
                 Conflicts
               </h3>
               <ul className="mt-1 space-y-1 text-[0.72rem] text-[var(--color-brick)]">

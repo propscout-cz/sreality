@@ -10,6 +10,10 @@
  * follow that timestamp. The photos come through the shared hydration layer, the
  * cover chosen as the Browse card chooses it.
  *
+ * Above the chips, only while this iPhone could receive notifications and does
+ * not, the push notice (components/phone/PushNotice): push is on by default,
+ * and the start screen is where the one tap Apple requires is asked for.
+ *
  * The chips: "Filtry" (Browse's whole filter set in a sheet, its own lazy chunk),
  * "Vše" + the account's saved presets (#1761, per account since #1775); the
  * portals; "Skryté" switches the roll to the hidden properties only
@@ -27,11 +31,12 @@ import FeedCard from '@/components/phone/FeedCard';
 import BottomSheet from '@/components/phone/BottomSheet';
 import DayRule from '@/components/phone/DayRule';
 import { CHIP, CHIP_DIVIDER, CHIP_MD, CHIP_ROW, CHIP_SM, chipState } from '@/components/phone/chips';
-import { PHOTOS_PER_CARD } from '@/components/phone/CardRoll';
 import { filtersBeyond } from '@/components/phone/filterRows';
 import { RollEmpty, RollSkeleton } from '@/components/phone/RollParts';
 import { usePhoneHeaderAside } from '@/components/phone/PhoneShell';
-import { SlidersIcon } from '@/components/phone/phoneIcons';
+import PushNotice from '@/components/phone/PushNotice';
+import { SlidersIcon, SortIcon } from '@/components/phone/phoneIcons';
+import SortSheet from '@/components/phone/SortSheet';
 import { AlertIcon, EyeOffIcon } from '@/components/icons';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
 import { listFilterPresets } from '@/lib/api';
@@ -42,6 +47,7 @@ import {
   FEED_ALL_SCOPE,
   dayRuleLabel,
   feedFiltersForPreset,
+  feedHiddenKey,
   feedSearch,
   feedTimestamp,
   feedViewOf,
@@ -59,7 +65,7 @@ import {
 import { filterById } from '@/lib/filterRegistry.generated';
 import { filtersEqualForPreset } from '@/lib/filters';
 import { czPlural } from '@/lib/format';
-import { CardHydrationProvider } from '@/lib/hydration';
+import { CardHydrationProvider, PHOTOS_PER_CARD } from '@/lib/hydration';
 import type { KeysetCursor } from '@/lib/keyset';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { cyclePortal, portalShort, type PortalChoice } from '@/lib/portals';
@@ -77,14 +83,10 @@ import {
   type DismissedCardRow,
 } from '@/lib/queries';
 import { useInfiniteList } from '@/lib/useInfiniteList';
+import { useListHold } from '@/lib/useListHold';
 
 /* Browse's whole filter set is large; the sheet loads on its first open. */
 const FilterSheet = lazyChunk(() => import('@/components/phone/FilterSheet'));
-
-/* The hidden roll is keyed under Browse's `cards` root so a restore — which
- * re-reads every Browse list — re-reads it too; `showDismissed: true` keeps a
- * dismissal from patching rows out of it. */
-const HIDDEN_KEY_FILTERS = { ...FEED_ALL_FILTERS, showDismissed: true };
 
 /* Resume after this long away and the roll re-reads (#1763: refetch on foreground). */
 const STALE_ON_RESUME_MS = 60_000;
@@ -103,6 +105,7 @@ export default function Feed() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [hidden, setHidden] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [sortOpen, setSortOpen] = useState(false);
 
   const presetsQ = useQuery({ queryKey: filterPresetKeys.all, queryFn: listFilterPresets });
   const presets = useMemo(() => presetsQ.data?.data ?? [], [presetsQ.data]);
@@ -153,7 +156,7 @@ export default function Feed() {
   const orderPortal = orderPortalOf(filters, sort);
 
   const feedKey = browseKeys.cards(filters, sort);
-  const hiddenKey = useMemo(() => [...browseKeys.cards(HIDDEN_KEY_FILTERS, sort), 'dismissed'], [sort]);
+  const hiddenKey = useMemo(() => feedHiddenKey(sort), [sort]);
 
   const feed = useInfiniteList<CardRow>({
     queryKey: feedKey,
@@ -176,6 +179,9 @@ export default function Feed() {
   const list = hidden ? hiddenRoll : feed;
   const activeKey = hidden ? hiddenKey : feedKey;
   const rows: CardRow[] = list.rows;
+  /* A change made elsewhere moves the roll at once, but never under a finger
+   * (ruling Q3(c)); the count in the header re-reads regardless. */
+  const hand = useListHold([activeKey]);
 
   const hiddenCountQ = useQuery({
     queryKey: dismissalKeys.count,
@@ -271,6 +277,8 @@ export default function Feed() {
       };
   /* The Filtry chip counts what the view adds to its scope (not under Skryté). */
   const shownBeyond = hidden ? 0 : beyond;
+  /* Likewise the Řazení chip names an order only where one applies: Skryté is read by dismissal date. */
+  const orderShown = !hidden && !newestFirst;
   /* The chosen chip carries a trailing "·" once the view has left its filters. */
   const scopeChip = (id: string, name: string) => {
     const on = !hidden && activeScope === id;
@@ -306,6 +314,7 @@ export default function Feed() {
 
   return (
     <div className="pt-3">
+      <PushNotice />
       <div className={CHIP_ROW} role="group" aria-label="Předvolby">
         <button
           type="button"
@@ -319,6 +328,16 @@ export default function Feed() {
           {shownBeyond > 0 && (
             <span className="font-mono text-[11px] tabular-nums text-[var(--color-ink)]">{shownBeyond}</span>
           )}
+        </button>
+        <button
+          type="button"
+          onClick={() => setSortOpen(true)}
+          aria-haspopup="dialog"
+          aria-label={orderShown ? `Řazení: ${sortLabel(sort)}` : 'Řazení'}
+          className={`${CHIP} ${CHIP_MD} ${chipState(orderShown)}`}
+        >
+          <SortIcon className="h-3.5 w-3.5" />
+          {orderShown ? sortLabel(sort) : 'Řazení'}
         </button>
         <span aria-hidden className={CHIP_DIVIDER} />
         {scopeChip(FEED_ALL_SCOPE, 'Vše')}
@@ -384,32 +403,39 @@ export default function Feed() {
       </div>
 
       <CardHydrationProvider listingIds={listingIds} renders={{ photos: PHOTOS_PER_CARD }}>
-        <Roll
-          hidden={hidden}
-          loading={list.isLoading || waitingForPreset}
-          error={list.isError}
-          onRetry={() => list.refetch()}
-          rows={rows}
-          groups={groups}
-          todayKey={todayKey}
-          clock={pragueClock(updatedAt)}
-          order={newestFirst ? null : sortLabel(sort)}
-          refresh={refresh}
-          coverTag={coverTag}
-          onClearFilters={beyond > 0 || !newestFirst ? clearBeyond : undefined}
-        />
-        {rows.length > 0 && (
-          <InfiniteSentinel
-            onReach={list.fetchNextPage}
-            hasNextPage={list.hasNextPage}
-            isFetchingNextPage={list.isFetchingNextPage}
-            loadedCount={rows.length}
-            total={null}
-            loadingLabel="Načítám…"
-            endLabel={hidden ? 'Víc skrytých není.' : 'Víc inzerátů v tomto výběru není.'}
+        <div {...hand}>
+          <Roll
+            hidden={hidden}
+            loading={list.isLoading || waitingForPreset}
+            error={list.isError}
+            onRetry={() => list.refetch()}
+            rows={rows}
+            groups={groups}
+            todayKey={todayKey}
+            clock={pragueClock(updatedAt)}
+            order={newestFirst ? null : sortLabel(sort)}
+            refresh={refresh}
+            coverTag={coverTag}
+            onClearFilters={beyond > 0 || !newestFirst ? clearBeyond : undefined}
           />
-        )}
+          {rows.length > 0 && (
+            <InfiniteSentinel
+              onReach={list.fetchNextPage}
+              hasNextPage={list.hasNextPage}
+              isFetchingNextPage={list.isFetchingNextPage}
+              loadedCount={rows.length}
+              total={null}
+              loadingLabel="Načítám…"
+              endLabel={hidden ? 'Víc skrytých není.' : 'Víc inzerátů v tomto výběru není.'}
+            />
+          )}
+        </div>
       </CardHydrationProvider>
+
+      {sortOpen && (
+        /* Through `show`, as the Filtry sheet applies: Skryté is read by dismissal date and takes no order. */
+        <SortSheet sort={sort} onPick={(next) => show({ ...view, sort: next })} onClose={() => setSortOpen(false)} />
+      )}
 
       {sheetOpen && (
         <Suspense

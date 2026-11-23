@@ -4,7 +4,7 @@
  * (FilterPresetBar.test, stats/DashboardBar.test). */
 
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 import { ApiError } from '@/lib/api';
 import { PRESET_COPY, PRESET_GROUP_COPY } from './FilterPresetBar';
@@ -77,34 +77,73 @@ describe('<SavedSetBar> chips', () => {
 });
 
 describe('<SavedSetBar> dirty', () => {
-  it('marks the active chip and offers the update for an own one', () => {
+  const entries = () => screen.getAllByRole('menuitem').map((b) => b.textContent);
+
+  it('marks the active chip, and its menu leads with Save changes and Revert to saved', () => {
     renderBar({ activeId: 'a', dirty: true });
     expect(screen.getByRole('button', { name: 'Alfa' })).toHaveAccessibleDescription('Edited since loaded');
     expect(screen.getByRole('button', { name: 'Beta' })).not.toHaveAccessibleDescription('Edited since loaded');
-    expect(screen.getByRole('button', { name: 'Update preset' })).toBeInTheDocument();
+    openMenu('Alfa');
+    expect(entries().slice(0, 3)).toEqual(['Save changes', 'Revert to saved', 'Edit…']);
   });
 
-  it('never offers the update for a shared chip', () => {
+  it('draws no save button in the bar (operator 2026-10-27)', () => {
+    renderBar({ activeId: 'a', dirty: true });
+    expect(screen.queryByRole('button', { name: /Update|Save changes/ })).toBeNull();
+  });
+
+  it('offers neither on a clean chip, nor on another one', () => {
+    renderBar({ activeId: 'a', dirty: false });
+    openMenu('Alfa');
+    expect(entries()).not.toContain('Save changes');
+    expect(entries()).not.toContain('Revert to saved');
+    cleanup();
+    renderBar({ activeId: 'a', dirty: true });
+    openMenu('Beta');
+    expect(entries()).not.toContain('Save changes');
+  });
+
+  it('offers a shared chip the revert, never the save', () => {
     renderBar({ activeId: 's', dirty: true });
     const load = screen.getByRole('button', { name: /^Cizí/ });
     expect(load).toHaveAccessibleDescription('Edited since loaded');
     expect(within(load).getByTitle('Edited — save a copy of your own')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Update preset' })).toBeNull();
+    openMenu('Cizí — shared by owner@example.com');
+    expect(entries()).toEqual(['Revert to saved']);
   });
 
-  it('updates through the dialog, the checkbox starting from the item', async () => {
+  it('saves in one click, with no dialog: the name, colour and checkbox answer stay the item\'s own', async () => {
     const checkboxInitial = vi.fn((i: Item | null) => i?.id === 'a');
     const { onUpdate } = renderBar({
       activeId: 'a',
       dirty: true,
       checkbox: { label: 'Include the current map area in this preset', initial: checkboxInitial },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Update preset' }));
-    const dialog = screen.getByRole('dialog', { name: 'Update preset' });
-    expect(within(dialog).getByRole('button', { name: /map area/ })).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Update preset' }));
+    openMenu('Alfa');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Save changes' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
     await waitFor(() => expect(onUpdate).toHaveBeenCalledWith(ITEMS[0], 'Alfa', true, null));
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+  });
+
+  it('saves a greyed-out checkbox unticked', async () => {
+    const { onUpdate } = renderBar({
+      activeId: 'a',
+      dirty: true,
+      checkbox: { label: 'Uložit i nastavení filtru', initial: () => true, disabled: () => 'Nenese filtr.' },
+    });
+    openMenu('Alfa');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Save changes' }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledWith(ITEMS[0], 'Alfa', false, null));
+  });
+
+  it('reverts by loading the stored set again', () => {
+    const { onLoad, onUpdate } = renderBar({ activeId: 'a', dirty: true });
+    openMenu('Alfa');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Revert to saved' }));
+    expect(onLoad).toHaveBeenCalledWith(ITEMS[0]);
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(screen.queryByRole('menu')).toBeNull();
   });
 });
 

@@ -126,11 +126,18 @@ describe('drift rails', () => {
   /* The extension's build overwrites content_scripts.matches from PORTALS, so the
    * checked-in list is a template; this keeps it honest. vitest runs from
    * frontend/, inside the full repo checkout (CI and local alike). */
-  it('chrome-extension/manifest.json matches exactly the PORTALS hosts', () => {
+  it('chrome-extension/manifest.json matches exactly the PORTALS page hosts', () => {
     const manifest = JSON.parse(readFileSync(join(process.cwd(), '..', 'chrome-extension', 'manifest.json'), 'utf8'));
     const matches: string[] = manifest.content_scripts[0].matches;
-    const fromRules = PORTALS.flatMap((p) => p.hosts.map((h) => `https://${h}/*`));
+    const fromRules = PORTALS.flatMap((p) => p.pageHosts.map((h) => `https://${h}/*`));
     expect([...matches].sort()).toEqual([...fromRules].sort());
+  });
+
+  it('every page host is one of its portal hosts, and every portal has one', () => {
+    for (const p of PORTALS) {
+      expect(p.pageHosts.length).toBeGreaterThan(0);
+      for (const h of p.pageHosts) expect(p.hosts).toContain(h);
+    }
   });
 });
 

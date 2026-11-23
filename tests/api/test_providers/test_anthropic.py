@@ -62,6 +62,11 @@ class _FakeAnthropicSDK:
         self._raw = raw
         self.calls: list[dict[str, Any]] = []
         self.messages = self  # messages.create(...) form
+        self.options: list[dict[str, Any]] = []
+
+    def with_options(self, **options: Any) -> "_FakeAnthropicSDK":
+        self.options.append(options)
+        return self
 
     def create(self, **kwargs: Any) -> _RawResponse:
         self.calls.append(kwargs)
@@ -258,6 +263,15 @@ def test_tool_choice_forces_named_tool(patch_anthropic):
         tool_choice="record_listing",
     )
     assert sdk.calls[0]["tool_choice"] == {"type": "tool", "name": "record_listing"}
+
+
+def test_a_deadline_bounds_the_whole_call_with_no_sdk_retry(patch_anthropic):
+    sdk = patch_anthropic(_RawResponse(text="ok"))
+    message = [Message(role="user", content=[TextBlock(text="x")])]
+    AnthropicProvider().complete(system="", messages=message, tools=[], model="claude-haiku-4-5")
+    assert sdk.options == []
+    AnthropicProvider().complete(system="", messages=message, tools=[], model="claude-haiku-4-5", timeout_s=12.5)
+    assert sdk.options == [{"timeout": 12.5, "max_retries": 0}]
 
 
 def test_no_tool_choice_key_when_unset(patch_anthropic):

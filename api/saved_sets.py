@@ -26,6 +26,8 @@ class SavedSetKind:
     blob_columns: tuple[str, ...]        # jsonb columns, each validated by its type on the body models
     create_in: type[BaseModel]
     update_in: type[BaseModel]
+    # Plain-typed columns (no jsonb cast), selected, inserted, updated and returned like the blobs (migration 681).
+    scalar_columns: tuple[str, ...] = ()
     # A PUT's explicit null clears these; on every other field a null keeps the stored value.
     nullable: frozenset[str] = frozenset({"color"})
     # Blob columns a falsy stored value reads as `{}` from (a preset's filter, as its old reader did).
@@ -44,7 +46,7 @@ class SavedSetKind:
 
 
 def _projection(kind: SavedSetKind) -> str:
-    cols = ["t.id", "t.name", *(f"t.{c}" for c in kind.blob_columns),
+    cols = ["t.id", "t.name", *(f"t.{c}" for c in (*kind.blob_columns, *kind.scalar_columns)),
             "t.created_at", "t.updated_at", "t.position", "t.color", *(["t.group_id"] if kind.groups else [])]
     return ", ".join([*cols, *(f"{sql} AS {field}" for field, sql in kind.projection_extra)])
 
@@ -70,8 +72,8 @@ def _get_for_update_sql(kind: SavedSetKind) -> str:
 
 def _insert_sql(kind: SavedSetKind) -> str:
     # A new row goes last among the caller's OWN rows (RLS scopes MAX; own_rows drops the ones shared with them).
-    cols = ", ".join(["name", *kind.blob_columns, "color", "position", "account_id"])
-    blobs = "".join(", %s::jsonb" for _ in kind.blob_columns)
+    cols = ", ".join(["name", *kind.blob_columns, *kind.scalar_columns, "color", "position", "account_id"])
+    blobs = "".join([*(", %s::jsonb" for _ in kind.blob_columns), *(", %s" for _ in kind.scalar_columns)])
     own = (kind.own_rows,) if kind.own_rows else ()
     return (f"INSERT INTO {kind.table} AS t ({cols}) VALUES (%s{blobs}, %s, "
             f"(SELECT COALESCE(MAX(t.position), -1) + 1 FROM {kind.table} t{_where(kind, *own)}), %s) "
@@ -104,7 +106,7 @@ def _layout_sql(kind: SavedSetKind) -> str:
 
 
 def _fields(kind: SavedSetKind) -> tuple[str, ...]:
-    return ("name", *kind.blob_columns, "color")
+    return ("name", *kind.blob_columns, *kind.scalar_columns, "color")
 
 
 def statements(kind: SavedSetKind) -> tuple[str, ...]:
@@ -119,7 +121,7 @@ def _jsonb(value: Any) -> str | None:
 
 
 def _row(kind: SavedSetKind, row: tuple[Any, ...]) -> dict[str, Any]:
-    fields = ("id", "name", *kind.blob_columns, "created_at", "updated_at", "position", "color",
+    fields = ("id", "name", *kind.blob_columns, *kind.scalar_columns, "created_at", "updated_at", "position", "color",
               *(("group_id",) if kind.groups else ()), *(field for field, _sql in kind.projection_extra))
     out = dict(zip(fields, row))
     out["id"] = str(out["id"])
@@ -153,7 +155,8 @@ def create(
     conn: psycopg.Connection, kind: SavedSetKind, values: dict[str, Any], *, account_id: uuid.UUID | str,
 ) -> dict[str, Any]:
     """Insert one row at the end of the list; `account_id` is REQUIRED (a dropped one is a TypeError, never NULL)."""
-    params = [values["name"], *(_jsonb(values[c]) for c in kind.blob_columns), values.get("color"), account_id]
+    params = [values["name"], *(_jsonb(values[c]) for c in kind.blob_columns),
+              *(values[c] for c in kind.scalar_columns), values.get("color"), account_id]
     row = _one(conn, kind, _insert_sql(kind), params)
     assert row is not None
     return row
@@ -263,14 +266,14 @@ def saved_set_router(kind: SavedSetKind, prefix: str) -> APIRouter:
 
     @router.get("")
     @_runs(*lists)
-    def list_route(conn: Any = Depends(tenant_pool.tenant_conn)) -> dict[str, Any]:
+    def list_route(conn: tenant_pool.TenantConn) -> dict[str, Any]:
         return listing(conn, kind)
 
     @router.post("")
     @_runs(_insert_sql(kind))
     def create_route(
         body: kind.create_in,  # type: ignore[name-defined]
-        conn: Any = Depends(tenant_pool.tenant_conn),
+        conn: tenant_pool.TenantConn,
         account_id: uuid.UUID = Depends(tenant_pool.require_account_id),
     ) -> dict[str, Any]:
         return create(conn, kind, body.model_dump(), account_id=account_id)
@@ -278,21 +281,21 @@ def saved_set_router(kind: SavedSetKind, prefix: str) -> APIRouter:
     # Declared before the `/{id}` routes so PUT <prefix>/reorder is matched here, not captured by `/{id}`.
     @router.put("/reorder")
     @_runs(_reorder_sql(kind), *lists)
-    def reorder_route(body: ReorderIn, conn: Any = Depends(tenant_pool.tenant_conn)) -> dict[str, Any]:
+    def reorder_route(body: ReorderIn, conn: tenant_pool.TenantConn) -> dict[str, Any]:
         reorder(conn, kind, [str(i) for i in body.ids])
         return listing(conn, kind)
 
     if kind.groups:
         @router.put("/layout")
         @_runs(_reorder_sql(kind.groups), _layout_sql(kind), *lists)
-        def layout_route(body: LayoutIn, conn: Any = Depends(tenant_pool.tenant_conn)) -> dict[str, Any]:
+        def layout_route(body: LayoutIn, conn: tenant_pool.TenantConn) -> dict[str, Any]:
             return layout(conn, kind, [str(g) for g in body.groups],
                           [(str(i.id), None if i.group_id is None else str(i.group_id)) for i in body.items])
 
     @router.get(one)
     @_runs(_get_sql(kind))
     def get_route(
-        set_id: uuid.UUID = Path(alias=kind.id_param), conn: Any = Depends(tenant_pool.tenant_conn),
+        conn: tenant_pool.TenantConn, set_id: uuid.UUID = Path(alias=kind.id_param),
     ) -> dict[str, Any]:
         return row_or_404(kind, get(conn, kind, str(set_id)))
 
@@ -300,15 +303,15 @@ def saved_set_router(kind: SavedSetKind, prefix: str) -> APIRouter:
     @_runs(_update_sql(kind, _fields(kind)), _get_for_update_sql(kind))
     def update_route(
         body: kind.update_in,  # type: ignore[name-defined]
+        conn: tenant_pool.TenantConn,
         set_id: uuid.UUID = Path(alias=kind.id_param),
-        conn: Any = Depends(tenant_pool.tenant_conn),
     ) -> dict[str, Any]:
         return row_or_404(kind, update(conn, kind, str(set_id), changes(kind, body)))
 
     @router.delete(one)
     @_runs(_delete_sql(kind))
     def delete_route(
-        set_id: uuid.UUID = Path(alias=kind.id_param), conn: Any = Depends(tenant_pool.tenant_conn),
+        conn: tenant_pool.TenantConn, set_id: uuid.UUID = Path(alias=kind.id_param),
     ) -> dict[str, Any]:
         if not delete(conn, kind, str(set_id)):
             raise HTTPException(status_code=404, detail=f"{kind.noun} not found")

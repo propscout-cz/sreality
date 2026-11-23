@@ -210,7 +210,8 @@ migration 629 + its two tests.
 - `FilterType.INT_LIST` lost its last user with the retype and was deleted (with FilterForm's
   `int_list` branch) — pure dead-path subtraction, outside the ledger.
 - Grouped elements (Mine / Shared with me / No longer available): the whole-set chips get a trailing
-  row of their own, so the not-in chip is still the control's last chip. Vanished `#id` chips
+  row of their own, so the not-in chip is still the control's last chip; a rule above that row keeps
+  it from reading as a member of the last group (2026-10-27, it did under "Shared with me"). Vanished `#id` chips
   CLEAR on click (tags used to cycle them). A whole-set include a link carries for a set that
   does not offer the chip (`?tags=any`, `?collections=any`) is drawn as a pressed "Se štítkem" /
   "V kolekci" chip so it can be switched off. The operator ruled **keep** (2026-10-19): the codec

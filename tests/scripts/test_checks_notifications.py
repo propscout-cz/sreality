@@ -102,7 +102,7 @@ def test_the_registry_row_is_a_ten_minute_worker_alarm_owned_by_the_feed() -> No
         nc.check_notifications, "platform", "alarm", "realtime-worker", 600, "Push notifications", "cells",
         "/notifications", 5.0)
     keys = [c.key for c in CHECKS]
-    assert keys.index("notifications") == keys.index("dedup") + 1 == keys.index("parsing") - 1
+    assert keys.index("notifications") == keys.index("dedup") + 1 == keys.index("curation_sync") - 1
     assert T == {"notifications_stall_min": 10, "notifications_recall_grace_min": 5,
                  "notifications_failures_fail": 3}
 

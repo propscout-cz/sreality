@@ -278,9 +278,9 @@
     {"property_id": 3040, "listing_id": 1040, "location_listing_ref_id": 1040, "sreality_id": 800039, "source": "bezrealitky", "all_sources": ["bezrealitky"], "active_sources": ["bezrealitky"], "category_main": "pozemek", "category_type": "pronajem", "category_sub_cb": 6, "subtype": null, "disposition": null, "price_czk": 51000, "area_m2": 400.0, "lat": 50.12, "lng": 14.4211, "condition": "spatny", "building_type": "drevo", "energy_rating": null, "has_balcony": true, "has_lift": false, "has_parking": null, "terrace": false, "cellar": null, "garage": true, "furnished": "neuvedeno", "ownership": "neuvedeno", "estate_area": 1200.0, "usable_area": 110.0, "garden_area": 250.0, "parking_lots": 3, "building_condition_level": null, "apartment_condition_level": 3, "mf_gross_yield_pct": null, "home_obec_pop": 1300000, "near_pop_5km": 400000, "near_pop_15km": 800000, "near_jobs_5km": 9.1, "near_jobs_15km": 8.8, "near_youth_5km": 7.5, "near_youth_15km": 9.0, "near_overall_5km": 8.0, "near_overall_15km": 9.5, "price_change_count": null, "price_change_count_30d": 2, "price_change_count_90d": 3, "price_change_count_365d": null, "total_price_change_pct": 4.0, "obec_id": null, "okres_id": null, "region_id": null, "cast_obce_id": 411655, "is_active": true, "first_seen_at__days_ago": 36, "price_per_m2": 127.5, "plot_area_m2": 400.0}
   ],
   "curated_cities_public": [
-    {"city_id": 1, "admin_boundary_id": 554782},
-    {"city_id": 2, "admin_boundary_id": 586846},
-    {"city_id": 3, "admin_boundary_id": 595209}
+    {"city_id": 1, "obec_kod": 554782},
+    {"city_id": 2, "obec_kod": 586846},
+    {"city_id": 3, "obec_kod": 595209}
   ],
   "city_index_values_public": [
     {"city_id": 1, "index_name": "celkove_hodnoceni", "value": 7.5, "source_revision": 1},

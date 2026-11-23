@@ -9,9 +9,9 @@ import {
   cardsWord,
   daysInStage,
   fmtDaysInStage,
-  initialStageIndex,
   orderStages,
   readLastStage,
+  stageOnScreen,
   stagePages,
   writeLastStage,
 } from './phonePipeline';
@@ -129,10 +129,18 @@ describe('the remembered stage', () => {
   const pages = stagePages([stage(1, 1), stage(2, 2, { is_entry: true }), stage(3, 3)], []);
 
   it('opens on the remembered stage while it exists, else on the entry stage', () => {
-    expect(initialStageIndex(pages, 3)).toBe(2);
-    expect(initialStageIndex(pages, 77)).toBe(1);
-    expect(initialStageIndex(pages, null)).toBe(1);
-    expect(initialStageIndex(stagePages([stage(5, 1), stage(6, 2)], []), null)).toBe(0);
+    expect(stageOnScreen(pages, 3, -1)).toBe(2);
+    expect(stageOnScreen(pages, 77, -1)).toBe(1);
+    expect(stageOnScreen(pages, null, -1)).toBe(1);
+    expect(stageOnScreen(stagePages([stage(5, 1), stage(6, 2)], []), null, -1)).toBe(0);
+  });
+
+  it('keeps the stage on screen by id wherever it moves, and falls to its neighbour once it is gone', () => {
+    expect(stageOnScreen(pages, 1, 2)).toBe(0);
+    /* Stage 3 was shown at index 2 and is gone: the page now there, clamped to the last. */
+    expect(stageOnScreen(stagePages([stage(1, 1), stage(2, 2, { is_entry: true })], []), 3, 2)).toBe(1);
+    expect(stageOnScreen(stagePages([stage(1, 1), stage(3, 3)], []), 2, 1)).toBe(1);
+    expect(stageOnScreen(stagePages([], []), 2, 1)).toBe(0);
   });
 
   it('round-trips through storage by stage id', () => {

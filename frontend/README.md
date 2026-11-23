@@ -94,13 +94,14 @@ src/
     Region.tsx       part D
     Health.tsx       part E
   styles/
-    globals.css      design tokens (@theme), typography, base reset
+    tokens.css       design tokens: every colour and radius, six themes
+    globals.css      fonts (@theme), typography, base reset
 ```
 
 ## Design system in one place
 
-All visual tokens live in `src/styles/globals.css` under a single `@theme`
-block (light) plus a dark-mode mirror.  Colour names are domain words —
+All visual tokens live in `src/styles/tokens.css`: the Měď light block, then
+dark and the Kobalt and Grafit schemes.  Colour names are domain words —
 `--color-paper`, `--color-ink`, `--color-copper`, `--color-brick`, etc. —
 not abstract greys.  Depth strategy is **borders only** (no shadows),
 with one carve-out: map-anchored popovers may use a small shadow because
@@ -112,11 +113,13 @@ aligns to the rightmost digit.
 
 ## Deploy
 
-Railway, as a second service in the same project as the API.  The
-service builds from this `frontend/` directory using the local
-`Dockerfile` (Node build stage → Caddy serve stage) and exposes a
-public domain that Railway terminates TLS at.  See the root `README.md`
-for the click-by-click setup.
+Railway, as its own project `vite`.  The service builds from this
+`frontend/` directory (root directory `/frontend`) using the local
+`Dockerfile` (Node build stage → Caddy serve stage), with the `/healthz`
+health check and the `/frontend/**` watch pattern, and exposes a public
+domain that Railway terminates TLS at.  Those settings live in
+`/.railway/railway.ts`, applied by the operator with
+`scripts/railway_iac_wizard.sh` (a merge alone changes none of them).
 
 `Caddyfile` handles SPA routing (`try_files {path} /index.html`),
 gzip + zstd compression, immutable caching for hashed `assets/*`
@@ -184,7 +187,10 @@ Makléři, Odkaz `/link`) and an account sheet (the theme, this iPhone's push sw
 "Oznámení na tomto iPhonu" — `src/components/phone/PushSwitch.tsx` over
 `src/lib/usePush.ts`, offered on an iPhone or iPad only, its subscription
 bound to the signed-in user by `src/lib/auth.tsx` and `src/lib/push.ts`
-and riding the bell's plan gate — the desktop view, sign-out).
+and riding the bell's plan gate — the desktop view, sign-out). Push is on
+by default: the feed asks for the one tap Apple requires
+(`src/components/phone/PushNotice.tsx`) and the re-sync subscribes by itself
+wherever notifications are already allowed; the switch is the way off.
 A tapped push lands on `/n/:dispatchId` (`src/pages/NotificationOpen.tsx`),
 which marks it read and replaces itself with what it is about. One unread observer
 (`src/lib/unreadCount.tsx`, mounted by `Shell`) feeds the bell, the

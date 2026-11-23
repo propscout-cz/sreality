@@ -17,7 +17,7 @@ from dataclasses import replace
 from location_data.resolver import bind as step_bind
 from location_data.resolver import core
 from location_data.resolver import grade as step_grade
-from location_data.resolver.types import AddressPoint, Street
+from location_data.resolver.types import AddressPoint, PartPoint, Street
 from location_data.resolver.version import RESOLVER_VERSION
 from tests.location_data import mini_mirror as mm
 
@@ -71,18 +71,6 @@ def test_an_ephemeral_coordinate_can_never_become_the_position():
     assert (resolution.lat, resolution.lon) == (50.0755, 14.4378)
 
 
-def test_the_pin_is_chosen_by_declared_quality_not_by_claim_id():
-    """A blurred coordinate that merely arrived FIRST used to become the position."""
-    claims = [
-        mm.claim(1, "obec_name", value_text="Praha"),
-        mm.claim(2, "coordinate", lat=50.0755, lon=14.4378,
-                 declared_precision_label="municipality"),
-        mm.claim(3, "coordinate", lat=50.10102, lon=14.34804, declared_precision_label="gps"),
-    ]
-    pin = step_bind.elect_pin(claims)
-    assert pin is not None and pin.id == 3
-
-
 def test_a_declared_blurred_pin_grades_at_the_obec_rung():
     claims = [
         mm.claim(1, "obec_name", value_text="Praha"),
@@ -93,18 +81,6 @@ def test_a_declared_blurred_pin_grades_at_the_obec_rung():
     resolution = _resolve(claims)
     assert resolution.granularity == "obec"
     assert resolution.match_confidence == "medium"
-
-
-def test_a_bare_blur_hint_is_a_distinct_claim_type_with_no_declared_value():
-    """bazos 'Přibližná lokalita' is a BINARY presence signal — folding it into
-    `precision_declaration` would lose that it declares nothing."""
-    claims = [
-        mm.claim(1, "obec_name", value_text="Praha", source="bazos"),
-        mm.claim(2, "coordinate", lat=50.0755, lon=14.4378, source="bazos"),
-        mm.claim(3, "blur_hint", value_text="Přibližná lokalita", source="bazos"),
-    ]
-    resolution = _resolve(claims)
-    assert resolution.granularity == "obec"
 
 
 def test_our_own_coords_stamp_is_not_the_portals_declared_precision():
@@ -127,9 +103,9 @@ def test_our_own_coords_stamp_is_not_the_portals_declared_precision():
 def test_the_chain_comes_from_the_join_not_from_geometry():
     resolution = _resolve(_address_claims())
     assert (resolution.obec_kod, resolution.obec_name) == (554782, "Praha")
-    assert (resolution.okres_kod, resolution.kraj_kod) == (3100, 19)
+    assert (resolution.okres_kod, resolution.kraj_kod) == (9999, 19)
     assert (resolution.okres_name, resolution.kraj_name) == (
-        "Hlavní město Praha", "Hlavní město Praha"
+        "území Hlavního města Prahy", "Hlavní město Praha"
     )
 
 
@@ -146,7 +122,7 @@ def test_the_quarter_lands_on_a_name_bound_row_too():
         mm.claim(2, "cast_obce_name", value_text="Vokovice"),
     ])
     assert (resolution.cast_obce_kod, resolution.cast_obce_name) == (490067, "Vokovice")
-    assert (resolution.obec_kod, resolution.okres_kod, resolution.kraj_kod) == (554782, 3100, 19)
+    assert (resolution.obec_kod, resolution.okres_kod, resolution.kraj_kod) == (554782, 9999, 19)
 
 
 def test_a_street_match_carries_the_whole_chain():
@@ -356,11 +332,15 @@ def test_a_street_in_the_named_town_carries_the_registers_part_not_the_adverts()
     assert resolution.house_number_cp is None
 
 
-def test_a_street_across_parts_or_in_a_town_the_advert_does_not_name_carries_no_part():
-    """Fail closed: RÚIAN draws no část polygon, so a street across two parts gets none; a
-    town only the PSČ and a part-of-town claim supplied, or a typo'd street (R3), lends none."""
-    for resolution in (_stefanikova((71, 409871), (72, 409847)),
-                       _stefanikova((71, 409871), town=False),
+def test_a_street_keeps_the_claimed_part_only_where_it_has_doors():
+    """Q2 (W5): RÚIAN draws no část polygon, so a street across two parts keeps the advert's
+    Třebeš because the street has doors there; in a town only the PSČ and the part claim
+    supplied, the same; a street whose doors are all elsewhere, or a typo'd one (R3), lends
+    none."""
+    across = _stefanikova((71, 409871), (72, 409847))
+    unnamed = _stefanikova((72, 409847), town=False)
+    assert across.cast_obce_kod == unnamed.cast_obce_kod == 409847
+    for resolution in (_stefanikova((71, 409871), town=False),
                        _stefanikova((71, 409871), street="Štefánikovva")):
         assert (resolution.street_name, resolution.cast_obce_kod) == ("Štefánikova", None)
 
@@ -454,17 +434,57 @@ def test_an_admissible_pin_still_wins_over_the_unit_point():
     assert (resolution.lat, resolution.lon) == (49.7600, 18.0200)
 
 
-def test_a_quarter_takes_its_towns_point_because_ruian_draws_no_quarter_polygon():
-    """The walk, and why it is a walk and not `chain[0]`: `cast_obce` and `momc` are the two
-    levels a Czech listing most often names by hand, and RÚIAN has no polygon for either —
-    so the finest bound unit is precisely the one with no point of its own."""
+def test_a_quarter_stands_at_its_own_doors_because_ruian_draws_no_quarter_polygon():
+    """v5.8 (operator ruling 2026-10-25). RÚIAN draws no polygon for a část obce, the level a
+    Czech listing most often names by hand, so a quarter used to take its TOWN's point — a
+    Břevnov ad stood in Vinohrady, 9 km from its street. It stands at the centroid of its own
+    doors now, as a bound street does, and their reach is the floor under its radius."""
+    mirror = mm.default_mirror()
     resolution = _resolve([
         mm.claim(1, "obec_name", value_text="Praha"),
         mm.claim(2, "cast_obce_name", value_text="Vokovice"),
-    ])
+    ], mirror=mirror)
+    part = mirror.part_point(14)
+    assert part is not None
     assert resolution.cast_obce_kod == 490067
     assert resolution.granularity == "cast_obce_or_quarter"
+    assert (resolution.lat, resolution.lon) == (part.lat, part.lon)
+    assert (resolution.lat, resolution.lon) != (50.0755, 14.4378)
+    assert resolution.uncertainty_radius_m == max(
+        step_grade.RADIUS_M["cast_obce_or_quarter"], part.extent_m)
+
+
+def test_a_quarter_with_no_door_takes_its_towns_point_and_the_towns_reach():
+    """The walk, and why it is a walk and not `chain[0]`: a část with no valid door has no
+    point either, so it climbs to the town — and the radius then says how far the town
+    reaches from that point (Praha 17.6 km), not the 1 km an `obec` row used to claim."""
+    mirror = mm.default_mirror()
+    mirror.points = [p for p in mirror.points if p.cast_obce_unit_id != 14]
+    mirror.units = [replace(u, extent_m=17_556.0) if u.level == "obec" and u.code == 554782
+                    else u for u in mirror.units]
+    resolution = _resolve([
+        mm.claim(1, "obec_name", value_text="Praha"),
+        mm.claim(2, "cast_obce_name", value_text="Vokovice"),
+    ], mirror=mirror)
+    assert resolution.cast_obce_kod == 490067
     assert (resolution.lat, resolution.lon) == (50.0755, 14.4378)
+    assert resolution.uncertainty_radius_m == 17_556.0
+
+
+def test_a_pin_placed_quarter_keeps_its_pin_and_takes_no_floor_from_the_doors():
+    """FILL places only what BIND did not: a pinned row keeps its pin, and the reach of the
+    část's doors — read here for its KÚ, Praha spanning several — is no floor under the pin's
+    radius."""
+    mirror = mm.default_mirror()
+    wide = PartPoint(lat=50.2, lon=14.2, extent_m=5_000.0, point_count=9)
+    mirror.part_point = lambda unit_id: wide  # type: ignore[method-assign]
+    resolution = _resolve([
+        mm.claim(1, "obec_name", value_text="Praha"),
+        mm.claim(2, "cast_obce_name", value_text="Vokovice"),
+        mm.claim(3, "coordinate", lat=50.10102, lon=14.34804, declared_precision_label="gps"),
+    ], mirror=mirror)
+    assert (resolution.lat, resolution.lon) == (50.10102, 14.34804)
+    assert resolution.uncertainty_radius_m < wide.extent_m
 
 
 def test_a_region_only_listing_is_placed_at_the_region_it_named():

@@ -43,6 +43,9 @@ frontend/coverage/
 frontend/*.local
 # A frontend command run from the repo root writes its Vite/Vitest cache here.
 /node_modules/
+# The pinned Railway CLI + SDK (`npm ci --prefix .railway`) and a pinned plan written beside them.
+.railway/node_modules/
+.railway/railway-plan.json
 /.vite/
 npm-debug.log*
 yarn-debug.log*

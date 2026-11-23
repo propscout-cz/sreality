@@ -25,9 +25,19 @@ from typing import Any
 import pytest
 from psycopg.types.json import Jsonb
 
-from scraper import portal_factory
+from scraper import job_lease, portal_factory
 from scraper import realtime_worker as rw
 from scraper.portal import default_config
+from scraper.stop import StopRequested
+
+
+@pytest.fixture(autouse=True)
+def _browser_is_available(monkeypatch):
+    """ceskereality is fetched through a headless browser, and the worker skips its lanes
+    when playwright is absent (`_skip_for_browser`). Playwright is an optional extra, so it
+    is absent here and in CI — these tests are about lane SELECTION, so they state the
+    image's side of that assumption explicitly instead of inheriting the dev box's."""
+    monkeypatch.setattr("scraper.browser_fetch.playwright_available", lambda: True)
 
 
 def _probe_agg(**over: Any) -> dict[str, Any]:
@@ -454,9 +464,14 @@ def _images_agg(**over: Any) -> dict[str, Any]:
     return agg
 
 
+def _retry_counts(**over: Any) -> dict[str, int]:
+    return {"phash_retried": 0, "phash_hashed": 0, "phash_given_up": 0, **over}
+
+
 def test_images_pass_runs_capped_active_only_download(monkeypatch):
     monkeypatch.setattr(rw, "_read_images_slice", lambda: 123)
     monkeypatch.setattr(rw.image_storage, "is_configured", lambda: True)
+    monkeypatch.setattr(rw, "_run_phash_retry_sync", _retry_counts)
     ran: list[int] = []
     monkeypatch.setattr(
         rw, "_run_images_sync", lambda cap: ran.append(cap) or _images_agg())
@@ -467,19 +482,74 @@ def test_images_pass_runs_capped_active_only_download(monkeypatch):
     assert images["passes"] == 1
     assert images["last"] == {
         "downloaded": 4, "phash_missed": 0, "stopped_suspicious": False, "cap": 123,
+        "phash_retried": 0, "phash_hashed": 0, "phash_given_up": 0,
     }
 
 
 def test_images_pass_heartbeat_carries_inline_phash_misses(monkeypatch):
-    """A stored image the inline hash missed is the hourly backstop's work; the
-    heartbeat carries the count so a silent inline failure is visible live."""
+    """A stored image the inline hash missed is the retry's work; the heartbeat
+    carries the count so a silent inline failure is visible live."""
     monkeypatch.setattr(rw, "_read_images_slice", lambda: 50)
     monkeypatch.setattr(rw.image_storage, "is_configured", lambda: True)
+    monkeypatch.setattr(rw, "_run_phash_retry_sync", _retry_counts)
     monkeypatch.setattr(
         rw, "_run_images_sync", lambda cap: _images_agg(images_phash_missed=3))
     state = rw._new_state()
     asyncio.run(rw._images_pass(asyncio.Event(), state))
     assert state["lanes"]["images"]["last"]["phash_missed"] == 3
+
+
+def test_images_pass_records_the_phash_retry_after_the_downloads(monkeypatch, caplog):
+    order: list[str] = []
+    monkeypatch.setattr(rw, "_read_images_slice", lambda: 50)
+    monkeypatch.setattr(rw.image_storage, "is_configured", lambda: True)
+    monkeypatch.setattr(rw, "_run_images_sync", lambda cap: order.append("download") or _images_agg())
+    monkeypatch.setattr(rw, "_run_phash_retry_sync", lambda: order.append("retry") or _retry_counts(
+        phash_retried=5, phash_hashed=2, phash_given_up=1))
+    state = rw._new_state()
+
+    with caplog.at_level("INFO", logger="scraper.realtime_worker"):
+        asyncio.run(rw._images_pass(asyncio.Event(), state))
+
+    assert order == ["download", "retry"]
+    last = state["lanes"]["images"]["last"]
+    assert (last["phash_retried"], last["phash_hashed"], last["phash_given_up"]) == (5, 2, 1)
+    line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("IMAGES lane"))
+    assert "phash_retried=5 phash_hashed=2 phash_given_up=1" in line
+
+
+def test_a_failed_phash_retry_never_loses_the_download_result(monkeypatch, caplog):
+    def boom() -> dict[str, int]:
+        raise RuntimeError("pooler said no")
+
+    monkeypatch.setattr(rw, "_read_images_slice", lambda: 50)
+    monkeypatch.setattr(rw.image_storage, "is_configured", lambda: True)
+    monkeypatch.setattr(rw, "_run_images_sync", lambda cap: _images_agg())
+    monkeypatch.setattr(rw, "_run_phash_retry_sync", boom)
+    state = rw._new_state()
+
+    with caplog.at_level("WARNING", logger="scraper.realtime_worker"):
+        asyncio.run(rw._images_pass(asyncio.Event(), state))
+
+    last = state["lanes"]["images"]["last"]
+    assert last["downloaded"] == 4 and last["phash_retried"] == 0
+    assert any("pooler said no" in r.getMessage() for r in caplog.records)
+
+
+def test_a_stop_during_the_downloads_skips_the_retry_but_records_them(monkeypatch):
+    stop = asyncio.Event()
+
+    def download(cap: int) -> dict[str, Any]:
+        stop.set()
+        return _images_agg()
+
+    monkeypatch.setattr(rw, "_read_images_slice", lambda: 50)
+    monkeypatch.setattr(rw.image_storage, "is_configured", lambda: True)
+    monkeypatch.setattr(rw, "_run_images_sync", download)
+    monkeypatch.setattr(rw, "_run_phash_retry_sync", lambda: pytest.fail("a stopping worker must not retry"))
+    state = rw._new_state()
+    asyncio.run(rw._images_pass(stop, state))
+    assert state["lanes"]["images"]["last"]["downloaded"] == 4
 
 
 def test_images_pass_slice_zero_records_an_off_pass(monkeypatch):
@@ -531,6 +601,22 @@ def test_run_images_sync_reuses_main_machinery_over_the_whole_queue(monkeypatch)
     assert seen == {"args": (250, rw.IMAGES_WORKERS), "kw": {}}
 
 
+def test_run_phash_retry_sync_runs_one_pass_on_its_own_connection(monkeypatch):
+    from scraper import image_phash
+
+    class _Conn:
+        def __enter__(self) -> "_Conn":
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+    conn = _Conn()
+    monkeypatch.setattr(rw.db, "connect", lambda: conn)
+    monkeypatch.setattr(image_phash, "retry_unhashed", lambda c: _retry_counts(phash_retried=c is conn))
+    assert rw._run_phash_retry_sync()["phash_retried"] == 1
+
+
 # --- heartbeat -----------------------------------------------------------------
 
 
@@ -576,6 +662,21 @@ def test_heartbeat_upserts_latest_wins_row(monkeypatch):
     assert params["started_at"] == state["started_at"]
     assert isinstance(params["details"], Jsonb)
     assert params["details"].obj["probe"]["last"] == {"portals": 4}
+
+
+def test_the_beat_records_the_commit_beside_every_lane(monkeypatch):
+    conn = _FakeConn()
+    monkeypatch.setattr(rw.db, "connect", lambda **_: conn)
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "abc123")
+    state = rw._new_state()
+    rw._record_pass(state, "probe", {"portals": 4})
+    rw._beat_sync(state)
+    details = conn.calls[0][1]["details"].obj
+    assert details["version"] == "abc123"
+    assert details["probe"]["last"] == {"portals": 4}
+    monkeypatch.delenv("RAILWAY_GIT_COMMIT_SHA")
+    rw._beat_sync(state)
+    assert conn.calls[-1][1]["details"].obj["version"] is None
 
 
 def test_the_heartbeat_lane_records_its_own_pass(monkeypatch):
@@ -734,7 +835,7 @@ class _Harness:
     """scripts.verify_pipeline as the health lane uses it."""
 
     def __init__(self, due: list[str]) -> None:
-        self.THRESHOLDS = {"jobs_lane_inflight_warn_s": 1200}
+        self.THRESHOLDS: dict[str, Any] = {}
         self.due = due
         self.projected: list[tuple[str, Any]] = []
         self.ran: list[dict[str, Any]] = []
@@ -806,12 +907,18 @@ def test_the_health_lane_ticks_on_a_constant_and_sits_before_autodedup() -> None
     assert (rw.HEALTH_TICK_SECONDS, rw.HEALTH_PASS_BUDGET_SECONDS) == (60.0, 500.0)
     from scripts import verify_pipeline
 
-    # Wave 6: the thirteen worker budgets (680 s) outgrow one pass inside the watcher's 600 s
-    # in-flight line, so the pass is capped and run_due defers a gauge that no longer fits.
+    # Wave 6: the worker budgets (1,165 s since #2512) outgrow one pass inside the watcher's 600 s in-flight line,
+    # so the pass is capped and run_due defers what no longer fits. Since curation sync (migration
+    # 696, docs/design/curation-sync.md § 3.9) the alarms due at once owe WORKER_ALARMS_DUE_AT_ONCE_S,
+    # past the pass: all but the last fit at their whole budgets, and the last (parsing) defers one
+    # tick, like a gauge.
     hosted = [c for c in verify_pipeline.CHECKS if c.host == rw.WORKER_NAME]
     alarms = [c for c in hosted if c.cls == "alarm"]
-    assert verify_pipeline.lane_budget_for(alarms) <= rw.HEALTH_PASS_BUDGET_SECONDS, (
-        "every worker ALARM due at once fits; gauges defer")
+    assert verify_pipeline.WORKER_ALARMS_DUE_AT_ONCE_S == verify_pipeline.lane_budget_for(alarms)
+    assert verify_pipeline.WORKER_ALARMS_DUE_AT_ONCE_S > rw.HEALTH_PASS_BUDGET_SECONDS, (
+        "the docs (pipeline-verification.md, health-dashboard.md) say the last alarm defers: restate them")
+    assert verify_pipeline.lane_budget_for(alarms[:-1]) <= rw.HEALTH_PASS_BUDGET_SECONDS, (
+        "every worker ALARM but the last due at once fits; the last and the gauges defer")
     assert max(c.budget_s for c in hosted) <= rw.HEALTH_PASS_BUDGET_SECONDS, (
         "a check whose budget exceeds the pass would be deferred for ever")
     assert rw.HEALTH_PASS_BUDGET_SECONDS + 30.0 < 600.0, "the beat's lag inside the watcher's line"
@@ -925,7 +1032,7 @@ def producers(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "match_changes_once": {"subscriptions_evaluated": 2, "subscriptions_invalid": 0,
                                "subscriptions_failed": 0, "changes_inserted": 0,
                                "collection_changes_inserted": 0},
-        "match_monitored_collections_once": {"monitored_collections": 2, "events_inserted": 1},
+        "match_lifecycle_once": {"monitored_collections": 2, "events_inserted": 1},
     }}
 
     def fake(name: str) -> Any:
@@ -967,7 +1074,7 @@ def test_the_lanes_steps_bind_to_the_real_producers() -> None:
     binding them keeps a rename from leaving the lane calling nothing."""
     from api import notifications
 
-    assert list(rw.NOTIFICATIONS_STEPS) == ["watchdog_new", "price", "monitor"]
+    assert list(rw.NOTIFICATIONS_STEPS) == ["watchdog_new", "price", "lifecycle"]
     for name in rw.NOTIFICATIONS_STEPS.values():
         inspect.signature(getattr(notifications, name)).bind(None)
 
@@ -986,7 +1093,7 @@ def test_a_notifications_pass_runs_each_step_on_its_own_connection(
     lane = state["lanes"]["notifications"]
     assert (lane["passes"], lane["started_at"], lane["failing_since"]) == (1, None, None)
     assert lane["portal_errors"] == {}
-    assert set(lane["last"]) == {"watchdog_new", "price", "monitor"}
+    assert set(lane["last"]) == {"watchdog_new", "price", "lifecycle"}
     assert lane["last"]["watchdog_new"]["matches_inserted"] == 2
     Jsonb(rw._lane_snapshot(state["lanes"]))
 
@@ -1010,7 +1117,7 @@ def test_a_failing_step_is_its_own_cell_and_the_other_steps_still_write(
     assert set(errors) == {"watchdog_new", "price"}
     assert errors["price"]["last_error"] == "RuntimeError: statement timeout"
     assert errors["watchdog_new"]["last_error"] == "1 of 2 watchdogs failed"
-    assert set(lane["last"]) == {"watchdog_new", "monitor"}
+    assert set(lane["last"]) == {"watchdog_new", "lifecycle"}
 
     now = datetime.fromisoformat(errors["price"]["failing_since"])
     cells = platform._portal_cells("notifications", lane, {}, 900.0, now)
@@ -1370,7 +1477,7 @@ def _patch_resolver(
         captured["conn"] = c
         captured["job_name"] = job_name
         captured.update(kwargs)
-        yield acquired
+        yield job_lease.Hold(job_name, "test-holder", 60, 0.0) if acquired else None
 
     def default_run(
             c: Any, *, batch_size: int, max_seconds: int, workers: int) -> Any:
@@ -1382,6 +1489,9 @@ def _patch_resolver(
 
     monkeypatch.setattr(rw.db, "connect_session", lambda *a, **k: conn)
     monkeypatch.setattr("scraper.job_lease.held", fake_held)
+    # W2: the pass first asks reconcile; the default fake has nothing to sweep.
+    monkeypatch.setattr("location_data.resolver.drain.reconcile",
+                        lambda c, *, stop: captured.__setitem__("stop", stop))
     monkeypatch.setattr("location_data.resolver.drain.run", run or default_run)
     monkeypatch.setattr(rw, "_read_location_resolve_max_seconds", lambda: 240)
     monkeypatch.setattr(rw, "_read_location_resolve_batch_size", lambda: 250)
@@ -1392,17 +1502,22 @@ def _patch_resolver(
     return conn, captured
 
 
-def test_location_resolve_lane_registered_and_dark_by_default(monkeypatch):
-    # Registered in _amain, and DARK: with the flag absent the interval is 0 so
-    # _lane_loop idles it — no lease attempt, no connection, no drain.
+def test_location_resolve_lane_registered_and_live_by_default(monkeypatch):
+    # W2 (ruling Q9): the only runtime of the resolver ships LIVE. Registered in _amain with
+    # its own cadence as the fail-safe, and the interval setting is the ONE control: absent
+    # reads 15, 0 idles the lane (idle-not-dead), no flag is consulted.
     src = inspect.getsource(rw._amain)
     assert '("location_resolve"' in src
-    monkeypatch.setattr(rw, "_read_flag", lambda key: False)
+    assert "default_interval=LOCATION_RESOLVE_INTERVAL_DEFAULT" in src
+    assert "_read_flag" not in inspect.getsource(rw._read_location_resolve_interval)
+    assert not hasattr(rw, "LOCATION_RESOLVE_LANE_SETTING")
+    monkeypatch.setattr(rw, "_read_int", lambda key, default: default)
+    assert rw._read_location_resolve_interval() == 15
+    monkeypatch.setattr(rw, "_read_int", lambda key, default: 0)
     assert rw._read_location_resolve_interval() == 0
 
 
-def test_location_resolve_interval_uses_configured_when_enabled(monkeypatch):
-    monkeypatch.setattr(rw, "_read_flag", lambda key: True)
+def test_location_resolve_interval_uses_the_configured_value(monkeypatch):
     monkeypatch.setattr(rw, "_read_int", lambda key, default: 7)
     assert rw._read_location_resolve_interval() == 7
 
@@ -1412,12 +1527,12 @@ def test_location_resolve_max_seconds_is_clamped_below_the_lane_pass_timeout(
     # A HEALTHY pass must never read as a stall (the jobs check's in-flight Watch) and
     # must never be abandoned by the lane loop. The lease is NOT bounded by this — see
     # test_location_resolve_lease_ttl_covers_the_budget_plus_one_batch.
-    from scripts import verify_pipeline
+    from scripts.checks import platform as plat
 
     monkeypatch.setattr(rw, "_read_int", lambda key, default: 99999)
     clamped = rw._read_location_resolve_max_seconds()
     assert clamped == rw.LOCATION_RESOLVE_MAX_SECONDS_CEILING
-    assert clamped < verify_pipeline.THRESHOLDS["jobs_lane_inflight_warn_s"], (
+    assert clamped < plat.LANE_INFLIGHT_WARN_S, (
         "a healthy pass would read as in flight too long")
     assert clamped < rw.LANE_PASS_TIMEOUT_SECONDS
     monkeypatch.setattr(rw, "_read_int", lambda key, default: 60)
@@ -1523,6 +1638,35 @@ def test_location_resolve_sync_runs_the_shared_drain_with_configured_budget(
     assert out["seconds"] == 12.3
     assert out["rate"] == round(40 / 12.34, 2)
     assert conn.closed is True
+
+
+def test_location_resolve_sync_spends_a_pass_on_the_sweep_and_drains_on_the_next(monkeypatch):
+    """W2 (ruling Q9): under the lease the pass asks `drain.reconcile` with the lease fence;
+    a sweep is the whole pass (no drain shares its lease TTL), reported under `swept`, and
+    the heartbeat carries it past the next pass."""
+    conn, captured = _patch_resolver(monkeypatch)
+    sweeps = iter([{"pair": ["resolver:vX", "ruian:L"], "rows": 1_068_644, "complete": True}, None])
+
+    def reconcile(c: Any, *, stop: Any) -> Any:
+        captured["reconcile_conn"] = c
+        captured["stop"] = stop
+        return next(sweeps)
+
+    monkeypatch.setattr("location_data.resolver.drain.reconcile", reconcile)
+    first = rw._location_resolve_sync()
+    assert first["swept"]["rows"] == 1_068_644 and first["claimed"] == 0
+    assert "run_conn" not in captured, "a sweep pass does not drain"
+    assert captured["reconcile_conn"] is conn and callable(captured["stop"])
+    second = rw._location_resolve_sync()
+    assert "swept" not in second and captured["run_conn"] is conn
+    state = rw._new_state()
+    monkeypatch.setattr(rw, "_location_resolve_sync", lambda: first)
+    asyncio.run(rw._location_resolve_pass(asyncio.Event(), state))
+    monkeypatch.setattr(rw, "_location_resolve_sync", lambda: {"acquired": True, "claimed": 0})
+    asyncio.run(rw._location_resolve_pass(asyncio.Event(), state))
+    lane = state["lanes"]["location_resolve"]
+    assert lane["swept"]["rows"] == 1_068_644 and lane["swept"]["pair"] == ["resolver:vX", "ruian:L"]
+    assert "at" in lane["swept"] and lane["passes"] == 2
 
 
 def test_location_resolve_sync_skips_cheaply_when_the_lease_is_held(monkeypatch):
@@ -1667,14 +1811,14 @@ def test_location_resolve_quiets_the_drain_log_only_once_the_queue_is_empty(
         drain_log.setLevel(original)
 
 
-def test_location_resolve_lane_is_dark_when_the_settings_read_fails() -> None:
-    # _lane_loop keeps default_interval when read_interval() RAISES, and the
-    # flag lives inside the read that just failed. A positive fallback would run
-    # a full drain pass on any app_settings blip while the operator believes the
-    # lane is off (e.g. during an epoch recompute).
+def test_location_resolve_lane_keeps_its_cadence_when_the_settings_read_fails() -> None:
+    # W2 (ruling Q9): the lane is the resolver's only runtime, so _lane_loop's fallback when
+    # read_interval() RAISES is the lane's own cadence, never 0 — a pooler blip must not
+    # idle the one thing that resolves. (Before W2 the flag lived inside that read and 0
+    # was the fail-safe for a lane the operator might have left dark.)
     src = inspect.getsource(rw._amain)
     lane = src.split('("location_resolve"', 1)[1].split(")),", 1)[0]
-    assert "default_interval=0" in lane
+    assert "default_interval=LOCATION_RESOLVE_INTERVAL_DEFAULT" in lane
 
 
 def test_location_resolve_pass_returns_early_when_stopping(monkeypatch):
@@ -1692,7 +1836,7 @@ def test_location_resolve_pass_returns_early_when_stopping(monkeypatch):
 # ------------------------------------- location_intake_fast (W7-a): one lane, two schedules
 
 _FAST_STATS = {
-    "listings": 12, "claims_inserted": 34, "enqueued": 7,
+    "listings": 12, "written": 34, "enqueued": 7,
     "payload_seconds": 1.234, "cursor_after_id": 987654,
     "bodies_mined": 5, "bodies_seconds": 2.0, "bodies_pass_complete": True,
     "bodies_cursor_after_id": 4242,
@@ -1762,10 +1906,9 @@ def test_location_intake_fast_knobs_are_env_vars_and_clamped(
     monkeypatch.setenv(rw.LOCATION_INTAKE_FAST_BUDGET_ENV, "99999")
     assert rw._read_location_intake_fast_budget() == rw.LOCATION_INTAKE_FAST_BUDGET_CEILING
     # A healthy pass must never read as a stall, nor be abandoned by the lane loop.
-    from scripts import verify_pipeline
+    from scripts.checks import platform as plat
 
-    assert (rw.LOCATION_INTAKE_FAST_BUDGET_CEILING
-            < verify_pipeline.THRESHOLDS["jobs_lane_inflight_warn_s"])
+    assert rw.LOCATION_INTAKE_FAST_BUDGET_CEILING < plat.LANE_INFLIGHT_WARN_S
     assert rw.LOCATION_INTAKE_FAST_BUDGET_CEILING < rw.LANE_PASS_TIMEOUT_SECONDS
     # A typo must not stop a lane that ships live.
     monkeypatch.setenv(rw.LOCATION_INTAKE_FAST_BUDGET_ENV, "forty-five")
@@ -1840,7 +1983,7 @@ def test_location_intake_fast_sync_runs_the_shared_scan_on_its_own_lane(
     assert schedule.pool is rw._intake_fast_pool()
     # The heartbeat's `last`: what the tick achieved and where it left BOTH keysets.
     assert out == {
-        "ran": True, "listings": 12, "claims_inserted": 34, "enqueued": 7,
+        "ran": True, "listings": 12, "written": 34, "enqueued": 7,
         "bodies_mined": 5, "bodies_complete": True, "seconds": 3.2,
         "cursor": 987654, "bodies_cursor": 4242,
     }
@@ -2045,23 +2188,26 @@ def _patch_refetch(
     return captured
 
 
-def test_location_refetch_lane_registered_and_live_by_default(
+def test_location_refetch_lane_ticks_every_six_hours_on_a_constant(
         monkeypatch: pytest.MonkeyPatch) -> None:
-    # LIVE by default for the intake lane's reason: an env var the operator has to
-    # remember to set on the Railway service is a fix that never runs.
+    # W2: one constant tick, no flag, no interval knob, no first delay — the predicate (a page
+    # at least MIN_AGE old) bounds the traffic. #2506: the tick is that predicate's own 6 h, a
+    # code constant (no Railway variable), so liveness reads the lane late after 18 h. The
+    # equality is pinned because the worker and realtime-scrapers.md derive the ~12 h re-read of a
+    # still-townless ad from it: change one value and that statement must change too.
     src = inspect.getsource(rw._amain)
     assert '("location_refetch"' in src
-    monkeypatch.delenv(rw.LOCATION_REFETCH_ENABLED_ENV, raising=False)
-    monkeypatch.delenv(rw.LOCATION_REFETCH_INTERVAL_ENV, raising=False)
-    assert rw._read_location_refetch_interval() == 86400
-    monkeypatch.setenv(rw.LOCATION_REFETCH_ENABLED_ENV, "0")
-    assert rw._read_location_refetch_interval() == 0
+    assert rw.LOCATION_REFETCH_TICK_SECONDS == 21600.0 == float(rw.LOCATION_REFETCH_MIN_AGE_DEFAULT)
+    assert "LOCATION_REFETCH_TICK_SECONDS" in src
+    for gone in ("LOCATION_REFETCH_ENABLED_ENV", "LOCATION_REFETCH_INTERVAL_ENV",
+                 "LOCATION_REFETCH_INTERVAL_DEFAULT", "LOCATION_REFETCH_FIRST_DELAY_SECONDS",
+                 "_read_location_refetch_interval"):
+        assert not hasattr(rw, gone), gone
 
 
 def test_location_refetch_knobs_are_env_vars_and_clamped(
         monkeypatch: pytest.MonkeyPatch) -> None:
-    for env in (rw.LOCATION_REFETCH_INTERVAL_ENV, rw.LOCATION_REFETCH_MIN_AGE_ENV,
-                rw.LOCATION_REFETCH_CAP_ENV):
+    for env in (rw.LOCATION_REFETCH_MIN_AGE_ENV, rw.LOCATION_REFETCH_CAP_ENV):
         monkeypatch.delenv(env, raising=False)
     assert rw._read_location_refetch_min_age() == 21600
     assert rw._read_location_refetch_cap() == 500
@@ -2070,8 +2216,6 @@ def test_location_refetch_knobs_are_env_vars_and_clamped(
     assert rw._read_location_refetch_cap() == 500
     monkeypatch.setenv(rw.LOCATION_REFETCH_CAP_ENV, "0")
     assert rw._read_location_refetch_cap() == 1, "a cap knob is not the flag"
-    monkeypatch.setenv(rw.LOCATION_REFETCH_INTERVAL_ENV, "1")
-    assert rw._read_location_refetch_interval() == 3600, "the interval has an hour floor"
 
 
 def test_location_refetch_tick_queues_every_portal_at_verify_priority(
@@ -2087,7 +2231,8 @@ def test_location_refetch_tick_queues_every_portal_at_verify_priority(
 
     out = rw._location_refetch_sync()
 
-    assert captured["kwargs"] == {"min_age_seconds": 21600, "cap_per_source": 500}
+    assert captured["kwargs"] == {"min_age_seconds": 21600, "cap_per_source": 500,
+                                  "statement_timeout_s": rw.LOCATION_REFETCH_STATEMENT_TIMEOUT_S}
     # ONE enqueue per portal, carrying (native_id, detail_ref, price) — the drain needs
     # the stored URL to fetch a crawler portal's page at all.
     assert [src for src, _ in captured["enqueued"]] == ["ceskereality", "realitymix"]
@@ -2151,7 +2296,7 @@ def test_a_first_delay_holds_the_pass_and_still_stops_cleanly() -> None:
         return calls
 
     assert asyncio.run(scenario()) == []
-    assert rw.LOCATION_REFETCH_FIRST_DELAY_SECONDS > 0
+    assert rw.SOLD_COMPS_FIRST_DELAY_SECONDS > 0
 
 
 # --- sold_comps lane (sold-comps W2) ------------------------------------------
@@ -2267,6 +2412,23 @@ def test_a_ledger_refusal_ends_the_sold_comps_tick_at_once(
     assert captured["conn_obj"].closed is True
 
 
+def test_a_deploy_stop_ends_the_sold_comps_tick_at_the_cell_in_hand(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    # #2438: the worker's SIGTERM sets `scraper.stop`, and every later cell's first request would raise it again:
+    # a `failed` ledger row apiece for cells nothing was wrong with. The cell in hand wrote nothing; it is walked again.
+    captured = _patch_sold_comps(monkeypatch, [1, 2, 3], results=[
+        {"obec_kod": 1, "status": "ok", "records": 5, "new": 5, "pages": 1,
+         "source_total": 625, "dropped": 0, "error": None},
+        StopRequested("a stop signal arrived"),
+    ])
+
+    out = rw._sold_comps_sync()
+
+    assert captured["fetched"] == [1, 2]
+    assert (out["cells"], out["records"], out["failed"], out["budget_refused"]) == (1, 5, 0, 0)
+    assert captured["conn_obj"].closed is True
+
+
 def test_the_worker_names_the_lane_never_the_source() -> None:
     # A shared module that imports one data source's client/parser makes the second
     # sold source an edit to the worker rather than to `sold_fetch`.
@@ -2319,7 +2481,7 @@ def test_a_failed_cell_is_counted_and_never_stops_the_tick(
 
 def test_a_cell_that_could_not_be_boxed_never_reads_as_a_quiet_pass(
         monkeypatch: pytest.MonkeyPatch) -> None:
-    # The work-list's admin_boundaries join means the lane should never see one; if
+    # The work-list's ruian_unit_render join means the lane should never see one; if
     # it ever does, `skipped` is the only place it can show, because a skip writes
     # no ledger row either.
     _patch_sold_comps(monkeypatch, [1], results=[
@@ -2449,7 +2611,8 @@ def test_text_extract_is_free_while_its_scope_is_empty(
     from toolkit import description_extraction
 
     monkeypatch.setattr(rw.db, "connect", lambda: _FakeConn())
-    monkeypatch.setattr(description_extraction, "lane_scope", lambda conn: {})
+    monkeypatch.setattr(description_extraction, "location_sources", lambda conn: frozenset())
+    monkeypatch.setattr(description_extraction, "scope_from", lambda located: {})
     assert rw._text_extract_sync() == {"claimed": 0, "reason": "empty_scope"}
 
 
@@ -2465,8 +2628,7 @@ def _text_pass_that_read(monkeypatch: pytest.MonkeyPatch, ids: list[int]) -> lis
 
     def mine(conn: Any, listing_ids: list[int], **kwargs: Any) -> dict[str, Any]:
         handed.append((list(listing_ids), kwargs))
-        return {"readings_mined": len(listing_ids), "claims_inserted": 3,
-                "claims_superseded": 1}
+        return {"readings_mined": len(listing_ids), "written": 3}
 
     monkeypatch.setattr(claims_intake, "mine_readings", mine)
     return handed
@@ -2482,8 +2644,8 @@ def test_a_text_pass_that_read_listings_mines_those_readings_at_once(
     assert handed == [([11, 12], {"max_seconds": rw.LOCATION_READINGS_FAST_BUDGET_S,
                                   "statement_timeout": 60})]
     assert "listing_ids" not in last
-    assert last["readings_fast"]["mined"] == 2 and last["readings_fast"]["superseded"] == 1
-    assert any(r.getMessage().startswith("INTAKE readings fast ids=2 mined=2 superseded=1")
+    assert last["readings_fast"]["mined"] == 2 and last["readings_fast"]["written"] == 3
+    assert any(r.getMessage().startswith("INTAKE readings fast ids=2 mined=2 written=3")
                for r in caplog.records)
 
 
@@ -2590,8 +2752,8 @@ def test_a_pass_that_ran_or_met_its_ceiling_is_not_a_failed_one(
 
 # --- liveness: the 2026-09-29 freeze ----------------------------------------------------
 #
-# ceskereality answered 403 to everything; the shared rate ledger parked every caller up
-# to an hour; each abandoned probe/drain pass left one more thread asleep there; the
+# The shared rate ledger parked every caller up to an hour; each abandoned probe/drain
+# pass left one more thread asleep there; the
 # default executor filled; the heartbeat write and every interval read queued behind
 # them; the loop stayed alive, so nothing exited and Railway never restarted the worker.
 
@@ -2626,7 +2788,7 @@ def test_a_second_probe_pass_while_one_is_in_flight_is_skipped_and_counted(monke
         probe = state["lanes"]["probe"]
         assert probe["passes"] == 1
         assert probe["last"] == {"previous_pass_running": True}
-        # no second thread started: the abandoned pass got as far as the blocked portal
+        # no second thread started: the abandoned pass got as far as the stalled portal
         assert ran == list(rw.REALTIME_SOURCES[: rw.REALTIME_SOURCES.index("ceskereality") + 1])
     finally:
         release.set()
@@ -3018,3 +3180,36 @@ def test_the_autodedup_pass_hands_the_lane_a_fresh_connection_factory(monkeypatc
     assert seen["fresh"] is not seen["conn"]
     assert len(opened) == 2 and opened[1] == {
         "attempts": 1, "connect_timeout": rw.AUTODEDUP_RESCUE_CONNECT_TIMEOUT_SECONDS}
+
+
+def test_a_browser_fetched_portal_is_skipped_while_playwright_is_absent(monkeypatch):
+    """The code and the image's `browser` extra deploy separately. In that window every
+    ceskereality claim could only raise, and each raise burns one of a queue row's five
+    attempts — 50k rows written off within hours. So the lane is skipped instead, exactly
+    as an unset proxy skips a PROXY_REQUIRED portal."""
+    monkeypatch.setenv("SCRAPER_PROXY_URL", "http://proxy.example:1080")
+    monkeypatch.setattr("scraper.browser_fetch.playwright_available", lambda: False)
+    rw._BROWSER_WARNED.discard("ceskereality")
+    assert rw._skip_for_browser("ceskereality") is True
+    # Every other portal is untouched: they do not set USE_BROWSER.
+    for source in ("sreality", "idnes", "bazos", "mmreality"):
+        assert rw._skip_for_browser(source) is False
+
+
+def test_the_browser_portal_runs_once_playwright_is_there(monkeypatch):
+    monkeypatch.setattr("scraper.browser_fetch.playwright_available", lambda: True)
+    assert rw._skip_for_browser("ceskereality") is False
+
+
+def test_the_drain_skips_the_browser_portal_when_playwright_is_absent(monkeypatch):
+    """The guard reaches the real lane, not just the predicate."""
+    monkeypatch.setenv("SCRAPER_PROXY_URL", "http://proxy.example:1080")
+    monkeypatch.setattr("scraper.browser_fetch.playwright_available", lambda: False)
+    monkeypatch.setattr(rw, "_read_drain_slice", lambda: 200)
+    monkeypatch.setattr(rw, "_read_drain_disabled_sources", lambda: set())
+    monkeypatch.setattr(rw, "_claimable_by_source", lambda: {"ceskereality": 7, "idnes": 5})
+    ran: list[tuple[str, int]] = []
+    monkeypatch.setattr(rw, "_run_drain_sync",
+                        lambda source, max_claims: (ran.append((source, max_claims)), _drain_agg())[1])
+    asyncio.run(rw._drain_pass(asyncio.Event(), rw._new_state()))
+    assert ran == [("idnes", 5)], "ceskereality must not burn attempts without a browser"

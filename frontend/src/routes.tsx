@@ -12,21 +12,18 @@ import ForgotPassword from './pages/ForgotPassword';
 import UpdatePassword from './pages/UpdatePassword';
 import Browse from './pages/Browse';
 import PropertyDetail, { AdvertRedirect } from './pages/PropertyDetail';
-import EstimationDetail from './pages/EstimationDetail';
 import EstimationList from './pages/EstimationList';
 import Brokers from './pages/Brokers';
-import BrokerDetail from './pages/BrokerDetail';
 import Collections from './pages/Collections';
-import CollectionDetail from './pages/CollectionDetail';
 import Pipeline from './pages/Pipeline';
 import WatchdogManage from './pages/WatchdogManage';
-import WatchdogEdit from './pages/WatchdogEdit';
-import Notifications from './pages/Notifications';
 
 // Admin-only pages are code-split out of the default bundle — a non-admin
 // session never downloads them.
 const Health = lazyChunk(() => import('./pages/Health'));
 const Costs = lazyChunk(() => import('./pages/Costs'));
+const Signups = lazyChunk(() => import('./pages/Signups'));
+const AgentPlatform = lazyChunk(() => import('./pages/AgentPlatform'));
 const Scrapers = lazyChunk(() => import('./pages/Scrapers'));
 const Settings = lazyChunk(() => import('./pages/Settings'));
 const Datasets = lazyChunk(() => import('./pages/Datasets'));
@@ -42,7 +39,6 @@ const NewDedupTrainingSet = lazyChunk(() => import('./pages/NewDedupTrainingSet'
 const NewDedupExam = lazyChunk(() => import('./pages/NewDedupExam'));
 const NewDedupExamReview = lazyChunk(() => import('./pages/NewDedupExamReview'));
 const NewDedupTaggingBakeoff = lazyChunk(() => import('./pages/NewDedupTaggingBakeoff'));
-const LocationPinAudit = lazyChunk(() => import('./pages/LocationPinAudit'));
 const NewDedupTaxonomy = lazyChunk(() => import('./pages/NewDedupTaxonomy'));
 const AutodedupProgress = lazyChunk(() => import('./pages/AutodedupProgress'));
 const AutodedupGroups = lazyChunk(() => import('./pages/AutodedupGroups'));
@@ -60,11 +56,27 @@ const Feed = lazyChunk(() => import('./pages/Feed'));
 // Prohlídky, the sixth tab: phone-designed and its own chunk, as the other tabs.
 const PhoneViewings = lazyChunk(() => import('./pages/phone/PhoneViewings'));
 // Where a tapped push lands (notifications push § 3.5): opened from a
-// notification only, so outside the first visit.
+// notification only, so outside the first visit. The feed it lands on opens
+// from the bell or a push, never on a first visit either: its own chunk.
 const NotificationOpen = lazyChunk(() => import('./pages/NotificationOpen'));
+const Notifications = lazyChunk(() => import('./pages/Notifications'));
 // Paste-a-building (rule 13): an operator flow opened by its own link, never on a
 // first visit — its page and unit editor are their own chunk, like the admin pages.
+// Every /buildings route is admin-only (agent platform M0), so the page is too.
 const BuildingDetail = lazyChunk(() => import('./pages/BuildingDetail'));
+// A collection's page opens from the collections list or a shared link, not on a first
+// visit: its own chunk keeps the members' card grid off the first-visit budget.
+const CollectionDetail = lazyChunk(() => import('./pages/CollectionDetail'));
+// An estimation run and a broker open from a link in a list, not on a first visit: their own chunks keep
+// the section cards' growth off the first-visit budget.
+const EstimationDetail = lazyChunk(() => import('./pages/EstimationDetail'));
+const BrokerDetail = lazyChunk(() => import('./pages/BrokerDetail'));
+// A watchdog's editor opens from the watchdog list, not on a first visit: moved here to pay for the Runs nav read.
+const WatchdogEdit = lazyChunk(() => import('./pages/WatchdogEdit'));
+// Agent runs: an operator tool behind an allowlist, so never part of a first visit. Open to any session: a refused
+// account reads why, and the API decides what each caller may do.
+const Runs = lazyChunk(() => import('./pages/Runs'));
+const RunDetail = lazyChunk(() => import('./pages/RunDetail'));
 
 function AdminPage({ children }: { children: ReactNode }) {
   return (
@@ -136,30 +148,86 @@ export const routes: RouteObject[] = [
       { path: ROUTES.listingLegacy.childPath, element: <AdvertRedirect />, handle: { title: 'Property' } },
       { path: ROUTES.health.childPath, element: <AdminPage><Health /></AdminPage>, handle: { title: 'Health' } },
       { path: ROUTES.costs.childPath, element: <AdminPage><Costs /></AdminPage>, handle: { title: 'LLM costs' } },
+      { path: ROUTES.signups.childPath, element: <AdminPage><Signups /></AdminPage>, handle: { title: 'Sign-ups' } },
+      { path: ROUTES.agentPlatform.childPath, element: <AdminPage><AgentPlatform /></AdminPage>, handle: { title: 'Agent platform' } },
+      {
+        path: ROUTES.runs.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={320} className="mx-6 my-8" />}>
+            <Runs />
+          </Suspense>
+        ),
+        handle: { title: 'Runs' },
+      },
+      {
+        path: ROUTES.runDetail.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={320} className="mx-6 my-8" />}>
+            <RunDetail />
+          </Suspense>
+        ),
+        handle: { title: 'Run' },
+      },
       { path: 'estimate', element: <Navigate to={ROUTES.estimations.build()} replace /> },
       { path: ROUTES.estimations.childPath, element: <EstimationList />, handle: { title: 'Estimations' } },
-      { path: ROUTES.estimationDetail.childPath, element: <EstimationDetail />, handle: { title: 'Estimation' } },
+      {
+        path: ROUTES.estimationDetail.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={320} className="mx-6 my-8" />}>
+            <EstimationDetail />
+          </Suspense>
+        ),
+        handle: { title: 'Estimation' },
+      },
       { path: ROUTES.brokers.childPath, element: <Brokers />, handle: { title: 'Brokers' } },
       { path: ROUTES.brokersReview.childPath, element: <AdminPage><BrokerReview /></AdminPage>, handle: { title: 'Brokers · Review' } },
-      { path: ROUTES.brokerDetail.childPath, element: <BrokerDetail />, handle: { title: 'Broker' } },
+      {
+        path: ROUTES.brokerDetail.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={320} className="mx-6 my-8" />}>
+            <BrokerDetail />
+          </Suspense>
+        ),
+        handle: { title: 'Broker' },
+      },
       { path: ROUTES.outreach.childPath, element: <AdminPage><Outreach /></AdminPage>, handle: { title: 'Outreach' } },
       { path: ROUTES.outreachDetail.childPath, element: <AdminPage><OutreachDetail /></AdminPage>, handle: { title: 'Campaign' } },
       {
         path: ROUTES.buildingDetail.childPath,
-        element: (
-          <Suspense fallback={<Skeleton height={240} className="mx-4 my-4" />}>
-            <BuildingDetail />
-          </Suspense>
-        ),
+        element: <AdminPage><BuildingDetail /></AdminPage>,
         handle: { title: 'Building' },
       },
       { path: ROUTES.collections.childPath, element: <Collections />, handle: { title: 'Collections' } },
-      { path: ROUTES.collectionDetail.childPath, element: <CollectionDetail />, handle: { title: 'Collection' } },
+      {
+        path: ROUTES.collectionDetail.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={320} className="mx-6 my-8" />}>
+            <CollectionDetail />
+          </Suspense>
+        ),
+        handle: { title: 'Collection' },
+      },
       { path: ROUTES.pipeline.childPath, element: <Pipeline />, handle: { title: 'Pipeline' } },
       { path: ROUTES.datasets.childPath, element: <AdminPage><Datasets /></AdminPage>, handle: { title: 'Datasets' } },
       { path: ROUTES.watchdog.childPath, element: <WatchdogManage />, handle: { title: 'Watchdogs' } },
-      { path: ROUTES.watchdogEdit.childPath, element: <WatchdogEdit />, handle: { title: 'Edit watchdog' } },
-      { path: ROUTES.notifications.childPath, element: <Notifications />, handle: { title: 'Notifications' } },
+      {
+        path: ROUTES.watchdogEdit.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={320} className="mx-6 my-8" />}>
+            <WatchdogEdit />
+          </Suspense>
+        ),
+        handle: { title: 'Edit watchdog' },
+      },
+      {
+        path: ROUTES.notifications.childPath,
+        element: (
+          <Suspense fallback={<Skeleton height={320} className="mx-6 my-8" />}>
+            <Notifications />
+          </Suspense>
+        ),
+        handle: { title: 'Notifications' },
+      },
       {
         path: ROUTES.notificationOpen.childPath,
         element: (
@@ -180,7 +248,6 @@ export const routes: RouteObject[] = [
       { path: ROUTES.newDedupExam.childPath, element: <AdminPage><NewDedupExam /></AdminPage>, handle: { title: 'NEW DEDUP · Exam' } },
       { path: ROUTES.newDedupExamReview.childPath, element: <AdminPage><NewDedupExamReview /></AdminPage>, handle: { title: 'NEW DEDUP · Exam review' } },
       { path: ROUTES.newDedupTaggingBakeoff.childPath, element: <AdminPage><NewDedupTaggingBakeoff /></AdminPage>, handle: { title: 'NEW DEDUP · Tagging bake-off' } },
-      { path: ROUTES.newDedupPinAudit.childPath, element: <AdminPage><LocationPinAudit /></AdminPage>, handle: { title: 'NEW DEDUP · Audit poloh' } },
       { path: ROUTES.autodedupProgress.childPath, element: <AdminPage><AutodedupProgress /></AdminPage>, handle: { title: 'AUTODEDUP · Progress' } },
       { path: ROUTES.autodedupGroups.childPath, element: <AdminPage><AutodedupGroups /></AdminPage>, handle: { title: 'AUTODEDUP · Groups' } },
       { path: ROUTES.autodedupResidual.childPath, element: <AdminPage><AutodedupResidual /></AdminPage>, handle: { title: 'AUTODEDUP · Residual' } },

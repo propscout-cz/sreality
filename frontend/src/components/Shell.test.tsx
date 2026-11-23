@@ -16,7 +16,6 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import Shell from './Shell';
 import * as auth from '@/lib/auth';
 import * as api from '@/lib/api';
-import * as pinAudit from '@/lib/pinAudit';
 import { writeLastBrowseSearch } from '@/lib/lastBrowseView';
 
 vi.mock('@/lib/auth', async (importOriginal) => ({
@@ -26,10 +25,7 @@ vi.mock('@/lib/auth', async (importOriginal) => ({
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   getNotificationUnreadCount: vi.fn(),
-}));
-vi.mock('@/lib/pinAudit', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/pinAudit')>()),
-  fetchPinAuditTotal: vi.fn(),
+  fetchAgentRunOptions: vi.fn(),
 }));
 vi.mock('@/lib/supabase', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/supabase')>()),
@@ -43,7 +39,6 @@ function Boom(): never {
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.mocked(api.getNotificationUnreadCount).mockResolvedValue({ unread_count: 0 });
-  vi.mocked(pinAudit.fetchPinAuditTotal).mockResolvedValue(0);
   vi.mocked(auth.useAuth).mockReturnValue({
     isAdmin: true,
     session: null,
@@ -59,18 +54,20 @@ afterEach(() => {
 
 function renderShellWith(element: React.ReactNode, at = '/browse') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[at]}>
         <Routes>
           <Route element={<Shell />}>
             <Route path="/browse" element={element} />
             <Route path="/property/:propertyId" element={element} />
+            <Route path="/new-dedup/candidates" element={element} />
           </Route>
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...view, qc };
 }
 
 describe('<Shell> error containment', () => {
@@ -102,6 +99,46 @@ describe('<Shell> notifications badge', () => {
   });
 });
 
+/* Runs is on the bar for an account the API says may start one, and for nobody else: an admin off the allowlist is no
+ * exception, and a read that failed shows no entry it cannot vouch for. */
+describe('<Shell> Runs entry', () => {
+  const signedIn = (isAdmin: boolean) =>
+    vi.mocked(auth.useAuth).mockReturnValue({
+      isAdmin, session: { user: {} }, user: null, loading: false, agendas: {},
+    } as unknown as ReturnType<typeof auth.useAuth>);
+
+  it('shows for an account that may start a run, without a query for anyone signed out', async () => {
+    signedIn(false);
+    vi.mocked(api.fetchAgentRunOptions).mockResolvedValue({ start: { allowed: true, reason: null }, queue: 'dark', agents: [], limit: null });
+    renderShellWith(<p>page content</p>);
+    expect(await screen.findByRole('link', { name: 'Runs' })).toHaveAttribute('href', '/runs');
+  });
+
+  it('is absent for a refused account, an admin included', async () => {
+    signedIn(true);
+    vi.mocked(api.fetchAgentRunOptions).mockResolvedValue({ start: { allowed: false, reason: 'no' }, queue: null, agents: [], limit: null });
+    renderShellWith(<p>page content</p>);
+    await waitFor(() => expect(api.fetchAgentRunOptions).toHaveBeenCalled());
+    await screen.findByText('page content');
+    expect(screen.queryByRole('link', { name: 'Runs' })).toBeNull();
+  });
+
+  it('is absent when the read fails', async () => {
+    signedIn(false);
+    vi.mocked(api.fetchAgentRunOptions).mockRejectedValue(new Error('down'));
+    renderShellWith(<p>page content</p>);
+    await waitFor(() => expect(api.fetchAgentRunOptions).toHaveBeenCalled());
+    expect(screen.queryByRole('link', { name: 'Runs' })).toBeNull();
+  });
+
+  it('asks nothing before a session exists', () => {
+    vi.mocked(api.fetchAgentRunOptions).mockClear();
+    renderShellWith(<p>page content</p>);
+    expect(api.fetchAgentRunOptions).not.toHaveBeenCalled();
+    expect(screen.queryByRole('link', { name: 'Runs' })).toBeNull();
+  });
+});
+
 /* The nav's Browse entry is a way BACK to the view that was left: from another
  * page it carries that view's filters; on Browse itself the same click stays the
  * reset. */
@@ -129,31 +166,25 @@ describe('<Shell> Browse entry', () => {
   });
 });
 
-/* The hidden set leads the nav, and the count of rows in it rides on the entry
- * — but navigation can never depend on that number arriving. The number is the
- * ISSUE count (W7-b): `fetchPinAuditTotal` asks for `state=unresolved` only,
- * which `lib/pinAudit.test.ts` pins on the read itself. */
-describe('<Shell> !AUDIT POLOH', () => {
-  it('is the first nav entry and carries the audit count', async () => {
-    vi.mocked(pinAudit.fetchPinAuditTotal).mockResolvedValue(37052);
-    renderShellWith(<p>page content</p>);
-    const link = await screen.findByRole('link', { name: /^!AUDIT POLOH/ });
-    expect(link).toHaveAttribute('href', '/new-dedup/pin-audit');
-    await waitFor(() =>
-      expect(link).toHaveAccessibleName(
-        '!AUDIT POLOH 37052 inzerátů s nevyřešenou polohou',
-      ),
-    );
+/* A page inside the menu lights the trigger and only its own row (Dashboard's
+ * `end` keeps /new-dedup from prefix-matching). */
+describe('<Shell> a page inside the Admin menu', () => {
+  it('lights the Admin trigger and only its own row', async () => {
+    const user = userEvent.setup();
+    renderShellWith(<p>page content</p>, '/new-dedup/candidates');
     const nav = screen.getByRole('navigation');
-    expect(nav.querySelectorAll('a')[0]).toBe(link);
-  });
-
-  it('still navigates when the count read fails', async () => {
-    vi.mocked(pinAudit.fetchPinAuditTotal).mockRejectedValue(new Error('nope'));
-    renderShellWith(<p>page content</p>);
-    const link = await screen.findByRole('link', { name: '!AUDIT POLOH' });
-    await waitFor(() => expect(link).toHaveAccessibleName('!AUDIT POLOH'));
-    expect(link).toHaveAttribute('href', '/new-dedup/pin-audit');
+    const trigger = within(nav).getByRole('button', { name: /^Admin/ });
+    const classes = trigger.className.split(/\s+/);
+    expect(classes).toContain('text-[var(--color-chrome-ink)]');
+    expect(classes).not.toContain('text-[var(--color-chrome-ink-2)]');
+    await user.click(trigger);
+    expect(within(nav).getByRole('menuitem', { name: 'Candidates' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    expect(within(nav).getByRole('menuitem', { name: 'Dashboard' })).not.toHaveAttribute(
+      'aria-current',
+    );
   });
 });
 
@@ -204,14 +235,14 @@ describe('<Shell> admin menu', () => {
     }
   });
 
-  /* Health leads the menu: it is where the operator starts when something is
-   * wrong, and where the bell's system alerts open. */
-  it('opens with Health as its first entry', async () => {
+  /* Health leads the menu: where the operator starts when something is wrong, and
+   * where the bell's system alerts open. */
+  it('opens with Health', async () => {
     const user = userEvent.setup();
     renderShellWith(<p>page content</p>);
     const nav = screen.getByRole('navigation');
     await user.click(within(nav).getByRole('button', { name: /^Admin/ }));
-    const first = within(within(nav).getByRole('menu')).getAllByRole('menuitem')[0];
+    const [first] = within(within(nav).getByRole('menu')).getAllByRole('menuitem');
     expect(first).toHaveAccessibleName('Health');
     expect(first).toHaveAttribute('href', '/health');
   });
@@ -222,5 +253,25 @@ describe('<Shell> admin menu', () => {
     for (const label of ['Browse', 'Pipeline', 'Estimations', 'Collections']) {
       expect(within(nav).getByRole('link', { name: label })).toBeInTheDocument();
     }
+  });
+});
+
+/* Ruling P34 (2026-10-27): the build line goes; the map tiles' attribution is a
+ * licence condition, so it stays. */
+describe('<Shell> footer', () => {
+  it('keeps only the map-tile attribution', () => {
+    renderShellWith(<p>page content</p>);
+    const footer = screen.getByRole('contentinfo');
+    for (const gone of ['read-only', 'U1a', 'Supabase']) {
+      expect(footer).not.toHaveTextContent(gone);
+    }
+    expect(within(footer).getByRole('link', { name: 'OpenFreeMap' })).toHaveAttribute(
+      'href',
+      'https://openfreemap.org',
+    );
+    expect(within(footer).getByRole('link', { name: 'OpenStreetMap' })).toHaveAttribute(
+      'href',
+      'https://www.openstreetmap.org/copyright',
+    );
   });
 });

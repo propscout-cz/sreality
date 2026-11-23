@@ -15,7 +15,8 @@ import { PickButton } from '@/components/controls';
 import PipelineMark from '@/components/PipelineMark';
 import ReadFailedMark, { readFailed } from '@/components/ReadFailedMark';
 import { useTagReads } from '@/lib/useCardTags';
-import { collectionLabel, isMine, useCollections } from '@/lib/collectionCache';
+import { useCollections } from '@/lib/collectionCache';
+import { collectionLabel, isMine } from '@/lib/collectionRules';
 import { usePipelineStages } from '@/lib/pipelineReads';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
 import {
@@ -167,7 +168,8 @@ export function CuratedSetFilter({
               {row(g.elements.map((u) => elementChip(u, g.gone)))}
             </div>
           ))}
-          {row(<>{head}{tail}</>)}
+          {/* Headingless, so without the rule it reads as a member of the last group. */}
+          <div className="border-t border-[var(--color-rule)] pt-2">{row(<>{head}{tail}</>)}</div>
         </>
       )}
       {d.inRule === 'every' && (scope?.in.length ?? 0) > 1 && (

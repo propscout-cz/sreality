@@ -24,7 +24,11 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
+
+if TYPE_CHECKING:
+    from playwright.sync_api import BrowserContext, Page
 
 LOG = logging.getLogger(__name__)
 
@@ -200,7 +204,7 @@ def login_via_browser(
             browser.close()
 
 
-def _fill_editable(page, selectors: list[str], value: str, timeout_ms: int) -> None:
+def _fill_editable(page: Page, selectors: list[str], value: str, timeout_ms: int) -> None:
     """Fill the first selector that resolves to a visible, editable field."""
     last: Exception | None = None
     for sel in selectors:
@@ -214,7 +218,7 @@ def _fill_editable(page, selectors: list[str], value: str, timeout_ms: int) -> N
     raise AuthError(f"no editable field for {selectors}: {last}")
 
 
-def _dump_debug(page, debug_dir: Path) -> None:
+def _dump_debug(page: Page, debug_dir: Path) -> None:
     try:
         debug_dir.mkdir(parents=True, exist_ok=True)
     except OSError:  # pragma: no cover
@@ -234,7 +238,7 @@ def _dump_debug(page, debug_dir: Path) -> None:
             pass
 
 
-def _collect_cookies(context) -> dict[str, str]:
+def _collect_cookies(context: BrowserContext) -> dict[str, str]:
     out: dict[str, str] = {}
     for c in context.cookies():
         domain = (c.get("domain") or "").lstrip(".")
@@ -253,7 +257,7 @@ _CONSENT_SELECTORS = (
 )
 
 
-def _dismiss_consent(page) -> None:
+def _dismiss_consent(page: Page) -> None:
     """Accept the Seznam consent wall if present — on the page or in any frame.
 
     The wall can disable the login form until accepted, which is why a
@@ -272,7 +276,7 @@ def _dismiss_consent(page) -> None:
                 continue
 
 
-def _click_first(page, selectors: list[str]) -> None:
+def _click_first(page: Page, selectors: list[str]) -> None:
     for sel in selectors:
         try:
             el = page.locator(sel).first

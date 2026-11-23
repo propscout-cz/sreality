@@ -18,17 +18,14 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from scraper.cpus import job_cpus
 
+if TYPE_CHECKING:
+    import torch
+
 _TAXONOMY_PATH = Path(__file__).resolve().parent.parent / "data" / "clip_taxonomy.json"
-
-
-# The render-vs-photo axis is only meaningful for ROOM/photo images (a real kitchen photo
-# vs a 3D kitchen render). For DRAWINGS / DOCUMENTS (floor plans, site/situation/cadastral
-# plans, property documents) it's noise — the anchors are about interiors, so a flat drawing
-# scores arbitrarily (empirically a flat 0..1 spread). We leave their render_score NULL.
-_DRAWING_LOGICAL_TAGS: frozenset[str] = frozenset({"floor_plan", "site_plan", "property_document"})
 
 
 @dataclass(frozen=True)
@@ -36,14 +33,13 @@ class TagResult:
     fine_tag: str       # the CLIP anchor that won (e.g. 'cadastral_map')
     logical_tag: str    # collapsed to the engine's label space (e.g. 'site_plan')
     confidence: float   # softmax probability of the winning anchor (0..1)
-    render_score: float | None  # P(3D render) vs real photo, 0..1 — NULL for drawings/documents
 
 
 def load_taxonomy() -> dict:
     return json.loads(_TAXONOMY_PATH.read_text())
 
 
-def _project(out):
+def _project(out: Any) -> torch.Tensor:
     """get_text_features/get_image_features return a wrapper under some
     transformers versions; take pooler_output when so, else the tensor itself."""
     return out if hasattr(out, "shape") else out.pooler_output
@@ -52,8 +48,8 @@ def _project(out):
 class Tagger:
     """Loaded CLIP model + precomputed taxonomy text embeddings."""
 
-    def __init__(self, model, processor, labels, text_emb, collapse, model_id,
-                 render_emb=None, n_render=0, revision=None):
+    def __init__(self, model: Any, processor: Any, labels: list[str], text_emb: torch.Tensor,
+                 collapse: dict[str, str], model_id: str, revision: str | None = None) -> None:
         self._model = model
         self._processor = processor
         self._labels = labels
@@ -61,10 +57,6 @@ class Tagger:
         self._collapse = collapse
         self.model_id = model_id
         self.revision = revision
-        # Orthogonal render-vs-photo axis: render_emb stacks render_anchors then
-        # photo_anchors; the first n_render rows are the render side.
-        self._render_emb = render_emb
-        self._n_render = n_render
 
     @classmethod
     def load(cls, threads: int = 0) -> "Tagger":
@@ -89,10 +81,9 @@ class Tagger:
                 "data/clip_taxonomy.json has no 'revision' — refusing to embed "
                 "against an unpinned checkpoint"
             )
-        # The sharded backfill runs 4 jobs in parallel; concurrent HF downloads of
-        # the ~600 MB weights occasionally 503 / time out (the single-job trial
-        # never did). Retry with backoff; the workflow also caches
-        # ~/.cache/huggingface so every run after the first restores warm.
+        # Retry with backoff for the hub's transient 503s on a cold download of the
+        # ~600 MB weights; the runner image loads the baked weights offline, where a
+        # retry only delays the error.
         model = processor = None
         last_exc: Exception | None = None
         for attempt in range(4):
@@ -115,26 +106,10 @@ class Tagger:
                                    attention_mask=inp.get("attention_mask"))
             text_emb = model.text_projection(_project(out))
         text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)
-        # Orthogonal render-vs-photo axis (data/clip_taxonomy.json). Encode the
-        # render then photo anchors into one matrix; the first n_render rows are render.
-        render_emb = None
-        n_render = 0
-        render_anchors = tax.get("render_anchors") or []
-        photo_anchors = tax.get("photo_anchors") or []
-        if render_anchors and photo_anchors:
-            anchors = list(render_anchors) + list(photo_anchors)
-            n_render = len(render_anchors)
-            with torch.no_grad():
-                rinp = processor(text=anchors, return_tensors="pt", padding=True)
-                rout = model.text_model(input_ids=rinp["input_ids"],
-                                        attention_mask=rinp.get("attention_mask"))
-                render_emb = model.text_projection(_project(rout))
-            render_emb = render_emb / render_emb.norm(dim=-1, keepdim=True)
         return cls(model, processor, labels, text_emb, tax.get("collapse", {}),
-                   model_id, render_emb=render_emb, n_render=n_render,
-                   revision=revision)
+                   model_id, revision=revision)
 
-    def embed(self, images: list, batch_size: int = 32):
+    def embed(self, images: list, batch_size: int = 32) -> torch.Tensor | None:
         """L2-normalized image embeddings (for tagging AND the cosine tier)."""
         import torch
 
@@ -149,36 +124,17 @@ class Tagger:
             chunks.append(feats)
         return torch.cat(chunks) if chunks else None
 
-    def tags_from_emb(self, emb) -> list[TagResult]:
+    def tags_from_emb(self, emb: torch.Tensor) -> list[TagResult]:
         """Tag precomputed embeddings — proper CLIP zero-shot (logit_scale +
-        softmax), so confidence is the winning anchor's probability. Also scores the
-        orthogonal render-vs-photo axis (render_score = summed render-anchor prob)."""
+        softmax), so confidence is the winning anchor's probability."""
         scale = self._model.logit_scale.exp()
         probs = (scale * emb @ self._text_emb.T).softmax(dim=-1)
         conf, idx = probs.max(dim=-1)
-        if self._render_emb is not None:
-            rprobs = (scale * emb @ self._render_emb.T).softmax(dim=-1)
-            render = rprobs[:, : self._n_render].sum(dim=-1).tolist()
-        else:
-            render = [0.0] * len(idx)
         out = []
-        for i, c, r in zip(idx.tolist(), conf.tolist(), render):
+        for i, c in zip(idx.tolist(), conf.tolist()):
             fine = self._labels[i]
-            logical = self._collapse.get(fine, fine)
-            rs = None if logical in _DRAWING_LOGICAL_TAGS else round(float(r), 4)
-            out.append(TagResult(fine, logical, round(float(c), 4), rs))
+            out.append(TagResult(fine, self._collapse.get(fine, fine), round(float(c), 4)))
         return out
-
-    def render_scores_from_emb(self, emb) -> list[float]:
-        """render_score per row from precomputed (L2-normalized) image embeddings — the
-        same orthogonal render-vs-photo axis tag() scores. Lets a backfill re-score the
-        already-tagged images from their STORED embeddings without re-downloading or
-        re-embedding. 0.0 for every row if the render anchors aren't configured."""
-        if self._render_emb is None:
-            return [0.0] * int(emb.shape[0])
-        scale = self._model.logit_scale.exp()
-        rprobs = (scale * emb @ self._render_emb.T).softmax(dim=-1)
-        return [round(float(r), 4) for r in rprobs[:, : self._n_render].sum(dim=-1).tolist()]
 
     def tag(self, images: list, batch_size: int = 32) -> list[TagResult]:
         emb = self.embed(images, batch_size)

@@ -1,159 +1,23 @@
 @import "tailwindcss";
 @import "maplibre-gl/dist/maplibre-gl.css";
 @import "./fonts.css";
+@import "./tokens.css";
 
-/*
- * Design tokens. The world this UI lives in: residential Prague — sandstone
- * facades, oxidised copper church domes, mansard slate, the off-white of
- * archival paper. Civic-archive feel. Borders only, no shadows except over
- * map tiles. See ROADMAP / U1a for full direction notes.
- */
+/* Every colour and radius of the six themes is in tokens.css. @theme keeps only
+ * the font families; the few `rounded-sm` / `rounded-lg` read Tailwind's own
+ * `--radius-*`, which the unlayered tokens.css overrides. `dark:` follows the
+ * chosen side (`data-theme`, lib/theme.ts), never the OS on its own. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 @theme {
-  /* Surfaces. ~3% lightness shifts between levels — whisper-quiet. */
-  --color-paper:        #f6f3ec;          /* canvas, "laid paper" */
-  --color-paper-2:      #fbf9f3;          /* one step up: cards, panels */
-  --color-paper-3:      #ffffff;          /* highest: popovers, dropdowns */
-  --color-inset:        #efeae0;          /* one step DOWN: input bgs, code blocks */
-
-  /* Foreground hierarchy — four levels. */
-  --color-ink:          #1a1c22;          /* primary */
-  --color-ink-2:        #4a4d57;          /* secondary */
-  --color-ink-3:        #7a7d86;          /* tertiary, metadata */
-  --color-ink-4:        #b0b1b7;          /* muted, disabled, placeholder */
-
-  /* Borders — low rgba so they recede. */
-  --color-rule:         rgba(26, 28, 34, 0.08);     /* standard */
-  --color-rule-soft:    rgba(26, 28, 34, 0.05);     /* softer separation */
-  --color-rule-strong:  rgba(26, 28, 34, 0.16);     /* emphasis */
-  --color-focus:        rgba(60, 110, 99, 0.45);    /* focus ring */
-
-  /* Accent — single. Oxidised copper / verdigris from Prague's church domes. */
-  --color-copper:       #3c6e63;
-  --color-copper-2:     #2f5750;          /* hover/active */
-  --color-copper-soft:  rgba(60, 110, 99, 0.10);  /* tinted backgrounds */
-
-  /* Semantic. Brick for inactive/failures, sage for success, ochre for warn. */
-  --color-brick:        #a04b3d;
-  --color-brick-soft:   rgba(160, 75, 61, 0.10);
-  --color-sage:         #5e7a4a;
-  --color-sage-soft:    rgba(94, 122, 74, 0.10);
-  --color-ochre:        #b58438;
-  --color-ochre-soft:   rgba(181, 132, 56, 0.10);
-
   /* Typography. */
   --font-display: "Fraunces", ui-serif, Georgia, serif;
   --font-sans:    "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono:    "JetBrains Mono", ui-monospace, "Menlo", monospace;
-
-  /* Radii. Tight — archival, not friendly. */
-  --radius-xs: 3px;
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
-}
-
-/* Dark mode — mirror the world after dusk: deep ink, copper still copper.
- * Per the skill: shadows lose definition on dark, lean harder on borders. */
-@media (prefers-color-scheme: dark) {
-  @theme {
-    --color-paper:        #14161b;
-    --color-paper-2:      #1a1d24;
-    --color-paper-3:      #20242c;
-    --color-inset:        #0e1015;
-
-    --color-ink:          #ece8de;
-    --color-ink-2:        #b4b3ad;
-    --color-ink-3:        #7e8086;
-    --color-ink-4:        #50535b;
-
-    --color-rule:         rgba(236, 232, 222, 0.10);
-    --color-rule-soft:    rgba(236, 232, 222, 0.06);
-    --color-rule-strong:  rgba(236, 232, 222, 0.18);
-    --color-focus:        rgba(126, 178, 167, 0.55);
-
-    --color-copper:       #7eb2a7;
-    --color-copper-2:     #9bcabd;
-    --color-copper-soft:  rgba(126, 178, 167, 0.14);
-
-    --color-brick:        #c47767;
-    --color-brick-soft:   rgba(196, 119, 103, 0.14);
-    --color-sage:         #97b27e;
-    --color-sage-soft:    rgba(151, 178, 126, 0.14);
-    --color-ochre:        #d8a763;
-    --color-ochre-soft:   rgba(216, 167, 99, 0.14);
-  }
-}
-
-/* Explicit theme override. Tailwind v4's @theme directive can't live
- * inside a selector, so the user-toggled theme redeclares the same
- * variables as plain CSS custom properties on :root. The attribute
- * selector outranks the media query above, letting the operator
- * pick light on a dark OS (and vice versa). Values are copied
- * verbatim from the @theme blocks — token palette is unchanged. */
-:root[data-theme="light"] {
-  --color-paper:        #f6f3ec;
-  --color-paper-2:      #fbf9f3;
-  --color-paper-3:      #ffffff;
-  --color-inset:        #efeae0;
-
-  --color-ink:          #1a1c22;
-  --color-ink-2:        #4a4d57;
-  --color-ink-3:        #7a7d86;
-  --color-ink-4:        #b0b1b7;
-
-  --color-rule:         rgba(26, 28, 34, 0.08);
-  --color-rule-soft:    rgba(26, 28, 34, 0.05);
-  --color-rule-strong:  rgba(26, 28, 34, 0.16);
-  --color-focus:        rgba(60, 110, 99, 0.45);
-
-  --color-copper:       #3c6e63;
-  --color-copper-2:     #2f5750;
-  --color-copper-soft:  rgba(60, 110, 99, 0.10);
-
-  --color-brick:        #a04b3d;
-  --color-brick-soft:   rgba(160, 75, 61, 0.10);
-  --color-sage:         #5e7a4a;
-  --color-sage-soft:    rgba(94, 122, 74, 0.10);
-  --color-ochre:        #b58438;
-  --color-ochre-soft:   rgba(181, 132, 56, 0.10);
-
-  color-scheme: light;
-}
-
-:root[data-theme="dark"] {
-  --color-paper:        #14161b;
-  --color-paper-2:      #1a1d24;
-  --color-paper-3:      #20242c;
-  --color-inset:        #0e1015;
-
-  --color-ink:          #ece8de;
-  --color-ink-2:        #b4b3ad;
-  --color-ink-3:        #7e8086;
-  --color-ink-4:        #50535b;
-
-  --color-rule:         rgba(236, 232, 222, 0.10);
-  --color-rule-soft:    rgba(236, 232, 222, 0.06);
-  --color-rule-strong:  rgba(236, 232, 222, 0.18);
-  --color-focus:        rgba(126, 178, 167, 0.55);
-
-  --color-copper:       #7eb2a7;
-  --color-copper-2:     #9bcabd;
-  --color-copper-soft:  rgba(126, 178, 167, 0.14);
-
-  --color-brick:        #c47767;
-  --color-brick-soft:   rgba(196, 119, 103, 0.14);
-  --color-sage:         #97b27e;
-  --color-sage-soft:    rgba(151, 178, 126, 0.14);
-  --color-ochre:        #d8a763;
-  --color-ochre-soft:   rgba(216, 167, 99, 0.14);
-
-  color-scheme: dark;
 }
 
 @layer base {
   html {
     font-family: var(--font-sans);
-    color-scheme: light dark;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
@@ -301,16 +165,15 @@
     letter-spacing: 0.02em;
     color: var(--color-ink-3);
   }
-  /* How precisely the pin is placed — tight under the place line it qualifies. */
+  /* How precisely the pin is placed and when the ad was last seen, one line
+   * tight under the place it qualifies (ruling P13); each half's detail is its
+   * tooltip. */
   .lp-precision {
     margin: 2px 0 0;
     font-size: 0.68rem;
     color: var(--color-ink-3);
   }
-  .lp-seen {
-    margin: 6px 0 0;
-    font-size: 0.65rem;
-    color: var(--color-ink-4);
+  .lp-precision [title] {
     cursor: help;
   }
   .lp-link {
@@ -433,70 +296,6 @@
 }
 
 /* ----------------------------------------------------------------------------
- * Tag palette (U2.6). Eight-name closed set, enforced server-side by the
- * CHECK constraint in migration 024 and by api/schemas.TagColor. The four
- * names that already exist as global semantics (copper, sage, brick, ochre)
- * reuse those swatches so the visual language stays coherent; slate, plum,
- * teal, sand are introduced here as tag-only tokens. The `-fg` pairs are
- * meant for solid-pill text on the `-soft` background.
- * Adding a new colour = a new migration (ALTER CHECK) + new tokens here.
- * -------------------------------------------------------------------------- */
-:root {
-  --color-tag-copper:      var(--color-copper);
-  --color-tag-copper-soft: var(--color-copper-soft);
-  --color-tag-sage:        var(--color-sage);
-  --color-tag-sage-soft:   var(--color-sage-soft);
-  --color-tag-brick:       var(--color-brick);
-  --color-tag-brick-soft:  var(--color-brick-soft);
-  --color-tag-ochre:       var(--color-ochre);
-  --color-tag-ochre-soft:  var(--color-ochre-soft);
-
-  --color-tag-slate:       #4a5b73;
-  --color-tag-slate-soft:  rgba(74, 91, 115, 0.10);
-  --color-tag-plum:        #7a4664;
-  --color-tag-plum-soft:   rgba(122, 70, 100, 0.10);
-  --color-tag-teal:        #2e6f7c;
-  --color-tag-teal-soft:   rgba(46, 111, 124, 0.10);
-  --color-tag-sand:        #9c8c5e;
-  --color-tag-sand-soft:   rgba(156, 140, 94, 0.10);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-tag-slate:       #8a9bb3;
-    --color-tag-slate-soft:  rgba(138, 155, 179, 0.16);
-    --color-tag-plum:        #b687a3;
-    --color-tag-plum-soft:   rgba(182, 135, 163, 0.16);
-    --color-tag-teal:        #74b0bb;
-    --color-tag-teal-soft:   rgba(116, 176, 187, 0.16);
-    --color-tag-sand:        #ccb986;
-    --color-tag-sand-soft:   rgba(204, 185, 134, 0.16);
-  }
-}
-
-:root[data-theme="light"] {
-  --color-tag-slate:       #4a5b73;
-  --color-tag-slate-soft:  rgba(74, 91, 115, 0.10);
-  --color-tag-plum:        #7a4664;
-  --color-tag-plum-soft:   rgba(122, 70, 100, 0.10);
-  --color-tag-teal:        #2e6f7c;
-  --color-tag-teal-soft:   rgba(46, 111, 124, 0.10);
-  --color-tag-sand:        #9c8c5e;
-  --color-tag-sand-soft:   rgba(156, 140, 94, 0.10);
-}
-
-:root[data-theme="dark"] {
-  --color-tag-slate:       #8a9bb3;
-  --color-tag-slate-soft:  rgba(138, 155, 179, 0.16);
-  --color-tag-plum:        #b687a3;
-  --color-tag-plum-soft:   rgba(182, 135, 163, 0.16);
-  --color-tag-teal:        #74b0bb;
-  --color-tag-teal-soft:   rgba(116, 176, 187, 0.16);
-  --color-tag-sand:        #ccb986;
-  --color-tag-sand-soft:   rgba(204, 185, 134, 0.16);
-}
-
-/* ----------------------------------------------------------------------------
  * The stretched-link card pattern (W5).
  *
  * A Browse card used to BE a link: <Link> wrapped the whole card body, and
@@ -538,6 +337,9 @@
    *                               estimate corner
    *    2  .card-tip               a badge whose only job above the ::after is
    *                               to be hit-testable, so its title tooltip shows
+   *   20  the sticky tab strip    (Tabs.tsx `sticky`, the property page) — a
+   *                               photo's chevrons scroll UNDER it, not over
+   *   30  the Shell header        the strip pins just below it (top-14)
    *   50  every modal             (inline, z-50) — Explore modals render cards
    *   60  AnchoredPopover         the portalled panel — on <body>, above any
    *                               modal that opened it

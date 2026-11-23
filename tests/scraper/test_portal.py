@@ -126,7 +126,10 @@ def test_default_config_ceskereality():
     assert all("sale_type" in c and "category" in c for c in cfg.categories)
     # houses + land (the categories the original branch config omitted) are present
     assert {"rodinne-domy", "pozemky"} <= {c["category"] for c in cfg.categories}
-    assert cfg.limits.detail_workers == 4       # proxy removes the throttle -> normal speed
+    # 1, not the proxied portals' 4: this portal's bytes arrive through ONE headless
+    # browser context (a JS interstitial since 2026-10-31, #2529), which is serial, and
+    # one context is what keeps the interstitial solved once per phase.
+    assert cfg.limits.detail_workers == 1
 
 
 def test_default_config_unknown_raises():

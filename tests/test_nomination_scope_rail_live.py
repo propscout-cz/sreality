@@ -3,13 +3,14 @@
 A sighting is label-blind and a unit's nomination is not, so an ad whose label no walked unit covers was
 never checked once it left the index (703 such ads on 2026-10-22, 430 of them unclosable since June:
 ceskereality's /drazby/ auctions and realitymix's chaty with a NULL label). The runner now nominates them
-as orphans once every unit reached the end. This rail builds each portal as its walk does, from the
+as orphans once a walk cycle reached the end over every scope. This rail builds each portal as its walk does, from the
 replayed schema's `portals` row, takes each unit's scope from the runner (`portal_runner._scope`), seeds one
 active ad per label an ad can carry (every canonical main x type, the scopes' own subtypes, NULL in each
 column) and runs the real nomination queries: each unit scope's `db.presence_candidates`, then
 `db.orphan_candidates`. An ad no query returns is the class coming back; an ad two return is a double
-nomination under two flip-cap descriptors. Runs in CI's migrations lane (`TEST_DATABASE_URL`,
-`DB_RAILS_REQUIRED=1`); skipped locally.
+nomination under two flip-cap descriptors. The cycle's ledger read (`db.walk_ledger`) runs here too: it is
+what decides the orphans' anchor. Runs in CI's migrations lane (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED=1`);
+skipped locally.
 """
 
 from __future__ import annotations
@@ -18,9 +19,12 @@ import itertools
 import os
 from collections import Counter
 from collections.abc import Iterator
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
+
+from psycopg.types.json import Jsonb
 
 from scraper import db, parser, portal_factory, portal_runner
 from scraper.portal import load_portal_config
@@ -82,9 +86,49 @@ def test_every_active_ad_is_in_exactly_one_nomination_scope(conn: Any, source: s
     for scope in scopes:
         candidates, _ = db.presence_candidates(conn, source, scope, unseen, seen_key=seen_key)
         nominated.update(n for n, _ref, _price in candidates if n in seeded)
-    orphans, _ = db.orphan_candidates(conn, source, scopes, unseen, seen_key=seen_key)
+    orphans, _ = db.orphan_candidates(conn, source, scopes, datetime.now(timezone.utc), seen_key=seen_key)
     nominated.update(n for n, _ref, _price in orphans if n in seeded)
     wrong = {seeded[n]: nominated[n] for n in seeded if nominated[n] != 1}
     assert not wrong, (
         f"{source}: (category_main, category_type, subtype) -> times nominated, expected once each "
         f"(scopes {scopes}): {dict(sorted(wrong.items(), key=str))}")
+
+
+def test_the_cycle_ledger_reads_back_what_each_walk_recorded(conn: Any) -> None:
+    """Each other index run of the portal in the window, oldest first, with each entry's scope, verdict and count;
+    an entry from before the cycle (no scope) left out, the run's own start read from its row."""
+    anchor = datetime(2026, 10, 29, 6, 0, tzinfo=timezone.utc)
+    scope = {"category_main": "byt", "category_type": "prodej"}
+    flags = {"total_is_count": False, "upper_bound": False}
+    unit = portal_runner._entry("byt", "prodej", scope=scope, cycle=anchor, declared=3, collected=2,
+                                reached=True, **flags)
+    loose = portal_runner._entry(None, None, scope=None, cycle=anchor, declared=0, collected=0,
+                                 reached=False, **flags)
+    ended = portal_runner._entry(None, None, scope={}, cycle=anchor, declared=0, collected=0,
+                                 reached=True, **flags)
+    old = {k: v for k, v in unit.items() if k not in ("scope", "cycle_started_at")}
+
+    def run(source: str, run_type: str, ago: timedelta, entries: list[dict[str, Any]]) -> int:
+        row = conn.execute(
+            "insert into scrape_runs (source, run_type, started_at, by_category) values (%s, %s, now() - %s, %s) "
+            "returning id", (source, run_type, ago, Jsonb(entries))).fetchone()
+        return int(row[0])
+
+    run("idnes", "index", timedelta(days=20), [unit])                    # outside the window
+    run("idnes", "index", timedelta(hours=7), [old])                      # from before the cycle
+    run("idnes", "index", timedelta(hours=6), [unit, loose, ended])
+    run("idnes", "detail", timedelta(hours=5), [unit])                    # a drain, not a walk
+    run("bazos", "index", timedelta(hours=5), [unit])                     # another portal
+    run("idnes", "index", timedelta(hours=1), [unit])
+    own = run("idnes", "index", timedelta(minutes=1), [unit])
+    start, runs = db.walk_ledger(conn, "idnes", own, 14)
+    assert start == conn.execute("select started_at from scrape_runs where id = %s", (own,)).fetchone()[0]
+    got = [sorted((e["scope"] is None, str(e["scope"]), e["reached"], e["collected"]) for e in entries)
+           for _started, entries in runs]
+    assert got == [
+        [],
+        sorted([(False, str(scope), True, 2), (True, "None", False, 0), (False, "{}", True, 0)]),
+        [(False, str(scope), True, 2)],
+    ]
+    assert [started for started, _ in runs] == sorted(started for started, _ in runs)
+    assert db.walk_ledger(conn, "idnes", None, 14)[0] == conn.execute("select now()").fetchone()[0]

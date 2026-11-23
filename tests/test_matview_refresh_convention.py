@@ -9,11 +9,11 @@ names, refreshes CONCURRENTLY (plain only on first populate), skips an in-flight
 duplicate, and stamps derived_artifacts. These rails keep the class unrepresentable,
 offline, before a bypass ships.
 
-Pre-578 SQL producers (refresh_location_pin_audit_mv, the browse_list blue-green
-rebuild, refresh_llm_cost_rollups) keep their inline concurrent-refresh + stamp shapes —
-they are pinned by tests/test_derived_artifacts_stamping.py and were never the blocking
-class (refresh_health_matviews and the map's rebuild were two more, until migrations 643
-and 631 dropped them). New SQL producers should call the chokepoint.
+Pre-578 SQL producers (the browse_list blue-green rebuild, refresh_llm_cost_rollups) keep
+their inline concurrent-refresh + stamp shapes — they are pinned by
+tests/test_derived_artifacts_stamping.py and were never the blocking class
+(refresh_health_matviews, the map's rebuild and refresh_location_pin_audit_mv were three more,
+until migrations 643, 631 and 719 dropped them). New SQL producers should call the chokepoint.
 
 Every test states the mutation that makes it RED.
 """
@@ -23,8 +23,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-# Dollar-quote-aware comment stripping, reused like test_broker_leaderboard_contract
-# reuses the rls-grants helpers: migration headers quote refresh statements in prose.
+# Dollar-quote-aware comment stripping: migration headers quote refresh statements in prose.
 from tests.test_derived_artifacts_stamping import _drop_sql_comment_lines
 
 _REPO = Path(__file__).resolve().parent.parent

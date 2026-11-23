@@ -89,6 +89,30 @@ describe('<ComparableModal> as a dialog', () => {
     renderModal([photo(1)]);
     expect(screen.getByRole('dialog')).toHaveAccessibleName('Comparable · id 900');
   });
+
+  /* The run behind the modal is being read comparable by comparable. */
+  it('opens "View in full" in a new tab, leaving the run and this modal open', () => {
+    renderModal([photo(1)]);
+    const full = screen.getByRole('link', { name: /View in full/ });
+    expect(full).toHaveAttribute('href', '/listing/900');
+    expect(full).toHaveAttribute('target', '_blank');
+  });
+});
+
+/* A dialog has no section cards (system.md § Section cards): its sections are
+ * L3 titles between hairlines, never small caps (L4 is for field labels only). */
+describe('<ComparableModal> section headings', () => {
+  it.each([
+    ['with photos', [photo(1), photo(2)]],
+    ['with no photos', []],
+  ])('titles Photos, Summary and Details as L3 headings (%s)', (_case, images) => {
+    renderModal(images);
+    for (const name of ['Photos', 'Summary', 'Details']) {
+      const h = screen.getByRole('heading', { level: 3, name });
+      expect(h).toHaveClass('text-sm', 'font-semibold', 'text-[var(--color-ink)]');
+      expect(h).not.toHaveClass('uppercase');
+    }
+  });
 });
 
 describe('<ComparableModal> photo thumbnails', () => {

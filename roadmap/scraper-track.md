@@ -5,11 +5,70 @@
 Scraper-specific evolution beyond Phase 1's nightly index walk.
 Independent of the analytical, UI, and map tracks.
 
+### ceskereality behind a JS proof-of-work wall — headless-browser fetch (2026-11-16, #2529 / #2479)
+- **Found:** on 2026-10-31 the portal put an Anubis v1.28.2 interstitial (`fast`, difficulty 2) in
+  front of every page. It answers **200 with challenge HTML**, so the `requests` fetch collected the
+  challenge, the parser found zero cards and each page read as EMPTY — an our-stop, so no walk
+  reached the portal's end and nominations stopped (#2479). Pages/walk ~2,400 → ~140 the same day;
+  0 new ads for 16 days; 50,224 ads stuck active. A datacenter IP is refused by nginx *before* the
+  interstitial, so the residential proxy stays mandatory.
+- **Done:** ONE seam — `BasePortalClient._send` (default `requests`), overridden by
+  `CeskerealityClient` to drive `scraper/browser_fetch.py` (Python Playwright, lazy import, the
+  `browser` extra, chromium baked by `EXTRAS=api,browser` and installed in the walk workflow). One
+  context per phase solves the interstitial ONCE and carries its ~7-day cookie on ONE pinned
+  residential exit IP (the gateway rotates per request, which would re-challenge every page);
+  `PortalDefaults.close()` + the walk/probe/drain teardown release it; `detail_workers` 1. A
+  still-challenged page is classified **403 — a failed fetch, never content** — so a difficulty bump
+  reads red (#2376) instead of looking like a page with no ads. Pacing, retry, penalize, gone
+  detection, `walk_reached_end` and nomination are untouched and portal-generic (rule #21); the
+  parser is untouched.
+- **Caught in review, fixed before merge:** Playwright's sync API is thread-AFFINE, not merely
+  thread-unsafe — its dispatcher is a greenlet owned by the starting thread, so a cross-thread call
+  raises `greenlet.error: Cannot switch to a different thread` (reproduced against real chromium).
+  The first cut guarded it with a lock, which does nothing for affinity: the drain builds a NEW pool
+  per claim chunk, so chunk 2 would have failed every claim, and its teardown runs on a third thread,
+  so `close()` raised, was swallowed as best-effort, and leaked a chromium every ~30 s pass. Now
+  every browser call runs on ONE owner thread inside the fetcher (verified: 16 fetches across two
+  pools + a foreign-thread close, no leak). Also from the review: browser errors are raised as a
+  `requests.RequestException` subclass so the shared retry still applies (otherwise one flaky page
+  load ended a walk slice — the very symptom this fixes); the post-solve status is read from the
+  last document response, so a 404 served after the solve is not reported as the challenge's 200;
+  the solve-wait re-raises `stop.StopRequested`; and the browser budget comes from the client's
+  `timeout_s` instead of a fixed 45 s + 45 s.
+- **Deploy ordering:** the worker skips this portal's lanes while playwright is absent
+  (`_skip_for_browser`, symmetrical to `_skip_for_proxy`). Without it, the window between the code
+  deploy and the operator's `.railway/` apply would have burned all five attempts on every queue row.
+- **Measured live 2026-11-16** through the production client: 4 index pages × 20 items parsed, one
+  solve, ~1.3 s / ~30 KB per steady page; a real detail page parsed (price, area, disposition,
+  coordinates). Projection for a ~2,500-page walk: ~73 MB, inside the 150-min budget.
+- **Rejected, with evidence:** a pure-Python proof-of-work solver (no browser). The cookie is
+  coupled to the browser that earned it — a plain-HTTP client reusing one was tar-pitted after a
+  single page — so it is unproven and an arms race.
+- **Next:** the operator's wizard apply for `.railway/` (`EXTRAS=api,browser` on the worker), then
+  the first live walk must collect > 0 and `walk_reached_end` return to near its 96 % baseline — the
+  gate that closes #2479. Optional config tidy: the live `portals.operational_limits` row still says
+  `detail_workers: 4`, which overrides the code default; the owner thread makes that correct, it just
+  leaves three threads queueing on one browser.
+- **Maintenance note:** this is now a cat-and-mouse surface. A difficulty bump or added
+  fingerprinting surfaces as red walks and needs a response.
+
+### bazos / web floor 0 from a stray 'přízemí' — flat grammar in `floor_from_text` (2026-10-26, PR open)
+- **Found:** `floor_from_text` ended with "any 'přízemí' → 0", so "v šestém podlaží … sklep v přízemí domu"
+  read 0; 373 bazos flats (116 active) carried floor 0 while their text names a higher storey
+  (read-only SQL, 2026-10-25; re-counted 2026-10-26: 374 / 117, query in the PR body).
+- **Done (in the PR):** a flat (or unknown category) reads bare `N. podlaží` (N−1) and spelled-out
+  ordinals up to the tenth; 'přízemí' is 0 only when tied to the flat and no other storey is named
+  (both said → None, for the text lane).
+  Every other category keeps the legacy miner. The one-off heal ran 2026-10-26 and its script is gone
+  (#2552); a number worded only as "patro" is unread since #2552.
+- **Next (#2552):** `reparse` `--fields floor` on ceskereality, then bazos; a data migration blanks the
+  stored floors that came from a patro wording.
+
 ### Condition scoring PARKED — no surface reads the frozen 1–5 levels (2026-10-20, done)
 - **Done:** operator ruling 2026-10-20 ("keep the scoring engine for now, but make sure it does
   not impact anything"; rule #14). The crons have been off since PR #730 (2026-07-09) and the last
-  level was written 2026-06-18 (~4% of properties). Kept: `toolkit/condition_scoring.py`, the four
-  scripts, the six dispatch-only workflows, `listing_condition_scores`, the two
+  level was written 2026-06-18 (~4% of properties). Kept: `toolkit/condition_scoring.py`, the five
+  remaining scripts, the three dispatch-only workflows (Actions exit R6a deleted the marker-mining pair and the model A/B, #2018), `listing_condition_scores`, the two
   `listings.*_condition_level` columns, their data, the Settings per-kraj toggle (a toggle alone
   runs nothing) and the engine's tests. Retired from every surface: the four
   `*_condition_level_min/_max` registry filters (Browse sidebar + URL `bld_cond_*`/`apt_cond_*`,
@@ -46,16 +105,18 @@ Independent of the analytical, UI, and map tracks.
 - **Done:** `coverage_gate` deleted — `scripts/coverage_gate.py`, `coverage_gate.yml`, its tests,
   `portal_factory.canonical_category_count` and `_config_for` — with ceskereality's `_record_slices`
   and mmreality's `_record_slice` + `SLICE_KEY`, the slice writes only it read. It had been a no-op
-  since every scraper portal's flag came back true (its newest evaluation is from 2026-09-13). idnes
-  keeps its slice ledger for its stalest-first order (`slice_staleness`).
+  since every scraper portal's flag came back true (its newest evaluation is from 2026-09-13). idnes's
+  slice ledger went on 2026-10-29 (#2020): every walk now goes least recently walked group first and a
+  cut walk resumes as one cycle, from `scrape_runs.by_category`; migration 689 drops `portal_index_slices`.
 - **Left after Health wave 9** (migration 643 dropped `portal_coverage_gate`; wave 9 as built did
-  not drop the other three, so this track owns them): the 150 unread ceskereality and mmreality
-  rows of `portal_index_slices` (unjudged), `portals.supports_complete_walk` (no writer now; the
+  not drop the other three, so this track owns them; the third, `portal_index_slices`, goes with
+  migration 689): `portals.supports_complete_walk` (no writer now; the
   Scrapers page's portal posture still reads it) and `delist_flip_refusals`, still written by
   `db.enqueue_presence_checks` and read by nothing since `delist_flip_refused` went (a drop
   removes the writer first).
-- **Filed by the Health investigation (2026-10-18), owed to this track:** #1851 a sreality ad that
-  answers HTTP 409 (615387212) is given up and re-armed forever by the walk's re-arm; #1852 (DONE 2026-10-26,
+- **Filed by the Health investigation (2026-10-18), owed to this track:** #1851 (DONE 2026-11-02: the
+  walk re-arms only active listings, an unheld ad returns on a sighting at most once per 24 h) a sreality ad that
+  answered HTTP 409 (615387212) was given up and re-armed forever by the walk's re-arm; #1852 (DONE 2026-10-26,
   PR #2052: the lease casts its integers and bazos shares ONE 0.7 req/s budget, migration 676) the
   bazos rate-ledger lease overflowed `smallint`, so every GitHub bazos walk fell back to per-process
   pacing (the cause of the NEW-queue bursts of 10-12, 10-13 and 10-16); #1853 422 active ads with a
@@ -181,18 +242,13 @@ Independent of the analytical, UI, and map tracks.
   single pre-594 verdict closed (sreality 10.7k, idnes 9.5k, bezrealitky 0.9k, remax 0.4k,
   mmreality 0.6k over 14 d) at VERIFY priority, pilot 25/portal then release.
 
-### ceskereality hard-403 — Chrome client hints (2026-10-02, recovered)
-- 2026-10-02: every ceskereality request 403'd from 09-29 07:37Z (last 200) until 10-02 — the site's own
-  nginx (not Cloudflare) rejects a Chrome UA arriving over HTTP/1.1 without `sec-ch-ua` client hints (a
-  header rule, not IP/proxy). Fixed by #1685: `BasePortalClient.CLIENT_HINTS` opt-in derives the hints from
-  the UA; only `CeskerealityClient` opts in (census test). Canary drain through the prod proxy (run
-  36995661138): 0×403, 5/5 pages, errors=0 → `portal_rate_state` reset, both `app_settings` kill switches
-  lifted, both workflows re-enabled, full walk dispatched 10:30Z. img.ceskereality.cz needs no hints.
-- **Next:** `scripts/verify_outbound_urls.py` (unproxied HEAD) still 403s on ceskereality (the on-demand
-  URL parser that shared the exposure was deleted 2026-10-20) — pre-existing exposure;
-  new ceskereality rows/day fell 800→2 on 09-26..09-29 BEFORE the wall, unexplained; a fully blocked walk
-  ends green (`errors=0`, `walk_coverage='complete'` with collected=0) and the drain budget is not enforced
-  inside a chunk — observability follow-ups from the 10-02 review.
+### ceskereality — Chrome client hints (2026-10-02, done)
+- 2026-10-02, #1685: the `BasePortalClient.CLIENT_HINTS` opt-in derives the `sec-ch-ua` hints from the
+  UA; only `CeskerealityClient` opts in (census test). Canary drain through the prod proxy (run
+  36995661138): 5/5 pages, errors=0; full walk dispatched 10:30Z. img.ceskereality.cz needs no hints.
+- **Next:** `scripts/verify_outbound_urls.py` HEADs ceskereality unproxied; new ceskereality rows/day
+  fell 800→2 on 09-26..09-29, unexplained; the drain budget is not enforced inside a chunk —
+  follow-ups from the 10-02 review.
 
 ### The sighting diff lives once — `portal_runner.reconcile_sightings` (2026-10-01, done)
 - **Moved:** the index-walk diff (clamp → `index_summary_native` → touch → `classify_index_sighting`
@@ -555,7 +611,7 @@ Independent of the analytical, UI, and map tracks.
   (22 scopes, ~2,400 pages) GitHub was cancelling the walk at 75 min, so the tail scopes never
   walked and the `scrape_run` was never finalized.
 - **Next:** watch the first `COVERAGE` warnings per portal (a forged terminator shows up there
-  first) and the drain volume from ceskereality's newly-unblocked categories.
+  first) and the drain volume from ceskereality's newly-nominating categories.
 
 ### Presence-verified delisting — rule #3 rewritten (2026-09-07, done)
 - Index absence NOMINATES, the page DECIDES: a complete category walk queues every active
@@ -588,8 +644,7 @@ Independent of the analytical, UI, and map tracks.
   `written_unseen=0`, every `CHECK` row opens as a live detail page (all ceskereality/
   realitymix/mmreality rows, plus any whose filled `raw_json` values, spec cells, images or
   price dropped — content, since the HTML parsers' key set is fixed) and erroring + given-up is
-  negligible (else first make the `enqueue_presence_checks` re-arm skip inactive listings — it
-  re-arms given-up rows forever, #1851). Finish every pass within 7 days: the "already read as gone" skip
+  negligible (the `enqueue_presence_checks` re-arm skips inactive listings since #1851). Finish every pass within 7 days: the "already read as gone" skip
   and the readout read `detail_queue_completions` (7-day retention); a later pass only re-fetches.
 
 ### mmreality: ten per-type indexes, proved against the portal's own count (2026-09-06, done)

@@ -112,6 +112,7 @@ def parse_listing(raw: dict[str, Any]) -> dict[str, Any]:
     estate_area = stated_plot(category_main, estate_area, usable=usable,
                               headline=area_m2, headline_basis=area_basis, text=description)
 
+    floor = floor_from_portal(floor_convention(SOURCE), read("floor"))
     return {
         "sreality_id": sreality_id,
         "category_main": category_main,
@@ -121,8 +122,8 @@ def parse_listing(raw: dict[str, Any]) -> dict[str, Any]:
         "area_m2": area_m2,
         "area_basis": area_basis,
         "disposition": disposition,
-        "floor": floor_from_portal(floor_convention(SOURCE), read("floor")),
-        "total_floors": total_floors_from_portal(_int_or_none(read("total_floors"))),
+        "floor": floor,
+        "total_floors": total_floors_from_portal(_int_or_none(read("total_floors")), floor=floor),
         "has_balcony": vocabulary.any_true(
             *(vocabulary.yes_no(v) for v in source_values(SOURCE, "has_balcony", raw))
         ),

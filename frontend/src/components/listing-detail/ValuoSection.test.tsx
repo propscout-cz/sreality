@@ -176,7 +176,7 @@ describe('<ValuoSection> editor', () => {
     expect(within(rating).getAllByRole('option')[0]).toHaveTextContent('Nevyplněno');
     expect(container.querySelector('input[type="date"]')).toHaveValue('2026-10-19');
     // A yes/no in the basic group, where the API's grouping puts it.
-    for (const name of ['neuvedeno', 'ano', 'ne']) expect(param('Novostavba').getByRole('button', { name })).toBeInTheDocument();
+    for (const name of ['ano', 'ne']) expect(param('Novostavba').getByRole('button', { name })).toBeInTheDocument();
     expect(param('Novostavba').getByRole('button', { name: 'ano' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByRole('textbox', { name: 'Podlaží' })).not.toBeInTheDocument();
 
@@ -195,8 +195,29 @@ describe('<ValuoSection> editor', () => {
     expect(placeBox()).toHaveClass('h-[2.125rem]');
     const rating = screen.getByRole('combobox', { name: 'Stav' }); // no default: nothing is sent
     expect(rating).toHaveClass('h-[2.125rem]', 'border-dashed');
-    for (const b of param('Novostavba').getAllByRole('button')) expect(b).toHaveClass('h-[2.125rem]', 'border-dashed');
-    expect(screen.getByRole('button', { name: 'Prodej' })).not.toHaveClass('border-dashed');
+    // A pick-one is one joined bar: its track is the box.
+    expect(param('Novostavba').getByRole('group', { name: 'Novostavba' }).firstElementChild).toHaveClass('h-[2.125rem]', 'border-dashed');
+    expect(screen.getByRole('button', { name: 'Prodej' }).parentElement).toHaveClass('h-[2.125rem]');
+    expect(screen.getByRole('button', { name: 'Prodej' }).parentElement).not.toHaveClass('border-dashed');
+  });
+
+  /* The joined bar (operator ruling 2026-10-27) as the form box: a required pick-one has no "neuvedeno" to light. */
+  it('lights nothing in a required pick-one that has no value, its track the dashed box', async () => {
+    renderSection(page({ defaults: { ...DEFAULTS, kind: null } }));
+    const bar = (await screen.findAllByRole('group', { name: 'Typ obchodu' })).at(-1)!;
+    expect(within(bar).getAllByRole('button').map((b) => b.textContent)).toEqual(['Prodej', 'Pronájem']);
+    for (const b of within(bar).getAllByRole('button')) expect(b).toHaveAttribute('aria-pressed', 'false');
+    expect(bar.firstElementChild).toHaveClass('h-[2.125rem]', 'border-dashed');
+  });
+
+  it('paints a refused pick-one\'s track brick and names the refusal on the bar', async () => {
+    const refused = { ...REFUSED, error: { ...REFUSED.error!, form_errors: [{ field: 'kind', message: 'Invalid enum value' }] } };
+    renderSection(page({ blocking: [], defaults: { ...DEFAULTS, rating: 'good' }, history: [refused] }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Nové ocenění →' }));
+    const bar = screen.getAllByRole('group', { name: 'Typ obchodu' }).at(-1)!;
+    expect(bar).toHaveAttribute('aria-invalid', 'true');
+    expect(bar).toHaveAccessibleDescription('Valuo: „Invalid enum value“');
+    expect(bar.firstElementChild).toHaveClass('[[aria-invalid=true]>&]:border-[var(--color-brick)]');
   });
 
   it('tags every value with where it came from, and counts the folded group', async () => {
@@ -233,11 +254,12 @@ describe('<ValuoSection> editor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Pronájem' }));
     fireEvent.click(screen.getByRole('button', { name: 'Prodej' }));
     fireEvent.change(container.querySelector('input[type="date"]')!, { target: { value: '' } }); // never cleared
-    fireEvent.click(param('Novostavba').getByRole('button', { name: 'neuvedeno' }));
+    openMore();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Podlaží' }), { target: { value: '' } });
     fireEvent.click(cta());
 
     await waitFor(() => expect(apiPost).toHaveBeenCalledTimes(1));
-    expect(apiPost).toHaveBeenCalledWith('/properties/5/valuo', { overrides: { rating: 'good', new_building: null } });
+    expect(apiPost).toHaveBeenCalledWith('/properties/5/valuo', { overrides: { rating: 'good', floor: null } });
     // The answer replaces the editor in place.
     expect(await screen.findByText(t(fmtCzk(6_120_000)))).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Ocenit přes Valuo' })).not.toBeInTheDocument();
@@ -310,6 +332,7 @@ describe('<ValuoSection> editor', () => {
     renderSection(page({ blocking: [], defaults: { ...DEFAULTS, rating: 'good' } }));
     fireEvent.click(await screen.findByRole('button', { name: 'Ocenit přes Valuo →' }));
     const nb = param('Novostavba');
+    expect(nb.getAllByRole('button').map((b) => b.textContent)).toEqual(['ano', 'ne']); // never 'neuvedeno'
     expect(nb.getByRole('button', { name: 'ano' })).toHaveAttribute('aria-pressed', 'true');
     expect(nb.getByText('odvozeno')).toBeInTheDocument();
     expect(nb.getByRole('img', { name: 'Ve výstavbě → Novostavba' })).toBeInTheDocument();
@@ -522,8 +545,9 @@ describe('<ValuoSection> states', () => {
 
   it('lists the comparables Valuo sent under the card, in its order, each per-m² figure with its unit', async () => {
     renderSection(page({ history: [V3] }));
-    const label = await screen.findByText(/^Srovnávací nemovitosti/);
-    expect(label).toHaveTextContent('Srovnávací nemovitosti · 2');
+    /* A group inside the card (C7): an L3 title and its bare count, never a box. */
+    const label = await screen.findByRole('heading', { level: 3, name: 'Srovnávací nemovitosti' });
+    expect(label.nextElementSibling).toHaveTextContent(/^2$/);
     const table = screen.getByRole('table', { name: 'Srovnávací nemovitosti Valuo' });
     const rows = within(table).getAllByRole('row');
     // Short one-line headers, the layout and the area in one cell, the per-m² under its price: no sideways scroll at 1024 px.
@@ -589,7 +613,7 @@ describe('<ValuoSection> states', () => {
     expect(screen.queryByText(/^Srovnávací nemovitosti/)).not.toBeInTheDocument();
   });
 
-  it('on the phone reads the latest answer on its band with no editor and no button, and nothing without one', async () => {
+  it('on the phone reads the latest answer on its band with no editor and no button, and says so without one', async () => {
     const { unmount } = renderSection(page({ history: [SALE] }), { readOnly: true });
     expect(await screen.findByText(t(fmtCzk(6_120_000)))).toBeInTheDocument();
     expect(screen.getByText('pásmo spolehlivosti (Valuo)')).toBeInTheDocument();
@@ -597,9 +621,23 @@ describe('<ValuoSection> states', () => {
     expect(screen.queryByText(/^\d+ ocenění$/)).not.toBeInTheDocument(); // one card, no count
     unmount();
 
-    const { container } = renderSection(page({ history: [] }), { readOnly: true });
-    await waitFor(() => expect(apiGet).toHaveBeenCalled());
-    expect(container).toBeEmptyDOMElement();
+    /* C10: the card stays on the phone too, one line, no action there (#1760 Q10). */
+    renderSection(page({ history: [] }), { readOnly: true });
+    const card = await screen.findByRole('region', { name: 'Valuo' });
+    expect(await within(card).findByText('Zatím bez ocenění.')).toBeInTheDocument();
+    expect(within(card).queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  /* C9/C10 (section cards, operator ruling 2026-10-28): no answer yet is one muted line and the
+     action inside the card, never the old dashed "Zatím bez ocenění" tile. */
+  it('says "Zatím bez ocenění." in one line with its action, no dashed tile', async () => {
+    const { container } = renderSection(page({ blocking: [] }));
+    const card = await screen.findByRole('region', { name: 'Valuo' });
+    expect(card).toHaveAttribute('id', 'valuo');
+    expect(await within(card).findByText('Zatím bez ocenění.')).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Ocenit přes Valuo →' })).toBeInTheDocument();
+    expect(within(card).queryByText('Ocenění Valuo')).not.toBeInTheDocument();
+    expect(container.querySelector('.border-dashed')).toBeNull();
   });
 });
 

@@ -14,25 +14,21 @@ from typing import Annotated, Any, Literal
 
 from fastapi import HTTPException
 from pydantic import (
-    AfterValidator, AwareDatetime, BaseModel, BeforeValidator, Field, TypeAdapter, field_validator,
+    AfterValidator, AwareDatetime, BaseModel, BeforeValidator, ConfigDict, Field, TypeAdapter, field_validator,
     model_validator,
 )
 
+from api.capabilities.subject import Point, unanchored
+from api.filter_args import agenda_ids, as_str_list, filter_model
 from api.location_filter import DistrictChip
+from api.notifications import CollectionNotifyKinds
+from toolkit import ComparableFilters
 from toolkit import stats_registry as sr
-
-
-def _as_str_list(v: Any) -> Any:
-    """Coerce a bare string into a single-element list (backward-compat for
-    callers that still send `furnished="ano"` now that the filter is
-    multi-select). None and lists pass through unchanged."""
-    if isinstance(v, str):
-        return [v]
-    return v
+from toolkit.filter_registry import Agenda
 
 
 # Multi-select enum filter that also accepts a single bare string.
-EnumListFilter = Annotated[list[str] | None, BeforeValidator(_as_str_list)]
+EnumListFilter = Annotated[list[str] | None, BeforeValidator(as_str_list)]
 
 
 class TargetIn(BaseModel):
@@ -44,56 +40,28 @@ class TargetIn(BaseModel):
     exclude_listing_ids: list[int] = Field(default_factory=list)
 
 
-class FindComparablesIn(BaseModel):
-    target: TargetIn
-    radius_m: int = 1000
-    area_band_pct: float = 0.20
-    disposition_match: Literal["exact", "loose", "any"] = "exact"
-    # No implicit freshness gate. Pass max_age_days + lifecycle='active'
-    # explicitly when you want only fresh active listings; lifecycle
-    # also unlocks 'delisted' / 'all' cohorts.
-    max_age_days: int | None = None
-    lifecycle: Literal["active", "delisted", "all"] | None = None
-    floor_band: int | None = None
-    portals: list[str] | None = None
-    condition_match: list[str] | None = None
-    building_type_match: list[str] | None = None
-    energy_rating_match: list[str] | None = None
-    has_balcony: bool | None = None
-    has_lift: bool | None = None
-    has_parking: bool | None = None
-    min_price_czk: int | None = None
-    max_price_czk: int | None = None
-    # Required, no silent default. A missing category used to mean
-    # "apartments for rent", which made house/commercial cohorts
-    # impossible to drive cleanly. Pass `null` explicitly to search every
-    # category. See ComparableFilters in toolkit/comparables.py.
-    category_main: str | None = Field(...)
-    category_type: str | None = Field(...)
-    category_sub_cb: int | None = None
-    include_unreliable: bool = False
-    furnished: EnumListFilter = None
-    terrace: bool | None = None
-    cellar: bool | None = None
-    garage: bool | None = None
-    ownership: EnumListFilter = None
-    min_estate_area: float | None = None
-    max_estate_area: float | None = None
-    min_usable_area: float | None = None
-    max_usable_area: float | None = None
-    min_parking_lots: int | None = None
-    tom_days_min: int | None = None
-    tom_days_max: int | None = None
-    tom_observed_only: bool | None = None
-    last_seen_min_days: int | None = None
-    last_seen_max_days: int | None = None
-    first_seen_min_days: int | None = None
-    first_seen_max_days: int | None = None
+# The cohort filters are the registry's, generated (api/filter_args.py): a new COMPARABLES filter needs no edit
+# here. The category pair is required, null meaning every category: a missing category used to mean "apartments
+# for rent", which made house and commercial cohorts impossible to drive cleanly.
+_CohortFilters = filter_model(
+    "FindComparablesFilters", agenda_ids(Agenda.COMPARABLES), ComparableFilters,
+    required={"category_main", "category_type"},
+)
 
 
-class AnalyzeDistributionIn(BaseModel):
-    listings: list[dict[str, Any]]
-    field: Literal["price_czk", "price_per_m2", "area_m2"] = "price_per_m2"
+class FindComparablesTarget(Point):
+    exclude_listing_ids: list[int] = Field(
+        default_factory=list, description="Ads whose whole property is left out of the cohort (Decision 13).")
+
+
+class FindComparablesIn(_CohortFilters):
+    target: FindComparablesTarget
+
+    @model_validator(mode="after")
+    def _bands_have_their_anchor(self) -> "FindComparablesIn":
+        if missing := unanchored(self, self.target):
+            raise ValueError(f"{'; '.join(missing)}, and the target has none")
+        return self
 
 
 class ClusterComparablesIn(BaseModel):
@@ -104,11 +72,6 @@ class ClusterComparablesIn(BaseModel):
     n_clusters: int = Field(default=3, ge=2, le=8)
     seed: int = 42
     n_restarts: int = Field(default=5, ge=1, le=20)
-
-
-class FindComparablesRelaxedIn(FindComparablesIn):
-    min_results: int = Field(default=5, ge=1, le=50)
-    relaxation_ladder: list[str] | None = None
 
 
 class FindComparablesAlongAxisIn(FindComparablesIn):
@@ -127,74 +90,6 @@ class CompareSnapshotsIn(BaseModel):
     sreality_id: int | None = None
     since_days: int | None = None
     listing_id: int | None = None
-
-
-class DescribeNeighborhoodIn(BaseModel):
-    lat: float
-    lng: float
-    radius_m: int = 1000
-    # No implicit freshness gate; pass explicitly when needed.
-    max_age_days: int | None = None
-    # Required, no silent apartment-rental default. Pass `null` to span
-    # every category.
-    category_main: str | None = Field(...)
-    category_type: str | None = Field(...)
-
-
-class FindDistributionOutliersIn(BaseModel):
-    listings: list[dict[str, Any]]
-    field: Literal["price_per_m2", "price_czk"] = "price_per_m2"
-    iqr_multiplier: float = 1.5
-    investigate_history: bool = True
-
-
-class ComputeMarketVelocityIn(BaseModel):
-    target: TargetIn
-    radius_m: int = 1000
-    area_band_pct: float = 0.20
-    disposition_match: Literal["exact", "loose", "any"] = "exact"
-    floor_band: int | None = None
-    portals: list[str] | None = None
-    condition_match: list[str] | None = None
-    building_type_match: list[str] | None = None
-    energy_rating_match: list[str] | None = None
-    has_balcony: bool | None = None
-    has_lift: bool | None = None
-    has_parking: bool | None = None
-    min_price_czk: int | None = None
-    max_price_czk: int | None = None
-    # Required, no silent apartment-rental default. Pass `null` to span
-    # every category.
-    category_main: str | None = Field(...)
-    category_type: str | None = Field(...)
-    category_sub_cb: int | None = None
-    include_unreliable: bool = False
-    furnished: EnumListFilter = None
-    terrace: bool | None = None
-    cellar: bool | None = None
-    garage: bool | None = None
-    ownership: EnumListFilter = None
-    min_estate_area: float | None = None
-    max_estate_area: float | None = None
-    min_usable_area: float | None = None
-    max_usable_area: float | None = None
-    min_parking_lots: int | None = None
-    tom_days_min: int | None = None
-    tom_days_max: int | None = None
-    tom_observed_only: bool | None = None
-    last_seen_min_days: int | None = None
-    last_seen_max_days: int | None = None
-    first_seen_min_days: int | None = None
-    first_seen_max_days: int | None = None
-    lifecycle: Literal["active", "delisted", "all"] = "all"
-    trend_split_days: int = 7
-
-
-class ComputeListingVelocityIn(BaseModel):
-    sreality_id: int
-    radius_m: int = 1000
-    disposition_match: Literal["exact", "loose", "any"] = "exact"
-    lifecycle: Literal["active", "delisted", "all"] = "all"
 
 
 class FindAnchorAmenitiesIn(BaseModel):
@@ -393,77 +288,11 @@ class ScenarioUpdateIn(BaseModel):
     renovation_czk: float | None = None
 
 
-# Typed so a malformed entry is a 422 at the boundary, never a 500 in the binder.
-class RegionalEntry(BaseModel):
-    """One entry of a Mapy.cz suggestion's `regionalStructure` (other keys ignored)."""
-    name: str | None = None
-    type: str | None = None
-
-
-class ResolveLocationIn(BaseModel):
-    """A picked Mapy.cz suggestion, as `api.maps.resolve` binds it to one RÚIAN unit."""
-    lat: float
-    lng: float
-    type: str
-    name: str
-    regional_structure: list[RegionalEntry] = Field(default_factory=list)
-
-
-class EstimateYieldIn(BaseModel):
-    target: TargetIn
-    estimate_kind: Literal["rent", "sale"] = "rent"
-    purchase_price_czk: int | None = None
-    expected_monthly_rent_czk: int | None = None
-    radius_m: int = 1000
-    area_band_pct: float = 0.20
-    disposition_match: Literal["exact", "loose", "any"] = "exact"
-    max_age_days: int | None = None
-    lifecycle: Literal["active", "delisted", "all"] | None = None
-    floor_band: int | None = None
-    portals: list[str] | None = None
-    condition_match: list[str] | None = None
-    building_type_match: list[str] | None = None
-    energy_rating_match: list[str] | None = None
-    has_balcony: bool | None = None
-    has_lift: bool | None = None
-    has_parking: bool | None = None
-    min_price_czk: int | None = None
-    max_price_czk: int | None = None
-    # category_main is required (no silent apartment default). category_type
-    # follows estimate_kind when omitted — same smart pattern as
-    # CreateEstimationIn (rent -> pronajem, sale -> prodej). Pass it
-    # explicitly to override.
-    category_main: str | None = Field(...)
-    category_type: str | None = None
-    category_sub_cb: int | None = None
-    include_unreliable: bool = False
-    furnished: EnumListFilter = None
-    terrace: bool | None = None
-    cellar: bool | None = None
-    garage: bool | None = None
-    ownership: EnumListFilter = None
-    min_estate_area: float | None = None
-    max_estate_area: float | None = None
-    min_usable_area: float | None = None
-    max_usable_area: float | None = None
-    min_parking_lots: int | None = None
-    tom_days_min: int | None = None
-    tom_days_max: int | None = None
-    tom_observed_only: bool | None = None
-    last_seen_min_days: int | None = None
-    last_seen_max_days: int | None = None
-    first_seen_min_days: int | None = None
-    first_seen_max_days: int | None = None
-
-    @model_validator(mode="after")
-    def _apply_kind_defaults(self) -> "EstimateYieldIn":
-        if self.category_type is None:
-            self.category_type = (
-                "pronajem" if self.estimate_kind == "rent" else "prodej"
-            )
-        # No implicit freshness gate. Callers that want only fresh active
-        # listings now pass max_age_days + lifecycle='active' explicitly.
-        return self
+class PlaceSuggestIn(BaseModel):
+    """Own place search's typed text (#2449), in a body so it stays out of URLs and logs."""
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(min_length=1, max_length=200)
+    limit: int = Field(default=10, ge=1, le=10)
 
 
 # --- curation -------------------------------------------------------------
@@ -478,16 +307,25 @@ TagColor = Literal[
 ]
 
 
+def _blank_to_null(text: str | None) -> str | None:
+    """A nullable text column holds NULL, never a blank string: one normalisation for every write."""
+    return text if text and text.strip() else None
+
+
 class CreateCollectionIn(BaseModel):
     name:               str = Field(min_length=1, max_length=200)
-    description:        str | None = None
+    description:        Annotated[str | None, AfterValidator(_blank_to_null)] = None
     monitoring_enabled: bool = False
+    # Left out = the column default, every event a collection can tell (migration 735).
+    notify_kinds:       CollectionNotifyKinds | None = None
 
 
 class UpdateCollectionIn(BaseModel):
     name:               str | None = Field(default=None, min_length=1, max_length=200)
-    description:        str | None = None
+    # Sent as null or blank clears it, left out keeps it (`model_fields_set`).
+    description:        Annotated[str | None, AfterValidator(_blank_to_null)] = None
     monitoring_enabled: bool | None = None
+    notify_kinds:       CollectionNotifyKinds | None = None
 
 
 class AddPropertiesToCollectionIn(BaseModel):
@@ -588,6 +426,10 @@ class AttachTagIn(BaseModel):
 
 class AddPipelineCardIn(BaseModel):
     property_id: int
+    # The stage the new card lands at: absent = the entry stage (the bookmark). A
+    # named stage must be one of the account's live, open stages: "add it at the
+    # viewing stage" is then one write and one ledger event, never an add plus a move.
+    stage_id: int | None = None
 
 
 class DismissPropertyIn(BaseModel):
@@ -618,6 +460,10 @@ class CreateStageIn(BaseModel):
     code: str | None = Field(default=None, min_length=1, max_length=4)
 
 
+# What a stage means to the app, whatever its label (migration 734).
+PipelineStageRole = Literal["viewing"]
+
+
 class UpdateStageIn(BaseModel):
     # All optional; an absent field is left unchanged. `is_entry` may only be
     # set True (move the entry crown to this stage) — you re-home the entry by
@@ -629,6 +475,9 @@ class UpdateStageIn(BaseModel):
     # Sent explicitly as null to clear the badge back to the ordinal fallback,
     # so this one is read via model_fields_set, not `is not None`.
     code: str | None = Field(default=None, min_length=1, max_length=4)
+    # A role moves onto this stage from whichever held it; null clears it here.
+    # Read via model_fields_set, like `code`.
+    role: PipelineStageRole | None = None
 
 
 class ReorderStagesIn(BaseModel):
@@ -703,6 +552,8 @@ class CreateStatsDashboardIn(BaseModel):
     charts: Charts
     # The preset blob, embedded (ruling 2, never a linked preset); None = the dashboard carries no filter.
     filter_spec: PresetSpec | None = None
+    # The Stats tab's "Malé vzorky": cells under the floor show their small-sample summary (migration 681).
+    show_small: bool = False
     color: TagColor | None = None
 
 
@@ -711,6 +562,7 @@ class UpdateStatsDashboardIn(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     charts: Charts | None = None
     filter_spec: PresetSpec | None = None
+    show_small: bool | None = None
     color: TagColor | None = None
 
 
@@ -720,6 +572,14 @@ ShareDashboardIn = ShareIn
 class ValuoValuationIn(BaseModel):
     """A Valuo valuation (api/valuo.py): parameter -> the user's value, or null to send none."""
     overrides: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentRunIn(BaseModel):
+    """Start a run (api/routes/agent_runs.py). It names no account, user or provider: the route stamps who is asking."""
+    model_config = ConfigDict(extra="forbid")
+    agent: str = Field(min_length=1, max_length=64)
+    input: dict[str, Any]
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 # --- buildings ------------------------------------------------------------

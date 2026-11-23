@@ -8,8 +8,7 @@ spreadsheet.
 Every envelope carries `basis`: the unit the percentiles are IN when `field`
 is the per-m² measure, and None for the two fields whose unit is unambiguous
 (`price_czk` is Kč, `area_m2` is m²). It is READ off the rows, never derived
-here — `POST /tools/analyze_distribution` accepts caller-supplied listings that
-need carry no basis at all, and those degrade to 'unknown'. Guessing, or
+here — rows that carry no basis degrade to 'unknown'. Guessing, or
 defaulting to sale, would put a confident unit on a number that has none.
 """
 

@@ -2,8 +2,8 @@
 
 Fetches POI elements for a (lat, lng, radius_m) circle filtered by a
 list of OSM tag dicts. Mirrors the structure of sreality_client.py:
-polite throttling, retries on the usual transient codes, browser-ish
-User-Agent.
+polite throttling, retries on the usual transient codes, and our identifying
+User-Agent (scraper.contact; OSM's usage policy asks for one).
 
 Tag mapping is NOT in this module. Callers (toolkit/amenities.py)
 translate a category name to a list of tag dicts and pass that in;
@@ -22,13 +22,13 @@ from typing import Any
 
 import requests
 
+from scraper import contact
+
 LOG = logging.getLogger(__name__)
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
-DEFAULT_USER_AGENT = (
-    "sreality-tracker/0.1 (+https://github.com/waiff/sreality; OSM amenity cache)"
-)
+DEFAULT_USER_AGENT = contact.USER_AGENT
 
 RETRYABLE_STATUS: frozenset[int] = frozenset(
     {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524}

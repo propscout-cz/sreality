@@ -19,31 +19,7 @@ the real schema in CI.
 
 from __future__ import annotations
 
-import re
-
-from tests.sql_corpus import discover
-
-
-def _invalid_placeholder(sql: str) -> str | None:
-    """psycopg's error if `sql` has an invalid `%` placeholder, else None.
-
-    Prefers psycopg's own tokenizer (authoritative — the exact code path that
-    raises at execute() time); falls back to a self-contained model of the same
-    rule if psycopg restructures its internals, so the guard never goes dark.
-    """
-    try:
-        from psycopg._queries import _split_query  # type: ignore[attr-defined]
-    except Exception:
-        _split_query = None
-    if _split_query is not None:
-        try:
-            _split_query(sql.encode())
-            return None
-        except Exception as exc:  # psycopg.ProgrammingError on a bad placeholder
-            return str(exc)
-    # Fallback: strip every valid placeholder token; any leftover `%` is invalid.
-    leftover = re.sub(r"%%|%\([^)]*\)s|%[sbt]", "", sql)
-    return "bare '%' is not a valid placeholder" if "%" in leftover else None
+from tests.sql_corpus import _invalid_placeholder, discover
 
 
 def test_sql_constants_have_valid_placeholders():

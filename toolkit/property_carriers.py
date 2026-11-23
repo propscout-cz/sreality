@@ -283,16 +283,26 @@ NOT_CARRIED: dict[tuple[str, str], str] = {
     ("property_merge_events", "prev_property_id"): _MERGE_LEDGER,
     ("property_merge_carries", "from_property_id"): _CARRY_RECORD,
     ("property_merge_carries", "to_property_id"): _CARRY_RECORD,
+    ("agent_runs", "cited_property_ids"):
+        "a run's answer as it was given, citing what its tools returned; a reader follows a merged-away id to its survivor",
+    ("agent_artifacts", "property_id"):
+        "a run's output, naming the property as that run read it; a reader follows a merged-away id to its survivor",
     ("property_pipeline_events", "property_id"):
         "the pipeline's move log: history naming the property at the time; merges no longer "
         "write it (W3)",
     ("dirty_properties", "property_id"):
         "a work queue: a retired id left queued recomputes to nothing",
+    ("watchdog_slice_members", "property_id"):
+        "producer state the slice's next pass rebuilds (migration 735): a retired member leaves, and its survivor "
+        "takes its place silently (api/notifications._SLICE_PASS_SQL)",
     ("tag_candidates", "property_id"): "a draw-time snapshot (migration 450)",
     ("backup_464_tag_candidates", "property_id"):
         "migration 464's frozen copy of tag_candidates: a backup, never read",
     ("browse_list", "property_id"):
         "a read model rebuilt wholesale (migration 276); the writers patch it per property",
+    ("broker_book", "property_id"):
+        "derived: the broker book (migration 692), recomputed from its view by properties_changed, "
+        "which every merge and detach runs over both sides",
     ("autodedup.clusters", "property_id"): _AUTODEDUP_HISTORY,
     ("autodedup.merges", "survivor_property_id"): _AUTODEDUP_HISTORY,
     ("autodedup.merges", "retired_property_id"): _AUTODEDUP_HISTORY,

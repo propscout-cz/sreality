@@ -17,7 +17,7 @@ from typing import Any, NamedTuple
 
 import pytest
 
-from tests._live_property import REQUIRED_DB, _collection, _stage, _tag, cur  # noqa: F401
+from tests._live_property import REQUIRED_DB, _collection, _stage, _tag
 from tests._tenant_scope import scoped
 
 pytestmark = REQUIRED_DB

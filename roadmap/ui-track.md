@@ -7,6 +7,158 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Map layers on the property map, web and phone; one list for every map (2026-11-20, no migration)
+- **Done** (operator ask 2026-11-20: "turn on the various map layers on the property detail map, both
+  apps; reuse/unify"). Rulings 2026-11-20: (1) the 170 px web minimap keeps a clean face, its Vrstvy
+  button opens a large map dialog with Browse's rail, list and keys, a pick there drawn on the minimap
+  too; (2) ČÚZK's aerial photo on every map, Browse included (Podklad Mapa / Letecká); (3) reference
+  layers only (no Města / Růst cen a nájmů on the property map); (4) phone Poloha: one Vrstvy button →
+  a bottom sheet with the same list, the keys under the plate. Supersedes the 2026-10-23 "minimap = zoom
+  only" ruling.
+- Unified: the photo, relief and contours are keys of the one `layers` selection (one memory, one URL key);
+  `lib/usePointMap` is the one hook of the three point maps; `MapOverlayControls` is every map's one list.
+- Next (unruled): Města / Růst cen a nájmů stay Browse's; the photo carries no street names (a "hybrid"
+  would need the basemap's buildings hidden under it).
+
+### Terrain on the map: ČÚZK relief and contours (2026-11-11, no migration, #2494)
+- **Done** (operator ask 2026-11-11: turn on "relief" and "vrstevnice" to judge the terrain). OpenFreeMap
+  carries no elevation; ČÚZK, already the aerial photo's source, serves DMR 5G shaded relief and ZABAGED
+  contours (1 m base interval, thinned on steep slopes by ZABAGED's own `ZOBRAZ_K` pick, from zoom 16).
+  Browse: "Reliéf a vrstevnice" in Vrstvy, each switchable alone, URL `relief=1` / `contours=1`. Phone
+  Poloha: Mapa / Letecká / Terén. Not the listing-detail minimap (ruling 2026-10-23: no overlay toggles).
+- Next (unruled): both services draw each tile on request; if they turn slow under use, cache the tiles
+  on our side (R2) behind the API.
+
+### Browse's circle is a true circle, placed on the main map (2026-10-30, migrations 694 + 695)
+- **Done** (operator report 2026-10-30: "I do not see pins for inactive properties" — the view held
+  more than the pin limit, and a centre + radius with no centre filtered nothing). Rulings 2026-10-30:
+  the "Piny do" limit is remembered per browser (#2184); a switch to centre + radius places the circle
+  in the middle of the main map (radius = half the view's shorter side, 100 m to 10 km), its centre is
+  dragged ON the main map, the sidebar keeps the radius only (the small map, lat / lng and Clear are
+  gone); the circle is TRUE, not the square around it (+12 to 22 % overcount measured).
+- One map area (`bounds` or `circle`, URL `bbox` or `circle`; `locationMode`, `centerRadius`,
+  `effectiveBbox`, `LocationControl` deleted), sent as the readers' own parameters and tested by
+  `in_map_area` (migration 694) in the list source, both stats RPCs, the watchdog matcher, the broker
+  board and the agents' search. Migration 695 strips the two dead keys from saved presets.
+- **Pin hover** (ruled 2026-10-30): every pin answers a pointer with its preview on the map, the click
+  popup's own HTML (a click keeps it open), and lights its card when the card is loaded; the hover follows
+  the pin under the cursor (`mousemove`), so touching pins follow it and a stack lights together. Before:
+  10 % of pins answered with 72 of 659 cards loaded.
+
+### Preset save moves into the chip menu; Reset leaves the preset (2026-10-27, no migration)
+- **Done** (operator ask 2026-10-27: "get rid of the update preset button", option B of the
+  proposal page). The copper Update button is gone from both saved-set bars (Browse presets, Stats
+  dashboards). An edited chip keeps its dot; its ⋯ menu leads with Save changes (one click, no dialog,
+  the set's own map-area / filter answer) and Revert to saved. The filter sidebar's Reset and the
+  empty-results "clear filters" now write the default filters AND deselect the preset in one write
+  (`browseState.resetFilters`), so a reset never shows the preset as edited.
+- **Ruled 2026-10-27:** Save changes is one click; adding or dropping a map area / dashboard filter
+  on an existing set went with the dialog (save it as a new set instead).
+- **Not built (offered, open):** an undo toast after a save (`lib/toast`: an action toast stays until
+  dismissed, louder than the button removed) and Ctrl/⌘+S.
+
+### Lists open in a new tab (2026-10-27, no migration)
+- **Done** (operator ask 2026-10-27: "when I click on a notification, browse card or pipeline card, open it
+  in a new window"). A notification row (and a share row's "Open …" link), a Browse card (and its estimate
+  chip) and a pipeline card open their destination in a new tab on the desktop, so the list being worked
+  through is never unloaded. From the app-wide link review, the same rule now covers: the map pin popup's
+  "View details →", the pipeline card's broker, a Brokers ranking row (its filters are not in the URL), a
+  collection's rows (the place is now the link, not the sreality id), a broker's ads, a run's comparables
+  ("View in full", the set-aside list) and the advert-not-found page's portal link. ONE rule, `lib/linkGestures`
+  `useNewTabProps` (`{ external }` adds `noreferrer`): `target="_blank" rel="noopener"` on the desktop, nothing
+  in the phone shell (often the installed app, where a new tab leaves the app). Navigation stays in the tab:
+  menus, crumbs, "Go to Browse", redirects after a save, a collection opened from Collections. The
+  pipeline card's address link is now stretched over the whole card (`.stretched-link`, as Browse and the
+  phone board), its controls lifted with `card-action`, its tooltips with `card-tip`; the town line's own
+  tooltip went (the link's title is the whole place). A middle-click on a notification marks it read too.
+
+### PropScout.cz and three colour schemes (2026-10-26, no migration)
+- **Done** (operator ask 2026-10-26: "rename the app to PropScout.cz", "build Měď, Kobalt and Grafit as
+  themes the user can pick from"). The brand is `PropScout.cz` (`lib/brand.ts`; tab prefix "PS:", a "PS"
+  home-screen icon). Every user picks a colour scheme (Měď, Kobalt, Grafit) and light / dark / system
+  in the account menu, the phone's account sheet and Settings → Appearance; the choice stays on the
+  device (`lib/theme.ts`). A scheme only changes token VALUES (`globals.css`); new tokens `--color-chrome*`
+  (the top bar: a dark band in Měď), `--color-on-copper` / `--color-on-brick` (text on an accent or danger
+  fill, which `text-white` failed in dark). Proposal and previews: the PropScout.cz design system artifact.
+- **Done, one appearance** (2026-10-28): the palette moved to `styles/tokens.css` (`:root` + `:host` rules, ready
+  for the extension); one store in `lib/theme.ts` behind all three pickers, "system" resolved to a concrete
+  `data-theme` (the four `@media` copies deleted), painted from `index.html` before CSS, kept in the user's
+  Supabase Auth profile (`user_metadata.appearance`) with the device cache. One rule: the newest explicit
+  pick wins, per user (a default never overwrites a profile). Another device's pick lands at the next page
+  load or token refresh. **Next:** `index.html`'s
+  `color-scheme` meta and its theme-color pair still follow the OS until CSS loads (the pre-paint script knows
+  the side and could set both).
+- **Ruled 2026-10-27:** all 35 removal proposals (24 confirmed, 11 declined) and the rule that nothing
+  revealed on hover may shift layout, recorded in `.interface-design/system.md` § Hierarchy rulings.
+- **Done, agenda 1 Browse card** (2026-10-27): the portals left the photo for a quiet line at the top of
+  the card's foot, above the MF yield (P01); the room tag shows only with the pointer on the card or keyboard
+  focus in it, as an opacity overlay (P02); the photo draws no render verdict, just the counter (P03, the card only); a
+  card of the one type and deal the filter pins reads "2+kk · 54 m²", any other keeps "Byt na prodej ·"
+  (P05); the storey chip is a quiet inset label without a border (P06 note).
+- **Done, agenda 7 Collections** (2026-10-27): a dashed "+ Nová kolekce" card ends my list and opens the
+  new-collection form in place (P30; the phone's "Nová sbírka" moved there too, dashed); the collection page
+  header carries the "Sledovat" switch, "Sdílet · N" (the sharing block in a panel) and ⋯ with Přejmenovat (the
+  edit fields in place) and Smazat kolekci (its confirm) (P31); the members are Browse's cards with notes,
+  pipeline and estimates, the table the second tab (P32); no small-caps label above either h1 (P26). Open: the
+  phone header's P31 controls (the phone has none of the three blocks), for the operator.
+- **Done, agenda 2 Browse page, map and stats** (2026-10-27): the header keeps the count and what is counted,
+  every other applied filter a removable pill under it (P09, pills by operator ruling); "Sloučit…" after Cover
+  and Sort enters merge mode (P10); the map rail has no price-label button, the Piny a ceny checkbox stays
+  (P12); the pin popup says "Přesná poloha · viděno před 2 h", each half's detail in its tooltip (P13); a
+  chart card shows Upravit and ⋯ with ↑, ↓ and Odebrat (P14).
+- **Done, agenda 2 Stats review** (2026-10-27, its own commit): the dashboard row and the sample row sit in one
+  panel above the charts (S01), labelled "Dashboard" and "Vzorek" (S02); the sample sentence sits under the lens,
+  its name in bold (S03); "Malé vzorky (pod 5)" ends the row, its detail in a tooltip (S04); the Okolí dashboard's
+  chip carries an "Okolí" badge with a pin (S06); the tabs read "Nemovitosti" and "Statistiky" (S07); a table or
+  box chart whose every cell is under 5 says so once, with "Zobrazit malé vzorky" (S09). S05, S08, S10 declined.
+- **Done, agenda 3 Pipeline** (2026-10-27): no city-index strip on the card (P19); the MF yield only on Velké
+  cards (P20); the terminal stages fold into one "Uzavřené" lane, a drop row and count per closed stage, a
+  row opening its cards (P22; rule #22: a stage move, never a remove).
+- **Done, agendas 4–6** (2026-10-27): Watchdogs' Delete in a ⋯ menu with its confirm (P24) and the created
+  date under the name (P25); Notifications load older rows on reaching the end (P27); Brokers say each unit
+  once in the column heads (P28) and show five firm pills, then "+ N dalších" (P29), the phone following.
+- **Done, agenda 8 Shell** (2026-10-27): "!AUDIT POLOH" is the first Admin item, its count on the Admin
+  trigger (P33); the footer keeps only the map-tile attribution (P34); no small-caps label above a page's h1
+  (P26, on every agenda's pages; only the error and not-found states keep one).
+- **Done, tab strips** (2026-10-27; the operator picked option A of the tab-strip options page): one
+  `components/Tabs.tsx` for Browse (+ its Explore windows), the property page, a collection and NEW DEDUP
+  Labeling; a full-width rule, the first label on the title's edge, a label-wide 2px copper line on the rule, no
+  weight change, the inset count pill, arrow keys everywhere; the property strip now pins under the header (it
+  hid behind it). Kept unruled: Browse's tab count, the collection's divider, the broker window's single tab,
+  the filled toggles. Pattern: `.interface-design/system.md` § Tab strip.
+- **Built 2026-10-28:** the operator review notes P19 (the city-index card on Přehled), P24 and phone P31; and
+  render scoring removed end to end (P03: tagger, writers, SPA, migration 686 dropping the column). Handoff:
+  `docs/design/propscout-redesign.md`.
+- **Ruled 2026-10-27:** ten Stats-tab proposals (S01–S10, mostly the header): S01–S04, S06, S07, S09 confirmed,
+  S05, S08, S10 declined; the confirmed ones are built (above; handoff § Stats review).
+- **Ruled 2026-10-28: section cards** (operator ask: "find a better way to separate sections … same pattern on the
+  new chrome plugin layout"; option B of four). Every detail-page section, the admin panels and the extension's
+  panel sections become a card with a title bar (Fraunces title, count, actions); small caps stay for field labels
+  only. Spec `.interface-design/system.md` § Section cards, picture `docs/design/propscout-section-cards.png`.
+- **Done (branch `feature/section-cards`): the property page.** Every section of every tab, the Poznámky card above
+  them and the phone property page's sections are `Panel` cards, 16 px apart: the count bare beside the title
+  (never in brackets or the title string), the actions in the title bar (Moje fotky's Nahrát, Valuo's Sandbox,
+  Prozkoumat okolí, Ověřit aktuálnost), Valuo's comparables and both ledgers (`RunHistory`) L3 groups. C10: Odhady,
+  Makléř, Popis, Moje fotky and Valuo keep their card with count 0 and one line ("Zatím bez ocenění." + "Ocenit
+  přes Valuo →"); no dashed tile or box-in-a-box is left (the broker's contact card is `bare` inside its card).
+- **Built 2026-10-28 (branch `feature/extension-side-sheet`): the extension's panel** is a side sheet of section
+  cards (operator rulings 2026-10-28, X1): full height on the right, folding to a tab, a header, "Vývoj ceny" (one
+  step line per ad), "Moje" (pipeline step bar + "Uzavřít ▾", collections, tags, notes), "AI agenti" (the Výnos
+  estimate, three agents "Brzy", a chat box with no backend). The old floating panel is deleted.
+- **Built 2026-10-31 (branch `feature/extension-chrome-side-panel`, ext 0.12): the panel moves into Chrome's side
+  panel** (operator ruling 2026-10-31: "ten panel by měl zmenšit zbytek okna" — the page narrows, nothing is covered;
+  it replaces the 2026-10-28 rulings "opens by itself", "covers the page", "not Chrome's sidePanel API" and "starts
+  folded under 1280 px"). Our page `sidepanel.html`, one global panel per window showing the active tab's subject;
+  opened by the toolbar icon, a listing's edge tab (the old folded tab, with its marks) or a search card's badge.
+  Deleted with the overlay: `sheet.ts`, the fold code, the 1280 px rule, the covering CSS. Nothing reads the
+  `panelFolded` / `panelMinimized` keys any more; installs keep them, inert (no cleanup owed).
+- **Done 2026-10-28 (branch `cleanup/lookup-old-panel-fields`): the lookup drops what only the old panel read** —
+  `kind_label`, `sreality_id` and the ad's `subtype` / `last_seen_at`.
+- **Next (not built):** the section cards on `components/Panel.tsx` first, then the property page's tabs and the
+  other detail pages. Owed by the panel: the chat and the three agents need their backends (agent platform). The
+  `content.js` growth the sheet caused (199,330 → 300,721 B) is gone with it: 195,001 B since the side panel, the
+  filter registry riding only in `sidepanel.js`, an extension page loaded once per window.
+
 ### Preset groups: boxes on the Browse preset row (2026-10-25, migration 672)
 - **Done** (operator ask 2026-10-25: "group my presets, a boundary box per group, move them into the boxes
   or outside of them"). A group is a named box with an optional colour (`filter_preset_groups`, a saved set
@@ -24,8 +176,16 @@ toolkit work.
   "Prohlídka" in the composer; native Prague day + time pickers), moves or drops its date in the editor,
   and leads with the property's upcoming viewings under a calendar leaf. The Phone app's sixth tab,
   Prohlídky (`/viewings`, `GET /viewings`): the account's own viewings one day at a time in time order,
-  Nadcházející / Vše, arrows + swipe + a date wheel + "Dnes", jumps to the nearest day with a viewing, a
-  "now" rule on today; a row opens its property.
+  arrows + swipe + a date wheel + "Dnes", jumps to the nearest day with a viewing, a "now" rule on today; a
+  row opens its property.
+- **Done** (2026-10-26): the day maths is swept across Prague midnight (CET, CEST) and both DST nights
+  under three runner zones (`lib/viewings.boundary.test.ts`); the composer's first guess counts the next
+  full hour on the instant, so the spring DST night no longer pre-fills 02:00, a time its clock skips.
+- **Done** (operator ask 2026-11-07, #2436): past viewings are a day back. The Nadcházející / Vše scope is
+  gone (its default barred every day before today, so with every viewing behind the operator the tab showed
+  nothing): the arrows, swipe and wheel go either way, an empty day offers the nearest viewing either side
+  (the last one leads when none is ahead), a passed viewing reads as past on any day, and the header counts
+  the ones still ahead ("2 v plánu"); another year's day title is "čt 27. listopadu 2025".
 - **Next (offered, not built):** a push reminder before a viewing; "Přidat do kalendáře" (an .ics file
   for the iPhone calendar).
 
@@ -172,10 +332,18 @@ toolkit work.
   Řazení) gains "Ulice: A → Z / Z → A" on `browse_list.street_name`, the location ad's street under the
   Czech collation (Č after C, Ch after H); a property with no street (62% of active) sorts last both
   ways. A sort key only: the card still prints `display_label`, the street filter stays `ulice_id`.
+- **Done: Price change sort 2026-10-26** (operator request; no migration). The cards menu (desktop +
+  phone Řazení) gains "Změna ceny: největší pokles / největší nárůst" on `total_price_change_pct`, the
+  column the card's price-move badge and the Price change filter read (first observed price of the
+  shown price's lineage → the shown price); an ad seen at one price (66% of active sales) sorts last
+  both ways. ~84 ms, flats for sale.
+- **Ruled 2026-10-27: no plausibility patches on Browse values.** Both sorts open on portal junk at their
+  ends (a 48 194 054 m² lot, a 1 Kč first price, a ×1000 typo). #2117 (a 10 .. 1 000 000 m² lot band,
+  migration 680, and a placeholder-price floor in the rollup) was merged 2026-10-26 and reverted the next
+  day (migration 685): the user narrows odd values with the filters (Lot area, Price, Price change).
 - **Shipped (2026-10-22): Advanced → Energy rating (PENB A–G)**, Browse + Watchdog (migration 648:
-  `energy_rating_filter` on the Stats and map-tile RPCs; `browse_list` already carried the column). A
-  property's rating is the first non-null across its ads; G is also the legal "no certificate"
-  placeholder (~half of rated flats for sale), which no portal marks apart.
+  `energy_rating_filter` on the Stats and map-tile RPCs; `browse_list` already carried the column). G is
+  also the legal "no certificate" placeholder (~half of rated flats for sale), which no portal marks apart.
 - **Shipped (2026-10-22): Advanced → Broker** — a name search (GET /brokers/search) that sets the
   existing broker scope (`brokerId`, MS19) on desktop and phone; it narrows the current filters
   (the explore-broker modal still opens a broker's whole book) and stays outside presets.
@@ -226,6 +394,12 @@ toolkit work.
   listings) and 28 impossible dispositions (812 listings) that charted as raw-spelled "pod 5" rows now read
   as the canon or NULL; the mapping is pinned to `scraper/vocabulary.py` by its test. `backup_642` holds the
   old values — drop it after a clean week.
+- **Done: small samples on request (2026-10-26, migration 678):** a cell under the n ≥ 5 floor carries `small`
+  {min, max, mean, median}; the Stats tab's "Malé vzorky" switch (`small=1`, on every Stats tab) shows it in the
+  table and box views on a tinted row (a column-dimension table tints only that cell), each number with its own
+  label; percentiles never under the floor; line and bar keep their gaps. Since migration 681 a dashboard
+  saves the switch (`show_small`): loading one sets it, changing it marks the dashboard edited, and the
+  property page's Okolí dashboard tab draws with its dashboard's setting.
 - **Done: dashboard duplicate + the sold-market lens (2026-10-22):** an own dashboard's menu offers "Duplikovat"
   (a new row as stored, "<name> (kopie)"); the Stats tab's "Vzorek" switch counts every chart over the Browse
   filter or over the sold market (inactive, seen from birth, dismissed included, 2–60 days on market) — a URL
@@ -294,13 +468,16 @@ toolkit work.
   no estimation start); the fifth tab `/link` takes a pasted link (the first URL in the text) to its
   property, keeps the last five per device, and says "Tento inzerát v databázi nemáme" with the
   portal link for an ad we lack. A password sign-in with nothing stashed lands on `/`. Resolves on the
-  install walk. Follow-up (PR open): **Poloha** — Mapy's static map streamed through the API (never stored), label + note + Apple/Google/Mapy.cz links, as the feed card's fourth margin mark (a sheet) and the property page's first section; `MAPY_STATIC_MAPS_ENABLED=0` turns the image off.
+  install walk. Follow-up: **Poloha** — label + note + Apple/Google/Mapy.cz links, as the feed card's fourth margin mark (a sheet) and the property page's first section; since #2446 over a lazy OpenFreeMap map at the location ad's point (zoom by precision, two-finger pan, dimmed after dusk); the Mapy image and its switch are gone. Since #2447 a Mapa / Letecká bar lays ČÚZK's aerial photo over that map (hidden until the tap, so no aerial tile loads before it).
 - **W3: the pipeline as swiped stage pages** (#1768): on the phone `/pipeline` renders
   `components/phone/PhonePipeline.tsx` instead of the kanban (never mounted there) — a stage strip
   (code badge, label, count; a hairline before the closed stages) over one scroll-snapped page per
   stage, each scrolling on its own; cards are a stage-washed 104 px thumbnail, price, layout, place,
   days in the stage and MF; the stage badge opens the stage sheet (move, two-step remove through
   `usePipelineCard`). Same reads as the board (`lib/pipelineReads`); no drag, no stage management.
+- **Lokalita on the phone pipeline** (2026-10-26): a place chip over the stage tabs opens the
+  desktop bar's own place filter in a sheet — same `districts` params (one link, one view on either
+  device), same `LocationTypeahead`, same `matchesDistricts`; stage counts and the header follow it.
 - **W4: collections and brokers on the phone** (#1769): `/collections` is a hairline list with
   "Nová sbírka" (a name in a bottom sheet, `createCollection`, monitoring off) and `/collection/:id`
   the members as feed cards (`fetchListingsForCards`, the collection as prefilter; the card's
@@ -499,12 +676,12 @@ End-to-end browser flow over the U1b backend.
 
 ### browse-2: Region search + box plots (done)
 - Mapy.cz suggest / resolve proxy endpoints (`api/maps.py`) — bearer-
-  gated, 5-min in-process TTL cache on suggest, admin_boundaries-aware
+  gated, 5-min in-process TTL cache on suggest, admin_boundaries-aware (dropped 729)
   polygon resolution that auto-degrades to point + radius when the
   table is missing or empty.
 - Region page rebuilt around a single `LocationSearchBox`: typing a
   street address, neighbourhood, or kraj returns ranked Mapy.cz
-  suggestions and resolves to either a polygon (when admin_boundaries
+  suggestions and resolves to either a polygon (when admin_boundaries (dropped 729)
   ships) or a point + radius. Browse-1's district / radius pickers
   remain reachable under an "Advanced" disclosure for legacy
   bookmarks and direct radius drag-and-drop.
@@ -915,7 +1092,7 @@ indentation across 136 files and was reverted before commit. Unconditional lint
 ban on the literal; a source-level test guards the global rule the 63 now rely
 on. **Operator ask, not smuggled:** `--color-focus` composites to 1.86:1 in
 light mode (the base palette) — under WCAG 2.4.11's 3:1; dark passes at 3.16:1.
-Raising it is a `globals.css` `@theme` change reserved for you; no conformance
+Raising it is a `styles/tokens.css` change reserved for you; no conformance
 claim is made until it lands.
 
 **W4 — focus has a destination (merged).** `<main id="main" tabIndex={-1}>`

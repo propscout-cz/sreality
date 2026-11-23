@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -74,24 +76,19 @@ describe('cycleSet', () => {
   });
 });
 
+/* The normal form, one table read by both languages (search_properties holds its scopes in it too). */
+const NORMAL_FORM = JSON.parse(
+  readFileSync(join(process.cwd(), '..', 'tests', 'fixtures', 'set_scope_normal_form.json'), 'utf-8'),
+) as { cases: Array<{ scope: SetScope; normal: SetScope }> };
+
 describe('normalizeScope — contradictions are unrepresentable', () => {
   it('an all-empty scope is off', () => {
     expect(normalizeScope(S(null))).toBeNull();
     expect(normalizeScope(null)).toBeNull();
   });
 
-  it("'out' empties both element lists", () => {
-    expect(normalizeScope(S('out', [1], [2]))).toEqual(S('out'));
-  });
-
-  it("an element on the in side supersedes 'in'", () => {
-    expect(normalizeScope(S('in', [1], [2]))).toEqual(S(null, [1], [2]));
-    expect(normalizeScope(S('in', [], [2]))).toEqual(S('in', [], [2]));
-  });
-
-  it('an element sits on one list only (out wins), lists are deduplicated', () => {
-    expect(normalizeScope(S(null, [1, 1, 2], [2, 3, 3]))).toEqual(S(null, [1], [2, 3]));
-    expect(normalizeScope(S(null, [4], [4]))).toEqual(S(null, [], [4]));
+  it.each(NORMAL_FORM.cases)('$scope is $normal', ({ scope, normal }) => {
+    expect(normalizeScope(scope)).toEqual(normal);
   });
 });
 

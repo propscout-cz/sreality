@@ -2,9 +2,9 @@
  * id comes out of its detail URL. ONE copy for BOTH browser surfaces, shared the
  * way lib/brand.ts is:
  *   - the SPA's paste-a-link (`parsePortalUrl` → /listing/:source/:nativeId);
- *   - the Chrome extension (content / background / index_overlay / index_cards,
- *     and its vite.config.ts, which builds manifest `content_scripts.matches`
- *     from PORTALS[].hosts).
+ *   - the Chrome extension (content / index_overlay / index_cards, and its
+ *     vite.config.ts, which builds manifest `content_scripts.matches` from
+ *     PORTALS[].pageHosts).
  * Zero imports, no React, no DOM at module load: safe in either build. It lives
  * under frontend/ because the SPA's Docker build context is frontend/ only (a
  * repo-root file would break the Railway image); the extension always builds
@@ -23,8 +23,9 @@
  * identity); one probe fixture, tests/fixtures/portal_url_probes.json, runs
  * against both, so the two can only drift with a red test.
  *
- * Adding a host here means adding it to chrome-extension/manifest.json too;
- * portalIds.test.ts fails when the two lists differ. */
+ * Adding a page host here means adding it to chrome-extension/manifest.json and
+ * to chrome-extension/release/allowed.ts too (a new site on the install warning);
+ * portalIds.test.ts fails when the manifest and the page hosts differ. */
 
 export interface PortalRef {
   source: string;
@@ -33,8 +34,13 @@ export interface PortalRef {
 
 export interface Portal {
   source: string;
-  /* Hostnames this portal serves listings on (exact match, case-insensitive). */
+  /* Every hostname that names this portal (exact match, case-insensitive): a pasted
+   * link on any of them resolves. Mirrors scraper/portal_identity.py. */
   hosts: string[];
+  /* The hosts that answer with pages; the rest of `hosts` only redirect to one of
+   * these, deep ad paths included (checked 2026-11-01). The extension's content
+   * script runs only here, so the install warning names only these. */
+  pageHosts: string[];
   /* Native id from a detail URL or a card's detail href; null = not a detail
    * link (so also: not a detail page). Accepts absolute or relative hrefs. */
   detailId(pathname: string): string | null;
@@ -49,6 +55,7 @@ export const PORTALS: Portal[] = [
   {
     source: 'sreality',
     hosts: ['www.sreality.cz', 'sreality.cz'],
+    pageHosts: ['www.sreality.cz'],
     // /detail/{type}/{main}/{slug}/{id} — id is the LAST segment, all digits; 18 at most,
     // so it always fits the queue's bigint sreality_id.
     detailId: (p) => firstMatch(/\/detail\/[^?#]*\/([0-9]{5,18})\/?$/, p),
@@ -56,6 +63,7 @@ export const PORTALS: Portal[] = [
   {
     source: 'bazos',
     hosts: ['reality.bazos.cz'],
+    pageHosts: ['reality.bazos.cz'],
     // /inzerat/{id}/{slug}.php
     detailId: (p) => firstMatch(/\/inzerat\/(\d+)\//, p),
   },
@@ -64,12 +72,14 @@ export const PORTALS: Portal[] = [
     // ids as .cz under its own path word. Checked live 2026-10-12.
     source: 'bezrealitky',
     hosts: ['www.bezrealitky.cz', 'bezrealitky.cz', 'www.bezrealitky.com', 'bezrealitky.com'],
+    pageHosts: ['www.bezrealitky.cz', 'www.bezrealitky.com'],
     // /nemovitosti-byty-domy/{id}-{slug} (.cz) · /properties-flats-houses/{id}-{slug} (.com)
     detailId: (p) => firstMatch(/\/(?:nemovitosti-byty-domy|properties-flats-houses)\/(\d+)/, p),
   },
   {
     source: 'idnes',
     hosts: ['reality.idnes.cz'],
+    pageHosts: ['reality.idnes.cz'],
     // /detail/{sale}/{cat}/{slug}/{hex objectid}/ — 24 hex today, 16+ in the canon
     // (scraper/portal_identity.py); the last segment only, so a hex-looking slug word is no id.
     detailId: (p) => firstMatch(/\/detail\/[^?#]*?\/([0-9a-f]{16,})\/?$/, p),
@@ -77,12 +87,14 @@ export const PORTALS: Portal[] = [
   {
     source: 'maxima',
     hosts: ['nemovitosti.maxima.cz'],
+    pageHosts: ['nemovitosti.maxima.cz'],
     // /nemovitosti/{id}/  — id is a letter + digits token (e.g. b50089333)
     detailId: (p) => firstMatch(/\/nemovitosti\/([a-z][0-9]+)\/?$/, p),
   },
   {
     source: 'remax',
     hosts: ['www.remax-czech.cz', 'remax-czech.cz'],
+    pageHosts: ['www.remax-czech.cz'],
     // /reality/detail/{id}/{slug}
     detailId: (p) => firstMatch(/\/reality\/detail\/(\d+)/, p),
   },
@@ -92,6 +104,7 @@ export const PORTALS: Portal[] = [
     // ids carry a letter prefix.) Verified against live source_id_native.
     source: 'mmreality',
     hosts: ['www.mmreality.cz', 'mmreality.cz'],
+    pageHosts: ['www.mmreality.cz'],
     detailId: (p) => firstMatch(/\/nemovitosti\/([0-9]+)\/?/, p),
   },
   {
@@ -101,6 +114,7 @@ export const PORTALS: Portal[] = [
     // Verified against 100% of live source_id_native.
     source: 'ceskereality',
     hosts: ['www.ceskereality.cz', 'ceskereality.cz'],
+    pageHosts: ['www.ceskereality.cz'],
     detailId: (p) => firstMatch(/-([0-9]{4,})\.html$/, p),
   },
   {
@@ -109,6 +123,7 @@ export const PORTALS: Portal[] = [
     // "pole-253870-m-…-{id}.html").
     source: 'realitymix',
     hosts: ['www.realitymix.cz', 'realitymix.cz'],
+    pageHosts: ['realitymix.cz'],
     detailId: (p) => firstMatch(/-([0-9]{4,})\.html$/, p),
   },
 ];

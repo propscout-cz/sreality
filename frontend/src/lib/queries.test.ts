@@ -1,6 +1,6 @@
 /* Tests for the Browse query builders in queries.ts: the sort, the portal rule, the
- * district chips and the prefilters. The box helpers (effectiveBbox) live in
- * lib/filters.ts with their tests. */
+ * district chips, the prefilters and the map area's parameters (areaArgs). The circle
+ * helpers (circleInView, circleBounds) live in lib/filters.ts with their tests. */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
@@ -19,9 +19,11 @@ import {
   CARD_SORTS,
   adPortals,
   applyPortalRule,
+  areaArgs,
   applyPrefilters,
   buildBrowseStatsArgs,
   fetchBrowseCount,
+  fetchCurationClock,
   fetchIsDismissed,
   fetchNoteCounts,
   fetchPropertySourcesByPropertyIds,
@@ -371,8 +373,8 @@ describe('the one-portal order', () => {
   });
 
   it('passes every other sort straight through', () => {
-    for (const field of ['price_czk', 'price_per_m2', 'area_m2', 'plot_area_m2', 'street_name',
-                         'last_seen_at', 'mf_gross_yield_pct'] as const) {
+    for (const field of ['price_czk', 'price_per_m2', 'total_price_change_pct', 'area_m2',
+                         'plot_area_m2', 'street_name', 'last_seen_at', 'mf_gross_yield_pct'] as const) {
       expect(orderPortal(withPortals(['idnes']), { field, direction: 'desc' })).toBeNull();
       expect(effectiveSort(withPortals(['idnes']), { field, direction: 'desc' }))
         .toEqual({ field, direction: 'desc' });
@@ -509,6 +511,34 @@ describe('the cards sort menu', () => {
     expect(String(s.calls.find(([m]) => m === 'select')?.[1][0])).toContain('street_name');
     vi.restoreAllMocks();
   });
+  /* Price change is the card's price-move badge column: the biggest drop is the most
+   * negative percent, so it sorts ascending; an ad seen at one price has none and
+   * comes last both ways. */
+  it('offers price change both ways, the biggest drop ascending', () => {
+    const byLabel = new Map(CARD_SORTS.map((o) => [o.label, o.spec]));
+    expect(byLabel.get('Změna ceny: největší pokles'))
+      .toEqual({ field: 'total_price_change_pct', direction: 'asc' });
+    expect(byLabel.get('Změna ceny: největší nárůst'))
+      .toEqual({ field: 'total_price_change_pct', direction: 'desc' });
+    expect(parseSort('total_price_change_pct')).toEqual({ field: 'total_price_change_pct', direction: 'asc' });
+  });
+
+  it('pages the cards by price change past a negative cursor, the rows without a change last', async () => {
+    const s = stubReads();
+    await fetchListingsForCards(
+      DEFAULT_FILTERS,
+      { field: 'total_price_change_pct', direction: 'asc' },
+      { value: -12.5, id: 7 },
+    );
+    expect(s.calls.filter(([m]) => m === 'order').map(([, a]) => a)).toEqual([
+      ['total_price_change_pct', { ascending: true, nullsFirst: false }],
+      ['property_id', { ascending: true }],
+    ]);
+    expect(s.calls).toContainEqual(['or', [
+      'total_price_change_pct.gt.-12.5,and(total_price_change_pct.eq.-12.5,property_id.gt.7),total_price_change_pct.is.null',
+    ]]);
+    vi.restoreAllMocks();
+  });
 });
 
 /* The measure travels with its PUBLISHED LABEL on every Browse lane, or the
@@ -537,6 +567,13 @@ describe('Browse select-lists carry the measure with its published basis', () =>
    * from Browse with all of them green. */
   it('selects the ad count the card badge reads', () => {
     expect(cols(BROWSE_SELECT_COLUMNS.cards)).toContain('source_count');
+  });
+
+  /* The map reads the rung (exact or approximate) and no radius: ruling 2026-11-01
+   * retired the drawn circle, and every map column is wire cost on every pin. */
+  it('selects the pin rung for the map and no uncertainty radius', () => {
+    expect(cols(BROWSE_SELECT_COLUMNS.map)).toContain('granularity_rank');
+    expect(cols(BROWSE_SELECT_COLUMNS.map)).not.toContain('uncertainty_radius_m');
   });
 });
 
@@ -979,10 +1016,12 @@ describe('the map pins read the list\'s relation through the list\'s chain', () 
       await fetchListingsForCards(f, DEFAULT_SORT, null);
       const [pins, ...lists] = urls.filter((u) => !u.pathname.endsWith('/browse_map_cells'));
       if (!showDismissed) expect(pins.pathname).toBe('/rest/v1/rpc/browse_list_visible');
+      /* The map area is the source's own parameters (migration 694), tested in the database. */
       expect(filters(pins)).toEqual(expect.arrayContaining([
         'all_sources=ov.{sreality}', 'newest_ad_at_sreality=not.is.null',
-        'lat=gte.49.94', 'lat=lte.50.18', 'lng=gte.14.22', 'lng=lte.14.71',
+        'bbox_south=49.94', 'bbox_north=50.18', 'bbox_west=14.22', 'bbox_east=14.71',
       ]));
+      expect(filters(pins).some((p) => p.startsWith('lat=gte') || p.startsWith('lng=gte'))).toBe(false);
       expect(pins.searchParams.has('order') || pins.searchParams.has('limit')).toBe(false);
       expect(lists).toHaveLength(1);
       for (const list of lists) {
@@ -1041,5 +1080,50 @@ describe('the Neuvedeno chip reaches the list as NULL or off-canon', () => {
   it('sends the selection to the aggregates as it stands, the sentinel included', () => {
     const args = buildBrowseStatsArgs({ ...DEFAULT_FILTERS, conditionMatch: ['__unknown__'] }, NO_PREFILTERS);
     expect(args.condition_match_filter).toEqual(['__unknown__']);
+  });
+});
+
+/* The map area, one value for every reader (migration 694): a box or a circle, never both, sent as
+ * the source's and the stats RPCs' own parameters so the database tests it with in_map_area. */
+describe('areaArgs and the stats args', () => {
+  const box = { west: 14.22, south: 49.94, east: 14.71, north: 50.18 };
+  const circle = { lat: 50.08, lng: 14.42, radius_m: 1500 };
+  const none: BrowsePrefilters = { obecIds: null, propertyIds: null, empty: false };
+
+  it('sends the set side only', () => {
+    expect(areaArgs(DEFAULT_FILTERS)).toEqual({});
+    expect(areaArgs({ ...DEFAULT_FILTERS, bounds: box })).toEqual({
+      bbox_west: 14.22, bbox_south: 49.94, bbox_east: 14.71, bbox_north: 50.18,
+    });
+    expect(areaArgs({ ...DEFAULT_FILTERS, circle })).toEqual({ circle_lat: 50.08, circle_lng: 14.42, circle_radius_m: 1500 });
+  });
+
+  it('hands the stats RPCs the circle itself, never the square around it', () => {
+    const args = buildBrowseStatsArgs({ ...DEFAULT_FILTERS, circle }, none);
+    expect(args).toMatchObject({ circle_lat: 50.08, circle_lng: 14.42, circle_radius_m: 1500 });
+    expect([args.bbox_west, args.bbox_south, args.bbox_east, args.bbox_north]).toEqual([null, null, null, null]);
+  });
+});
+
+/* The curation clock read (lib/curationSyncOwner's), through the real supabase-js
+ * client against a stubbed fetch: the ClockRow columns of the view, and never the
+ * acting header — the audience is the view's to state (docs/design/curation-sync.md
+ * § 3.4). */
+describe('fetchCurationClock', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('reads exactly the ClockRow columns of curation_clock_public and never sends x-act-as', async () => {
+    const rows = [{ account_id: 'acct-me', family: 'board', counter: 3, mine: true, age_ms: 3_600_000 }];
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) =>
+      ({ ok: true, status: 200, statusText: '', headers: new Headers(), text: async () => JSON.stringify(rows) }) as
+        unknown as Response,
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(fetchCurationClock({ signal: new AbortController().signal })).resolves.toEqual(rows);
+    const [url, init] = fetchMock.mock.calls[0];
+    const u = new URL(String(url));
+    expect(u.pathname).toBe('/rest/v1/curation_clock_public');
+    expect(u.searchParams.get('select')).toBe('account_id,family,counter,mine,age_ms');
+    expect(new Headers(init?.headers).has('x-act-as')).toBe(false);
   });
 });

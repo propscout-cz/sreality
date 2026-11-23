@@ -1,11 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   fmtArea,
   fmtDistanceM,
   fmtFloor,
+  storeyFromOrdinal,
+  storeyOrdinal,
   fmtMeasuredPricePerM2,
   fmtPct,
   fmtPP,
+  fmtRelative,
+  fmtRelativeCs,
 } from './format';
 
 const NBSP = ' ';
@@ -157,29 +163,57 @@ describe('fmtDistanceM', () => {
 });
 
 describe('fmtFloor', () => {
-  /* The column is ground = 0 on every portal (W8), and the word is the only thing on
-     screen that says so — a bare "0" reads as missing data, a bare "3" reads as
-     whichever convention the reader assumes. */
-  it('names the storey in Czech under the ground = 0 convention', () => {
-    expect(fmtFloor(0)).toBe('přízemí');
-    expect(fmtFloor(3)).toBe('3. patro');
-    expect(fmtFloor(-1)).toBe('suterén');
-  });
+  /* One wording on every surface, and the same one `storey_label` gives the PDF sheet:
+     both formatters read this fixture. */
+  const cases: Array<{ floor: number | null; total: number | null; label: string | null }> =
+    JSON.parse(readFileSync(resolve(__dirname, '../../../tests/fixtures/storey_labels.json'), 'utf8'));
 
-  it('spells the building total as podlaží, not as the second half of a slash', () => {
-    expect(fmtFloor(2, 5)).toBe('2. patro z 5 podlaží');
-    expect(fmtFloor(0, 4)).toBe('přízemí z 4 podlaží');
-  });
-
-  it('keeps the magnitude below ground so two basements never read as one', () => {
-    /* AttrDiffTable diffs the RENDERED strings, so 'suterén' for both −1 and −2 hid a
-       distinguishing fact on the surface whose whole job is same-or-different. */
-    expect(fmtFloor(-2)).toBe('2. podzemní podlaží');
-    expect(fmtFloor(-3, 6)).toBe('3. podzemní podlaží z 6 podlaží');
+  it.each(cases)('words $floor of $total as $label', ({ floor, total, label }) => {
+    expect(fmtFloor(floor, total)).toBe(label);
   });
 
   it('returns null for an absent storey so each surface renders its own gap', () => {
-    expect(fmtFloor(null, 5)).toBeNull();
     expect(fmtFloor(undefined)).toBeNull();
+  });
+
+  it('turns a typed ordinal into the stored storey and back, with no storey 0', () => {
+    expect(storeyOrdinal(6)).toBe(7);
+    expect(storeyFromOrdinal(7)).toBe(6);
+    expect(storeyOrdinal(-1)).toBe(-1);
+    expect(storeyFromOrdinal(-1)).toBe(-1);
+    expect(storeyFromOrdinal(0)).toBeNull();
+    expect(storeyOrdinal(null)).toBeNull();
+  });
+});
+
+/* The map popup's "viděno před 2 h" (ruling P13): fmtRelative's buckets, in Czech. */
+describe('fmtRelativeCs', () => {
+  const NOW = new Date('2026-10-27T12:00:00Z');
+  const ago = (s: number) => new Date(NOW.getTime() - s * 1000).toISOString();
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('says how long ago in the same buckets as fmtRelative', () => {
+    expect(fmtRelativeCs(ago(30))).toBe('před 30 s');
+    expect(fmtRelativeCs(ago(5 * 60))).toBe('před 5 min');
+    expect(fmtRelativeCs(ago(2 * 3600))).toBe('před 2 h');
+    expect(fmtRelativeCs(ago(3 * 86400))).toBe('před 3 dny');
+    expect(fmtRelativeCs(ago(14 * 86400))).toBe('před 2 týd.');
+    expect(fmtRelativeCs(ago(90 * 86400))).toBe('před 3 měs.');
+    expect(fmtRelativeCs(ago(730 * 86400))).toBe('před 2 r.');
+    expect(fmtRelative(ago(2 * 3600))).toBe('2\u202fh ago');
+  });
+
+  it('never reads a clock skew as the future', () => {
+    expect(fmtRelativeCs(new Date(NOW.getTime() + 5000).toISOString())).toBe('před 0 s');
+  });
+
+  it('is a dash for a missing or unreadable time', () => {
+    expect(fmtRelativeCs(null)).toBe('—');
+    expect(fmtRelativeCs(undefined)).toBe('—');
+    expect(fmtRelativeCs('not a date')).toBe('—');
   });
 });

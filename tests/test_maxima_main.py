@@ -11,9 +11,13 @@ import time
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from scraper import maxima_main, portal_runner
 from scraper.maxima_main import MaximaPortal
 from scraper.portal import PortalConfig
+
+pytestmark = pytest.mark.usefixtures("no_sighted_rearm")
 
 
 class _Conn:

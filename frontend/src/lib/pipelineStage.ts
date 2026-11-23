@@ -52,3 +52,11 @@ export const stageBadge = (
   const idx = stages.findIndex((s) => s.id === stage.id);
   return idx < 0 ? null : String(idx + 1);
 };
+
+/* Removal's confirm, in the same words wherever removal is offered (rule #22: never
+ * a toggle). The card's dates do not come back, so a board with closed stages is
+ * pointed at them: they keep a finished deal's record. */
+export const REMOVE_QUESTION = 'Odebrat z pipeline?';
+export const removeWarning = (stages: ReadonlyArray<Pick<PipelineStage, 'is_terminal'>>): string =>
+  'Karta zmizí z nástěnky a ztratí „v pipeline od“ i „ve fázi od“ — po opětovném přidání se počítají znovu.'
+  + (stages.some((s) => s.is_terminal) ? ' Uzavřený obchod raději přesuňte do některé z uzavřených fází.' : '');

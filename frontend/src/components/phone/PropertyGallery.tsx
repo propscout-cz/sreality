@@ -2,21 +2,22 @@
  * "Nemovitost"): the canonical ad's photos as full-width 4:3 slides — the 1080 px
  * copies (#1765) — snapped one per swipe, dots and "N fotek" under them. The
  * photos show bare, no stage wash: here the stage is the curation row's funnel
- * cell (operator ruling 2026-10-22). A tap opens the app's lightbox on that photo
- * at full size. */
+ * cell (operator ruling 2026-10-22). A tap opens the viewer on that photo at full
+ * size (listing-detail/PhotoViewer, the desktop's opener too). The swiper goes
+ * round, as the viewer does (operator's ask, 2026-11-15; ./useLoopStrip). */
 
-import { Suspense, useRef, useState } from 'react';
+import { useState } from 'react';
 
+import { OFF_MARKET_DIM, usePhotoViewer } from '@/components/listing-detail/PhotoViewer';
 import { czPlural } from '@/lib/format';
 import { imageSrc } from '@/lib/imageUrl';
-import { lazyChunk } from '@/lib/lazyChunk';
 import type { ImagePublic } from '@/lib/types';
 
 import { PHOTO_DARK } from './CardPhotoStrip';
+import { loopSlots, useLoopStrip } from './useLoopStrip';
 
-const ImageLightbox = lazyChunk(() => import('@/components/ImageLightbox'));
-
-/* More dots than this stop reading as positions; a counter takes over. */
+/* More dots than this stop reading as positions; a counter takes over (the feed
+ * card's strip, narrower, turns at eight). */
 const MAX_DOTS = 12;
 
 export const photosWord = (n: number): string => `${n} ${czPlural(n, 'fotka', 'fotky', 'fotek')}`;
@@ -30,10 +31,9 @@ export default function PropertyGallery({
   loading: boolean;
   isActive: boolean;
 }) {
-  const [at, setAt] = useState(0);
-  const [openAt, setOpenAt] = useState<number | null>(null);
+  const { ref, at, handlers } = useLoopStrip(images.length);
+  const { open, viewer } = usePhotoViewer(images, isActive);
   const [broken, setBroken] = useState<ReadonlySet<number>>(() => new Set());
-  const raf = useRef(0);
 
   if (images.length === 0) {
     return loading ? (
@@ -43,31 +43,25 @@ export default function PropertyGallery({
     );
   }
 
-  const onScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    const el = e.currentTarget;
-    if (raf.current) return;
-    raf.current = requestAnimationFrame(() => {
-      raf.current = 0;
-      if (el.clientWidth) setAt(Math.round(el.scrollLeft / el.clientWidth));
-    });
-  };
-
   return (
     <div>
       <div
+        ref={ref}
         aria-label="Fotky"
         role="group"
-        onScroll={onScroll}
+        {...handlers}
         className="flex snap-x snap-mandatory overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
-        {images.map((img, i) => {
-          const src = imageSrc(img, { w: 1080 });
+        {loopSlots(images.length).map(({ index, copy }) => {
+          const img = images[index];
           return (
             <button
-              key={img.id}
+              key={copy ? `copy-${img.id}` : img.id}
               type="button"
-              onClick={() => setOpenAt(i)}
-              aria-label={`Fotka ${i + 1} z ${images.length}`}
+              onClick={() => open(index)}
+              tabIndex={copy ? -1 : undefined}
+              aria-hidden={copy || undefined}
+              aria-label={copy ? undefined : `Fotka ${index + 1} z ${images.length}`}
               className="relative aspect-[4/3] w-full shrink-0 snap-start overflow-hidden bg-[var(--color-inset)]"
             >
               {broken.has(img.id) ? (
@@ -76,12 +70,12 @@ export default function PropertyGallery({
                 </span>
               ) : (
                 <img
-                  src={src}
+                  src={imageSrc(img, { w: 1080 })}
                   alt=""
-                  loading={i === 0 ? 'eager' : 'lazy'}
+                  loading={index === 0 ? 'eager' : 'lazy'}
                   decoding="async"
                   onError={() => setBroken((prev) => new Set(prev).add(img.id))}
-                  className={`block h-full w-full object-cover ${isActive ? '' : 'opacity-70'} ${PHOTO_DARK}`}
+                  className={`block h-full w-full object-cover ${isActive ? '' : OFF_MARKET_DIM} ${PHOTO_DARK}`}
                 />
               )}
             </button>
@@ -107,16 +101,7 @@ export default function PropertyGallery({
           {photosWord(images.length)}
         </span>
       </div>
-      {openAt != null && (
-        <Suspense fallback={null}>
-          <ImageLightbox
-            images={images}
-            startIndex={openAt}
-            onClose={() => setOpenAt(null)}
-            dim={isActive ? '' : 'opacity-70'}
-          />
-        </Suspense>
-      )}
+      {viewer}
     </div>
   );
 }

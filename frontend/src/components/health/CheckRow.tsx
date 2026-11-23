@@ -5,9 +5,10 @@
  * incident line with Acknowledge, and the link to the page that owns the fix. An OK row is one muted
  * line plus any Not measured cells (on the phone, a note of its hidden OK cells). Nothing here judges: every status is the view's (`effective_status`) or the check's own
  * (`cell.status`), and every message is quoted as written. */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import Expandable from '@/components/Expandable';
 import StatusDot, { STATUS_WORD } from '@/components/StatusDot';
 import {
   HEALTH_QUERY,
@@ -212,42 +213,21 @@ export default function CheckRow({ row, target }: { row: HealthRow; target?: { s
 }
 
 /* The check's own sentence, quoted as written; two lines until opened. The toggle shows only
- * when the clamp actually hides text (measured in the browser, so no length guess); its name
- * says what it opens and keeps its visible word ("more", "less"), so a voice command still finds it. */
+ * when the clamp actually hides text (components/Expandable measures it); its name says what it
+ * opens and keeps its visible word ("more", "less"), so a voice command still finds it. */
 function Message({ text }: { text: string }) {
-  const ref = useRef<HTMLParagraphElement>(null);
-  const [open, setOpen] = useState(false);
-  const [overflows, setOverflows] = useState(false);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const measure = () => setOverflows(el.scrollHeight > el.clientHeight);
-    measure();
-    if (typeof ResizeObserver !== 'function') return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [text]);
   return (
-    <div className="mt-1 flex items-start gap-2">
-      <p
-        ref={ref}
-        className={`min-w-0 flex-1 whitespace-pre-line break-words text-[0.8rem] leading-relaxed text-[var(--color-ink-2)] ${open ? '' : 'line-clamp-2'}`}
-      >
-        {text}
-      </p>
-      {(open || overflows) && (
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-label={open ? 'Show less of the message' : 'Show more of the message'}
-          onClick={() => setOpen(!open)}
-          className="shrink-0 text-[0.75rem] text-[var(--color-ink-2)] underline decoration-[var(--color-rule-strong)] underline-offset-2 max-md:inline-flex max-md:min-h-11 max-md:items-center"
-        >
-          {open ? 'less' : 'more'}
-        </button>
-      )}
-    </div>
+    <Expandable
+      as="p"
+      lines={2}
+      words={['more', 'less']}
+      names={['Show more of the message', 'Show less of the message']}
+      className="mt-1 flex items-start gap-2"
+      contentClassName="min-w-0 flex-1 whitespace-pre-line break-words text-[0.8rem] leading-relaxed text-[var(--color-ink-2)]"
+      toggleClassName="shrink-0 text-[0.75rem] text-[var(--color-ink-2)] underline decoration-[var(--color-rule-strong)] underline-offset-2 max-md:inline-flex max-md:min-h-11 max-md:items-center"
+    >
+      {text}
+    </Expandable>
   );
 }
 

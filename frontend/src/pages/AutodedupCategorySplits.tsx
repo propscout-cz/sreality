@@ -308,7 +308,7 @@ function SideSection({
   const empties = side.adverts.filter((a) => a.empty);
   return (
     <section aria-label={sideLabel(side)}>
-      <h3 className="mb-1.5 text-[0.7rem] uppercase tracking-[0.12em] text-[var(--color-ink-3)]">
+      <h3 className="mb-1.5 text-sm leading-5 font-semibold text-[var(--color-ink)]">
         {sideLabel(side)} · {fmtCount(cards.length)} {inzeratu(cards.length)}
       </h3>
       {cards.length > 0 && (

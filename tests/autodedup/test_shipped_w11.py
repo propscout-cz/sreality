@@ -18,8 +18,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from autodedup import family, seals
 from autodedup.settings import Settings
 

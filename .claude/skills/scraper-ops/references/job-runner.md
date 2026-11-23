@@ -1,0 +1,240 @@
+# The job runner: verbs, log lines, outcomes, drills
+
+The Railway job runner (`scraper/job_runner.py`, `scraper/job_process.py`; SQL in `scraper/job_lease.py`) runs every
+`scraper/jobs.py` entry whose host is `job-runner` (`jobs.runner_jobs()`), each as its own subprocess. Design and
+rulings: `docs/design/actions-exit/PROGRAM.md` § 4.2. Since #2025's move PR it runs `stale_images`, `rent_map` and
+`map_overlays`, since #2032 `clip`, and since #2027 the daily `property_sweep` (03:00 UTC) and `broker_sweep`
+(06:00 UTC), whose workflows those PRs deleted; each later move PR (#2028–#2031, #2033) flips more entries' host. On
+Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and 8 GB
+(`.railway/railway.ts` `jobRunner`; settings, drain and image: `docs/architecture.md` § Railway service
+configuration). Its Health cells and the "Jobs: run now" form are #2026's (below).
+
+## Verbs (`python -m scraper.job_runner <verb>`)
+
+A bare call prints help and exits 2: on a box with production credentials it never starts claiming.
+
+| Verb | What it does |
+|---|---|
+| `run` | The service (Railway's start command, exec form). Registers the registry at boot (`registry_at` is when a row joined: new, adopted or un-retired an hour or more after its retirement; a later boot keeps it, and so does migration 682's trigger whatever image boots; an un-retire under the hour, an older image's blink, keeps `due_at` too, so a cut run or a missed slot stays due), retires only rows it registered, claims due jobs, beats (only after a claim pass completes, so a replica that cannot register or list due jobs goes red), prunes `job_runs` after 90 days. |
+| `once <job>` | One foreground claim, run and release of a runner entry if it is due or requested. No upsert, no heartbeat. Exit 0 ok (75 included) or not due, 143 interrupted (a closed terminal and `Ctrl+\` are the stop too: the child has its own session and would outlive the runner), 1 otherwise (a timeout, or a database that did not answer within 60 s: "the database did not answer"). GitHub entries need #2033. |
+| `request <job> [--by WHO] [-- ARGS]` | Files a request row; the runner runs it within seconds, even while the schedule is paused. ARGS are appended to the registry argv (argparse keeps a repeated flag's last value), so they override the job's own flags unchecked: `clip --workers 64` or `stale_images --limit 10000000` bypass the co-tenancy census, which counts declared memory only. A second request is refused while one waits. The operator's form is "Jobs: run now" (below). |
+| `pause <job> --until <ISO\|now> --note TEXT [--by WHO]` | Pauses the schedule (a request still runs) on any row, a `held()` lane's and a retired one's included (an un-retire keeps it). `--until now` lifts it and records who did. A past time is refused. |
+| `list` | Every `scheduled_jobs` row with its state and latest run. |
+
+On Railway the operator runs `list` and `pause` with `scripts/railway_iac_wizard.sh runner-list` and `runner-pause
+<job> <until> <note>` (over `railway ssh` to job-runner; `pause` echoes the command and asks first, `--by operator`). A
+request is #2026's "Jobs: run now" form, never the wizard. If ssh cannot reach the service, the agent runs the one-row
+SQL with the operator's OK.
+
+Recipes:
+- Run a job now with a smaller batch: `python -m scraper.job_runner request clip --by cli:me -- --limit 500`.
+- Hold a job for a maintenance window: `pause property_sweep --until 2026-11-01T06:00 --note "migration 690"`.
+- **clip's re-embed proof** (AC2 of #2032; the procedure for every torch, transformers, Pillow or numpy bump):
+  with `clip`'s schedule paused (`runner-pause clip <until> "AC2 pending"`), `request clip --by <who> --
+  --verify-reembed`. It runs under the pause, writes nothing, and prints one `CLIP_VERIFY … pass=… why=…` line;
+  `why=download` is inconclusive (re-request; a sample object gone from R2 reads `why=sample`), any other failure keeps
+  the pause. Lift the pause on a pass.
+- **clip's exits:** 75 when its 1500 s budget cut a run that was making progress, or a re-tag campaign is still
+  open (a run re-tags for at most `--reselect-seconds`, 300 s, then is due again in 60 s, so new photos go first and a
+  backlog chains); 0 when a re-select finds under one chunk, or when downloads failed but something was marked or
+  under a whole chunk of them failed (`why=errors`); 1 when its downloads failed and it marked nothing, a whole chunk's
+  worth (`why=r2`), or a decode or embed failure was not one image's (`why=decode`, `why=embed`: a MemoryError, nothing
+  of the chunk decoding or embedding alone, or past 2 terminal a chunk / 5 a run; a decode one only on a second chunk
+  in a row: one alone is skipped, its photos that decode tagged, the rest unmarked, `undecoded=` in the done line, so
+  one listing's corrupt photos never stall the queue); 2 when `SUPABASE_DB_URL` or an
+  `R2_*` is missing. A GET that failed is retried by the next run, never again in the same one. A
+  `clip_taxonomy_retag_after` later than the database's now() is no campaign until it passes (one `RETAG` warning a
+  run). The last line is `CLIP_JOB exit=<code> why=…`.
+- **After a move PR merges**, `gh run list --workflow=<deleted file> --json status,databaseId`; if a run is queued or
+  running, pause the new row past that run's timeout (`runner-pause`), since a queued run in a non-cancelling group
+  can still start. A re-land within an hour of its revert's deploy keeps the row's `due_at`, and its boot claims a
+  slot GitHub ran in between: pause the retired row before that deploy (the slot then runs once the pause ends).
+- **clip's move (#2032) held nothing for a GitHub run in flight:** both writers upsert idempotently and stamp last,
+  so an overlap corrupts nothing (a rewritten vector moves about 1e-6 per value); the "AC2 pending" pause is what
+  held its first slot.
+
+## Log lines (Railway logs)
+
+| Line | Meaning |
+|---|---|
+| `BOOT pid1=… version=… holder=… deployment=… heartbeat=… pooler_addresses=… jobs=N memory_limit_mb=… cpus=…` | Once per start. `pid1=False` on Railway means the start command is not exec form; `pooler_addresses` above 2 breaks the drain's connect budget. The limits are the replica's cgroup's (a Railway replica: ≈ 7629 MiB, 4); every beat's `worker_heartbeats.details` carries them too. |
+| `JOBS register entries=… inserted=[…] adopted=[…] unretired=[…] retired=[…] skipped=[…]` | The boot upsert landed (retried every tick until it does; nothing is claimed before). |
+| `JOBS skip job=… why=…` (ERROR) | The database refused that entry (a CHECK, a bad value): never claimed until a deploy fixes it. |
+| `RUN start job=… run=… pid=… requested_by=… args=…` | A claim spawned. The child's own output follows as `[<job>#<run>] <line>`. |
+| `RUN term job=<job>#<run> pid=… why=timeout\|deploy` | The guard sent SIGTERM to the leader. |
+| `RUN kill job=… pid=… why=timeout\|deploy\|fence (…)` | The guard SIGKILLed the group: the grace ran out, or the lease's fence passed / a renewal was refused. |
+| `RUN end job=… run=… outcome=… due=… exit=… peak_mb=…` | Released. |
+| `LEASE lost job=…: …` | A renewal or a release was refused, or the reaper closed a lapsed run as `lost`. Each claim is its own holder (`<BOOT holder>/<n>`), so a late release never touches a later run of the job. |
+| `LEDGER <call> failed (connection lost): …` | A database call failed; the tick asks nothing more after a lost connection. A finished run waits in memory and is released when the database answers. |
+| `STOP seen: forwarding SIGTERM to N children, SIGKILL in 90 s` | A deploy's SIGTERM. Claims stop, mid-phase too (a lease claimed as it lands is released `interrupted`, "deploy stop; not started"); renewals and releases go on until nothing runs. |
+| `STOP drain spent …` (ERROR) | The runner's own 180 s drain ran out (Railway's SIGKILL follows at 250 s); those leases lapse and the reaper closes them `lost`. |
+| `TICK failed` / `WATCHDOG no clean tick for N s: killed N children, exiting` | A tick raised; after 300 s with no clean tick the guard kills every child and exits, and Railway restarts it. The guard only queues its lines (`STOP`, `RUN term`, `RUN kill`) for a forwarder thread, and the exit's backstop writes nowhere, so a stalled log reader holds no signal and no exit (≤ 10 s). |
+
+## Outcomes and next due time
+
+The runner's own stop decides before the exit code.
+
+| Run | `outcome` | Next `due_at` |
+|---|---|---|
+| spawn failed (`exit_code` NULL) | `failed` | backoff |
+| stopped at `timeout_s`, whatever it exited | `timeout` | retry: backoff floored at `timeout_s` |
+| exit 0 | `ok` | next slot |
+| exit 75 | `ok` | now + 60 s |
+| deploy stop, fence | `interrupted` | now (DB-heavy too) |
+| any other exit, an unsent SIGKILL (likely the OOM killer) | `failed` | backoff: 60 s doubling, capped at the cadence and the next slot |
+| lease lapsed (runner crash, a database outage past the fence; a refused renewal, since the reaper closes the run first) | `lost` | now, then backoff on a second loss in a row; a pure request: unchanged (one exception, below) |
+
+A DB-heavy job's backoff, retry and lost waits go to its own hour (the next day at most), and **no DB-heavy job starts
+while another one's run is open** (#2027; `job_lease`'s `due`/`claim` with `PgLedger.heavy`, main's whole registry, so
+`once` too; a transaction advisory lock makes two replicas' heavy claims take turns). A run off its hours (an
+interrupted one, a recovery after hours down, a request) waits instead, and past 10 min its cell reads Watch `due N ago
+and not started`. A pure request run never
+moves `due_at` (its exit 75 pulls it to 60 s at most), and the row's `due=now` log line does not apply to it; a request
+that also took a due slot advances it. Its loss keeps `due_at` too, but `job_runs` keeps no due slot, so the reaper
+reads one from the run: a request run whose row's `due_at` is still after its `started_at` (the claim's own now())
+took none (#2317), so a slot that came due while it ran stays due. One exception: a request on a paused row that was
+already due counts at its loss as having taken its slot, so its loss moves `due_at` on, never earlier.
+
+## Reading `job_runs`
+
+`exit_code` is signed: −9 / −15 = killed by that signal; 143 = the child exited after its own SIGTERM handling.
+`peak_rss_mb` is the larger of the leader's `VmHWM` and the group's summed `VmRSS` (pool workers included; shared
+pages count twice). `last_error` on `scheduled_jobs` names the cause in `settle`'s order (none for an `ok` run, a
+deploy or fence it outlived included; `killed by signal N` for a signal with no name) and never carries log text. **Never paste
+`log_tail` anywhere public: it can hold a connection string.**
+
+```sql
+select job_name, outcome, exit_code, peak_rss_mb, started_at, ended_at - started_at as took
+  from job_runs order by id desc limit 20;
+```
+
+## Health: the `job/<name>` cell (migration 682, #2026)
+
+The pg_cron watcher writes one `job/<name>` cell per registered job-runner row (`runner = 'job-runner'`,
+`registry_at` set), live or retired under an hour (a blink, judged whole), from `public.health_job_cells()`, every 5 min, so it
+survives a Railway outage. A job cell is never `unknown`. C is the row's cadence, T its `timeout_s`, W the longest run
+of a sibling on its resource seen since its clock started. The worst condition wins; every condition is in
+`facts.conditions`.
+
+| State | Status | Message (after `<job>: `) |
+|---|---|---|
+| Running, under ⅔·T | ok | `running for N of its T budget on job-runner/ab12cd34` (+ `; a request by X waits for it`) |
+| Running past ⅔·T / past T / past T + 10 min | Watch / Watch / **Problem** | `running for …`; past T `; past it: the runner is stopping it`; past T + `STUCK_RUN_GRACE_S` `; past the runner's 10 min stopping grace: nothing is stopping it` |
+| The latest closed run is `timeout` (ruling R-3) | **Problem** until a later run closes | `its last run hit its T budget and was stopped (timeout)`; a request's adds ` (a request by X): a request is never retried; a new request or its next slot (in N) clears it` |
+| Failures in a row (its failed runs since `registry_at`) | Watch at 1; **Problem** at 3 once the streak's first failure is min(C, 1 h) old | `its last run failed: <cause>` / `3 failed runs in a row, the first N ago; the last: <cause>` |
+| Late since its clock | Watch past C + T + W; **Problem** past that + min(C, 1 d) | `late: no ok run for N (Watch past …, Problem past …)` or `never ran ok` |
+| Due or requested, not started for 10 min | Watch while a replica beats; **Problem** when none has for 10 min | `due N ago and not started` / `requested by X N ago and not started` (+ `; no job-runner replica has beaten for 10 min`) |
+| Refused at boot (a replica's `JOBS skip`) | **Problem** | `refused at boot by job-runner/ab12cd34 (JOBS skip in its log): no replica claims it`; with no row: `… it has no row and runs nowhere` |
+| Paused | ok (late, failing and timeout suppressed) | `paused for N more by X: note` (+ `; its last run failed: <cause>`); paused longer than greater(C, 7 d) is Watch, `…longer than a cycle: its slots are skipped until then` |
+| Waiting for a sibling on its resource | ok | `waiting for B, which holds location-heavy (running N of its M budget)` (only while it waits) |
+| Requested, under 10 min | ok | `requested by X N ago; starting` |
+| New, adopted or un-retired, before its first slot | ok (history not judged until a run since closes) | `not run yet; first slot in N (… UTC)` (no trace of a run: no `job_runs` row, and no last ok, outcome or failure count on the row, which the 90-day prune keeps) / `not run since it joined the runner; first slot in N (…); before it joined: last ok M ago` (or `never ran ok`: a re-land, or an adopted lane row) |
+| Otherwise | ok | `last ok N ago; next slot in M` or `; due now`; an interrupted run (a deploy stop or a fence) adds `; its last run was interrupted and is due again at once`, or only `; its last run was interrupted` once its `due_at` is ahead (an image that re-slots an un-retired row, main's or a revert, moved it through a blink) (a request: `; a request by X was interrupted; it is not re-filed`) |
+
+- **A row is judged on its runs since `registry_at`**, when it joined the runner: stamped when the row is new,
+  adopted or un-retired `REJOIN_AFTER_S` (1 h) or more after its retirement (a revert's re-land), and kept by every
+  later boot (`_REGISTER_SQL`) and by migration 682's trigger, so a boot that re-stamps it (an older image with the
+  job, a revert) moves nothing, nor does a blink: an older image without the job retires the row, and the latest
+  booting again within the hour un-retires it with its streak, timeout and clock judged whole and its `due_at`
+  kept (a cut run, a retry or a missed slot stays due; so does a slot GitHub ran under a revert re-landed within
+  the hour, which the move recipe pauses). Its
+  streak, last run, cause and clock read only those runs, and it waits for its first slot (ok, history not judged)
+  until one of them closes, so the counter, timeout and last ok un-retiring carries from before a revert never read Problem,
+  however soon its first slot (a deploy-cut first run reads ok, one failure Watch). A steady row whose only ok run
+  was pruned (map_overlays: 91 d cadence, 90 d prune) is not waiting: its `last_success_at` falls after
+  `registry_at`. Applied after #2025 PR-2 deployed, 682 first joins each live row, and each one an older image
+  retired under an hour ago (a blink), at its first run (main's register had re-stamped it at every boot); apply it
+  before PR-2's first deploy, whichever merges first.
+- **The clock** is the last ok run since `registry_at` (a request's included), else the first *scheduled* run since
+  (`requested_by IS NULL`) minus C, else the first slot minus C, and a pause that lapsed restarts it. Known edge: a run
+  that served a request and took its due slot keeps `requested_by` (`job_runs` has no due slot), so a
+  never-succeeded job whose first run was one reads late up to one cycle later, never earlier.
+- **The cause** is the latest `failed`/`timeout`/`lost` run's: `lost: the replica holding it stopped renewing its
+  lease`; `scheduled_jobs.last_error` when that failure is the latest closed run; else `<outcome>, exit <code>`; a
+  request's cause adds `(a request by github:x, args …)`. `log_tail` is never read.
+- **Requests count as the job's runs** (#2024's release): a `--dry-run` request makes the job look freshly done and
+  resets the streak; a mistyped argument is a failed run (Watch until the next ok one; re-request it corrected). One
+  that makes the run outrun `timeout_s` is a recorded timeout, a **Problem** until a later run closes, and a request is
+  never retried: on rent_map or map_overlays that is the next slot, up to 30 or 91 d away, unless you re-request it
+  with arguments that fit the budget.
+- **`job-runner`** (the fleet, present while any live row exists, or one retired under an hour ago; M counts only the live ones, so a blink reads `0 jobs registered`): ok `N replicas beating; M jobs registered`, or Watch
+  when no replica has beaten for 10 min; never a Problem (a cleanly stopped or deleted runner deletes its beats; it
+  stays Watch until a job comes due + 10 min). Each replica keeps its own `worker/job-runner/<id>` cell (migration 675).
+- **`job-cells`**: a Problem if the helper raised (`the job cells could not be computed: …`), with an `unknown`
+  `<subject>: not judged` cell per open `job/*` incident, so the teller neither recovers nor retires them.
+- **`job-runner/registry`** (the worker's `jobs` check, `scripts/checks/platform.py`): every name in
+  `jobs.runner_jobs()` (the code the worker runs: main's) needs a live registered row. Missing past
+  `jobs_runner_register_grace_s` (1800 s) from the worker's boot, read missing at the previous measurement too: a
+  **Problem**, "the runner is not running this registry" (its build failed or was skipped, it refused the entry, or an
+  older image booted and retired it): read Railway's job-runner deployments and the `BOOT … jobs=N` line. Missing at
+  one read only: Watch (in a deploy overlap the one worker heartbeat row can be the predecessor's). A live row the code
+  does not declare: Watch. Inside the grace: ok `waiting for the runner's deploy`.
+- **For the move PRs (#2028, #2029): the ⅔ line.** A job whose own budget sits above ⅔ of its `timeout_s`
+  reads Watch on every healthy run that uses it: location_intake runs `--max-seconds 2400` against T 3300 (⅔ = 2200).
+  `tests/scraper/test_job_registry.py`'s argv census refuses a runner job's `--max-seconds` past ⅔ of its `timeout_s`, so
+  a move PR sets `timeout_s` ≥ 1.5× the job's own budget, lowers the budget, or asks the operator. A walk stopped at
+  its own timeout records `timeout`, a Problem: W4 keeps `walk_timeout_s` above each walk's p95. W2's three jobs are
+  clear (stale_images runs 2-9 s of 1200; rent_map and map_overlays carry no self-budget), W5's clip (`--max-seconds
+  1500` against 3300) and W3's sweeps: property_sweep's 6000 s budget against 9000 (its worst run, budget + one
+  in-flight batch + finalize, is 130 min; only a budget stop's tail crosses 6000 s), broker_sweep's against 4500
+  (its full runs since Broker Unify W3, 2026-10-01: 2982 s at most, under the 3000 s line; one failed at 3497 s).
+- One job's cell off: `pause <job> --until <t> --note <why>`. The whole arm, forward only: a migration replacing
+  `health_job_cells(interval)` with `select '[]'::jsonb`.
+
+## Jobs: run now, click by click
+
+The GitHub form `.github/workflows/run_job.yml` files a request through the `request` verb (`--by github:<you>`) and
+runs nothing on GitHub; the runner starts the job within seconds once it and its resource are free.
+
+1. github.com → the repo → **Actions** → **Jobs: run now** (left list) → **Run workflow** (right).
+2. Leave "Use workflow from" on `main`.
+3. Type the job's name as Health shows it after `job/` (e.g. `map_overlays`); anything but `a-z`, `0-9` and `_` is
+   refused before Python runs. Optional args, e.g. `--dry-run` (quote a value with spaces; an unmatched quote is
+   refused before Python runs, nothing filed); they override the job's own flags unchecked. **A blank Args box on
+   `map_overlays` starts a LIVE full run that replaces production tiles** about 6 s after filing, a pause does not stop
+   it and the summary line does not show args. An agent files it as `gh workflow run run_job.yml --ref main -f
+   job=map_overlays -f args=--dry-run` and reads `job_runs.args` at once. If it reads NULL with `requested_by` set,
+   Redeploy at once: a pure request keeps `due_at`, so nothing re-claims it.
+4. **Run workflow**.
+5. Open the run and read its one summary line: `request filed for <job>`, or why not (`<job> runs on
+   github-actions-until-moved` until its move PR lands; `a request by … has waited since …`; `not a job name`; `args: an unmatched quote, nothing filed`). Then
+   watch `job/<name>` on Health. Green means asked, not done.
+
+## Runner-only operations outside the merge coordinator's windows (#2025-R2, ruled 2026-10-26)
+
+The merge coordinator is a role (`docs/agents/issue-tracker.md` § Merging). Once W-1 has shown `sreality`'s
+deployment id unchanged by the job-runner apply, three kinds may run outside its windows: (a) an apply whose every
+change targets `service.job-runner`; (b) a Redeploy or Deploy Latest Commit of job-runner; (c) the gate-week drills
+below. Merges still wait for its light. Four conditions:
+1. The wizard's target check stays on. A change to shared or project-level variables, to the worker service or to the
+   API service books a window.
+2. Before drills C and D, the merge coordinator gets a one-line FYI with the time. No brake is needed.
+3. A job that writes autodedup tables, takes `rt_lease` or runs anything in `autodedup/` needs the coordinator's
+   window, as merges do.
+4. If a runner operation ever moves `sreality`'s deployment id or restarts the worker, runner-only work stops and the
+   merge coordinator is told.
+
+## Runner drills (run for gate #2123 on 2026-11-01; every number and the exact SQL are on that ticket)
+
+A deploy cut is a new deployment only: job-runner → Deployments → the ACTIVE deployment → ⋯ → Redeploy, or the Railway
+tool's `redeploy` with that deployment's id. Never Restart (no doc says it honours the drain), never an older deployment
+(its boot retires the newer registry's rows). A Redeploy reuses the build: SIGTERM comes 37-39 s after `createdAt`, and
+the new replicas boot about 4 s before it. Measure from the time inside the `STOP` message: Railway's record time lags
+up to about 10 s. One drill at a time, with no other request run open.
+- **A. Request run:** `map_overlays --dry-run` (150 s, 392 MB) and `rent_map` live (33 s, 268 MB) each end `ok` with
+  `requested_by` set, under their declarations (1024, 512), `due_at` unchanged. A bare `ok` does not prove the flood
+  source's egress (zero `REVISED unknown` lines does), and MF is reached only by `rent_map`.
+- **B. Pause with expiry:** pause `stale_images` until a :20 slot + 10 min: no claim while paused, and that same slot is
+  claimed at the lapse (4.6 s after it), not skipped.
+- **C. Deploy cut of a request:** Redeploy during a `map_overlays --dry-run` request. It closes `interrupted` (exit −15)
+  0.2 s after the SIGTERM and is not filed again.
+- **D. Re-claim:** aim at `clip`, whose run lasts long enough (`stale_images` lasts 2-9 s), on a slot between 09:00 and
+  15:59Z: create the deployment 20 s before the slot, for a SIGTERM at slot + 17 s. It closed `interrupted` (exit 143) 4.9 s
+  after the SIGTERM, and a new replica re-claimed it 4.1 s later (limit 60 s).
+- **E. Self-fence:** six writes, each one guarded on the ticket. Pause the row 14 days, so a moved `due_at` cannot start a
+  live run. File a dry run and check its args. Fence at run age 10-45 s. Read the reap: `due_at` reads unchanged, or later
+  if the row was already due (a pure request's loss keeps it since #2317; before it, the reaper moved it and the drill
+  restored it). File nothing until `RUN kill … why=fence` (50 s, limit about 62 s): a missing heartbeat entry does not
+  prove the child dead. File one clean dry run, then lift the pause only if `due_at` reads right. Expect
+  `LEASE lost`, never `LEASE race lost`. The gate's overlap query cannot see a second holder here, because the reaper sets
+  `ended_at` before the child dies: compare started_at with the kill line.

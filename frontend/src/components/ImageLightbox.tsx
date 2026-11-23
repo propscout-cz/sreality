@@ -3,12 +3,11 @@ import { createPortal } from 'react-dom';
 import type { ImagePublic } from '@/lib/types';
 import { imageSrc } from '@/lib/imageUrl';
 import ImageTagBadge from '@/components/ImageTagBadge';
-import ImageRenderBadge from '@/components/ImageRenderBadge';
 import Spinner from '@/components/Spinner';
 import { DialogClose } from '@/components/Dialog';
 import { useDialog } from '@/lib/useDialog';
 
-/* The full-screen photo modal — arrow-key nav, the tag/render badges on the
+/* The full-screen photo modal — arrow-key nav, the room-tag badge on the
  * enlarged photo. Extracted from listing-detail/Gallery (the property-detail image
  * expand) so the CLIP/pHash audit pages open the SAME modal instead of a second one-off —
  * it already operates on ImagePublic[], the exact shape images_public rows already are.
@@ -279,10 +278,6 @@ export default function ImageLightbox({
                     tag={badge.tag}
                     confidence={badge.confidence}
                     className="absolute bottom-2 left-2 text-[0.7rem]"
-                  />
-                  <ImageRenderBadge
-                    renderScore={current.clip_render_score}
-                    className="absolute bottom-2 right-2 text-[0.7rem]"
                   />
                 </>
               )}

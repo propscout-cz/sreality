@@ -13,7 +13,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { InfoIcon } from '@/components/icons';
-import { PickButton } from '@/components/controls';
+import { SegmentedBar } from '@/components/controls';
 
 /* -------------------------------------------------------------------- */
 /* Expand/collapse twisty — right-pointing when closed, rotates to point  */
@@ -95,6 +95,11 @@ export function useInfoMode(pageKey: string): [boolean, (next: boolean) => void]
   return [expanded, setExpanded];
 }
 
+const INFO_MODES = [
+  { value: false, label: 'Compact' },
+  { value: true, label: 'Detailed' },
+];
+
 export function InfoModeToggle({
   expanded,
   onChange,
@@ -103,18 +108,11 @@ export function InfoModeToggle({
   onChange: (next: boolean) => void;
 }) {
   return (
-    <div role="group" aria-label="Description density" className="inline-flex items-center gap-2 shrink-0">
+    <div className="inline-flex items-center gap-2 shrink-0">
       <span className="text-[0.65rem] tracking-[0.14em] uppercase text-[var(--color-ink-4)]">
         Descriptions
       </span>
-      <div className="inline-flex gap-1">
-        <PickButton on={!expanded} onClick={() => onChange(false)}>
-          Compact
-        </PickButton>
-        <PickButton on={expanded} onClick={() => onChange(true)}>
-          Detailed
-        </PickButton>
-      </div>
+      <SegmentedBar hug label="Description density" options={INFO_MODES} value={expanded} onChange={onChange} />
     </div>
   );
 }

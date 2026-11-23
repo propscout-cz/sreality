@@ -6,11 +6,12 @@
  * on the control's DESCRIPTION, which is what these tests pin.
  *
  * Every row opens what lib/dispatchTarget names (the property by property_id,
- * a share by its kind), and older rows page in on "Load more" (keyset cursor).
+ * a share by its kind), and older rows load as the end of the list comes into
+ * view (keyset cursor).
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -29,6 +30,7 @@ const baseDispatch: WatchdogDispatch = {
   collection_id: null,
   collection_name: null,
   property_id: 999,
+  listing_id: 501,
   change_kind: 'new',
   share_kind: null,
   share_ref: null,
@@ -39,6 +41,7 @@ const baseDispatch: WatchdogDispatch = {
   seen_at: null,
   trigger_price_czk: null,
   prev_price_czk: null,
+  match_reason: null,
   category_main: 'byty',
   category_type: 'prodej',
   price_czk: 8_900_000,
@@ -69,6 +72,7 @@ const share: WatchdogDispatch = {
   share_kind: 'collection',
   share_ref: '42',
   property_id: null,
+  listing_id: null,
   display_label: null,
   price_czk: null,
 };
@@ -81,6 +85,7 @@ const feed: WatchdogDispatchesResponse = {
       id: 'd2',
       // A bazos ad: no sreality id anywhere, and the row still opens its property.
       property_id: 4321,
+      listing_id: 502,
       source: 'bazos',
       display_label: 'Brno-střed',
       seen_at: '2026-05-12T11:00:00+00:00',
@@ -103,7 +108,16 @@ vi.mock('@/lib/api', async (orig) => ({
   markWatchdogDispatchSeen: vi.fn(),
 }));
 
+vi.mock('@/lib/queries', async (orig) => ({
+  ...(await orig<typeof import('@/lib/queries')>()),
+  fetchListingCovers: vi.fn(),
+}));
+
 import { getNotificationUnreadCount, listNotifications, markWatchdogDispatchSeen } from '@/lib/api';
+import { familyTargets } from '@/lib/curationSync';
+import { fetchListingCovers } from '@/lib/queries';
+import { revalidate } from '@/lib/revalidate';
+import { bareImage } from '@/lib/types';
 import { expectNoNestedInteractive } from '@/test/a11y';
 import Notifications from './Notifications';
 
@@ -118,18 +132,21 @@ function renderPage(page: WatchdogDispatchesResponse = feed) {
     pageParams: [null],
   });
   qc.setQueryData(notificationKeys.unreadCount, counts);
-  return render(
+  const view = render(
     <QueryClientProvider client={qc}>
       <MemoryRouter>
         <Notifications />
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...view, qc };
 }
 
 beforeEach(() => {
   vi.mocked(listNotifications).mockReset();
   vi.mocked(markWatchdogDispatchSeen).mockReset();
+  vi.mocked(fetchListingCovers).mockReset();
+  vi.mocked(fetchListingCovers).mockResolvedValue(new Map());
 });
 
 describe('<Notifications> row names', () => {
@@ -146,11 +163,129 @@ describe('<Notifications> row names', () => {
   });
 });
 
+describe('<Notifications> New match rows', () => {
+  it('name why the property entered the slice, a price cut with its two prices', () => {
+    const cut: WatchdogDispatch = {
+      ...baseDispatch,
+      id: 'cut',
+      match_reason: 'price',
+      trigger_price_czk: 8_400_000,
+      prev_price_czk: 9_000_000,
+    };
+    renderPage({ ...feed, data: [cut, { ...baseDispatch, id: 'old', display_label: 'Kolín' }], total: 2 });
+    const row = screen.getByRole('link', { name: /^New match Praha 5/ });
+    expect(row).toHaveTextContent('Watchdog · Praha 2+kk · Price cut');
+    expect(row).toHaveTextContent(/9\s000\s000.*→.*8\s400\s000/);
+    /* Told before reasons existed: newly listed, as every New match then was. */
+    expect(screen.getByRole('link', { name: /^New match Kolín/ })).toHaveTextContent('Newly listed');
+  });
+});
+
+/* A row leads with the cover of the ad it fired on (lib/hydration). The photo is a
+   decoration: it never gates the row, never names it, and its box is there before it. */
+describe('<Notifications> row photos', () => {
+  const boxes = () => document.querySelectorAll('li [class*="aspect-[4/3]"]');
+
+  it('lead a listing row with its ad cover, and leave the row\'s name as its own text', async () => {
+    vi.mocked(fetchListingCovers).mockResolvedValue(
+      new Map([[501, bareImage(1, null, 'https://cdn.example/501.jpg')]]),
+    );
+    renderPage();
+    const row = screen.getByRole('link', { name: /^New match Praha 5/ });
+    await waitFor(() => expect(row.querySelector('img')).not.toBeNull());
+    const img = row.querySelector('img')!;
+    expect(img).toHaveAttribute('src', 'https://cdn.example/501.jpg');
+    expect(img).toHaveAttribute('alt', '');
+    expect(img).toHaveAttribute('loading', 'lazy');
+    /* Dot, then the photo, then the kind chip. */
+    expect(row.children[1]).toContainElement(img);
+    expect(row).toHaveAccessibleName(/^New match Praha 5/);
+  });
+
+  it('ask for the covers of the ads the rows fired on; a share has no ad and no box', async () => {
+    renderPage();
+    await waitFor(() => expect(fetchListingCovers).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(fetchListingCovers).mock.calls[0][0]).toEqual([501, 502]);
+    expect(boxes()).toHaveLength(2);
+    expect(screen.getByText(/owner@example\.com shared/).closest('li')!.querySelector('img')).toBeNull();
+  });
+
+  it('keep an empty box for an ad with no cover, and a dashed one for a photo that will not load', async () => {
+    vi.mocked(fetchListingCovers).mockResolvedValue(
+      new Map([[501, bareImage(1, null, 'https://cdn.example/501.jpg')]]),
+    );
+    renderPage();
+    const row = screen.getByRole('link', { name: /^New match Praha 5/ });
+    await waitFor(() => expect(row.querySelector('img')).not.toBeNull());
+
+    expect(screen.getByRole('link', { name: /^New match Brno-střed/ }).querySelector('img')).toBeNull();
+    expect(boxes()).toHaveLength(2);
+
+    fireEvent.error(row.querySelector('img')!);
+    expect(row.querySelector('img')).toBeNull();
+    expect(row.children[1]).toHaveClass('border-dashed');
+  });
+
+  it('read the covers once per loaded page, so the next page never re-reads the last', async () => {
+    const rows = Array.from({ length: 51 }, (_, i) => ({
+      ...baseDispatch,
+      id: `r${i}`,
+      listing_id: 1000 + i,
+      display_label: `Místo ${i}`,
+    }));
+    renderPage({ ...feed, data: rows, total: 51 });
+    await waitFor(() => expect(fetchListingCovers).toHaveBeenCalledTimes(2));
+    const sizes = vi.mocked(fetchListingCovers).mock.calls.map(([ids]) => ids.length);
+    expect(sizes.sort((a, b) => a - b)).toEqual([1, 50]);
+  });
+});
+
 describe('<Notifications> listing rows', () => {
   it('open the property page by property_id, whatever portal the ad is on', () => {
     renderPage();
     expect(screen.getByRole('link', { name: /^New match Praha 5/ })).toHaveAttribute('href', '/property/999');
     expect(screen.getByRole('link', { name: /^New match Brno-střed/ })).toHaveAttribute('href', '/property/4321');
+  });
+
+  /* The feed is triaged row by row: on the desktop a row opens in a new tab and
+     the feed stays put. Opening it is reading it, whether by a click or by a
+     middle-click (which fires auxclick, never click). */
+  it('open in a new tab and mark the row read on a click or a middle-click', async () => {
+    vi.mocked(markWatchdogDispatchSeen).mockResolvedValue({ ...baseDispatch, seen_at: '2026-05-12T12:00:00+00:00' });
+    renderPage();
+    const row = screen.getByRole('link', { name: /^New match Praha 5/ });
+    expect(row).toHaveAttribute('target', '_blank');
+    expect(row).toHaveAttribute('rel', 'noopener');
+
+    fireEvent(row, new MouseEvent('auxclick', { bubbles: true, button: 2 })); // a right click marks nothing
+    expect(markWatchdogDispatchSeen).not.toHaveBeenCalled();
+    fireEvent(row, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    await waitFor(() => expect(markWatchdogDispatchSeen).toHaveBeenCalledTimes(1));
+    expect(markWatchdogDispatchSeen).toHaveBeenCalledWith('d1');
+  });
+
+  it('open and mark the row read on a plain click too', async () => {
+    vi.mocked(markWatchdogDispatchSeen).mockResolvedValue({ ...baseDispatch, seen_at: '2026-05-12T12:00:00+00:00' });
+    renderPage();
+    fireEvent.click(screen.getByRole('link', { name: /^New match Praha 5/ }));
+    await waitFor(() => expect(markWatchdogDispatchSeen).toHaveBeenCalledTimes(1));
+  });
+
+  /* A watchdog's name alone read like the ad's title (operator, 2026-11-03), so the row says
+     what kind of source told it first. */
+  it('name their source by its kind, then its name', () => {
+    const monitored: WatchdogDispatch = {
+      ...baseDispatch, id: 'd3', source_kind: 'collection_monitor', subscription_id: null,
+      subscription_name: null, collection_id: 7, collection_name: 'Vinohrady', property_id: 77,
+      change_kind: 'price_drop', display_label: 'Praha 2',
+    };
+    const gone: WatchdogDispatch = { ...baseDispatch, id: 'd5', subscription_name: null, property_id: 78, display_label: 'Kladno' };
+    renderPage({ ...feed, data: [baseDispatch, monitored, gone], total: 3 });
+    expect(within(screen.getByRole('link', { name: /^New match Praha 5/ })).getByText('Watchdog · Praha 2+kk'))
+      .toBeInTheDocument();
+    expect(within(screen.getByRole('link', { name: /^Price drop Praha 2/ })).getByText('Collection · Vinohrady'))
+      .toBeInTheDocument();
+    expect(within(screen.getByRole('link', { name: /^New match Kladno/ })).getByText('Watchdog')).toBeInTheDocument();
   });
 
   it('render a row with nothing to open as a button that only marks it read', async () => {
@@ -162,16 +297,16 @@ describe('<Notifications> listing rows', () => {
   });
 });
 
-describe('<Notifications> source tabs', () => {
-  it('offers All, Monitoring, Watchdogs and Shared, and no System tab', () => {
+describe('<Notifications> source filter', () => {
+  it('offers All, Collections, Watchdogs and Shared, and no System option', () => {
     renderPage();
-    for (const name of ['Monitoring', 'Watchdogs', 'Shared']) {
+    for (const name of ['Collections', 'Watchdogs', 'Shared']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument();
     }
     expect(screen.queryByRole('button', { name: 'System' })).toBeNull();
   });
 
-  it('asks for the share kind on the Shared tab', async () => {
+  it('asks for the share kind under Shared', async () => {
     renderPage();
     vi.mocked(listNotifications).mockResolvedValue({ ...feed, data: [], total: 0 });
     fireEvent.click(screen.getByRole('button', { name: 'Shared' }));
@@ -182,12 +317,49 @@ describe('<Notifications> source tabs', () => {
   });
 });
 
+/* Operator ruling 2026-10-27: the source and read filters pick one each, so each
+ * is the one joined bar (SegmentedBar), chosen filled copper on the desktop. */
+describe('<Notifications> filters are the one joined bar', () => {
+  it('draws Source and Read state as joined tracks, the chosen segment filled copper', () => {
+    renderPage();
+    for (const [name, labels] of [
+      ['Source', ['All', 'Collections', 'Watchdogs', 'Shared']],
+      ['Read state', ['All', 'Unread']],
+    ] as const) {
+      const bar = screen.getByRole('group', { name });
+      const track = bar.firstElementChild as HTMLElement;
+      expect(track).toHaveClass('border', 'bg-[var(--color-paper-2)]');
+      const buttons = within(bar).getAllByRole('button');
+      expect(buttons.map((b) => b.textContent)).toEqual(labels);
+      for (const b of buttons) {
+        expect(b.parentElement).toBe(track);
+        expect(b).toHaveAttribute('aria-pressed', String(b.textContent === 'All'));
+      }
+      const all = within(bar).getByRole('button', { name: 'All' });
+      expect(all).toHaveClass('bg-[var(--color-copper)]', 'text-[var(--color-on-copper)]');
+      expect(all).not.toHaveClass('bg-[var(--color-copper-soft)]');
+    }
+  });
+
+  it('moves the lit segment and asks for unread rows only', async () => {
+    renderPage();
+    vi.mocked(listNotifications).mockResolvedValue({ ...feed, data: [], total: 0 });
+    const read = screen.getByRole('group', { name: 'Read state' });
+    fireEvent.click(within(read).getByRole('button', { name: 'Unread' }));
+    expect(within(read).getByRole('button', { name: 'Unread' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(read).getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'false');
+    await waitFor(() =>
+      expect(listNotifications).toHaveBeenLastCalledWith(expect.objectContaining({ seen: 'unseen' })));
+  });
+});
+
 describe('<Notifications> share rows', () => {
   it('shows the sentence and links to the shared collection', () => {
     renderPage();
     const text = screen.getByRole('button', { name: /^Shared collection owner@example\.com shared the collection "Vinohrady"/ });
     expect(text).toHaveAccessibleDescription('unread');
     expect(screen.getByRole('link', { name: 'Open collection' })).toHaveAttribute('href', '/collection/42');
+    expect(screen.getByRole('link', { name: 'Open collection' })).toHaveAttribute('target', '_blank');
   });
 
   it('marks the share read when the collection is opened', async () => {
@@ -263,7 +435,28 @@ describe('<Notifications> share rows', () => {
   });
 });
 
-describe('<Notifications> Load more', () => {
+/* jsdom has no IntersectionObserver; this one records each observer so a test
+ * can bring the end of the list into view by hand. */
+class FakeIO {
+  static instances: FakeIO[] = [];
+  constructor(readonly callback: IntersectionObserverCallback) {
+    FakeIO.instances.push(this);
+  }
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+  takeRecords(): IntersectionObserverEntry[] {
+    return [];
+  }
+  reach(): void {
+    this.callback(
+      [{ isIntersecting: true } as IntersectionObserverEntry],
+      this as unknown as IntersectionObserver,
+    );
+  }
+}
+
+describe('<Notifications> older rows on reaching the end', () => {
   const fullPage: WatchdogDispatchesResponse = {
     ...feed,
     data: Array.from({ length: 50 }, (_, i) => ({ ...baseDispatch, id: `p1-${i}`, display_label: `Řádek ${i}` })),
@@ -277,28 +470,163 @@ describe('<Notifications> Load more', () => {
     next_cursor: null,
   };
 
-  it('asks for the page after next_cursor and appends it', async () => {
+  beforeEach(() => {
+    FakeIO.instances = [];
+    vi.stubGlobal('IntersectionObserver', FakeIO);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('loads the page after next_cursor when the end of the list comes into view', async () => {
     renderPage(fullPage);
-    vi.mocked(listNotifications).mockImplementation(async (params = {}) =>
-      params.cursor === 'cursor-1' ? older : fullPage,
+    let answerOlder: (page: WatchdogDispatchesResponse) => void = () => {};
+    vi.mocked(listNotifications).mockImplementation((params = {}) =>
+      params.cursor === 'cursor-1'
+        ? new Promise((resolve) => {
+            answerOlder = resolve;
+          })
+        : Promise.resolve(fullPage),
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+    expect(FakeIO.instances).toHaveLength(1);
+
+    act(() => FakeIO.instances[0].reach());
     await waitFor(() =>
       expect(listNotifications).toHaveBeenCalledWith(expect.objectContaining({ cursor: 'cursor-1', limit: 50 })),
     );
+    /* The same word the busy button used to show. */
+    expect(await screen.findByText('Loading…')).toBeInTheDocument();
+
+    act(() => answerOlder(older));
     expect(await screen.findByRole('link', { name: /^New match Nejstarší/ })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /^New match Řádek 0/ })).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull());
+    /* Exhausted, the list ends silently, as it did under the button. */
+    await waitFor(() => expect(screen.queryByText('Loading…')).toBeNull());
+    expect(screen.queryByText('End of results')).toBeNull();
   });
 
-  it('offers no Load more when the API names no next page', () => {
-    renderPage();
+  it('watches nothing and adds no end line when the API names no next page', async () => {
+    renderPage({ ...fullPage, next_cursor: null });
+    await waitFor(() => expect(listNotifications).toHaveBeenCalled());
+    expect(FakeIO.instances).toHaveLength(0);
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+    expect(screen.queryByText('End of results')).toBeNull();
+    expect(vi.mocked(listNotifications).mock.calls.every(([params]) => params?.cursor === undefined)).toBe(true);
+  });
+});
+
+describe('<Notifications> header', () => {
+  it('titles the page with the h1 alone, no small-caps label above it', () => {
+    renderPage();
+    const title = screen.getByRole('heading', { level: 1, name: 'What changed' });
+    expect(title.previousElementSibling).toBeNull();
+    expect(screen.queryByText('Notifications', { selector: 'p' })).toBeNull();
   });
 });
 
 /* The count is Shell's one observer (lib/unreadCount); the page polls none of
  * its own, so outside Shell it reads zero and has nothing to mark. */
+/* W7, ruling Q1b re-ruled 2026-11-01: "if I resolve a notification in another window
+ * or the app, I want the count to update everywhere." */
+describe('<Notifications> follows the curation clock', () => {
+  const read = { ...feed, data: feed.data.map((d) => ({ ...d, seen_at: '2026-05-12T12:00:00+00:00' })) };
+  const name = /^New match Praha 5/;
+
+  it('polls nothing: the feed re-reads on the clock alone', () => {
+    const { qc } = renderPage();
+    const query = qc.getQueryCache().find({ queryKey: notificationKeys.feed({ source: 'all', seen: 'all' }) });
+    expect(query?.observers[0].options.refetchInterval).toBeUndefined();
+  });
+
+  it('a row marked read elsewhere reads as read within one clock answer', async () => {
+    const { qc } = renderPage();
+    await waitFor(() => expect(listNotifications).toHaveBeenCalled());
+    expect(screen.getByRole('link', { name })).toHaveAccessibleDescription('unread');
+    vi.mocked(listNotifications).mockResolvedValue(read);
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'notifications', null));
+    });
+    await waitFor(() => expect(screen.getByRole('link', { name })).toHaveAccessibleDescription(''));
+  });
+
+  it('holds the rows under the pointer and pays when it leaves', async () => {
+    const { qc } = renderPage();
+    await waitFor(() => expect(listNotifications).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const row = screen.getByRole('link', { name });
+    fireEvent.pointerOver(row);
+    const before = vi.mocked(listNotifications).mock.calls.length;
+    vi.mocked(listNotifications).mockResolvedValue(read);
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'notifications', null));
+    });
+    expect(listNotifications).toHaveBeenCalledTimes(before);
+    expect(screen.getByRole('link', { name })).toHaveAccessibleDescription('unread');
+
+    fireEvent.pointerLeave(row);
+    await waitFor(() => expect(screen.getByRole('link', { name })).toHaveAccessibleDescription(''));
+  });
+
+  it('a click under the pointer reads as read and drops the count at once, the write still in flight', async () => {
+    const { qc } = renderPage();
+    await waitFor(() => expect(listNotifications).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    let answer!: (row: typeof baseDispatch) => void;
+    vi.mocked(markWatchdogDispatchSeen).mockReturnValue(new Promise((resolve) => {
+      answer = resolve as typeof answer;
+    }) as never);
+    const row = screen.getByRole('link', { name });
+    fireEvent.pointerOver(row);
+    const unreadBefore = qc.getQueryData<{ unread_count: number }>(notificationKeys.unreadCount)!.unread_count;
+    fireEvent.click(row);
+    expect(qc.getQueryData<{ unread_count: number }>(notificationKeys.unreadCount)!.unread_count).toBe(unreadBefore - 1);
+    await waitFor(() => expect(row).toHaveAccessibleDescription(''));
+    fireEvent.click(row); // already read: no second write
+    expect(markWatchdogDispatchSeen).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      answer({ ...baseDispatch, seen_at: '2026-05-12T12:00:00+00:00' });
+    });
+    expect(row).toHaveAccessibleDescription('');
+  });
+
+  it('a failed read offers a retry; a failed re-read keeps the rows, the banner under them', async () => {
+    const { qc } = renderPage();
+    await waitFor(() => expect(listNotifications).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    vi.mocked(listNotifications).mockRejectedValue(new Error('down'));
+    await act(async () => {
+      void revalidate(qc, familyTargets(qc, 'notifications', null));
+    });
+    expect(await screen.findByText(/Failed to load/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name })).toBeInTheDocument();
+
+    vi.mocked(listNotifications).mockResolvedValue(read);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByText(/Failed to load/)).toBeNull());
+    expect(screen.getByRole('link', { name })).toHaveAccessibleDescription('');
+  });
+
+  it('a mark-seen that fails puts the row and the count back', async () => {
+    const { qc } = renderPage();
+    await waitFor(() => expect(listNotifications).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const unreadBefore = qc.getQueryData<{ unread_count: number }>(notificationKeys.unreadCount)!.unread_count;
+    vi.mocked(markWatchdogDispatchSeen).mockRejectedValue(new Error('down'));
+    fireEvent.click(screen.getByRole('link', { name }));
+    await waitFor(() => expect(screen.getByRole('link', { name })).toHaveAccessibleDescription('unread'));
+    expect(qc.getQueryData<{ unread_count: number }>(notificationKeys.unreadCount)!.unread_count).toBe(unreadBefore);
+  });
+});
+
 describe('<Notifications> unread count', () => {
   it('reads the shared observer and polls no count of its own', () => {
     vi.mocked(getNotificationUnreadCount).mockClear();

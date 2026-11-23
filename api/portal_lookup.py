@@ -1,15 +1,13 @@
-"""POST /listings/lookup — batch (source, native id) → MF facts + latest estimate.
+"""POST /listings/lookup — batch (source, native id) → MF + property header facts + latest estimate.
 
 The Chrome extension overlays the Browse-card 'Výnos MF' yield
 (`mf_gross_yield_pct`) and the MF reference rent (`mf_reference_rent`) on
-portal detail + index pages, across every scraped portal, and deep-links each
-listing to its SPA page (`/listing/{sreality_id}`). The public views expose
-only `(source, sreality_id)`, so a non-sreality card — which only knows its own
-native id from its href — can't map to our row from the browser. This
-server-side lookup resolves uniformly on `(source, source_id_native)` (the
-migration-091 unique key; for sreality `source_id_native` is the numeric id as
-text) and joins any latest successful estimation. Read-only; bearer-gated like
-every other non-/health route.
+portal detail + index pages, across every scraped portal, and fills its listing
+sheet's header from the same row. A card knows only its own `(source, native
+id)` from its href, so the lookup resolves uniformly on `(source,
+source_id_native)` (the migration-091 unique key; for sreality
+`source_id_native` is the numeric id as text) and joins any latest successful
+estimation. Read-only; bearer-gated like every other non-/health route.
 
 It also returns the listing's `property_id` + its **deal-pipeline membership**
 (rule #22) so the panel's "Přidat do pipeline" toggle knows its state in the
@@ -50,9 +48,9 @@ from typing import TYPE_CHECKING, Any
 
 from psycopg.rows import dict_row
 
+from api import curation
 from api.schemas import DEFAULT_FOND_CZK_PER_M2
-from toolkit.filter_registry import label_cs
-from toolkit.measures import LAND_CATEGORY_MAIN
+from toolkit.measures import LAND_CATEGORY_MAIN, plot_area_sql
 
 if TYPE_CHECKING:
     import psycopg
@@ -61,25 +59,25 @@ if TYPE_CHECKING:
 
 # Listing columns projected onto each entry (dict keys === SELECT aliases).
 # `listing_id` is the surrogate (always present for a found listing) and is what
-# a write should carry; `sreality_id` is the legacy handle, kept for the SPA's
-# legacy /listing/{sreality_id} route and NULL post-Gate-2.
+# a write should carry.
 _LISTING_COLS: tuple[str, ...] = (
-    "sreality_id", "listing_id", "property_id",
+    "listing_id", "property_id",
     "category_main", "category_type", "area_m2", "area_basis",
     "price_czk", "price_per_m2", "price_per_m2_basis",
-    "disposition", "subtype",
-    "display_label", "is_active", "last_seen_at",
+    "disposition", "display_label", "is_active",
     "mf_reference_rent_czk", "mf_gross_yield_pct", "mf_reference_rent",
+    "canonical_listing_id", "property_is_active", "tom_days", "floor",
+    "total_floors", "condition", "ownership", "property_subtype", "plot_area_m2",
 )
 
-_MARKET_SQL = """
-WITH req(source, source_id) AS (VALUES {values})
+_MARKET_SQL = f"""
+WITH req(source, source_id) AS (VALUES {{values}})
 SELECT
     req.source,
     req.source_id,
     (l.source_id_native IS NOT NULL) AS found,
-    l.sreality_id, l.id AS listing_id, l.property_id,
-    l.category_main, l.category_type, l.area_m2, l.price_czk, l.disposition, l.subtype,
+    l.id AS listing_id, l.property_id,
+    l.category_main, l.category_type, l.area_m2, l.price_czk, l.disposition,
     -- ONE place string (migration 503), the same one Browse, the map and the
     -- notifications print. The panel used to fall back `district ?? locality`
     -- while the SPA fell back the other way, so one listing could be labelled
@@ -90,7 +88,7 @@ SELECT
              location_display_label(ll.street_name, ll.house_number_cp, ll.house_number_co,
                                     ll.obec_name, ll.cast_obce_name, ll.country_code,
                                     ll.country_status)) AS display_label,
-    l.is_active, l.last_seen_at,
+    l.is_active,
     -- THE measure and its label (migration 425), listing-grain: the panel is
     -- overlaid on ONE portal advert, so the number must be that advert's.
     -- `area_basis` (migration 423) rides along because the denominator is
@@ -108,7 +106,15 @@ SELECT
     -- (property_id NULL) has no property, so no MF.
     pp.mf_reference_rent_czk,
     pp.mf_gross_yield_pct,
-    pp.mf_reference_rent
+    pp.mf_reference_rent,
+    -- What the property IS, each field at its MS11 grain (docs/design/merge-sprint/PROGRAM.md):
+    -- the panel header's facts, off the same row as MF and, like it, NULL before attach.
+    -- `pp.listing_id` is the canonical ad (MS5), the first track of the price history;
+    -- `is_active` is aliased because `l.is_active` above is this advert's own.
+    pp.listing_id AS canonical_listing_id, pp.is_active AS property_is_active,
+    pp.tom_days, pp.floor, pp.total_floors, pp.condition, pp.ownership,
+    pp.subtype AS property_subtype,
+    {plot_area_sql('pp')} AS plot_area_m2
 FROM req
 LEFT JOIN listings l
     ON l.source = req.source AND l.source_id_native = req.source_id
@@ -116,50 +122,20 @@ LEFT JOIN properties_public pp ON pp.property_id = l.property_id
 LEFT JOIN listing_location ll ON ll.listing_id = l.id
 """
 
-# RLS alone scopes every join here: `current_account_ids()` is the ONE definition
-# of who the caller is, so this read and the SPA's direct reads of
-# property_pipeline_public cannot diverge (the 2026-07-23 regression was a second
-# definition — an explicit bound account — silently binding NULL).
-_ACCOUNT_SQL = """
-WITH tgt(listing_id, property_id) AS (VALUES {values})
-SELECT
-    tgt.listing_id,
+# Each ad's latest successful estimate as RLS shows the caller (estimation_runs_tenant_read: their own runs and the
+# SYSTEM account's); the property's curation is curation.property_state's. No account is bound in either.
+_ESTIMATION_SQL = """
+SELECT t.listing_id,
     e.id AS estimation_id, e.estimate_kind AS estimation_kind,
-    e.gross_yield_pct AS estimation_yield,
-    (pc.stage_id IS NOT NULL) AS in_pipeline,
-    pc.stage_id AS pipeline_stage_id,
-    pc.key   AS pipeline_stage_key,
-    pc.label AS pipeline_stage_label,
-    pc.code  AS pipeline_stage_code,
-    pc.color AS pipeline_stage_color,
-    (SELECT coalesce(array_agg(cp.collection_id ORDER BY cp.collection_id), array[]::bigint[])
-       FROM collection_properties cp
-      WHERE cp.property_id = tgt.property_id) AS collection_ids,
-    (SELECT coalesce(array_agg(pt.tag_id ORDER BY pt.tag_id), array[]::bigint[])
-       FROM property_tags pt
-      WHERE pt.property_id = tgt.property_id) AS tag_ids,
-    EXISTS (SELECT 1 FROM property_dismissals_public pd
-             WHERE pd.property_id = tgt.property_id) AS dismissed
-FROM tgt
--- A LATERAL, not a plain join: RLS is PLURAL (current_account_ids() returns every
--- account the caller belongs to), so a multi-membership caller could match more
--- than one card and multiply the output rows. Residual gap: such a caller sees
--- the most recently updated card; the active-account primitive is the future fix.
-LEFT JOIN LATERAL (
-    SELECT pp.stage_id, ps.key, ps.label, ps.code, ps.color
-    FROM property_pipeline pp
-    JOIN pipeline_stages ps ON ps.id = pp.stage_id
-    WHERE pp.property_id = tgt.property_id
-    ORDER BY pp.updated_at DESC, pp.account_id
-    LIMIT 1
-) pc ON true
-LEFT JOIN LATERAL (
+    e.gross_yield_pct AS estimation_yield
+FROM unnest(%s::bigint[]) AS t(listing_id)
+JOIN LATERAL (
     SELECT er.id, er.estimate_kind, er.gross_yield_pct
     FROM estimation_runs er
     WHERE er.status = 'success'
       -- Match on the SURROGATE for every source (R2): every run of an ad is
       -- stamped with its listings.id at submit.
-      AND er.input_listing_id = tgt.listing_id
+      AND er.input_listing_id = t.listing_id
     ORDER BY er.created_at DESC
     LIMIT 1
 ) e ON true
@@ -213,14 +189,14 @@ def lookup_portal_listings(
     tenant_conn: "psycopg.Connection",
     items: "list[s.PortalLookupItem]",
 ) -> dict[str, Any]:
-    """Resolve each (source, source_id) to its MF facts + latest estimate.
+    """Resolve each (source, source_id) to its MF + property header facts + latest estimate.
 
     One row per requested item, in request order; `found=false` (and null
     fields) when we have no listing for that pair. Market facts read on
-    `market_conn` (service-role — see module docstring); pipeline/collections/
-    estimation on `tenant_conn`, which takes NO account argument: RLS
-    (`current_account_ids()`) is the only membership definition — see
-    `_ACCOUNT_SQL`.
+    `market_conn` (service-role — see module docstring); estimation and the
+    property's state on `tenant_conn`, which takes NO account argument: RLS
+    is the only membership definition (`_ESTIMATION_SQL`,
+    `curation.property_state`).
     """
     values_sql = ", ".join(["(%s::text, %s::text)"] * len(items))
     params: list[str] = []
@@ -232,16 +208,14 @@ def lookup_portal_listings(
         rows = cur.fetchall()
 
     found_rows = [r for r in rows if r["found"] and r["listing_id"] is not None]
-    account_by_listing: dict[int, dict[str, Any]] = {}
+    estimate_by_listing: dict[int, dict[str, Any]] = {}
+    state_by_property: dict[int, dict[str, Any]] = {}
     if found_rows:
-        tgt_sql = ", ".join(["(%s::bigint, %s::bigint)"] * len(found_rows))
-        tgt_params: list[Any] = []
-        for r in found_rows:
-            tgt_params.extend([r["listing_id"], r["property_id"]])
         with tenant_conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(_ACCOUNT_SQL.format(values=tgt_sql), tgt_params)
-            for arow in cur.fetchall():
-                account_by_listing[arow["listing_id"]] = arow
+            cur.execute(_ESTIMATION_SQL, ([r["listing_id"] for r in found_rows],))
+            estimate_by_listing = {e["listing_id"]: e for e in cur.fetchall()}
+        held = dict.fromkeys(r["property_id"] for r in found_rows if r["property_id"] is not None)
+        state_by_property = {st["property_id"]: st for st in curation.property_state(tenant_conn, list(held))}
 
     by_key: dict[tuple[str, str], dict[str, Any]] = {}
     for row in rows:
@@ -255,17 +229,13 @@ def lookup_portal_listings(
         # from this subject's denominator (see `_fond_default_czk_per_m2`).
         # Served so the extension holds no copy of the number.
         entry["fond_per_m2_czk_default"] = _fond_default_czk_per_m2(row)
-        # The display "kind": the subtype label (commercial/houses) else the
-        # disposition (apartments). Computed server-side from the one canonical
-        # label source so the extension needs no slug dictionary of its own.
-        entry["kind_label"] = label_cs("subtype", row["subtype"]) or row["disposition"]
-        acct = account_by_listing.get(row["listing_id"], {})
-        est_id = acct.get("estimation_id")
+        est = estimate_by_listing.get(row["listing_id"], {})
+        est_id = est.get("estimation_id")
         entry["latest_estimation"] = (
             {
                 "estimation_id": est_id,
-                "estimate_kind": acct.get("estimation_kind"),
-                "gross_yield_pct": _clean(acct.get("estimation_yield")),
+                "estimate_kind": est.get("estimation_kind"),
+                "gross_yield_pct": _clean(est.get("estimation_yield")),
             }
             if est_id is not None
             else None
@@ -273,16 +243,20 @@ def lookup_portal_listings(
         # Deal-pipeline membership is property-grain (rule #22): only present
         # once the listing is attached to a property (a freshly-scraped row is
         # property_id NULL for ~5 min — the panel hides the toggle until then).
+        state = state_by_property.get(row["property_id"], {})
         entry["pipeline"] = (
             {
-                "in_pipeline": bool(acct.get("in_pipeline")),
-                "stage_id": acct.get("pipeline_stage_id"),
-                "stage_key": acct.get("pipeline_stage_key"),
-                "stage_label": acct.get("pipeline_stage_label"),
+                "in_pipeline": state.get("stage_id") is not None,
+                "stage_id": state.get("stage_id"),
+                "stage_key": state.get("stage_key"),
+                "stage_label": state.get("stage_label"),
                 # Badge + colour (migration 377) so the panel's funnel renders
                 # the same mark as the SPA's, from one server-side source.
-                "stage_code": acct.get("pipeline_stage_code"),
-                "stage_color": acct.get("pipeline_stage_color"),
+                "stage_code": state.get("stage_code"),
+                "stage_color": state.get("stage_color"),
+                # Since when the card sits at this stage (the PATCH stamps it): the
+                # panel's "ve fázi od".
+                "entered_stage_at": _clean(state.get("entered_stage_at")),
             }
             if row["property_id"] is not None
             else None
@@ -290,14 +264,14 @@ def lookup_portal_listings(
         # Collection memberships are property-grain (rule #18) — same NULL-until-
         # attached posture as pipeline above; the panel's save-to-collection control reads it.
         entry["collection_ids"] = (
-            list(acct.get("collection_ids") or []) if row["property_id"] is not None else None
+            list(state.get("collection_ids") or []) if row["property_id"] is not None else None
         )
         entry["tag_ids"] = (
-            list(acct.get("tag_ids") or []) if row["property_id"] is not None else None
+            list(state.get("tag_ids") or []) if row["property_id"] is not None else None
         )
         # Dismissal (migration 536) is property-grain too: the panel's hide toggle.
         entry["dismissed"] = (
-            bool(acct.get("dismissed")) if row["property_id"] is not None else None
+            bool(state.get("dismissed")) if row["property_id"] is not None else None
         )
         by_key[(row["source"], row["source_id"])] = entry
 

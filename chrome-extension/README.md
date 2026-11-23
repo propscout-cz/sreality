@@ -1,89 +1,94 @@
-# Limen Reality — Chrome extension (Realitní výnos / MF panel)
+# PropScout.cz — Chrome extension (the listing side panel + search-page controls)
 
-Overlays the property's **MF reference rent** (`mf_reference_rent`, rendered by
-its shape) and the **"Výnos MF"** gross yield (`mf_gross_yield_pct`) — the same
-figures the SPA shows — on listing pages
+Shows what the app knows about a property — its facts, its price history
+across every ad, the operator's pipeline, collections, tags and notes, the
+**"Výnos MF"** gross yield (`mf_gross_yield_pct`) and the comparables estimate,
+the same figures the SPA shows — beside listing pages
 across **every portal we scrape** (sreality, bazos, bezrealitky, idnes,
 maxima, remax, mmreality, ceskereality).
 
-- **Detail pages** get a floating panel (closed shadow root). For **any**
-  listing we have, it shows a **deal-pipeline control** (bookmark, then change
-  stage / remove), a **save-to-collection** control, **operator notes** (see the
-  existing notes + add a new one), and an **"Otevřít v aplikaci"** deep-link to
-  that listing's page in our app (`/listing/{sreality_id}`) plus its subject
-  facts. For a **flat** it shows the property's MF result by its shape — a value
-  (Výnos MF headline on a sale flat + the rent), the town's published range with
-  its note behind an (i), or the reason note alone — and nothing before the
-  advert is attached to a property. **Apartments for sale** additionally get a
-  comparables-based estimation as the deeper tool / fallback. A listing not in
-  our DB shows "Tato nemovitost zatím není v naší databázi." and a **Přidat do
-  databáze** button: it `POST`s the page URL to `/listings/ingest` (admins
-  only in v1), polls `GET /listings/ingest/{source}/{native_id}` every 2 s on
-  the estimate's budget (Hledám inzerát → Stahuji stránku → Zakládám
-  nemovitost), and once the ad is held with a property re-reads the lookup, so
-  every control above appears as for any listing we have. A refused, gone or
-  failed ad shows the API's one Czech sentence above the button. A non-admin's
-  first click answers the admin sentence and hides the button until the account
-  changes (the extension cannot read the admin claim). The flow itself is
-  `src/ingest_flow.ts` (no DOM, no `chrome`), tested by `npm test` (CI too).
-  - The **notes** are property-grain (rule #18), the same notes the SPA's
-    listing-detail `CurationBlock` shows. The panel lists the property's existing
-    notes (most-recent-first) and an add box ("Přidat poznámku…" → **Uložit
-    poznámku**). Writes go through the same JWT-gated `POST /properties/{id}/notes`
-    the SPA uses, recording the viewed advert's surrogate id as the note's
-    `origin_listing_ref_id` ("written while viewing this advert"); the panel fetches
-    existing notes lazily via `GET /properties/{id}/notes` on open, and a read that
-    fails every try says so with **Zkusit znovu**, never as "no notes" (MS16).
-    Sharing (migration 610): another author's shared note shows read-only as
-    "od {email} · {datum}" with no edit/delete; when someone shares a collection
-    holding the property with the operator, or the operator shares one, the add
-    box offers **"Sdílet s {emails}"** (off by default) and an own note carries
-    **Sdíleno** with a **Nesdílet** / **Sdílet s …** toggle (`PATCH {shared}`) —
-    the SPA's audience rule, so the two clients never disagree.
-  - The **pipeline control** is property-grain (the deal pipeline, rule #22),
-    the same as the SPA's listing-detail control. Out of pipeline → a
-    **"Přidat do pipeline"** button that inserts the property at the entry stage.
-    In pipeline → a pill with a stage **`<select>`** (change the deal stage) and a
-    **`✕`** (remove). Writes go through the same bearer-gated
-    `POST/DELETE /pipeline/cards` (bookmark/remove) + `PATCH /pipeline/cards/{id}`
-    (change stage — stamps `entered_stage_at`, logs a `moved` event) the SPA uses;
-    membership (incl. the current `stage_id`) comes back on the
-    `POST /listings/lookup` response and the stage list from `GET /pipeline/stages`.
-    Hidden only while a freshly-scraped listing has no property yet (a few minutes).
-  - The **save-to-collection control** is property-grain (rule #18) and is the
-    SPA listing header's "Uložit do kolekce": it reads **"Uložit do kolekce"**
-    while the property is in none of the operator's OWN collections and
-    **"V kolekci"** / **"V kolekcích · N"** once it is (hovering names them) — a
-    collection someone shared view-only never counts as saved. A click opens a
-    checklist of **every own** collection (a shared one is never a save target),
-    monitored ones first and bell-marked,
-    where one click adds or removes the property through the same bearer-gated
-    `POST/DELETE /collections/{id}/properties` the SPA uses. Membership rides on
-    `POST /listings/lookup` (`collection_ids`); the list comes from
-    `GET /collections` and is re-read whenever the checklist opens, so a
-    collection made in the app appears without reloading the portal page.
-    Creating, renaming and monitoring settings stay in the app ("Spravovat
-    kolekce →"). It replaced a one-click "Sledovat" bell that could only reach
-    the single monitoring collection.
-  - The **tag row** (rule #18), under the action bar: the property's tags as
-    the app's chips (the name in the tag's colour), then a **Štítky** /
-    **Přidat štítek** button opening the checklist of every tag, where one
-    click attaches or detaches through the same `POST/DELETE
-    /properties/{id}/tags` the SPA's assign list uses. Tags ride on
-    `POST /listings/lookup` (`tag_ids`); names and colours come from
-    `GET /tags`, re-read when the checklist opens. One checklist at a time —
-    opening it closes the collection one. Creating, renaming and recolouring
-    stay in the app's assign list ("Nový štítek v aplikaci →").
-  - The panel **scrolls** when it is taller than the window (it is pinned to
-    the bottom edge and grows upward), keeping its scroll position across
-    re-renders.
-  - The **hide control** ("Skrýt" / "Skryto", migration 536) dismisses the
-    property from the app's discovery surfaces (Browse, notifications) and undoes
-    it, one click either way, through the same `POST/DELETE /dismissals` the SPA's
-    `DismissButton` uses; the state rides on `POST /listings/lookup` (`dismissed`).
-    Absent while the property is a LIVE deal (a card at a non-terminal stage); a
-    deal closed into "Passed"/"Lost" keeps it. Adding a card, or moving one back
-    into a live stage, lifts the dismissal.
+- **The side panel** is Chrome's own (`chrome.sidePanel`, operator ruling
+  2026-10-31: it shrinks the page beside it, never covers it): our page
+  `sidepanel.html` (`src/sidepanel.ts`; controller `src/panel.ts`, frame
+  `src/frame.ts`, one stylesheet `src/panel.css` over the app's `tokens.css`,
+  the document root in the user's scheme and theme). One global panel per
+  window: once open it stays open across the window's tabs and shows the
+  **active tab's subject** — a detail page's ad, or the search card last opened
+  in it; any other tab shows "Vyberte inzerát na podporovaném portálu. Pokud
+  ho máte otevřený, obnovte stránku." (signed out: the sign-in card). A tab
+  switch keeps what is in progress: a half-typed note waits for its property,
+  an edit to the yield assumptions is saved at once, and an estimate still
+  running is shown again when its ad comes back (never a second run).
+  Chrome opens a side panel only on a user action, so it never opens by
+  itself: the toolbar icon toggles it, and a detail page's **edge tab**
+  (`src/edge_tab.ts`, a closed shadow root on the right edge: the PS mark, the
+  deal's stage badge, this ad's price drop and the MF yield) or a search
+  card's yield badge opens it; the edge tab hides while the panel is open in
+  that window (and reads its price history only while it shows). After an
+  extension update the open pages' scripts are cut off: the edge tab then
+  says so and its click reloads the page. The top bar: the wordmark,
+  **V aplikaci ↗** (the ad's page in the app, `/listing/{source}/{native_id}`),
+  the **⋯** account menu (email + **Odhlásit**, which signs out in every tab)
+  and **›**, which closes the panel. Under it:
+  - **The header** (`src/panel_header.ts`): deal · status · days on market, the
+    title (type, disposition, area), the address, the facts by property type —
+    a flat its floor, condition and ownership; a house its plot, condition and
+    house type; a commercial unit its type, floor and condition; a plot its
+    ownership only (a fact the property lacks is left out). This ad's price in
+    the live colour, its own last price move and its per-m² with the basis's
+    unit; the MF gross yield beside it only when the lookup serves one.
+  - **Vývoj ceny** (`src/panel_price.ts`): one step line per ad of the property
+    from `GET /properties/{id}/price-history` through the app's
+    `lib/priceHistory` and `lib/chartAxis` — the canonical ad first in the
+    accent, the others in ink dashed, an ad taken down dashed to a hollow end,
+    each labelled where it ends; the note counts portals and ads taken down; a
+    history with no move says "Cena se od … nezměnila.".
+  - **Moje** (`src/panel_mine.ts`), property-grain (rules #18, #22), every write
+    through the one store (`src/store.ts`) to the same JWT-gated routes the SPA
+    uses. Out of the pipeline: **Přidat do pipeline** (entry stage) and the
+    **Skrýt** toggle (migration 536; absent while the property is a LIVE deal).
+    In it: a step bar over the open stages (more than four: the stage
+    `<select>`), "ve fázi od" (the lookup's `pipeline.entered_stage_at`) and
+    **Uzavřít ▾** — the closed stages, then **Odebrat z pipeline…** behind a
+    two-step confirm (never a one-click remove). Collections (mine only — a
+    shared one is never "saved") and tags as chips, three then **+N**; **+** or
+    **+N** opens the save checklist (`src/checklist.ts`, the search cards' too),
+    re-read on opening; creating and renaming stay in the app. The notes: the
+    latest and the count; **Všechny** / **Přidat poznámku** expand them in place
+    to the full CRUD — edit, delete behind a confirm, another author's shared
+    note read-only ("od {email} · {datum}"), and **Sdílet s {emails}** (off by
+    default, offered only when someone would read it; migration 610). A note
+    records the viewed ad as its `origin_listing_ref_id`; a read that fails
+    every try says so with **Zkusit znovu**, never "no notes" (MS16).
+  - **AI agenti** (`src/panel_agents.ts`), the accent card: on a flat for sale
+    the **Výnos** row runs the comparables estimate (`POST /estimations`, polled
+    2 s up to 6 min) and shows its yield with the assumptions editor below it
+    — rent, fond oprav + SVJ, price, renovation, a live yield and **Reset**,
+    saved to the run's `scenario`; the monthly quota (zbývá N), the trial line
+    and, at the limit, **Upgradovat**. Flip agent, Agent přestavby and
+    Regionální scout are marked **Brzy**. The chat box has no backend yet: a
+    hover, focus or click lays "Chat s agentem připravujeme" over it.
+  - A listing not in our DB shows "Tato nemovitost zatím není v naší
+    databázi." and **Přidat do databáze**: it `POST`s the page URL to
+    `/listings/ingest` (admins only in v1), polls `GET /listings/ingest/{source}/{native_id}`
+    every 2 s on the estimate's budget (Hledám inzerát → Stahuji stránku →
+    Zakládám nemovitost), and once the ad is held with a property re-reads the
+    lookup, so the panel fills as for any listing we have. A refused, gone or
+    failed ad shows the API's one Czech sentence above the button; a
+    non-admin's first click answers the admin sentence and hides the button
+    until the account changes. The flow is `src/ingest_flow.ts` (no DOM, no
+    `chrome`), tested by `npm test`.
+  - No ad in the active tab, signed out, a failed lookup (**Zkusit znovu**) and
+    the first load (a static skeleton in the cards' shape) are one card each.
+    Escape closes its menus.
+  - **Two contexts, two stores.** Each tab's content script owns its subject
+    and its own store (search cards, edge tab); the side panel has its own over
+    the same transport. The panel opens a port to every tab of its window
+    (`chrome.tabs.connect`; a tab that loads later calls it, one dragged in is
+    connected as it arrives): the tab's subject goes up it, its closing shows
+    the edge tab again, and after a write lands in either the other re-reads
+    that property (`property_written`, property id only). No `tabs` permission:
+    the panel never reads a tab's URL, it asks the tab.
 - **Index / search pages — every category, not just flats** — get the Browse
   card's own controls on each listing card we have a property for, in the same
   order and with the same meaning as in the app (`src/index_cards.ts`):
@@ -111,11 +116,11 @@ maxima, remax, mmreality, ceskereality).
     it, corners matched), not by portal markup. A hidden card drawn barely
     visible gets no mark, and neither does a card guess that holds several
     listings (it could mark another listing's photo).
-  - All three write through the same routes as the panel and the app, are
+  - All three write through the same routes as the side panel and the app, are
     optimistic (a failure puts the state back and says why in the corner), and
     are property-grain: a write repaints every card of that property on the
-    page, and the panel when it shows the same property (and the other way
-    round).
+    page (they draw from the page's store, `src/store.ts`), and the side panel
+    re-reads it when it shows the same property (and the other way round).
   - A card is the outermost list item / article that still holds ONE listing,
     so a photo carousel that repeats the link on every slide gets one set of
     controls, not one per slide. The controls live in a closed shadow root per
@@ -127,7 +132,7 @@ maxima, remax, mmreality, ceskereality).
   parent of three or more items is the grid; smaller children (sort bars,
   pagination) are left alone.
 - **The corner dock** (`src/index_dock.ts`) sits **bottom-left** on every index
-  page with listing cards (the panel owns the bottom-right): a **Skrýt skryté**
+  page with listing cards: a **Skrýt skryté**
   switch plus how many hidden properties this page holds. On (the default), a
   hidden property's card stays where it is but is drawn barely visible (10 %,
   greyscale; hovering lifts it enough to see what it is); off, it is drawn like
@@ -139,13 +144,13 @@ maxima, remax, mmreality, ceskereality).
 - **Sale apartments** additionally get the per-card yield badge, after the
   three controls: `Výnos MF X.X %` (or the
   town's `X.X–Y.Y %` range, its note in the tooltip) when the property's MF
-  result has a yield, otherwise a clickable **Odhadnout výnos** badge that opens
-  the yield panel to estimate that ad. Only an ad we hold gets one. Controls and
+  result has a yield, otherwise a clickable **Odhadnout výnos** badge; either
+  opens the side panel on that ad. Only an ad we hold gets one. Controls and
   badges come only from a successful lookup; when it fails the page is not left
   silent — one small
   notice in the dock, above the switch, says
   why: **Přihlásit se přes Google** when signed out (a click first checks for
-  a session made elsewhere — the panel, another tab — and skips the Google
+  a session made elsewhere — the side panel, another tab — and skips the Google
   round trip if there is one), **Obnovit stránku** when the extension was
   reloaded, updated, disabled or removed under the open tab (the overlay then
   stops scanning), the error + **Zkusit znovu** otherwise (no button for a
@@ -158,27 +163,24 @@ maxima, remax, mmreality, ceskereality).
 
 The default display is a **read** of data we already have — no LLM call. It
 maps each portal listing to our row by `(source, native id)` through the
-FastAPI `POST /listings/lookup` endpoint (the public views don't expose the
-native id, so the browser can't resolve non-sreality listings on its own).
-The editable estimation block still shares its scenario state (rent / fond
-oprav / listing price) with the SPA's `/estimation/:id` page via the
-`scenario` JSONB column on `estimation_runs`.
+FastAPI `POST /listings/lookup` endpoint.
+The Výnos editor shares its scenario state (rent / fond oprav / price /
+renovation) with the SPA's `/estimation/:id` page via the `scenario` JSONB
+column on `estimation_runs`.
 
 ### Per-m² figures carry their basis (measure sprint W7)
 
 "One measure, one definition, one label" — the panel **reads** per-m² numbers,
 it never derives them:
 
-- The MF ledger line renders the per-m² rate carried in the property's own MF
-  result (`total_per_m2`, or a range's two totals). It used to divide the rent
-  by the listing's `area_m2` in the browser, which mixed grains — the rent is
-  **property**-grain and the area **listing**-grain.
-- Both monthly per-m² figures (the MF reference rent and the *Fond oprav + SVJ*
-  rate) are labelled **Kč/m²/měs**, the same unit string
-  `toolkit/measures.PPM2_UNIT_CS` uses. A bare `Kč/m²` is the *capital* unit.
-- The subject's area shows **which** area it is — `905 m² (pozemek)`,
-  `65 m² (užitná)` — from `listings.area_basis` (migration 423). `area_m2` is
-  polymorphic, so the bare number cannot say whether it is a flat or a field.
+- The header's per-m² is the lookup's `price_per_m2`, rendered with its
+  `price_per_m2_basis` through the app's `fmtMeasuredPricePerM2`, so a sale,
+  a rent and a plot each carry their own unit.
+- The *Fond oprav + SVJ* rate is labelled with the app's monthly unit
+  (`PPM2_UNIT.rent`, the same string `toolkit/measures.PPM2_UNIT_CS` uses). A
+  bare `Kč/m²` is the *capital* unit.
+- A plot's headline area says it is a plot (`905 m² pozemku`); the title's
+  hover names the area's basis from `listings.area_basis` (migration 423).
 - The fond is **not multiplied by a parcel**, and *whether a fond applies* is
   decided in exactly one place — the server, on `area_basis` **or**
   `category_main` (`api/portal_lookup._fond_default_czk_per_m2`). The panel
@@ -191,11 +193,9 @@ it never derives them:
   yield subtracts from the rent and which can turn the figure negative.
 - The default fond rate is **served per subject** by `POST /listings/lookup`
   (`fond_per_m2_czk_default`) from the one definition in
-  `api/schemas.DEFAULT_FOND_CZK_PER_M2`; the extension holds no live copy of
-  the number. Three distinct states: a number is the rate, `null` means "no
-  fond can apply to this subject", and an **absent key** means the API predates
-  this change — the panel then falls back to the pre-W7 literal so an old
-  deployment cannot silently blank the field and drop the headline yield.
+  `api/schemas.DEFAULT_FOND_CZK_PER_M2`, on every row; the extension holds no
+  copy of the number. A number is the rate, `null` means "no fond can apply to
+  this subject".
 - `POST /estimations` takes the ad's `listing_id` from the lookup (an
   estimation is always of an ad we hold; an ad we lack is added first) and is
   **category-aware**: the panel sends the subject's `category_main` and picks
@@ -217,15 +217,40 @@ the SPA's, never the SPA's refresh token (Supabase rotates refresh tokens
 with reuse-detection, so sharing one between two independently-refreshing
 sessions would eventually log both out). Every API route now requires a
 real per-user session; the panel shows a **"Přihlásit se přes Google"**
-prompt until you sign in, and a compact "signed in as … · Odhlásit" line
-in the panel once you are.
+prompt until you sign in, and once you are, its **⋯** menu names the
+account and offers **Odhlásit**.
 
 Under the hood: `chrome.identity.launchWebAuthFlow` opens the Google
 consent screen via Supabase GoTrue's PKCE flow; the code exchange and the
-periodic silent refresh (every ~30 min, via `chrome.alarms` — MV3 kills
-any in-memory timer when the service worker is evicted) happen entirely in
-the background worker. No secret ships in the bundle for this — the
-Supabase anon key is a public client key, same posture as the SPA.
+token refresh happen entirely in the background worker. No secret ships in
+the bundle for this — the Supabase anon key is a public client key, same
+posture as the SPA.
+
+**The session survives idle time and network blips** (`src/token_source.ts`,
+tested in `token_source.test.ts` against a fake GoTrue that rotates refresh
+tokens with reuse detection):
+
+- Every API call takes its token from it: a token near expiry is refreshed
+  first, so a session left idle for days is refreshed by the next call. No
+  timer, so no `alarms` permission.
+- One refresh at a time: concurrent calls share it (two refreshes on one
+  token would trip Supabase's reuse detection and revoke the session).
+- A refresh with no answer, a timeout (15 s), a 5xx, a 429, another 4xx from
+  something in between (a proxy, a firewall) or a 200 without a token
+  **keeps** the stored session; that call fails with "zkuste to znovu" and the
+  next one refreshes. (If GoTrue rotated the token but its answer was lost,
+  the kept token is already used and the next refresh is refused.)
+- Only GoTrue's refusal (its 400, or a body naming a refresh-token or session
+  error: invalid, reused, revoked) signs out, and the panel shows the sign-in
+  card.
+
+**Permissions:** `storage` (the session and two panel preferences),
+`identity` (the Google sign-in) and `sidePanel`; no host permissions. The
+content script runs on the portal hosts that serve pages (below). The
+sign-in card says what the extension sends once signed in and links
+https://propscout.cz/soukromi: the store allows browsing data only for a
+feature described in both its listing and the extension's own UI (program
+policies, 2026-11-01).
 
 **One-time setup for a NEW deployment** (already done for the operator's
 existing Railway + Supabase project — skip unless standing up a fresh one):
@@ -237,16 +262,16 @@ existing Railway + Supabase project — skip unless standing up a fresh one):
 2. **Supabase dashboard** → your project → **Authentication** → **URL
    Configuration** → **Redirect URLs** → add that exact URL to
    **Additional Redirect URLs** → **Save**.
-3. **Google Cloud Console** → your OAuth client (the same one Supabase's
-   Google provider uses) → **APIs & Services** → **Credentials** → open the
-   OAuth 2.0 Client → **Authorized redirect URIs** → add the SAME URL →
-   **Save**. (This is the step that actually breaks sign-in if skipped —
-   Google rejects the redirect before Supabase ever sees it.)
-4. **Supabase dashboard** → **Authentication** → **Providers** → confirm
+3. **Supabase dashboard** → **Authentication** → **Providers** → confirm
    **Google** is enabled.
+4. Add the extension's origin to the API's CORS allowlist (below, "Allow the
+   extension's origin in CORS").
+
+Google Cloud needs nothing for the extension: Google only ever sees Supabase's
+own callback, never the extension's redirect URL.
 
 If you ever need a *different* stable extension ID (e.g. a second
-deployment), generate a new keypair and repeat steps 1–3 with the new ID:
+deployment), generate a new keypair and repeat steps 1, 2 and 4 with the new ID:
 
 ```sh
 openssl genrsa -out extension-key.pem 2048
@@ -261,11 +286,9 @@ needs to keep deriving the same ID.
 ## Distribution policy
 
 No secret ships in the bundle — the Supabase anon key + FastAPI base URL are
-both non-sensitive public client config (same posture as the SPA). The
-extension is safe to distribute broadly, including via the public Chrome Web
-Store, once the Chrome Web Store readiness items in
-`docs/design/waves-1-4-public-features.md` (privacy policy, single-purpose
-statement, staged rollout) are done.
+both non-sensitive public client config (same posture as the SPA), and the
+manifest names no deployed host. The extension goes to the Chrome Web Store as
+an Unlisted item: spec #2261 and `docs/design/brand-domain-and-store/PROGRAM.md`.
 
 ## Build option A — GitHub Actions (recommended)
 
@@ -281,7 +304,7 @@ One-time setup — repository secrets:
    `VITE_SUPABASE_ANON_KEY` (the anon/publishable key — not a secret key).
 5. (Optional) Add `EXT_APP_BASE_URL` = the SPA (browser app) URL, no trailing
    slash — powers the "Otevřít v aplikaci" link to a listing's page in our app
-   (`/listing/{sreality_id}`). Leave it unset to hide the link.
+   (`/listing/{source}/{native id}`). Leave it unset to hide the link.
 
 Building:
 1. The workflow runs automatically on every push to `main` that
@@ -293,6 +316,12 @@ Building:
    download **chrome-extension-dist**.
 4. Unzip it. The unzipped folder is what you "Load unpacked" into
    Chrome.
+
+The same run also uploads **chrome-extension-store**, the store package (see
+"The store package and its permission guard" below). Don't load that one
+unpacked: it has no `key`, so Chrome would give it a different ID and sign-in
+would fail. **extension-e2e-shots** holds the side panel harness's screenshots
+("End-to-end harness" below).
 
 ## Build option B — Local
 
@@ -306,12 +335,16 @@ npm install
 npm run build
 ```
 
-The output lands in `chrome-extension/dist/`. `npm test` runs the extension's
+The output lands in `chrome-extension/dist/`. While working on one entry,
+`npm run watch -- sidepanel` (or `content`, `background`) rebuilds just that one
+on every save, after one full `npm run build`; reload the extension (and the
+portal page, for `content`) to pick it up. `npm test` runs the extension's
 unit tests (`src/*.test.ts`) with Node's built-in runner, which needs Node
 ≥ 22.18 to strip the types; `npm run type-check` type-checks them with the rest.
 
-`npm run build` runs vite **twice** — `--mode content`, then `--mode background`
-— and that is not a style choice. A manifest-declared content script is a
+`npm run build` runs vite **once per entry** — `--mode content`, then
+`--mode background`, then `--mode sidepanel` (the side panel's page script; the
+build copies `sidepanel.html` beside it) — and that is not a style choice. A manifest-declared content script is a
 *classic* script (MV3 has no module mode for `content_scripts[].js`), so
 `content.js` may not contain a static `import`. Rollup hoists any module shared
 between entries into a chunk, and the portal-id rules (`src/portals.ts` then,
@@ -323,6 +356,46 @@ self-contained, and a build-time guard in `vite.config.ts` re-parses `content.js
 as a classic script and fails the build if a static import ever comes back. A
 bare `vite build` with no `--mode` now errors rather than emitting half a bundle.
 
+The bundles import what the app already defines straight from `frontend/src`
+(formatters, the per-m² vocabulary, the MF result, the stage look, the
+collection rules, the appearance values, the palette `styles/tokens.css`) — one
+definition each, never a copy. A second guard in `vite.config.ts` keeps that
+safe: an app module the extension bundles may import only another plain `.ts`
+module by relative path, so a React, Supabase or `@/` import fails the build
+instead of landing in every portal page. The search-page controls take the
+user's colour scheme and light/dark side from their profile (the same choice
+as in the app, read from the session at its next refresh; Měď light when
+signed out).
+
+## End-to-end harness
+
+`e2e/sidepanel.mjs` drives the **built** extension in headless Chromium with
+`chrome.*` stubbed: the side panel page (`dist/sidepanel.html` at 400 px, a mock
+background answering its messages, mock content scripts answering its
+`tabs.connect` ports) and `dist/content.js` on routed fake sreality pages. It
+checks that the panel follows its window's active tab, the signed-out and
+no-ad states, what a tab switch keeps (a note draft, a debounced scenario edit,
+a run in flight), the menus' focus and the in-place yield editor; on the page,
+the edge tab's marks, opening the panel, hiding while it is open (bfcache
+included), the reload offer of an orphaned script and a search card's badge;
+and that no page threw.
+
+```sh
+npm run build && npm run e2e        # or: npm run e2e -- <dist-dir> <out-dir>
+```
+
+It prints one PASS/FAIL line per check, writes screenshots and `checks.txt` to
+`e2e-shots/` (gitignored) and exits 1 on any FAIL. Fixture dates count back
+from today. CI runs it after every build and uploads that folder as the
+**extension-e2e-shots** artifact, pass or fail.
+
+The browser is Playwright's headless shell for the pinned `playwright-core`:
+`npx playwright-core install chromium-headless-shell` once, plus its system
+libraries (`npx playwright-core install-deps chromium-headless-shell`, which
+needs `sudo`). On a machine without those libraries and without `sudo`, unpack
+them somewhere and set `LD_LIBRARY_PATH=<that>/usr/lib/x86_64-linux-gnu`;
+`CHROME_PATH=<binary>` runs any other Chromium instead of the cached one.
+
 ## Install in Chrome (unpacked)
 
 1. Open `chrome://extensions` in Chrome.
@@ -330,8 +403,10 @@ bare `vite build` with no `--mode` now errors rather than emitting half a bundle
 3. Click **Load unpacked**.
 4. Pick the `dist/` folder you downloaded (Option A) or built
    (Option B).
-5. Confirm the extension card shows "Limen Reality — výnos & pipeline" with
-   the copper "%" icon.
+5. Confirm the extension card shows "PropScout.cz — výnos & pipeline" with
+   the copper "%" icon. Pin it (the puzzle-piece menu → the pin) so its
+   toolbar icon, which opens and closes the side panel, stays in reach.
+   Chrome 116 or newer.
 
 **Unzip somewhere Windows won't decorate.** Chrome refuses to load a folder
 containing `desktop.ini` ("The filename is illegal"), and File Explorer creates
@@ -342,7 +417,7 @@ a plain local path (or delete `desktop.ini` from `dist/` before loading); on WSL
 The `key` field pinned in `manifest.json` means the extension ID is always
 `eibnegoankipleeegjilnjhpnbaedpjd` (same on every machine, every CI
 download) — the "one-time setup" steps above already registered it with
-both Supabase and Google, and the origin below is already correct.
+Supabase, and the API's CORS allowlist already names its origin.
 
 ## Keeping it up to date (auto-update)
 
@@ -379,12 +454,14 @@ extension ID, same update channel, no reinstall.
 
 1. Register once at the [Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole)
    (one-time US$5 fee, any Google account).
-2. **+ New item** → upload a ZIP of `dist/` (download the `chrome-extension-dist`
-   artifact from the Actions build, then zip the folder's *contents*).
+2. **+ New item** → upload the store package: the `chrome-extension-store`
+   artifact from the Actions build, downloaded as a ZIP with `manifest.json` at
+   its root, which is the shape the store takes. Never upload `dist/`: the
+   store refuses a manifest with a `key`.
 3. Fill the listing: description, an icon, at least one screenshot, a **privacy
    policy URL**, a **single-purpose statement**, and a justification for each
-   permission (`storage`, `identity`, `alarms`, `webNavigation`, and the two
-   `host_permissions` origins). See "Chrome Web Store submission" below.
+   permission in `release/allowed.ts` (there are no host permissions). See
+   "Chrome Web Store submission" below.
 4. **Visibility → Unlisted**. Submit for review. (Unlisted items are still
    reviewed; expect hours to a few days.)
 5. Install once from the item's link. From then on it updates itself.
@@ -392,13 +469,12 @@ extension ID, same update channel, no reinstall.
 > ⚠️ **The extension ID will probably change — check before you cut over.** The
 > store assigns the item its own ID, which will most likely differ from the
 > self-generated `eibnegoankipleeegjilnjhpnbaedpjd` pinned in the `key` field.
-> That ID is baked into three places, and sign-in plus every API call break if
-> they aren't updated: the **Supabase** redirect-URL allowlist, the **Google OAuth**
-> client's authorized redirect URIs (both `https://<id>.chromiumapp.org/`), and
-> Railway's `CORS_ALLOW_ORIGINS` (`chrome-extension://<id>`). After creating the
-> draft item, read its assigned ID off the dashboard URL and **add** the new
-> values alongside the existing ones (all three accept multiple entries) *before*
-> installing the store build. Adding rather than replacing means the unpacked dev
+> That ID is baked into two places, and sign-in plus every API call break if
+> they aren't updated: the **Supabase** redirect-URL allowlist
+> (`https://<id>.chromiumapp.org/`) and the API's `CORS_ALLOW_ORIGINS`
+> (`chrome-extension://<id>`). After creating the draft item, read its assigned
+> ID off the dashboard URL and **add** the new values alongside the existing
+> ones (both accept multiple entries) *before* installing the store build. Adding rather than replacing means the unpacked dev
 > copy keeps working throughout — no downtime, and no cutover to time.
 
 ### Option 2 — self-hosted `.crx` + `update_url`
@@ -427,50 +503,60 @@ repository secrets (`CWS_CLIENT_ID`, `CWS_CLIENT_SECRET`, `CWS_REFRESH_TOKEN`,
 
 ## Allow the extension's origin in CORS (Railway)
 
-The extension's fetches run from the background service worker under the
-origin `chrome-extension://eibnegoankipleeegjilnjhpnbaedpjd`. The FastAPI
-service must allow that origin or every request will be blocked.
+The manifest grants **no host permissions**, so every call the background
+worker makes to the API is an ordinary cross-origin request from
+`chrome-extension://<id>`. The API answers it only when that origin is in its
+`CORS_ALLOW_ORIGINS` allowlist; without it, every API call fails. The auth
+service (Supabase) answers any origin and needs no entry.
 
-1. Open the **Railway** dashboard.
-2. Pick the FastAPI service (the one running `api/main.py`).
-3. Open the **Variables** tab.
-4. Find `CORS_ALLOW_ORIGINS`. (If it doesn't exist yet, click
-   **+ New Variable** and add it.)
-5. Set the value to a comma-separated list including the extension's
-   origin. Example:
+Today the allowlist holds the app (`https://app.propscout.cz`) and the pinned
+extension ID, `chrome-extension://eibnegoankipleeegjilnjhpnbaedpjd` (added
+2026-10-31, #2275). The landing's sign-up forms are plain form posts and need
+no entry. The store's ID gets its own entry before the store review (#2280).
+
+`CORS_ALLOW_ORIGINS` is a **kept** Railway variable: its name is declared in
+`.railway/railway.ts`, its value lives in Railway, and the operator changes the
+value there (an agent never does):
+
+1. **Railway** → project **API** → service **sreality** → **Variables**.
+2. `CORS_ALLOW_ORIGINS` → **⋯** → **Edit**. Never rename it or add a second
+   variable: names belong to `.railway/railway.ts`.
+3. Append `,chrome-extension://<id>` to the end of the value; keep every
+   existing entry.
+4. Save, then click **Deploy** on the staged change (a variable edit alone
+   doesn't redeploy).
+5. Check, read-only: this prints `200` once the origin is allowed (`400`
+   before):
+   ```sh
+   curl -s -o /dev/null -w '%{http_code}\n' -X OPTIONS https://api.propscout.cz/health \
+     -H 'Origin: chrome-extension://<id>' -H 'Access-Control-Request-Method: GET'
    ```
-   https://app.propscout.cz,chrome-extension://eibnegoankipleeegjilnjhpnbaedpjd
-   ```
-   Keep any existing origins (your SPA's URL) and just append the
-   `chrome-extension://...` one. **No spaces** around the comma.
-6. Save. Railway auto-redeploys the service. Wait ~30 seconds for
-   the new deploy to come up.
 
 ## Use
 
-**First run:** the floating panel shows **"Přihlásit se přes Google"** —
-click it, complete the Google consent screen in the popup window that
-opens, and the panel reloads signed in. A compact "you@example.com ·
-Odhlásit" line then appears atop the panel; **Odhlásit** signs out in every
-tab (search pages drop their badges and card controls; open panels prompt).
+**First run:** open the side panel (the toolbar icon, or the PS tab on a
+listing's right edge); it shows **"Přihlásit se přes Google"** — click it,
+complete the Google consent screen in the popup window that opens, and the
+panel reloads signed in. Its **⋯** menu then names the account; **Odhlásit**
+there signs out in every tab (search pages drop their badges and card
+controls; the panel prompts).
 
 **On a listing detail page** (any supported portal):
 
-1. A floating panel appears bottom-right.
-2. At the top, for **any** listing we have: a **Přidat do pipeline** bookmark
-   (click to add the property to the deal pipeline / again to remove — it fills
-   in and shows the current stage) and an **Otevřít v aplikaci** link.
-3. For a **flat** we have, it shows the property's MF result by shape:
-   **Výnos MF X.X %** (sale flats) + the reference rent per month and per m²; the
-   town's range with an (i) note; or the reason note alone.
-4. For anything that isn't an apartment for sale, the estimation block is
-   replaced by a short note (the bookmark + app link still show).
-5. Below the MF headline, the **comparables estimation** block: if a
-   successful estimation exists it loads the editable yield scenario; if not,
-   a **Spustit odhad** button `POST`s the ad's `listing_id` to `/estimations`
-   and polls until done.
-   Edits to the three fields debounce 500 ms and PATCH the scenario back —
-   the SPA's `/estimation/:id` page picks up the same state on next load.
+1. A small PS tab sits on the right edge with the deal's stage, this ad's
+   price drop and the MF yield; click it (or the toolbar icon) and Chrome's
+   side panel opens beside the page, which narrows to make room. It stays
+   open as you move between listings and tabs in that window and follows
+   the tab in front; the **›** in its top bar (or the toolbar icon) closes it.
+2. The header says what the property is and what this ad asks; **V aplikaci ↗**
+   opens it in the app.
+3. **Vývoj ceny** charts every ad of the property; **Moje** holds the pipeline
+   (**Přidat do pipeline**, then the stage bar and **Uzavřít ▾**), the hide
+   toggle, collections, tags and notes.
+4. On a flat for sale, **AI agenti › Odhad výnosu** runs the comparables
+   estimate, or opens the one already made; its editor's fields debounce
+   500 ms and PATCH the scenario back — the SPA's `/estimation/:id` page picks
+   up the same state on next load.
 
 **On a search / index page** (any supported portal, any category):
 
@@ -488,8 +574,8 @@ tab (search pages drop their badges and card controls; open panels prompt).
 2. Sale-apartment cards also get a badge right after the icons:
    `Výnos MF X.X %` (or a range) when we have the yield (rent or note in the
    tooltip); otherwise a
-   clickable **Odhadnout výnos** badge that opens the yield panel, where the
-   estimate runs.
+   clickable **Odhadnout výnos** badge; either opens the side panel on that
+   ad, where the estimate runs.
 3. In the bottom-left corner, the **Skrýt skryté** switch: on, the properties
    you have hidden stay on the page as barely visible cards (hover one to peek
    at it, click its eye to bring it back); off, they look like every other
@@ -508,33 +594,61 @@ wrong one).
 
 The host list and the URL→id rules live in ONE module the SPA shares,
 `frontend/src/lib/portalIds.ts` (imported cross-tree like `lib/brand.ts`; the
-SPA's paste-a-link uses the same rules). The build writes
-`content_scripts.matches` from it; the checked-in `manifest.json` list is a
-template that `frontend/src/lib/portalIds.test.ts` keeps equal to it, so a new
-host goes in both.
+SPA's paste-a-link uses the same rules). Each portal names all its `hosts` (a
+pasted link on any of them resolves) and its `pageHosts`, the ones that answer
+with pages. The build writes `content_scripts.matches` from the page hosts
+only: `sreality.cz`, `bezrealitky.cz`, `bezrealitky.com`, `remax-czech.cz`,
+`mmreality.cz`, `ceskereality.cz` and `www.realitymix.cz` redirect every path
+to their page host (checked 2026-11-01), so the script never runs there and the
+install warning doesn't name them. The checked-in `manifest.json` list is a
+template that `frontend/src/lib/portalIds.test.ts` keeps equal to the page
+hosts, so a new page host goes in both (and in `release/allowed.ts`).
+
+**Soft navigation.** sreality and bezrealitky change the address through the
+History API, without a new document, and a manifest content script is injected
+only into a new document. The content script watches the Navigation API itself
+(`currententrychange`), which reaches its isolated world, and re-decides what to
+show; no `webNavigation` permission. Live-checked headless on nine of the ten
+page hosts (#2277): index → ad and ad → ad, soft on sreality and bezrealitky
+(.cz and .com), full page loads on the rest; ceskereality's check is a manual
+one in Chrome.
 
 > **Note:** index pages on the React/Next.js portals (sreality, bezrealitky)
 > render cards client-side, so the icons and badges appear a moment after the
 > results do and re-attach as you scroll/paginate (a `MutationObserver` watches
 > for new cards).
 
+## The store package and its permission guard
+
+`npm run package` (after `npm run build`) writes `store/` from `dist/`: the same
+files without the manifest's `key` (the store assigns its own ID; the repository
+keeps the key so unpacked builds keep theirs). It then refuses the package
+(`release/package.ts`) when it carries:
+
+- a permission, a content-script site or a host permission other than the
+  hand-written list in `release/allowed.ts` (compared for **equality**, so a
+  dropped permission fails too);
+- a `key`, a source map (`.map` file or `sourceMappingURL` comment), or one of
+  our deployed hostnames (the build's API, auth and app hosts);
+- a description over 132 characters.
+
+CI runs it on every pull request against the real build and uploads `store/` as
+the `chrome-extension-store` artifact. **Adding a permission or a portal site is
+a deliberate edit to `release/allowed.ts`**, reviewed in its PR: Chrome disables
+every installed copy until its user approves a new permission, so the install
+warning only grows on purpose. Never generate that list from the build or the
+portal registry.
+
 ## Chrome Web Store submission — what's left
 
-The bundle itself carries no secret and every write is per-user + RLS-scoped
-(Wave 1), so the remaining gap to a public listing is process, not code:
+The bundle carries no secret, every write is per-user + RLS-scoped, and the
+store package above passes the store's package rules. The rest is spec #2261:
+the privacy page, the listing kit, the first upload,
+and releases through the store API.
 
-- `sourcemap:false` + confirm `minify:'esbuild'` for the store build
-  (`sourcemap:true` today is a dev/debug convenience — flip it off before
-  packaging a store submission).
-- A privacy policy URL + per-permission justifications (`identity`,
-  `alarms`, `storage`, the two `host_permissions` origins) + a single-purpose
-  statement in the Developer Dashboard listing.
-- Staged rollout, with the API kept backward-compatible across at least two
-  extension versions. **No auth safety net remains**: the `verify_jwt`
-  dual-auth window closed 2026-08-04 (PR #941), so a build still presenting
-  a static `API_TOKEN` gets a flat `401` today — the key itself was deleted on
-  2026-10-13 (`tests/api/test_auth.py` asserts a non-JWT bearer is refused). Every install must carry a real
-  Supabase JWT; plan the rollout accordingly.
-
-Full detail: `docs/design/waves-1-4-public-features.md`, "Chrome Web Store
-readiness".
+Staged rollout: from the first store release on, keep API changes the extension
+relies on additive until the store has published the version that stopped
+needing the old shape. **No auth safety net remains**: the `verify_jwt`
+dual-auth window closed 2026-08-04 (PR #941), so a build still presenting a
+static `API_TOKEN` gets a flat `401` (`tests/api/test_auth.py` asserts a non-JWT
+bearer is refused). Every install must carry a real Supabase JWT.

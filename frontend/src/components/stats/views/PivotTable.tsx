@@ -15,7 +15,7 @@ import {
   type StatsCell,
   type StatsPivot,
 } from '@/lib/stats';
-import { NUM_TD, NUM_TH, PivotRow, ROW_DIM_TH, TooFew, rowDimsLabel, statTd } from './cells';
+import { NUM_TD, NUM_TH, PivotRow, ROW_DIM_TH, SMALL_BG, SmallStats, TooFew, rowDimsLabel, statTd } from './cells';
 
 const STATS = STATS_REGISTRY.chart_stats;
 
@@ -26,7 +26,15 @@ const COLGROUP_TH = 'px-3 pt-1.5 text-right text-[0.7rem] font-medium text-[var(
  * statistics; with one, each column value carries the chart's picked statistics
  * side by side, then its n. The unit is named once, in the header, from the
  * payload's basis. */
-function PivotTable({ pivot, stats }: { pivot: StatsPivot; stats: readonly ChartStat[] }) {
+function PivotTable({
+  pivot,
+  stats,
+  showSmall = false,
+}: {
+  pivot: StatsPivot;
+  stats: readonly ChartStat[];
+  showSmall?: boolean;
+}) {
   const { spec, basis, places, min_n: minN } = pivot;
   const rows = useMemo(() => pivotRows(pivot), [pivot]);
   const cols = useMemo(() => colValuesOf(pivot), [pivot]);
@@ -89,11 +97,13 @@ function PivotTable({ pivot, stats }: { pivot: StatsPivot; stats: readonly Chart
         </thead>
         <tbody>
           {rows.map((row) => (
-            <PivotRow key={row.key} row={row}>
+            <PivotRow key={row.key} row={row} small={!perColumn && smallOf(row.cells.get(''), showSmall) != null}>
               {perColumn ? (
-                cols.map((c) => <ColumnCells key={c} cell={row.cells.get(c)} stats={stats} fmt={fmt} minN={minN} />)
+                cols.map((c) => (
+                  <ColumnCells key={c} cell={row.cells.get(c)} stats={stats} fmt={fmt} minN={minN} showSmall={showSmall} />
+                ))
               ) : (
-                <SevenStats cell={row.cells.get('')} fmt={fmt} minN={minN} />
+                <SevenStats cell={row.cells.get('')} fmt={fmt} minN={minN} showSmall={showSmall} />
               )}
             </PivotRow>
           ))}
@@ -105,14 +115,20 @@ function PivotTable({ pivot, stats }: { pivot: StatsPivot; stats: readonly Chart
 
 export default memo(PivotTable);
 
+/* The small-sample summary a cell under the minimum shows, when asked for. */
+const smallOf = (cell: StatsCell | undefined, showSmall: boolean) =>
+  showSmall && cell != null && cell.median == null ? cell.small ?? null : null;
+
 function SevenStats({
   cell,
   fmt,
   minN,
+  showSmall,
 }: {
   cell: StatsCell | undefined;
   fmt: (v: number) => string;
   minN: number;
+  showSmall: boolean;
 }) {
   if (!cell) {
     return (
@@ -124,11 +140,12 @@ function SevenStats({
   }
   /* The server nulls the six statistics together below the minimum. */
   if (cell.median == null) {
+    const small = smallOf(cell, showSmall);
     return (
       <>
         <td className={`${NUM_TD} text-[var(--color-ink-2)]`}>{fmtCount(cell.n)}</td>
         <td colSpan={STATS.length} className="px-3 py-1.5 text-right">
-          <TooFew minN={minN} />
+          {small ? <SmallStats small={small} fmt={fmt} /> : <TooFew minN={minN} />}
         </td>
       </>
     );
@@ -151,11 +168,13 @@ function ColumnCells({
   stats,
   fmt,
   minN,
+  showSmall,
 }: {
   cell: StatsCell | undefined;
   stats: readonly ChartStat[];
   fmt: (v: number) => string;
   minN: number;
+  showSmall: boolean;
 }) {
   if (!cell) {
     return (
@@ -166,12 +185,14 @@ function ColumnCells({
     );
   }
   const n = <td className={`${NUM_TD} text-[var(--color-ink-3)]`}>{fmtCount(cell.n)}</td>;
-  /* The server nulls the statistics together below the minimum. */
+  /* The server nulls the statistics together below the minimum. A shown small sample
+   * tints only its own cells: the row's other column values may be full. */
   if (cell.median == null) {
+    const small = smallOf(cell, showSmall);
     return (
       <>
-        <td colSpan={stats.length} className="px-3 py-1.5 text-right">
-          <TooFew minN={minN} />
+        <td colSpan={stats.length} className={`px-3 py-1.5 text-right${small ? ` ${SMALL_BG}` : ''}`}>
+          {small ? <SmallStats small={small} fmt={fmt} /> : <TooFew minN={minN} />}
         </td>
         {n}
       </>

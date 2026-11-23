@@ -119,6 +119,16 @@ def test_function_call_extracted():
     assert out.stop_reason == "tool_use"
 
 
+def test_a_call_cut_at_the_length_limit_reports_max_tokens():
+    """Its arguments may be half-written (they parse to {}), so it must not read as a finished tool call."""
+    response = _tool_call_response("find_things", {})
+    response._payload["choices"][0]["finish_reason"] = "length"
+    out = _provider(FakeSession([response])).complete(
+        system="", messages=[Message(role="user", content=[TextBlock(text="go")])], tools=[], model="test-model",
+    )
+    assert out.tool_calls and out.stop_reason == "max_tokens"
+
+
 def test_tool_schema_translated_to_openai_function_shape():
     session = FakeSession([_tool_call_response("record_x", {})])
     p = _provider(session)
@@ -137,6 +147,15 @@ def test_tool_schema_translated_to_openai_function_shape():
             "parameters": {"type": "object", "properties": {}},
         },
     }]
+
+
+def test_a_deadline_replaces_the_default_timeout():
+    session = FakeSession([_tool_call_response("record_x", {}), _tool_call_response("record_x", {})])
+    p = _provider(session)
+    message = [Message(role="user", content=[TextBlock(text="go")])]
+    p.complete(system="", messages=message, tools=[], model="test-model")
+    p.complete(system="", messages=message, tools=[], model="test-model", timeout_s=12.5)
+    assert [c["timeout"] for c in session.calls] == [120, 12.5]
 
 
 def test_tool_choice_forces_named_function():

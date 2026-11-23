@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from tests._live_property import REQUIRED_DB, _advert, _property, _recompute, cur  # noqa: F401 -- `cur` is the fixture
+from tests._live_property import REQUIRED_DB, _advert, _mirror_unit, _property, _recompute
 from toolkit.publication import CAP_SQL
 
 pytestmark = REQUIRED_DB
@@ -50,12 +50,10 @@ def _stamped(cur: Any, pid: int) -> Any:
 
 
 def _town(cur: Any, code: int, name: str, centre: tuple[float, float], population: int) -> None:
-    """An obec: a 0.1° square around `centre`."""
+    """An obec of the register: a 0.1° square around `centre`, and its population."""
     lng, lat = centre
-    cur.execute(
-        "INSERT INTO admin_boundaries (id, level, name, geom, population) VALUES (%s, 'obec', %s, "
-        "ST_Multi(ST_MakeEnvelope(%s, %s, %s, %s, 4326))::geography, %s)",
-        (code, name, lng - 0.05, lat - 0.05, lng + 0.05, lat + 0.05, population))
+    _mirror_unit(cur, "obec", code, name, (lng - 0.05, lat - 0.05, lng + 0.05, lat + 0.05))
+    cur.execute("INSERT INTO obec_population (obec_kod, year, population) VALUES (%s, 2026, %s)", (code, population))
 
 
 def _ring_and_point(cur: Any) -> tuple[int, int, int]:
@@ -103,8 +101,8 @@ def test_a_property_is_served_by_its_location_ad_when_its_canonical_ad_has_no_pl
     assert cur.fetchone() == (unplaced, LABEL)
 
 
-def test_browse_serves_a_property_once_settled_or_past_the_cap_and_its_page_always(cur: Any) -> None:
-    """Rule 16 (operator ruling 2026-10-23): the stamp publishes at once, the cap without one; the property page, by
+def test_browse_serves_a_property_once_stamped_whatever_its_age_and_its_page_always(cur: Any) -> None:
+    """Rule 16 (operator rulings 2026-10-23, 2026-11-17): the stamp publishes, no clock does; the property page, by
     id, never waits. now() is the transaction's, so `first_seen_at = now()` is a property first seen this instant."""
     pid, _, _ = _ring_and_point(cur)
 
@@ -115,15 +113,15 @@ def test_browse_serves_a_property_once_settled_or_past_the_cap_and_its_page_alwa
                     "EXISTS (SELECT 1 FROM properties_public WHERE property_id = %(p)s)", {"p": pid})
         return cur.fetchone()
 
-    assert served("NULL", "now()") == (False, True), "a fresh unsettled property is in Browse, or its page is gone"
-    assert served("now()", "now()") == (True, True), "a settled property waits for the cap"
-    assert served("NULL", f"now() - {CAP_SQL} - interval '1 hour'") == (True, True), "the cap did not publish it"
+    assert served("NULL", "now()") == (False, True), "a fresh unstamped property is in Browse, or its page is gone"
+    assert served("now()", "now()") == (True, True), "a stamped property waits for a clock"
+    assert served("NULL", f"now() - {CAP_SQL} - interval '1 hour'") == (False, True), "a clock published it"
 
 
 def test_city_proximity_is_computed_at_the_location_ads_point(cur: Any) -> None:
     """The canonical ad stands in Brno, the location ad in Praha: the home town is Praha's."""
-    _town(cur, 9_990_001, "Brno (test)", (16.60, 49.19), 380_000)
-    _town(cur, 9_990_002, "Praha (test)", (14.46, 50.05), 1_300_000)
+    _town(cur, 582786, "Brno (test)", (16.60, 49.19), 380_000)
+    _town(cur, PRAHA, "Praha (test)", (14.46, 50.05), 1_300_000)
     pid = _property(cur)
     ring = _advert(cur, pid, source="idnes")
     point = _advert(cur, pid, source="idnes", active=False)

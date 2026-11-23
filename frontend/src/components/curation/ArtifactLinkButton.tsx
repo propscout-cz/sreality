@@ -34,7 +34,7 @@ export default function ArtifactLinkButton({
         /* The accent: copper on copper-soft, the app's "on" chip look, so the
            button stands out on the card without shouting over the price; solid
            copper under the pointer, like a primary button. */
-        'inline-flex items-center gap-1 rounded-[var(--radius-sm)] border border-[var(--color-copper)] bg-[var(--color-copper-soft)] font-medium text-[var(--color-copper)] transition-colors hover:bg-[var(--color-copper)] hover:text-white',
+        'inline-flex items-center gap-1 rounded-[var(--radius-sm)] border border-[var(--color-copper)] bg-[var(--color-copper-soft)] font-medium text-[var(--color-copper)] transition-colors hover:bg-[var(--color-copper)] hover:text-[var(--color-on-copper)]',
         className,
       ].join(' ')}
     >

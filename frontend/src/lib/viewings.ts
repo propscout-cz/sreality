@@ -9,8 +9,6 @@
 import { FEED_TZ, pragueDayKey, shiftDay } from './feed';
 import type { Note } from './types';
 
-export type ViewingScope = 'upcoming' | 'all';
-
 /* A viewing as the composer holds it: a Prague day ('YYYY-MM-DD') and time ('HH:MM'). */
 export interface ViewingSlot {
   day: string;
@@ -63,11 +61,14 @@ export const slotIsComplete = (s: ViewingSlot): boolean =>
   /^\d{4}-\d{2}-\d{2}$/.test(s.day) && /^\d{2}:\d{2}$/.test(s.time);
 
 /* A new viewing's first guess: the next full hour today, or tomorrow at 10:00
- * once that would be past 20:00 (a viewing is rarely booked for the night). */
+ * once that would be past 20:00 (a viewing is rarely booked for the night).
+ * Counted on the instant (Prague's offset is whole hours, so the next full UTC hour
+ * is the next full hour on its clock): the clock's hour + 1 would name 02:00 the
+ * night the clock skips it, and pass over the repeated 02:00 in autumn. */
 export function defaultSlot(now: Date = new Date()): ViewingSlot {
-  const { day, time } = viewingSlot(now.toISOString());
-  const next = Number(time.slice(0, 2)) + 1;
-  return next > 20 ? { day: shiftDay(day, 1), time: '10:00' } : { day, time: `${pad2(next)}:00` };
+  const today = pragueDayKey(now);
+  const next = viewingSlot(new Date((Math.floor(now.getTime() / 3_600_000) + 1) * 3_600_000).toISOString());
+  return next.day === today && next.time <= '20:00' ? next : { day: shiftDay(today, 1), time: '10:00' };
 }
 
 const WEEKDAY_SHORT = new Intl.DateTimeFormat('cs-CZ', { timeZone: 'UTC', weekday: 'short' });
@@ -84,13 +85,16 @@ export function shortDay(day: string, todayKey: string): string {
   return `${WEEKDAY_SHORT.format(dayDate(day))} ${d}. ${m}.${year}`;
 }
 
-/* The Prohlídky tab's day title: "Dnes", "Zítra", "Včera", else "čtvrtek 24. října". */
+/* The Prohlídky tab's day title: "Dnes", "Zítra", "Včera", else "čtvrtek 24. října"; another
+ * year's day trades the long weekday for its year ("čt 24. října 2025"), so the longest title
+ * stays the width of this year's longest beside the arrows and "Dnes". */
 export function dayTitle(day: string, todayKey: string): string {
   if (day === todayKey) return 'Dnes';
   if (day === shiftDay(todayKey, 1)) return 'Zítra';
   if (day === shiftDay(todayKey, -1)) return 'Včera';
-  const year = day.slice(0, 4) === todayKey.slice(0, 4) ? '' : ` ${day.slice(0, 4)}`;
-  return `${WEEKDAY_LONG.format(dayDate(day))} ${MONTH_LONG.format(dayDate(day))}${year}`;
+  const date = MONTH_LONG.format(dayDate(day));
+  if (day.slice(0, 4) === todayKey.slice(0, 4)) return `${WEEKDAY_LONG.format(dayDate(day))} ${date}`;
+  return `${WEEKDAY_SHORT.format(dayDate(day))} ${date} ${day.slice(0, 4)}`;
 }
 
 /* The full date under a relative title: "čtvrtek 24. října" (always, so "Zítra" names its date). */
@@ -123,9 +127,17 @@ export function viewingWhen(iso: string, now: Date = new Date()): string {
   return `${shortDay(day, pragueDayKey(now))} v ${time}`;
 }
 
-/* Upcoming = on today's Prague day or later: today's morning viewing stays on today's page. */
+/* Upcoming = on today's Prague day or later: a property's notes keep this morning's viewing on top
+ * until the day ends. */
 export const isUpcoming = (iso: string, now: Date = new Date()): boolean =>
   viewingSlot(iso).day >= pragueDayKey(now);
+
+/* Passed = its minute has come: the Prohlídky tab dims it on any day and counts only the rest as
+ * planned, so its header ("2 v plánu") and its rows say the same thing. */
+export const hasPassed = (iso: string, now: Date = new Date()): boolean => new Date(iso) <= now;
+
+/* A real Prague day key: a URL can carry '2026-00-10', which the shape passes and no formatter takes. */
+export const isDayKey = (s: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(s) && shiftDay(s, 0) === s;
 
 /* A property's notes as its Poznámky section lists them: its upcoming viewings first, the
  * nearest on top, then every other note in the order it came (newest written first). */
@@ -134,11 +146,6 @@ export function sectionOrder(notes: readonly Note[], now: Date = new Date()): No
     .filter((n) => n.viewing_at && isUpcoming(n.viewing_at, now))
     .sort((a, b) => a.viewing_at!.localeCompare(b.viewing_at!));
   return [...ahead, ...notes.filter((n) => !ahead.includes(n))];
-}
-
-/* The tab's viewings in a scope, earliest first (the read already orders them). */
-export function scoped(viewings: readonly Note[], scope: ViewingScope, now: Date = new Date()): Note[] {
-  return viewings.filter((v) => v.viewing_at && (scope === 'all' || isUpcoming(v.viewing_at, now)));
 }
 
 /* Each Prague day that holds a viewing, with its viewings in time order. */

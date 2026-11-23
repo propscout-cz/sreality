@@ -45,6 +45,7 @@ import { reconcileActiveBoard } from './pipelineShares';
 import { useCardTags } from './useCardTags';
 import { useDismissal } from './useDismissal';
 import { usePipelineCard } from './usePipelineCard';
+import { watchReads } from '@/test/reads';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -295,15 +296,14 @@ describe('every acting write lands on the owner\'s entries only, and never on Br
     qc.setQueryData<PipelineMembers>(pipelineKeys.members, new Map());
     qc.setQueryData<PipelineMembers>(actingKey('owner-e', pipelineKeys.members), new Map());
     qc.setQueryData(BROWSE, { pages: [{ rows: [{ property_id: 42 }] }], pageParams: [null] });
-    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    const { reread } = watchReads(qc);
     const acting = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={qc}>
         <ActingAs share={EDIT}>{children}</ActingAs>
       </QueryClientProvider>
     );
-    const roots = browseKeys.all.map(([r]) => r as unknown);
-    const touchedBrowse = () => invalidate.mock.calls.some(([f]) => roots.includes(f?.queryKey?.[0]));
-    return { qc, acting, touchedBrowse };
+    const touchedBrowse = () => browseKeys.all.some((root) => reread(root));
+    return { qc, acting, touchedBrowse, reread };
   }
 
   it('adds and moves a card as the owner, on the owner\'s map', async () => {
@@ -343,21 +343,24 @@ describe('every acting write lands on the owner\'s entries only, and never on Br
   });
 
   it('settles a tag or collection written as the owner on the owner\'s map alone', async () => {
-    const { qc } = seeded();
-    for (const set of [curationKeys.propertyTagMembers, curationKeys.propertyCollectionMembers]) {
+    const { qc, touchedBrowse, reread } = seeded();
+    const sets = [curationKeys.propertyTagMembers, curationKeys.propertyCollectionMembers];
+    for (const set of sets) {
       qc.setQueryData(set, new Map<number, number[]>());
       qc.setQueryData(actingKey('owner-e', set), new Map<number, number[]>());
     }
-    const invalidate = vi.spyOn(qc, 'invalidateQueries');
-    await settleTagWrite(qc, 42, 7, true, 'owner-e');
-    await settleCollectionWrite(qc, 42, 9, true, 'owner-e');
+    settleTagWrite(qc, 42, 7, true, 'owner-e');
+    settleCollectionWrite(qc, 42, 9, true, 'owner-e');
     expect(qc.getQueryData<Map<number, number[]>>(actingKey('owner-e', curationKeys.propertyTagMembers))?.get(42)).toEqual([7]);
     expect(qc.getQueryData<Map<number, number[]>>(actingKey('owner-e', curationKeys.propertyCollectionMembers))?.get(42)).toEqual([9]);
     expect(qc.getQueryData<Map<number, number[]>>(curationKeys.propertyTagMembers)?.size).toBe(0);
     expect(qc.getQueryData<Map<number, number[]>>(curationKeys.propertyCollectionMembers)?.size).toBe(0);
-    const keys = invalidate.mock.calls.map(([f]) => f?.queryKey);
-    expect(keys.length).toBeGreaterThan(0);
-    expect(keys.every((k) => k?.[0] === 'acting' && k[1] === 'owner-e')).toBe(true);
+    // The owner's maps are re-read; mine and Browse never are.
+    for (const set of sets) {
+      expect(reread(actingKey('owner-e', set))).toBe(true);
+      expect(reread(set)).toBe(false);
+    }
+    expect(touchedBrowse()).toBe(false);
   });
 });
 

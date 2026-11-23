@@ -376,24 +376,6 @@ def test_reclaim_stale_claims_releases_old_claims_and_prunes_ledger():
     assert params == ("sreality", 30)
 
 
-# --- Phase 3: dirty-property enqueue ----------------------------------------
-
-
-def test_mark_properties_dirty_drops_null_and_uses_unnest():
-    conn = _FakeConn([(lambda s: "INSERT INTO dirty_properties" in s, [(10,)])])
-    db.mark_properties_dirty(conn, [10, None, 10])
-    sql, params = conn.executed[0]
-    assert "unnest(%s::bigint[])" in sql
-    assert "ON CONFLICT (property_id) DO UPDATE SET marked_at = now()" in sql
-    assert params == ([10, 10],)  # NULL dropped; SQL DISTINCT collapses dups
-
-
-def test_mark_properties_dirty_empty_noop():
-    conn = _FakeConn([])
-    assert db.mark_properties_dirty(conn, [None]) == 0
-    assert conn.executed == []
-
-
 def test_active_count_is_source_scoped():
     conn = _FakeConn([
         (lambda s: "SELECT count(*) FROM listings" in s, [(42,)]),

@@ -3,10 +3,11 @@ executed and pinned to the shared fixture.
 
 `tests/fixtures/portal_rule.json` is read by both languages. Here: every case through
 `public.portal_status_matches`, through both aggregate RPCs (Stats and, since migration 630,
-the map cells over `browse_list`) and, for the `any` rows, through the Watchdog's
-compiled clause (`toolkit.filter_compiler.PROPERTIES_GRAIN`); every broker case seeds its
+the map cells over `browse_list`) and through both property grains' compiled rule
+(`toolkit.filter_compiler.PROPERTIES_GRAIN`, the Watchdog's, and `BROWSE_GRAIN`, the agents'
+search over Browse's source); every broker case seeds its
 ads, runs the broker lookup (`toolkit.brokers.broker_property_ids`, the portal side on the
-broker's ads) and keeps the property's own status beside it, as Browse does. The SPA half is
+broker's book row, migration 692) and keeps the property's own status beside it, as Browse does. The SPA half is
 `applyPortalRule` in queries.test.ts. Also live: the rebuild's one partial index per portal
 and the projection's and `browse_list`'s one shape. Offline: the fixture covers every arm.
 
@@ -99,20 +100,33 @@ def test_the_function_answers_the_table(conn, case: dict[str, Any]) -> None:
         assert cur.fetchone()[0] is case["expected"]
 
 
-@live
-@pytest.mark.parametrize("case", [c for c in CASES if c["status"] == "any"],
-                         ids=_ids([c for c in CASES if c["status"] == "any"]))
-def test_the_watchdogs_clauses_are_the_any_arm(conn, case: dict[str, Any]) -> None:
-    from toolkit.filter_compiler import PROPERTIES_GRAIN, compile_filter_where
+def _compiled(grain_name: str, case: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    from toolkit import filter_compiler as fc
 
-    where, params = compile_filter_where(
-        {"portals": case["portals"], "portals_excluded": case["excluded"],
-         "portals_excluded_active_only": case["excluded_active_only"]}, PROPERTIES_GRAIN)
+    grain = getattr(fc, grain_name)
+    values = {"portals": case["portals"], "status": case["status"], "portals_excluded": case["excluded"],
+              "portals_excluded_active_only": case["excluded_active_only"]}
+    if grain is fc.PROPERTIES_GRAIN:
+        # The Watchdog takes no status (its agenda refuses one): its `any` rows compile, every
+        # other row reaches the grain's own portal rule directly.
+        if case["status"] == "any":
+            return fc.compile_filter_where({**values, "status": None}, grain)
+        params: dict[str, Any] = {}
+        return grain.hooks["portals"]("portals", case["portals"], values, params), params
+    return fc.compile_filter_where(values, grain)
+
+
+@live
+@pytest.mark.parametrize("grain", ["PROPERTIES_GRAIN", "BROWSE_GRAIN"])
+@pytest.mark.parametrize("case", CASES, ids=_ids(CASES))
+def test_both_property_grains_compile_the_table(conn, case: dict[str, Any], grain: str) -> None:
+    where, params = _compiled(grain, case)
     with conn.cursor() as cur:
         cur.execute(
-            "select count(*) from (values (%(all)s::text[], %(active)s::text[])) "
-            f"as l(all_sources, active_sources) where {' and '.join(where) or 'true'}",
-            {**params, "all": case["all_sources"], "active": case["active_sources"]})
+            "select count(*) from (values (%(is_active)s, %(all)s::text[], %(active)s::text[])) "
+            f"as l(is_active, all_sources, active_sources) where {' and '.join(where) or 'true'}",
+            {**params, "is_active": case["is_active"], "all": case["all_sources"],
+             "active": case["active_sources"]})
         assert cur.fetchone()[0] == int(case["expected"])
 
 
@@ -162,15 +176,21 @@ def test_the_map_cells_count_the_table(conn, case: dict[str, Any]) -> None:
 
 
 def _seed_broker_case(cur: Any, case: dict[str, Any]) -> tuple[dict[str, int], int]:
+    """Each broker with one identity per portal they advertise on, as attribution keys them (an identity is one
+    portal's), and the property's book kept by the maintenance pass the lookup reads (migration 692)."""
+    from scripts.recompute_property_stats import properties_changed
+
     brokers: dict[str, int] = {}
     for label in sorted({ad["broker"] for ad in case["ads"]}):
         cur.execute("insert into brokers (display_name) values (%s) returning id",
                     (f"rule-{label}",))
-        broker_id = cur.fetchone()[0]
+        brokers[label] = cur.fetchone()[0]
+    identities: dict[tuple[str, str], int] = {}
+    for label, source in sorted({(ad["broker"], ad["source"]) for ad in case["ads"]}):
         cur.execute(
             "insert into broker_identities (source, source_broker_id_native, broker_id) "
-            "values ('sreality', %s, %s) returning id", (f"rule-{next(_IDS)}", broker_id))
-        brokers[label] = cur.fetchone()[0]
+            "values (%s, %s, %s) returning id", (source, f"rule-{next(_IDS)}", brokers[label]))
+        identities[label, source] = cur.fetchone()[0]
     cur.execute("insert into properties default values returning id")
     property_id = cur.fetchone()[0]
     for ad in case["ads"]:
@@ -179,11 +199,9 @@ def _seed_broker_case(cur: Any, case: dict[str, Any]) -> tuple[dict[str, int], i
             "insert into listings (source, source_id_native, sreality_id, raw_json, property_id, "
             "broker_identity_id, is_active) values (%s, %s, %s, '{}', %s, %s, %s)",
             (ad["source"], str(native), native if ad["source"] == "sreality" else None,
-             property_id, brokers[ad["broker"]], ad["is_active"]))
-    cur.execute("select id, broker_id from broker_identities where id = any(%s)",
-                (list(brokers.values()),))
-    by_identity = dict(cur.fetchall())
-    return {label: by_identity[i] for label, i in brokers.items()}, property_id
+             property_id, identities[ad["broker"], ad["source"]], ad["is_active"]))
+    properties_changed(cur.connection, [property_id])
+    return brokers, property_id
 
 
 @live

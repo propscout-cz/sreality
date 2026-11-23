@@ -32,11 +32,14 @@ import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Iterable, Iterator, Mapping, Protocol, Sequence
 
 import psycopg
 
 from toolkit import machine_labeling
+
+if TYPE_CHECKING:
+    from sklearn.linear_model import LogisticRegression
 
 ARTIFACT_VERSION = 1
 ARTIFACT_KIND = "tag_head_binary_logreg"
@@ -240,7 +243,7 @@ def dataset_hash(
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _chunks(ids: Sequence[int], size: int = _ID_CHUNK):
+def _chunks(ids: Sequence[int], size: int = _ID_CHUNK) -> Iterator[list[int]]:
     for i in range(0, len(ids), size):
         yield list(ids[i:i + size])
 
@@ -483,7 +486,8 @@ class TrainedHead:
         return score_embedding(self.artifact, embedding)
 
 
-def _fit(X, y, *, C: float, max_iter: int, seed: int):
+def _fit(X: list[list[float]], y: list[int], *, C: float, max_iter: int,
+         seed: int) -> LogisticRegression:
     from sklearn.linear_model import LogisticRegression
 
     if len(set(y)) < 2:

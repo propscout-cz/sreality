@@ -21,7 +21,13 @@
  * the desktop (lib/acting), switched in a strip above the stages; a shared
  * board renders inside <ActingAs>. A read share is read-only — no stage sheet,
  * no tag chips, no artifact link; an edit share moves cards through the stage
- * sheet as the owner. Sharing itself, and leaving, stay on the desktop. */
+ * sheet as the owner. Sharing itself, and leaving, stay on the desktop.
+ *
+ * LOKALITA is the desktop bar's place filter, nothing of its own: the same
+ * `districts` params (lib/pipelineState, so one link is one view on either
+ * device), the same typeahead as the Filtry sheet's place sheet, and the same
+ * in-memory rule over the board's five codes (`matchesDistricts`). The stage
+ * pages keep every stage and count only the cards in the place. */
 
 import {
   useEffect,
@@ -36,6 +42,8 @@ import {
 import { Link, useNavigationType } from 'react-router-dom';
 
 import { readFailed } from '@/components/ReadFailedMark';
+import { LocationTypeahead } from '@/components/filter-controls/LocationTypeahead';
+import { matchesDistricts } from '@/lib/districtCodes';
 import { fmtArea } from '@/lib/format';
 import { CardHydrationProvider, useCardHydration } from '@/lib/hydration';
 import { propertyPath } from '@/lib/listingUrl';
@@ -44,31 +52,40 @@ import {
   cardsWord,
   daysInStage,
   fmtDaysInStage,
-  initialStageIndex,
   readLastStage,
+  stageOnScreen,
   stagePages,
   writeLastStage,
   type StagePage,
 } from '@/lib/phonePipeline';
 import { TAB_BAR_SPACE } from '@/lib/phoneShell';
 import { usePipelineBoard, usePipelineStages } from '@/lib/pipelineReads';
-import { ActingAs, useActAs, useActingReadOnly, type ActiveBoard } from '@/lib/acting';
+import { BOARD_GESTURE_HELD } from '@/lib/queries';
+import { useReadHold } from '@/lib/revalidate';
+import { usePipelineViewState } from '@/lib/pipelineState';
+import { ActingAs, actingKey, useActAs, useActingReadOnly, type ActiveBoard } from '@/lib/acting';
 import { useBoardSelection, useSharedBoardGuard } from '@/lib/pipelineShares';
 import BoardSwitcher from '@/components/pipeline/BoardSwitcher';
 import { useCardTags } from '@/lib/useCardTags';
 import TagChip from '@/components/curation/TagChip';
 import ArtifactLinkButton from '@/components/curation/ArtifactLinkButton';
 import DelegatedStamp from '@/components/DelegatedStamp';
+import { MF_YIELD_TITLE, mfYieldLine } from '@/lib/mfReference';
 import { stageAccent, stageBadge } from '@/lib/pipelineStage';
+import type { DistrictChip } from '@/lib/filters';
 import type { PipelineBoardCard, PipelineStage } from '@/lib/types';
 
+import BottomSheet from './BottomSheet';
 import { PHOTO_DARK } from './CardPhotoStrip';
-import { feedDelta, feedLayout, feedMfYield, feedPrice } from './FeedCard';
+import { feedDelta, feedLayout, feedPrice } from './FeedCard';
 import { StageSheet, TagSheet, type SheetSubject } from './FeedSheets';
 import PhonePipelineSkeleton from './PhonePipelineSkeleton';
 import { usePhoneHeaderAside } from './PhoneShell';
 import StageWash from './StageWash';
-import { ChevronDownIcon } from './phoneIcons';
+import { usePagerGesture } from './usePagerGesture';
+import { CHIP, CHIP_MD, CHIP_ROW, NO_FOCUS_ZOOM, chipState } from './chips';
+import { ChevronDownIcon, PinIcon } from './phoneIcons';
+import { placeLabelOf } from './placeLabel';
 
 /* What is left between the phone header (PhoneShell's `h-14` plus its hairline)
  * and the tab bar's space: the strip and the pages fill exactly that. */
@@ -112,16 +129,24 @@ export default function PhonePipeline() {
 function PhoneBoard({ active, switcher }: { active: ActiveBoard; switcher: ReactNode }) {
   const stagesQ = usePipelineStages();
   const boardQ = usePipelineBoard();
+  const { districts, setDistricts } = usePipelineViewState();
+  const placed = districts.length > 0;
   const stages = stagesQ.data ?? NO_STAGES;
   const cards = boardQ.data ?? NO_CARDS;
-  const pages = useMemo(() => stagePages(stages, cards), [stages, cards]);
+  const shown = useMemo(
+    () => (placed ? cards.filter((c) => matchesDistricts(c, districts)) : cards),
+    [cards, districts, placed],
+  );
+  const pages = useMemo(() => stagePages(stages, shown), [stages, shown]);
   /* The badge's ordinal fallback counts along the pages' own order. */
   const ordered = useMemo(() => pages.map((p) => p.stage), [pages]);
   const loaded = stagesQ.data !== undefined && boardQ.data !== undefined;
   const failed = readFailed(stagesQ) || readFailed(boardQ);
   const total = pages.reduce((n, p) => n + p.cards.length, 0);
 
-  usePhoneHeaderAside(loaded && !failed ? cardsWord(total) : null);
+  usePhoneHeaderAside(
+    loaded && !failed ? (placed ? `${total} z ${cards.length} karet` : cardsWord(total)) : null,
+  );
 
   useSharedBoardGuard(active, stagesQ.data);
 
@@ -152,8 +177,54 @@ function PhoneBoard({ active, switcher }: { active: ActiveBoard; switcher: React
 
   return (
     <CardHydrationProvider listingIds={listingIds} renders={{ covers: true }}>
-      <StagePager pages={pages} stages={ordered} switcher={switcher} />
+      <StagePager
+        pages={pages}
+        stages={ordered}
+        switcher={switcher}
+        place={<PlaceRow districts={districts} onChange={setDistricts} />}
+        placed={placed}
+      />
     </CardHydrationProvider>
+  );
+}
+
+/* The place chip over the stage tabs, and its sheet: the typeahead with its
+ * field at the top, so the suggestions open above the keyboard. */
+function PlaceRow({
+  districts,
+  onChange,
+}: {
+  districts: DistrictChip[];
+  onChange: (next: DistrictChip[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const on = districts.length > 0;
+  const label = on ? placeLabelOf(districts) : 'Lokalita';
+  return (
+    <>
+      <div className={`${CHIP_ROW} shrink-0 py-2`}>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          aria-haspopup="dialog"
+          aria-label={on ? `Lokalita: ${label}` : 'Lokalita: všechny'}
+          className={`${CHIP} ${CHIP_MD} ${chipState(on)} max-w-[70vw]`}
+        >
+          <PinIcon className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">{label}</span>
+        </button>
+      </div>
+      {open && (
+        <BottomSheet label="Lokalita" onClose={() => setOpen(false)}>
+          <div className={`min-h-[70dvh] px-4 pt-3 ${NO_FOCUS_ZOOM}`}>
+            <LocationTypeahead label="Lokalita" value={districts} onChange={(next) => onChange(next ?? [])} />
+            <p className="mt-3 text-[12px] text-[var(--color-ink-3)]">
+              Kraj, okres, obec, část obce nebo ulice; bez lokality jsou vidět všechny karty.
+            </p>
+          </div>
+        </BottomSheet>
+      )}
+    </>
   );
 }
 
@@ -161,60 +232,86 @@ function StagePager({
   pages,
   stages,
   switcher,
+  place,
+  placed,
 }: {
   pages: StagePage[];
   stages: PipelineStage[];
   switcher: ReactNode;
+  place: ReactNode;
+  placed: boolean;
 }) {
   const stripRef = useRef<HTMLDivElement>(null);
   const pagerRef = useRef<HTMLDivElement>(null);
-  /* The stage last looked at is remembered per board (lib/phonePipeline). */
+  /* The stage on screen, by id, and the index it was last shown at: the one last
+   * looked at on this device (per board, lib/phonePipeline) until a swipe or a tap
+   * lands on another. The stage on screen is the one remembered — one memory, so
+   * nothing falls back to the stage of mount time. */
   const board = useActAs();
-  const remembered = useRef(readLastStage(board));
-  const [activeId, setActiveId] = useState<number | null>(null);
+  const [onScreen, setOnScreen] = useState<{ id: number | null; index: number }>(() => ({
+    id: readLastStage(board),
+    index: -1,
+  }));
   const [sheetFor, setSheetFor] = useState<{
     kind: 'stage' | 'tags';
     card: PipelineBoardCard;
     subject: SheetSubject;
   } | null>(null);
 
-  const found = activeId == null ? -1 : pages.findIndex((p) => p.stage.id === activeId);
-  const active = found >= 0 ? found : initialStageIndex(pages, remembered.current);
+  /* The page to show (lib/phonePipeline `stageOnScreen`: the stage on screen, its
+   * neighbour once it is archived elsewhere, the entry stage before any). Whichever
+   * it is becomes the stage on screen BY ID before anything paints (React's state
+   * adjusted while rendering), so a stage added or reordered elsewhere later moves
+   * its index, never what is on screen. */
+  const active = stageOnScreen(pages, onScreen.id, onScreen.index);
+  const shownId = pages[active]?.stage.id ?? null;
+  if (shownId != null && (shownId !== onScreen.id || active !== onScreen.index)) {
+    setOnScreen({ id: shownId, index: active });
+  }
+  /* The page on screen, for the handlers and effects (a scroll's frame, a landing). */
   const activeRef = useRef(active);
-  activeRef.current = active;
+  useLayoutEffect(() => {
+    activeRef.current = active;
+  });
+  useEffect(() => {
+    if (onScreen.id != null) writeLastStage(onScreen.id, board);
+  }, [onScreen.id, board]);
 
-  /* A tab tap's destination while the smooth scroll is on its way: the pages
-   * it passes over must not flick the strip through every stage between. */
+  /* A tab tap's destination, as a STAGE id, while the smooth scroll is on its
+   * way: the pages it passes over must not flick the strip through every stage
+   * between, and a stage added or reordered elsewhere meanwhile shifts every
+   * index but not the stage tapped. */
   const target = useRef<number | null>(null);
   const targetTimer = useRef<number | undefined>(undefined);
   const frame = useRef(0);
 
-  const settle = (i: number) => {
+  /* A remote change waits while a finger is on the pages or they are still
+   * scrolling (./usePagerGesture). */
+  const gesture = usePagerGesture(pagerRef);
+  useReadHold(
+    BOARD_GESTURE_HELD.map((key) => actingKey(board, key)),
+    gesture.active,
+  );
+
+  const showStage = (i: number) => {
     const page = pages[i];
-    if (!page) return;
-    setActiveId(page.stage.id);
-    writeLastStage(page.stage.id, board);
+    if (page) setOnScreen({ id: page.stage.id, index: i });
   };
 
   /* Land on the active page without animation: on first paint, when the stage
    * order changes under it, and when the width does. */
+  const { land } = gesture;
   const order = pages.map((p) => p.stage.id).join(',');
-  useLayoutEffect(() => {
-    const el = pagerRef.current;
-    if (el && el.clientWidth) el.scrollLeft = activeRef.current * el.clientWidth;
-  }, [order]);
+  useLayoutEffect(() => land(activeRef.current), [order, land]);
   useEffect(() => {
-    const onResize = () => {
-      const el = pagerRef.current;
-      if (el && el.clientWidth) el.scrollLeft = activeRef.current * el.clientWidth;
-    };
+    const onResize = () => land(activeRef.current);
     window.addEventListener('resize', onResize);
     return () => {
       window.removeEventListener('resize', onResize);
       window.clearTimeout(targetTimer.current);
       cancelAnimationFrame(frame.current);
     };
-  }, []);
+  }, [land]);
 
   /* Keep the active tab inside the strip, 8 px clear of either edge. */
   useEffect(() => {
@@ -228,6 +325,7 @@ function StagePager({
   }, [active]);
 
   const onPagerScroll = () => {
+    gesture.onScroll();
     if (frame.current) return;
     frame.current = requestAnimationFrame(() => {
       frame.current = 0;
@@ -235,18 +333,18 @@ function StagePager({
       if (!el || !el.clientWidth) return;
       const i = Math.min(pages.length - 1, Math.max(0, Math.round(el.scrollLeft / el.clientWidth)));
       if (target.current != null) {
-        if (i !== target.current) return;
+        if (pages[i]?.stage.id !== target.current) return;
         target.current = null;
       }
-      if (i !== activeRef.current) settle(i);
+      if (i !== activeRef.current) showStage(i);
     });
   };
 
   const goTo = (i: number) => {
     const el = pagerRef.current;
-    settle(i);
+    showStage(i);
     if (!el || !el.clientWidth || Math.round(el.scrollLeft / el.clientWidth) === i) return;
-    target.current = i;
+    target.current = pages[i]?.stage.id ?? null;
     window.clearTimeout(targetTimer.current);
     targetTimer.current = window.setTimeout(() => {
       target.current = null;
@@ -284,6 +382,7 @@ function StagePager({
   return (
     <div className="flex flex-col" style={{ height: FRAME_HEIGHT }}>
       {switcher && <div className="shrink-0 border-b border-[var(--color-rule-soft)]">{switcher}</div>}
+      {place}
       <div
         ref={stripRef}
         role="tablist"
@@ -331,6 +430,7 @@ function StagePager({
       <div
         ref={pagerRef}
         onScroll={onPagerScroll}
+        {...gesture.touch}
         className="flex min-h-0 flex-1 snap-x snap-mandatory overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         {pages.map((p, i) => (
@@ -340,6 +440,7 @@ function StagePager({
             index={i}
             count={pages.length}
             stages={stages}
+            placed={placed}
             subjectId={sheetCard?.property_id ?? null}
             onStage={(card, subject) => setSheetFor({ kind: 'stage', card, subject })}
             onTags={(card, subject) => setSheetFor({ kind: 'tags', card, subject })}
@@ -366,6 +467,7 @@ function StagePageView({
   index,
   count,
   stages,
+  placed,
   subjectId,
   onStage,
   onTags,
@@ -374,6 +476,7 @@ function StagePageView({
   index: number;
   count: number;
   stages: PipelineStage[];
+  placed: boolean;
   subjectId: number | null;
   onStage: (card: PipelineBoardCard, subject: SheetSubject) => void;
   onTags: (card: PipelineBoardCard, subject: SheetSubject) => void;
@@ -427,9 +530,11 @@ function StagePageView({
         </div>
       ) : (
         <p className="mx-4 my-1 rounded-[var(--radius-md)] border border-dashed border-[var(--color-rule-strong)] px-4 py-6 text-[13px] text-[var(--color-ink-3)]">
-          {readOnly
-            ? 'V této fázi teď nic není.'
-            : 'V této fázi teď nic není. Kartu sem přesunete z jejího odznaku fáze.'}
+          {placed
+            ? 'V této fázi v té lokalitě nic není.'
+            : readOnly
+              ? 'V této fázi teď nic není.'
+              : 'V této fázi teď nic není. Kartu sem přesunete z jejího odznaku fáze.'}
         </p>
       )}
     </section>
@@ -463,7 +568,7 @@ function PipelinePhoneCard({
   const place = card.display_label?.trim() || null;
   const delta = feedDelta(card.total_price_change_pct);
   const days = fmtDaysInStage(daysInStage(card.entered_stage_at));
-  const mf = feedMfYield(card);
+  const mf = mfYieldLine(card.mf_gross_yield_pct);
   const text = [layout, place].filter(Boolean).join(' · ');
   const sheetSubject: SheetSubject = { property_id: card.property_id, text, figure: price.text ? priceLabel : null };
 
@@ -518,7 +623,7 @@ function PipelinePhoneCard({
         </p>
         <p className="mt-0.5 flex flex-wrap gap-x-2 font-mono text-[11px] tabular-nums text-[var(--color-ink-3)]">
           {days && <span>{days}</span>}
-          {mf && <span title="Hrubý výnos dle cenové mapy nájemného MF (nájem ÷ cena)">{mf}</span>}
+          {mf && <span title={MF_YIELD_TITLE}>{mf}</span>}
           {!card.is_active && <span>neaktivní</span>}
         </p>
         {!readOnly && (

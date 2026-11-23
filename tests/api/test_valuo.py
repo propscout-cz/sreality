@@ -43,11 +43,11 @@ OFFICE = EMPTY | {"category_main": "komercni", "category_type": "pronajem", "sub
                   "disposition": "2+kk", "area_m2": 180, "condition": "dobry", "floor": 2}
 STREET = {
     "lat": 50.08, "lon": 14.42, "granularity": "address_point", "granularity_rank": 100,
-    "precision": "street", "country_status": "cz", "uncertainty_radius_m": 5.0,
-    "label": "Vinohradská 12, Praha", "zoom": 16, "note": None,
+    "precision": "street", "country_status": "cz",
+    "label": "Vinohradská 12, Praha", "note": None,
 }
 TOWN = STREET | {"granularity": "obec", "granularity_rank": 40, "precision": "town",
-                 "uncertainty_radius_m": 2500.0, "note": "Poloha jen na úrovni obce"}
+                 "note": "Poloha jen na úrovni obce"}
 
 
 def _build(subject: dict[str, Any], location: dict[str, Any] = STREET,
@@ -147,7 +147,7 @@ def test_a_flat_maps_from_its_ad_and_its_property():
     assert request == {
         "property_type": "flat", "place": "50.080000, 14.420000", "kind": "sale", "floor_area": 54.5,
         "rating": "very_good", "as_of": _today(), "local_type": "2+kk", "ownership": "private",
-        "construction": "brick", "floor": 3, "total_floors": 6, "country_code": "cs",
+        "construction": "brick", "floor": 3, "total_floors": 6, "new_building": False, "country_code": "cs",
     }
     assert list(request) == [f.name for f in valuo.FIELDS if f.name in request] + ["country_code"]
     assert "country_code" not in prov and "energy_performance" not in prov  # a flat's class: no v3 field
@@ -161,7 +161,8 @@ def test_a_flat_maps_from_its_ad_and_its_property():
     assert prov["place"] == {"class": "ad", "from": {"column": "listing_location.geom",
                                                      "value": "50.080000, 14.420000"},
                              "note": "Vinohradská 12, Praha"}
-    assert prov["new_building"] == {"class": "missing", "from": None, "note": None}
+    assert prov["new_building"] == {"class": "inferred", "from": {"column": "condition", "value": "po_rekonstrukci"},
+                                    "note": "Po rekonstrukci → ne"}
     assert prov["garages"] == {"class": "missing", "from": {"column": "garage", "value": False},
                                "note": "Inzerát garáž neuvádí jako ano — neposílá se."}
     assert prov["as_of"]["class"] == "assumed"
@@ -177,6 +178,8 @@ def test_a_missing_condition_blocks_rather_than_guessing():
     assert "rating" not in request
     assert prov["rating"]["class"] == "missing"
     assert valuo.blocking(request) == ["rating"]
+    assert request["new_building"] is False  # never left empty (operator ruling 2026-10-27)
+    assert prov["new_building"] == {"class": "assumed", "from": None, "note": "Inzerát stav neuvádí → ne"}
 
 
 def test_a_yes_garage_is_sent_naming_its_rule_and_a_no_is_not_sent():
@@ -222,6 +225,8 @@ def test_a_new_building_is_rated_very_good_by_assumption_and_flagged_new():
                                         "note": f"{word} → Novostavba"}
     request, _prov = _build(FLAT | {"condition": "novostavba"}, overrides={"new_building": False})
     assert request["new_building"] is False
+    request, prov = _build(HOUSE | {"condition": "dobry"})
+    assert request["new_building"] is False and prov["new_building"]["class"] == "inferred"
     request, prov = _build(OFFICE | {"condition": "novostavba"})
     assert "new_building" not in request and "new_building" not in prov
 
@@ -460,7 +465,8 @@ class _Cur:
         p = [_plain(x) for x in params]
         rows = self.store.rows
         if text.startswith("insert into valuo_valuations"):
-            account, listing_id, env, sha, request, provenance = p
+            account, listing_id, env, sha, request, provenance, agent_run_id = p
+            assert agent_run_id is None, "the website's POST names no run"
             if self.store.live_twin(account, env, listing_id, request):
                 self.result = []
                 return
@@ -586,7 +592,7 @@ def test_get_returns_the_editor_and_the_callers_history(client, world, store, mo
     body = client.get("/properties/7/valuo", headers=AUTH).json()
     assert body["environment"] == "sandbox" and body["refusal"] is None
     assert body["subject"]["location"] == {"label": "Vinohradská 12, Praha", "granularity": "address_point",
-                                           "uncertainty_radius_m": 5.0, "note": None}
+                                           "note": None}
     rating = next(f for f in body["fields"] if f["name"] == "rating")
     assert rating["required"] and rating["group"] == "basic"
     assert {"value": "very_good", "label": "Velmi dobrý"} in rating["options"]

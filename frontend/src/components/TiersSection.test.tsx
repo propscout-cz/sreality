@@ -61,6 +61,11 @@ describe('<TiersSection>', () => {
     vi.mocked(api.adminListEntitlements).mockResolvedValue({ data: ENTS });
   });
 
+  it('has an Agents row, off for a plan whose map has no such key', async () => {
+    renderSection();
+    expect(await screen.findByText('Agents')).toBeInTheDocument();
+  });
+
   it('names the add-tier field', async () => {
     renderSection();
     const field = await screen.findByRole('textbox', { name: 'New tier key' });

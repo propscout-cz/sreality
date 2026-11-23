@@ -10,21 +10,42 @@
  *                                  the list twenty times), the count drops one
  *   no longer matches            → map, stats and both counts re-read
  *   matches, not loaded          → may be a newcomer: that cohort re-reads
- *   cannot judge, or the map said "no" BEFORE the write while the server shows
- *   the row (a stale map)        → that cohort re-reads, nothing drops
+ *   cannot judge                 → that cohort re-reads, nothing drops
+ *
+ * The map can say "no" BEFORE the write while the list shows the row. Which
+ * side is stale? The MAP, if one of the member reads the verdict stands on is
+ * still owed (lib/revalidate `isOwed`) or was read before the list was: that
+ * cohort re-reads, nothing drops. Otherwise the LIST — a change made elsewhere
+ * after it was read, whose re-read (ruling Q3(c): within one clock read) has not
+ * landed yet, or is parked while the user's hand is on the list (lib/useListHold):
+ * the row is judged like any other, so a click that leaves it out drops it in
+ * place and only the aggregates re-read. A map's read time is the cache's
+ * `dataUpdatedAt`, which a patch keeps (lib/revalidate's ledger); a row's is its
+ * page's `readAt` (lib/useInfiniteList): a page read later, under a hand or not,
+ * does not refresh the rows before it, so the query's own time would overstate them.
  *
  * `settlePatches` are CachePatches built BEFORE the member maps move (that is
  * when the before-verdict is taken) and judged when applied, after them;
- * `settleRereads` names what to re-read once the write has landed. */
+ * `settleRereads` names what to re-read once the write has landed. A change
+ * made elsewhere reaches the cohorts through `lensTargets` instead. */
 
 import { hashKey, type InfiniteData, type Query, type QueryClient, type QueryKey } from '@tanstack/react-query';
 
 import { actingKey } from '@/lib/acting';
 import { browseKeys } from '@/lib/browseKeys';
+import { FEED_HIDDEN_FILTERS } from '@/lib/feed';
 import type { ListingFilters } from '@/lib/filters';
 import { curationKeys, dismissalKeys, pipelineKeys, type PipelineMembers } from '@/lib/queries';
+import {
+  cachePatch,
+  holdReads,
+  isOwed,
+  revalidate,
+  type CachePatch,
+  type ReadMode,
+  type Revalidation,
+} from '@/lib/revalidate';
 import { CURATED_SETS, CURATED_SET_NAMES, matchesScope, scopeActive, type CuratedSet } from '@/lib/setScope';
-import { cachePatch, type CachePatch } from '@/lib/useOptimisticWrite';
 import type { InfiniteListPage } from '@/lib/useInfiniteList';
 
 /** What a write moved: one curated set, or the dismissal. */
@@ -88,10 +109,34 @@ function verdict(qc: QueryClient, propertyId: number, f: ListingFilters): boolea
   return unknown ? null : true;
 }
 
-const holds = (data: unknown, propertyId: number): boolean =>
-  ((data as InfiniteData<ListPage> | undefined)?.pages ?? []).some((p) =>
+/* The member reads a cohort's verdict on one property stands on. */
+const memberKeys = (propertyId: number, f: ListingFilters): QueryKey[] => [
+  ...(f.showDismissed ? [] : [dismissalKeys.state(propertyId)]),
+  ...CURATED_SET_NAMES.filter((set) => scopeActive(f[set])).map((set) => MEMBERS[set].key),
+];
+
+/* When `q` read the row: the newest `readAt` of the pages holding it, else (a page
+ * from before the stamp) the query's own read time. */
+const rowReadAt = (q: Query, propertyId: number): number =>
+  Math.max(...pagesHolding(q.state.data, propertyId).map((p) => p.readAt ?? q.state.dataUpdatedAt));
+
+/* A "no" from a map whose read is owed, or older than the row's, is the map's staleness. */
+function staleMap(qc: QueryClient, propertyId: number, f: ListingFilters, lists: readonly Query[]): boolean {
+  if (verdict(qc, propertyId, f) !== false) return false;
+  const listReadAt = Math.max(...lists.map((q) => rowReadAt(q, propertyId)));
+  return memberKeys(propertyId, f).some((key) => {
+    const readAt = qc.getQueryState(key)?.dataUpdatedAt;
+    return isOwed(qc, key) || (readAt != null && readAt < listReadAt);
+  });
+}
+
+/* The loaded pages of a list that hold the property. */
+const pagesHolding = (data: unknown, propertyId: number): ListPage[] =>
+  ((data as InfiniteData<ListPage> | undefined)?.pages ?? []).filter((p) =>
     p.rows.some((r) => r.property_id === propertyId),
   );
+
+const holds = (data: unknown, propertyId: number): boolean => pagesHolding(data, propertyId).length > 0;
 
 const isList = (q: Query) => (LIST_ROOTS as readonly unknown[]).includes(q.queryKey[0]);
 
@@ -124,7 +169,7 @@ export function settlePatches(
   const patches: CachePatch[] = [];
   for (const { f, queries } of cohorts(qc, lens)) {
     const lists = queries.filter((q) => isList(q) && holds(q.state.data, propertyId));
-    if (lists.length === 0 || verdict(qc, propertyId, f) === false) continue;
+    if (lists.length === 0 || staleMap(qc, propertyId, f, lists)) continue;
     let judged: boolean | null | undefined;
     const leaves = () => (judged === undefined ? (judged = verdict(qc, propertyId, f)) : judged) === false;
     for (const q of lists) {
@@ -144,7 +189,8 @@ export function settlePatches(
 }
 
 /** What to re-read once the write has landed; everything when it failed (the
- * rollback restored the lists as they were at the click). */
+ * rollback takes back only this write's patch, and a page that landed meanwhile
+ * may hold it). */
 export function settleRereads(
   qc: QueryClient,
   propertyId: number,
@@ -164,30 +210,58 @@ export function settleRereads(
   return keys;
 }
 
+/** Where a change made elsewhere moved `lens`: every cached Browse cohort that
+ * engages it, its lists and its aggregates owed as `reread` says (curationSync
+ * LENS_REREAD), and for a dismissal the Feed's Skryté roll, a list of the hidden
+ * alone that no lens engages (lib/feed `FEED_HIDDEN_FILTERS`). Nothing per
+ * property: a remote change names no property. */
+export function lensTargets(
+  qc: QueryClient,
+  lens: CurationLens,
+  reread: { lists: ReadMode; aggregates: ReadMode },
+): Revalidation[] {
+  const out: Revalidation[] = [];
+  for (const { f } of cohorts(qc, lens)) {
+    for (const root of LIST_ROOTS) out.push({ queryKey: [root, f], mode: reread.lists });
+    for (const root of AGGREGATE_ROOTS) out.push({ queryKey: [root, f], mode: reread.aggregates });
+  }
+  if (lens === 'dismissed') out.push({ queryKey: browseKeys.cohortCards(FEED_HIDDEN_FILTERS), mode: reread.lists });
+  return out;
+}
+
 /** Settle a landed tag / collection write: judged before, put into its member
- * map (so the settle sees it before the map's own re-read lands), judged after.
- * Acting as an owner (`actAs`, lib/acting) only the owner's map moves: Browse
- * never acts, so no Browse cohort is judged on the owner's sets. */
-export async function settleMemberWrite(
+ * map (so the settle sees it before the map's own re-read lands), judged after,
+ * then `reads` (the caller's table reads, lib/curationSync `tableReads` — passed
+ * in, since that module imports this one) and the settle's re-reads owed. One
+ * hold spans the paint and the re-read, so no read lands in between and one
+ * still in flight is owed, not lost. Acting as an owner (`actAs`, lib/acting)
+ * only the owner's map moves: Browse never acts, so no Browse cohort is judged on
+ * the owner's sets. */
+export function settleMemberWrite(
   qc: QueryClient,
   set: 'tags' | 'collections',
   propertyId: number,
   elementId: number,
   member: boolean,
-  actAs: string | null = null,
-): Promise<void> {
-  const patches = settlePatches(qc, propertyId, set, actAs);
-  qc.setQueryData<Map<number, number[]>>(actingKey(actAs, MEMBERS[set].key), (prev) => {
-    if (!prev) return prev;
-    const next = new Map(prev);
-    const ids = (prev.get(propertyId) ?? []).filter((id) => id !== elementId);
-    if (member) ids.push(elementId);
-    if (ids.length) next.set(propertyId, ids);
-    else next.delete(propertyId);
-    return next;
-  });
-  if (actAs) return;
-  await Promise.all(patches.map((p) => qc.cancelQueries(p.filters)));
-  for (const p of patches) qc.setQueriesData(p.filters, p.update);
-  for (const queryKey of settleRereads(qc, propertyId, set)) void qc.invalidateQueries({ queryKey });
+  { actAs = null, reads = [] }: { actAs?: string | null; reads?: readonly QueryKey[] } = {},
+): void {
+  const patches = [
+    cachePatch<Map<number, number[]>>({ queryKey: actingKey(actAs, MEMBERS[set].key), exact: true }, (prev) => {
+      if (!prev) return prev;
+      const next = new Map(prev);
+      const ids = (prev.get(propertyId) ?? []).filter((id) => id !== elementId);
+      if (member) ids.push(elementId);
+      if (ids.length) next.set(propertyId, ids);
+      else next.delete(propertyId);
+      return next;
+    }),
+    // Built before the paint above lands: that is when the before-verdict is taken.
+    ...settlePatches(qc, propertyId, set, actAs),
+  ];
+  const hold = holdReads(
+    qc,
+    patches.map((p) => p.filters),
+    patches,
+  );
+  void revalidate(qc, [...reads, ...settleRereads(qc, propertyId, set, false, actAs)], { release: hold });
 }

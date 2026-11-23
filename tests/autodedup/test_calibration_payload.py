@@ -152,14 +152,14 @@ def test_a_payload_past_the_jsonb_ceiling_is_written_and_read(world, tmp_path,
     (~0.8 GB at the peak; the codes compress ~1000:1, so FakePg stores a few hundred kB.)"""
     seed_lane(world, tmp_path)
     code = "c" * (1 << 20)
-    big = Calibration(generation=GENERATION, feature_version=FEATURE_VERSION, built_at="t",
-                      n_listings=1, certifying_codes=[code] * 257)
+    big = [Calibration(generation=GENERATION, feature_version=FEATURE_VERSION, built_at="t",
+                       n_listings=1, certifying_codes=[code] * 257)]
     monkeypatch.setattr(calibration_cut.CalibrationCut, "build",
-                        lambda self, generation=GENERATION: big)
+                        lambda self, generation=GENERATION: big[0])
     out = cut_calibration(world, Settings(), "m", GENERATION)
     blob = world.calibration[GENERATION]["payload_zlib"]
     assert len(zlib.decompress(blob)) > JSONB_MAX and len(blob) < 1 << 20
-    del big
+    big.clear()
     _row, read = read_calibration(world)
     assert read.certifying_codes == [code] * 257
     assert read.digest() == out["digest"] == world.calibration[GENERATION]["digest"]

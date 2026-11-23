@@ -27,6 +27,7 @@ from pathlib import Path
 import requests
 
 from location_data.krovak import KrovakPositive, KrovakSignError
+from scraper import contact
 
 LOG = logging.getLogger("location_data.ruian_csv")
 
@@ -35,7 +36,7 @@ OB_ADR_URL = CSV_BASE + "/{vintage}_OB_ADR_csv.zip"
 STRUKT_URL = CSV_BASE + "/{vintage}_strukt_ADR.csv.zip"
 OBEC_ADR_URL = CSV_BASE + "/{vintage}_OB_{obec}_ADR.csv.zip"
 
-USER_AGENT = "sreality-location-data/1 (+ruian registry mirror)"
+USER_AGENT = contact.USER_AGENT
 _TIMEOUT = (30, 600)
 _CHUNK = 1 << 20
 
@@ -63,10 +64,6 @@ STRUKT_MEMBERS: dict[str, tuple[str, tuple[str, ...]]] = {
     "katastr": (
         "strukturovane-CSV/vazby-katastr-uzemi-cr.csv",
         ("ZSJ_KOD", "KATUZ_KOD", "OBEC_KOD"),
-    ),
-    "pou": (
-        "strukturovane-CSV/vazby-orp-cr.csv",
-        ("POU_KOD", "ORP_KOD", "OKRES_KOD", "VUSC_KOD", "REGSOUDR_KOD", "STAT_KOD"),
     ),
     "momc_statutarni": (
         "strukturovane-CSV/vazby-momc-statutarni-mesta.csv",

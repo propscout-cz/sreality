@@ -121,8 +121,8 @@ def test_a_connection_error_through_the_lane_reaches_no_heartbeat_and_no_log(
     monkeypatch.setenv(push.VAPID_ENV, push.b64url(os.urandom(32)))
     p256dh = push.b64url(ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(*push._POINT))
     row = (5, 9, 1, "00000000-0000-4000-8000-000000000005", "acc", "new", False, True, False, 80_000, False,
-           ENDPOINT, p256dh, push.b64url(os.urandom(16)), "https://app.example.cz", 5_000_000, None, "Praha",
-           "byt", None, "2+kk", None)
+           ENDPOINT, p256dh, push.b64url(os.urandom(16)), "https://app.example.cz", 5_000_000, None, None,
+           "Praha", "byt", None, "2+kk", None)
     norm = lambda sql: (lambda q: q == " ".join(sql.split()))  # noqa: E731
     lane["script"] = [(norm(pd.LIVE_DEVICES_SQL), [(1,)]), (norm(pd.FANOUT_SQL), [("pending",)]),
                       (norm(pd.CLAIM_SQL), [row]), (norm(pd.UNREAD_SQL), [(1,)])]

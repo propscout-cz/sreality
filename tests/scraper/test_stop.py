@@ -46,15 +46,42 @@ def test_the_signal_cuts_only_a_request_in_hand() -> None:
     assert stop.requested()
 
 
-def test_reset_forgets_the_stop_and_the_install() -> None:
+@pytest.mark.parametrize("sig", [signal.SIGHUP, signal.SIGQUIT])
+def test_a_foreground_install_also_takes_a_hangup_and_a_quit_as_the_stop(sig: signal.Signals) -> None:
+    """`job_runner once` runs its child in its own session: a closed terminal must stop it, not orphan it."""
     stop.install()
+    assert signal.getsignal(sig) is not stop._on_signal, "only a foreground run asks for these"
+    stop.install(hangup=True)
+    assert signal.getsignal(sig) is stop._on_signal  # before the kill: an unrouted one would end this process
+    os.kill(os.getpid(), sig)
+    assert stop.requested()
+
+
+def test_an_armed_wait_ends_on_the_stop_and_no_handler_is_taken() -> None:
+    """The realtime worker's event loop owns SIGTERM and SIGINT and sets the event itself (#2438)."""
+    handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+    stop.arm()
+    assert {sig: signal.getsignal(sig) for sig in handlers} == handlers
+    timer = threading.Timer(0.05, stop.EVENT.set)
+    timer.start()
+    try:
+        started = time.monotonic()
+        assert stop.wait(5.0)
+        assert time.monotonic() - started < 1.0
+    finally:
+        timer.cancel()
+
+
+@pytest.mark.parametrize("ready", ["install", "arm"])
+def test_reset_forgets_the_stop_and_the_install(ready: str) -> None:
+    getattr(stop, ready)()
     stop.EVENT.set()
     stop.reset()
     assert not stop.requested() and not stop._installed
 
 
 def test_before_install_a_wait_is_the_plain_sleep_it_replaced(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Nothing can deliver a stop to a process that never installed the handler (the realtime worker keeps its own)."""
+    """Nothing can deliver a stop to a process that neither installed the handlers nor armed the event."""
     slept: list[float] = []
     monkeypatch.setattr(stop.time, "sleep", slept.append)
     assert stop.wait(2.5) is False

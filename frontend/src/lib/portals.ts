@@ -46,6 +46,14 @@ export function advertHost(sourceUrl: string | null | undefined): string | null 
   }
 }
 
+/* THE outbound link of one advert: its page on its portal (`source_url`, see the note at
+ * the foot of this file); null when it has none, and the caller links in-app. Every
+ * advert `href` reads it, so a source whose advert page is not its portal's URL is
+ * taught here once (portals.test.ts pins that no component reads `source_url` for one). */
+export function advertLink(advert: { source: string; source_url?: string | null }): string | null {
+  return advert.source_url || null;
+}
+
 /* THE tag of one advert on a card or a row: its portal's name, or the advert's host for
  * a portal whose adverts live on many sites. `form` keeps each surface's register —
  * 'short' for compact chrome (portalShort), 'long' for the registry label. A portal

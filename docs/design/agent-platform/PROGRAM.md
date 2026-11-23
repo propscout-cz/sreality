@@ -225,8 +225,11 @@ Every component below exists because one of these agents or surfaces needs it.
 | Assistant over MCP | the user's Claude or ChatGPT | the same registry | structured results, links to artifacts | per tool; writes become approvals in our app |
 
 Three consequences. **Composite tools beat chatty ones:** get_property_dossier returns detail, canonical ad, location,
-price history, yield and masked brokers in one call. All of these are market facts; the user's own notes, cards and
-collections on that property come from a second call, get_my_property_context, so each entry keeps one tenancy class.
+price history, yield and masked brokers in one call (as built in #2063: under the user's login with the runs the page
+lists, and no broker; the brokers are their own market read, get_property_brokers, unmasked as the page shows them,
+AR13 re-taken). The dossier is the property page's own read under the user's login, the user's runs included; the
+user's own notes, cards and collections on that property come from a second call, get_my_property_context (the
+extension's state read), so each entry is one screen's reader.
 **Most analyst "code" is a template:** the model, the memo and the
 drawing render from a structured spec through git templates (tier 1), so AI-written code is off the critical path.
 **The assistant is a peer surface:** a skill "runs in a user's assistant or inside the platform" (GLOSSARY).
@@ -246,7 +249,8 @@ drawing render from a structured spec through git templates (tier 1), so AI-writ
 **Rails (censuses, F72).**
 1. Every entry declares all three classes.
 2. No handler opens a connection except through ctx.
-3. Only the API's dependencies and the agent-worker's one claims builder call `tenant_transaction`.
+3. Who calls `tenant_transaction` directly, and who builds a caller with claims: pinned by
+   `tests/api/test_tenant_caller_census.py`, not restated here.
 4. No input schema carries `account_id`, an act-as field, a user id or any principal field: identity comes only from
    the run.
 5. The market_cache class is allowed only for six agent cache writers, by name: `verify_listing_freshness`,
@@ -270,7 +274,7 @@ deletes `_FCR_OVERRIDE_FIELDS` (F26).
   `compute_reference_rent`; one Valuo valuation (costly, over `new_valuation`).
 - Four curation writes: add to a collection, create a note, attach a tag, set a pipeline card.
 - New: search_properties over `compile_filter_where` with the served and published predicates (Watchdog semantics,
-  AR7); get_property_dossier (market); get_my_property_context (tenant); a sold_comps adapter; start_run, get_run,
+  AR7); get_property_dossier (tenant); get_my_property_context (tenant); a sold_comps adapter; start_run, get_run,
   get_run_output and cancel_run.
 
 **Surfaces (D17, D18).** The SPA keeps its PostgREST reads under RLS, because RLS and the SQL functions are already the
@@ -502,8 +506,9 @@ budget. No chat table; a lazy-loaded panel that the Phone app frames for free (F
 - No token is stored, forwarded or refreshed: Supabase refresh tokens are single-use, so forwarding one would sign the
   user out (RESEARCH §6.3).
 - In agent-worker, **one claims builder** turns the stamped columns into {"sub": principal, "role": "authenticated",
-  "run_id": id} for each tenant transaction, READ ONLY for reads, as acting reads are today (F20, F21), and sets two
-  settings (GUCs): request.agent_run = true and request.account_id = the run's account.
+  "run_id": id} for each tenant transaction, READ ONLY for reads, as every GET/HEAD tenant read is today (F20,
+  F21), and sets two settings (GUCs): request.agent_run = true and request.account_id = the run's account. *As built
+  (#2070, migration 704): one top-level claim, `run_account_id`, does the work of both settings, with no run id in the claims.*
 - **Two narrowing-only changes to the identity functions ship in W2.** `is_platform_admin()` returns false whenever
   request.agent_run is set, so a run started by an admin never carries admin powers (no SYSTEM or NULL arms, no
   shared-table writes such as `manual_rental_estimates`, no admin-gated DEFINER functions). `current_account_ids()`
@@ -512,7 +517,8 @@ budget. No chat table; a lazy-loaded panel that the Phone app frames for free (F
   and with them unset both functions behave exactly as today (a census and live tests pin that).
 - Under act-as the builder sets the acting identity exactly as the X-Act-As header does, so the existing
   `delegated_edits` trigger stamps every delegated write; it gains the run id from the claims (additive).
-- `include_pii` is fixed to false in agent and MCP ctx: no run sees unmasked broker contacts (AR13).
+- Broker contacts: a run sees them as the page shows its user, at most 20 people per call, every call recorded; MCP
+  stays masked (AR13 re-taken 2026-10-25, ADR-0002; built in #2063 as get_property_brokers).
 - `current_account_ids()` is evaluated live, so a revoked membership takes effect at the next tool call. A NULL
   principal fails closed (§ 3.4).
 
@@ -531,7 +537,7 @@ the step.
 
 | Class | Examples | User-started run | Scheduled or event run | In the agent file |
 |---|---|---|---|---|
-| read_market | comparables, velocity, yield, masked broker reads | allow | allow | n/a |
+| read_market | comparables, velocity, yield, broker reads (unmasked, ≤ 20 people per call; AR13 re-taken) | allow | allow | n/a |
 | market_cache | summaries, the OSM mirror, transit lines, freshness (the six, § 3.1) | allow, metered; a live portal fetch is rate-limited per run and per account | allow, metered; **no live portal fetch** | n/a |
 | read_tenant | collections, notes, the pipeline board, watchdogs, run inputs | allow | allow | n/a |
 | own_collection | adding to a collection the run itself created; rows carry the run id for one-click undo | allow | allow | can only be tightened |
@@ -654,7 +660,8 @@ paying tenants, a second operator, or any agent-worker incident.
   each call stays under Claude's 240 s; a run id is re-authorised against the caller's account on every call. Results
   are a summary, structured content and an authenticated link to the artifact proxy. write_tenant tools come later;
   costly and external tools only create pending approvals that the user confirms in our app; admin tools are never
-  exported. `POST /brokers/by-listings` stays off agents and MCP (AR13).
+  exported. `POST /brokers/by-listings`' read stays off MCP (AR13 re-taken: agents read it as get_property_brokers;
+  MCP stays masked).
 - **Ledger and limits:** every call made outside a run appends a capability_calls row (account, user, surface, client
   id, capability, argument hash, outcome, cost, duration). That one ledger gives the spec's rate limit (a count over 60
   s per cost class, checked under the same per-account advisory lock as admission, so concurrent calls cannot all pass
@@ -766,7 +773,7 @@ data runs on the schema-replay Postgres with the frozen cohort.
 | D5 | Queue | own SKIP LOCKED · pgmq · DBOS · Temporal | our own, copied from the push ledger, with priorities | proven, race-tested, pooler-safe, no dependency | high | none |
 | D6 | Quota race | advisory transaction lock · counter row with CAS | the lock, inside one admission function with dollar reservations | no extra state to drift; the counter row if contention ever shows | high | none |
 | D7 | Code execution | renderers + gated run_python · Sandbox first · provider-hosted · E2B/Modal · defer | renderers now; run_python only with proven network denial; the Sandbox as second rung | most outputs need no AI code; no lethal trifecta | medium | AR4 |
-| D8 | Run identity | forward the JWT · mint JWTs · a claims builder · a database binding | the claims builder with narrowing settings now; the database binding in W8 | no token custody; no admin in runs; one account per run | medium | AR17 |
+| D8 | Run identity | forward the JWT · mint JWTs · a claims builder · a database binding | the claims builder with narrowing settings now (as built: one narrowing claim, migration 704); the database binding in W8 | no token custody; no admin in runs; one account per run | medium | AR17 |
 | D9 | Writes without approval | none · all user-started writes · the run's own collection only | own collection only | reversible, private, undoable; every other write asks | high | AR9 |
 | D10 | Skill source of truth | database · git + lock | git + lock + image | ends drift; changes are reviewed | medium | AR5 |
 | D11 | Artifacts | the main bucket · a new EU R2 bucket · Supabase Storage | a new EU R2 bucket | residency, scoped tokens, one authorization doctrine | low once filled | AR16 |
@@ -860,7 +867,7 @@ separate tenant role first; the `pgrst.db_pre_request` gate covers the MCP risk)
 
 | Risk | Mitigation |
 |---|---|
-| The claims builder becomes an identity mint | one function, pinned by a census; the principal only from API-stamped columns; a NULL principal fails closed; runs carry no admin and one account; live RLS tests on the replay database; the W8 database binding |
+| The claims builder becomes an identity mint | one function, pinned by a census; the principal only from API-stamped columns (as built: the dev-only `scripts/agent_run.py`, with no run row, names it on its command line, MVP § 8); a NULL principal fails closed; runs carry no admin and one account; live RLS tests on the replay database; the W8 database binding |
 | agent-worker is deployed with a forbidden secret | the boot assertion's allowlist; no service DSN at all (D19); a Health cell that fails on any refusal |
 | A resume replays a side effect | (run, step) keys; stored arguments run verbatim; the outbox compare-and-set; the Valuo write-ahead row; the approval consumed by one function in the claim transaction |
 | A resume runs on different code | the tool-set sha compared on every resume; pending approvals re-validated or voided; "definition changed, re-run" |
@@ -906,8 +913,10 @@ W0 -> W1 -> scout spike -> W2 (proof of concept) -> usage gate -> W3 (estimation
 operator's time).** *Entry:* AR1. *Items:* the ten in § 2.1. *Brake:* none needed; each change is a closure.
 *Deletes:* the browser write path on the run tables; account-blind building access; `RUNPOD_API_KEY` on the API.
 *Exit, IaC first, by 2026-11-15:* `railway config plan` shows no diff for all three services; after a forced
-redeploy, describe-service shows the Dockerfile builder, the start command, the healthcheck, the restart policy and
-drainingSeconds; `railway config migrate undo` has been rehearsed on one service. *Then:* with a trial account's JWT,
+redeploy, describe-service shows the Dockerfile builder, the restart policy and drainingSeconds on all three, the
+start command where a service defines one (the worker) and the health check where it serves HTTP (ruling R5, #2060);
+the undo path has been rehearsed on one service (2026-10-26: `migrate undo` cannot cover these
+services, as it accepts only `railway.json`/`railway.toml` paths; the paths are in docs/architecture.md). *Then:* with a trial account's JWT,
 a PostgREST INSERT into `estimation_runs` is denied while the scenario PATCH still works from the SPA and the
 extension; `/buildings` answers 403 to a non-admin; a token with a foreign issuer gets 401; boot refuses
 `API_AUTH_OPTIONAL` when RAILWAY_ENVIRONMENT is set; a message from a foreign sender is ignored by the extension; a
@@ -1048,8 +1057,9 @@ AR3 confirms both. *Entry condition:* the W0 probe result is recorded (it settle
    that crashes twice at one step fails with its reason.
 4. **Tenancy:** on the replay database, account A's run cannot read B's collections or pipeline; a two-membership
    user's run sees one account; an admin principal's run cannot write `manual_rental_estimates` or read SYSTEM or NULL
-   rows; a model-supplied account id is refused by the schema census; the claims builder is the only
-   `tenant_transaction` caller outside `api/`; the grant census of the three logins is green.
+   rows (as built, #2070: 639 dropped that table, the admin arm on account-less rows is what is tested, and the SYSTEM
+   arm stays every account's); a model-supplied account id is refused by the schema census; `tests/api/test_tenant_caller_census.py`
+   holds the `tenant_transaction` callers; the grant census of the three logins is green.
 5. **Approvals:** Valuo parks the run; a double approve makes exactly one call; the stored arguments run; edited
    arguments and an expired approval are refused; only the principal can approve, and an act-as run cannot reach the
    costly step; the approval is consumed in the same transaction as the Valuo write-ahead row.

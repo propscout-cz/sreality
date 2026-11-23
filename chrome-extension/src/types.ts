@@ -1,11 +1,12 @@
-/* The MF result type and its shape rule are the SPA's own zero-dependency
- * module (like brand.ts), imported rather than copied. */
+/* The extension's wire shapes. The pipeline stages, collections and tags are the
+ * app's own types (frontend/src/lib/types.ts, the same routes), imported. */
+import type { Appearance } from '../../frontend/src/lib/appearance';
 import type { ReferenceRent } from '../../frontend/src/lib/mfReference';
+import type { PortalRef } from '../../frontend/src/lib/portalIds';
+import type { ListingSnapshotPublic, PropertySource, TagColor } from '../../frontend/src/lib/types';
 
-/* Subset of the SPA's EstimationRun shape — we only consume the
- * fields needed by the yield panel. Mirroring frontend/src/lib/types.ts
- * but kept local so the extension build doesn't reach across into the
- * SPA's path aliases. */
+/* Subset of the SPA's EstimationRun shape — only the fields the side panel's
+ * Výnos editor reads (the old panel's estimation flow, moved unchanged). */
 
 export interface YieldScenario {
   rent_czk: number | null;
@@ -21,7 +22,6 @@ export interface EstimationRun {
   id: number;
   status: 'pending' | 'running' | 'success' | 'failed';
   estimate_kind: 'rent' | 'sale' | null;
-  input_sreality_id: number | null;
   input_purchase_price_czk: number | null;
   estimated_monthly_rent_czk: number | null;
   estimated_sale_price_czk: number | null;
@@ -29,15 +29,7 @@ export interface EstimationRun {
   confidence: 'high' | 'medium' | 'low' | null;
   input_spec: { area_m2?: number | null } | null;
   scenario: YieldScenario | null;
-  reference_rent: ReferenceRent | null;
   error_message: string | null;
-}
-
-export interface EstimationListResponse {
-  data: EstimationRun[];
-  total: number;
-  limit: number;
-  offset: number;
 }
 
 export interface YieldScenarioUpdate {
@@ -61,20 +53,9 @@ export interface PipelineMembership {
    * panel renders the same mark as the SPA without a second round trip.
    * stage_code null = fall back to the stage's ordinal in `stages`. */
   stage_code: string | null;
-  stage_color: string | null;
-}
-
-/* One operator-curated pipeline stage (GET /pipeline/stages). Mirrors the SPA's
- * stage shape; the extension reads id + label to populate the stage `<select>`. */
-export interface PipelineStage {
-  id: number;
-  key: string;
-  label: string;
-  position: number;
-  color: string | null;
-  is_terminal: boolean;
-  is_entry: boolean;
-  code: string | null;
+  stage_color: TagColor | null;
+  /* Since when the card sits at its stage (the move PATCH stamps it): "ve fázi od". */
+  entered_stage_at: string | null;
 }
 
 /* Response of the pipeline-card writes: POST /pipeline/cards (add) and
@@ -86,32 +67,10 @@ export interface PipelineCardResult {
   stage_key?: string | null;
   stage_label?: string | null;
   stage_code?: string | null;
-  stage_color?: string | null;
+  stage_color?: TagColor | null;
+  entered_stage_at?: string | null;
   added?: boolean;
   removed?: boolean;
-}
-
-/* One collection the caller can read (GET /collections): its own, or one
- * another account shared with it view-only (migration 610). Property-grain
- * (rule #18); `monitoring_enabled` marks it as a watchlist (always false on a
- * shared one: alerts go to its owner). `owner_email` is null exactly when it is
- * MINE — the one field mine vs shared is told by (glyphs.ts `isMine`). */
-export interface ExtCollection {
-  id: number;
-  name: string;
-  monitoring_enabled: boolean;
-  owner_email: string | null;
-  /* Who else reads it: on mine, every recipient; on a shared one, only my own
-   * grant (`email` null = me). Read for a note's share audience; absent from
-   * an API that predates sharing (same posture as `tag_ids`). */
-  shared_with?: { account_id: string; email: string | null }[];
-}
-
-/* A tag (GET /tags, rule #18): a name in one of the stage palette's colours. */
-export interface ExtTag {
-  id: number;
-  name: string;
-  color: string;
 }
 
 /* Response of POST /dismissals (`added`) and DELETE /dismissals/{id}
@@ -138,23 +97,6 @@ export interface TagWriteResult {
   detached?: boolean;
 }
 
-/* One note about a PROPERTY (rule #18) the caller can read: its own, or
- * another author's SHARED note on a property a share puts in reach (migration
- * 610). Read via GET /properties/{id}/notes (most-recent-first). */
-export interface ExtNote {
-  id: number;
-  property_id: number;
-  body: string;
-  /* The author's consent for it to cross a share (default false). A foreign
-   * note is always shared — else it would not be readable. */
-  shared: boolean;
-  created_at: string;
-  /* Null until the operator edits the note's body (marking it shared is not an edit). */
-  updated_at: string | null;
-  /* The author's email; null exactly when the note is mine (read-only otherwise). */
-  owner_email: string | null;
-}
-
 /* PATCH /properties/{id}/notes/{note_id}: at least one field (author only). */
 export interface NotePatch {
   body?: string;
@@ -170,11 +112,6 @@ export interface PortalListing {
   source: string;
   source_id: string;
   found: boolean;
-  /* LEGACY app-wide listing identity (negative for non-sreality portals).
-   * NULL for a post-Gate-2 listing — use `found` to test DB membership and
-   * `listing_id` to reference the listing in a write. The deep link uses the
-   * canonical /listing/{source}/{source_id} natural-key route regardless. */
-  sreality_id: number | null;
   /* Surrogate listing identity — present for every listing in our DB. */
   listing_id: number | null;
   /* The grouping property (the pipeline + dedup grain). Null when not in our
@@ -199,13 +136,6 @@ export interface PortalListing {
   price_per_m2: number | null;
   price_per_m2_basis: string | null;
   disposition: string | null;
-  /* Portal-agnostic property sub-type (migration 152): the meaningful "kind"
-   * for commercial/houses where disposition is NULL. */
-  subtype: string | null;
-  /* The display "kind": the Czech subtype label (commercial/houses) else the
-   * disposition (apartments). Computed server-side so the extension carries no
-   * slug→label dictionary of its own. */
-  kind_label: string | null;
   /* The ONE place string the whole product prints, composed server-side from
    * the listing's resolved location (migration 503). It replaced a
    * `district ?? locality` pair that this panel fell back through in one order
@@ -213,30 +143,31 @@ export interface PortalListing {
    * be labelled two different ways on two surfaces. */
   display_label: string | null;
   is_active: boolean | null;
-  last_seen_at: string | null;
   /* MF is PROPERTY-grain — every advert of one flat shows its property's
    * figures; null for a non-flat, and for an advert not yet attached to a
    * property. `mf_reference_rent` is the whole result, rendered by its SHAPE
-   * (mfShape): a value's breakdown, a range + note, or a note alone. Absent
-   * only from an API that predates it — then there is nothing to render. */
+   * (mfShape): a value's breakdown, a range + note, or a note alone. */
   mf_reference_rent_czk: number | null;
   mf_gross_yield_pct: number | null;
-  mf_reference_rent?: ReferenceRent | null;
-  /* The default service charge (fond oprav + SVJ) to seed the yield panel
-   * with, in Kč per m² of floor area per MONTH — resolved server-side from
-   * THIS subject's denominator. THREE distinct states, and collapsing any two
-   * of them blanks the panel's headline yield:
-   *   a number — the rate to seed;
-   *   `null`   — no fond can apply to this subject at all (its area is a
-   *              parcel). This is the server's ANSWER, and the one definition
-   *              of that decision — no consumer re-derives it;
-   *   absent   — the API predates W7 and knows nothing of the field.
-   * Optional on the wire for exactly that last reason: `api.ts` sends no
-   * version header, so a bundle built here can meet an older deployment, and
-   * the compiler must force that case to be handled (see `defaultFond` /
-   * LEGACY_FOND_FALLBACK_CZK_PER_M2 in content.ts). The one definition of the
-   * NUMBER lives in api/schemas.DEFAULT_FOND_CZK_PER_M2. */
-  fond_per_m2_czk_default?: number | null;
+  mf_reference_rent: ReferenceRent | null;
+  /* What the property IS, each at its MS11 grain (api/portal_lookup._LISTING_COLS), off the
+   * same properties_public row as MF and like it NULL before attach: the panel header's
+   * facts. `canonical_listing_id` is the canonical ad, the price chart's first track. */
+  canonical_listing_id: number | null;
+  property_is_active: boolean | null;
+  tom_days: number | null;
+  floor: number | null;
+  total_floors: number | null;
+  condition: string | null;
+  ownership: string | null;
+  property_subtype: string | null;
+  plot_area_m2: number | null;
+  /* The default service charge (fond oprav + SVJ) to seed the Výnos editor with,
+   * in Kč per m² of floor area per MONTH, resolved server-side from THIS
+   * subject's denominator (the one definition: api/schemas.DEFAULT_FOND_CZK_PER_M2).
+   * `null` is the server's answer that no fond can apply (the area is a parcel);
+   * the lookup serves the key on every row, found or not. */
+  fond_per_m2_czk_default: number | null;
   latest_estimation: {
     estimation_id: number;
     estimate_kind: 'rent' | 'sale' | null;
@@ -248,17 +179,18 @@ export interface PortalListing {
    * `savedCollections`). Null when the listing has no property yet (same
    * posture as `pipeline`). */
   collection_ids: number[] | null;
-  /* The property's tags (rule #18), same posture; absent from an API that
-   * predates the field. Names + colours come from `list_tags`. */
-  tag_ids?: number[] | null;
+  /* The property's tags (rule #18), same posture. Names + colours come from `list_tags`. */
+  tag_ids: number[] | null;
   /* Whether the caller dismissed the listing's property (migration 536). Null
-   * when there is no property yet; absent when the API predates the field —
-   * either way the panel shows no hide control. */
-  dismissed?: boolean | null;
+   * when there is no property yet, and then the panel shows no hide control. */
+  dismissed: boolean | null;
 }
 
-export interface PortalLookupResponse {
-  data: PortalListing[];
+/* GET /properties/{id}/price-history: every ad of the property (oldest first) and their
+ * price snapshots — the SPA property page's two reads, column for column. */
+export interface PriceHistory {
+  sources: PropertySource[];
+  snapshots: ListingSnapshotPublic[];
 }
 
 export interface PortalLookupItem {
@@ -282,10 +214,10 @@ export interface IngestState {
   queue: { attempts: number; claimed_at: string | null; given_up: boolean } | null;
 }
 
-/* Message protocol between content script and background worker.
- * The background worker is the only context allowed to make API
- * fetches — host_permissions covers it without CORS getting in the
- * way. Content scripts post messages, get the typed result back. */
+/* Message protocol between the content script or the side panel and the
+ * background worker. The background worker is the only context that makes API
+ * fetches, from the extension's origin, which the API's CORS allowlist names.
+ * Both post messages and get the typed result back. */
 export type ApiMessage =
   | { type: 'lookup_listings'; items: PortalLookupItem[] }
   | { type: 'ingest_listing'; url: string }
@@ -300,6 +232,7 @@ export type ApiMessage =
       category_main?: string | null;
     }
   | { type: 'get_estimation'; run_id: number }
+  | { type: 'get_price_history'; property_id: number }
   | { type: 'add_pipeline_card'; property_id: number }
   | { type: 'remove_pipeline_card'; property_id: number }
   | { type: 'move_pipeline_card'; property_id: number; stage_id: number }
@@ -324,12 +257,23 @@ export type ApiMessage =
   | { type: 'get_auth_state' }
   | { type: 'get_billing' };
 
-/* Background → content, the other direction: webNavigation.onHistoryStateUpdated
- * fires when a portal's SPA soft-navigates (History API, no new document), which
- * static manifest content_scripts never re-inject for. The background worker
- * relays the new URL so the already-running content script can re-decide what
- * to render without needing a real page reload. */
-export type RouteMessage = { type: 'route_changed'; url: string };
+/* What a tab shows the side panel: the ad of its detail page, or the search card
+ * last opened in the panel; `url` is the ad's page ("Přidat do databáze" sends it). */
+export interface PanelSubject {
+  ref: PortalRef;
+  url: string;
+}
+
+/* Content → every extension context: this tab has our content script (the side
+ * panel of its window connects to it); `open` on a click — the background opens
+ * the panel while the click's user gesture is still live. */
+export type PanelCall = { type: 'panel'; open: boolean };
+
+/* Over the port the side panel opens to each tab of its window (config.ts PANEL_PORT):
+ * the tab's subject, up; a property one side wrote, either way (the other re-reads it). */
+export type PortMessage =
+  | { type: 'subject'; subject: PanelSubject | null }
+  | { type: 'property_written'; property_id: number };
 
 /* The caller's agent-estimation allowance (GET /billing/me → agent_estimations),
  * for the panel's "(zbývá X)" counter + the upgrade prompt at zero. `metered`
@@ -355,6 +299,9 @@ export interface BillingMe {
 export interface AuthState {
   signedIn: boolean;
   email: string | null;
+  /* The user's profile appearance (user_metadata.appearance in the token, so a
+   * pick reaches here at the next refresh); Měď light when signed out or unset. */
+  appearance: Appearance;
 }
 
 export interface ApiResponse<T> {

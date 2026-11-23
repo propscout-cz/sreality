@@ -1,9 +1,14 @@
-/* The marks and stage rules every extension surface draws — the detail panel
- * and the search-page card controls — hand-reproduced from the SPA, which the
- * extension can't import (separate territory, classic content script). ONE
- * copy inside the extension, so the panel and a card never drift apart. */
+/* The marks every extension surface draws — the side panel, the edge tab and the
+ * search-page card controls — as inline SVG copies of the SPA's icon
+ * components (React, so not importable), and the save rules the extension adds
+ * on top of the app's shared ones (lib/collectionRules). */
 
-import type { ExtCollection, PipelineStage } from './types';
+import { isMine, sortCollections } from '../../frontend/src/lib/collectionRules';
+import { fmtPct } from '../../frontend/src/lib/format';
+import { stageAccent, stageBadge, type StageLook } from '../../frontend/src/lib/pipelineStage';
+import type { Collection, PipelineStage } from '../../frontend/src/lib/types';
+import { h } from './dom';
+import type { PipelineMembership } from './types';
 
 /* The SPA's <FunnelIcon> (icons.tsx) as inline SVG — the shared "pipeline"
  * glyph on every surface (a funnel with three arrows; filled body =
@@ -59,61 +64,30 @@ export function eyeOffIconSvg(filled: boolean): string {
   );
 }
 
-/* The stage's accent, mirroring the SPA's lib/pipelineStage.ts:stageAccent —
- * the operator's stage colour, copper when the stage has none (copper is THE
- * deal-tracking accent, rule #22). Values come from tokens.css's --tag-* vars,
- * which mirror the SPA palette by value. */
-const STAGE_COLORS = new Set([
-  'copper', 'sage', 'brick', 'ochre', 'slate', 'plum', 'teal', 'sand',
-]);
-
-export function stageAccent(color: string | null | undefined): { fg: string; soft: string } {
-  return color && STAGE_COLORS.has(color)
-    ? { fg: `var(--tag-${color})`, soft: `var(--tag-${color}-soft)` }
-    : { fg: 'var(--copper)', soft: 'var(--copper-soft)' };
+/* A membership's stage as the app's stage helpers take it (lib/pipelineStage
+ * stageAccent / stageBadge); null out of the pipeline. */
+export function stageLook(p: PipelineMembership | null | undefined): StageLook | null {
+  return p?.in_pipeline && p.stage_id != null ? { id: p.stage_id, color: p.stage_color, code: p.stage_code } : null;
 }
 
-/* The funnel badge, mirroring lib/pipelineStage.ts:stageBadge — the operator's
- * own short code, else the stage's 1-based ordinal among the live stages, else
- * nothing (stage list not loaded / stage archived). Never derived from
- * `position`: the live board reuses "9" across its three closed stages. */
-export function stageBadge(
-  code: string | null | undefined,
-  stageId: number | null | undefined,
-  stages: PipelineStage[] | null,
-): string | null {
-  if (code) return code;
-  if (stageId == null || stages == null) return null;
-  const idx = stages.findIndex((s) => s.id === stageId);
-  return idx < 0 ? null : String(idx + 1);
+/* A stage's code badge in the stage's own colours (the side panel's close menu
+ * and the edge tab); null for a stage the list cannot badge. */
+export function codeBadge(stage: StageLook, stages: readonly PipelineStage[] | null): HTMLElement | null {
+  const badge = stageBadge(stage, stages ?? []);
+  if (badge == null) return null;
+  const accent = stageAccent(stage);
+  const code = h('span', 'code', badge);
+  code.style.color = accent.fg;
+  code.style.background = accent.soft;
+  return code;
 }
 
-/* The save control's name and its checklist's, in the SPA's words
- * (CollectionSaveMenu's COLLECTION_SAVE_LABEL) — one verb on every surface. */
-export const COLLECTION_SAVE_LABEL = 'Uložit do kolekce';
-
-/* The checklist's order, the SPA menu's: monitored collections first, then by
- * name. Never the server's order — GET /collections sorts by updated_at, which
- * every add/remove bumps, so the row just clicked would jump to the top. */
-export function sortCollections(collections: ExtCollection[]): ExtCollection[] {
-  return [...collections].sort(
-    (a, b) =>
-      Number(b.monitoring_enabled) - Number(a.monitoring_enabled)
-      || a.name.localeCompare(b.name),
-  );
-}
-
-/* The collection list as the marks draw it — ONE definition for the panel and
- * the cards, compared this way rather than as whole API rows, which also carry
- * an `updated_at` that every add/remove bumps (no reason to redraw). Owner and
- * recipients count: they decide what is saved and who a shared note reaches. */
-export function collectionsKey(collections: ExtCollection[]): string {
-  return JSON.stringify(
-    sortCollections(collections).map((c) => [
-      c.id, c.name, c.monitoring_enabled, c.owner_email,
-      (c.shared_with ?? []).map((r) => r.email),
-    ]),
-  );
+/* This ad's last price move, by magnitude with its arrow (a cut is good news here: sage). */
+export function moveBadge(pct: number): HTMLElement {
+  const down = pct < 0;
+  const pill = h('span', `move ${down ? 'move--down' : 'move--up'}`, `${down ? '↓' : '↑'} ${fmtPct(Math.abs(pct))}`);
+  pill.title = `Poslední změna ceny inzerátu: ${fmtPct(pct, { signed: true })}`;
+  return pill;
 }
 
 /* Whether a held list knows every collection a lookup names. RLS means a fresh
@@ -121,22 +95,15 @@ export function collectionsKey(collections: ExtCollection[]): string {
  * list is stale (made or shared since it was read) — re-read it. */
 export function knowsAll(
   collectionIds: readonly number[] | null | undefined,
-  collections: ExtCollection[],
+  collections: Collection[],
 ): boolean {
   const held = new Set(collections.map((c) => c.id));
   return (collectionIds ?? []).every((id) => held.has(id));
 }
 
-/* Mine vs shared with me, told by ONE field — the SPA's collectionCache
- * `isMine`: `owner_email` is null exactly when the collection (or note) is the
- * caller's. */
-export function isMine(x: { owner_email: string | null }): boolean {
-  return x.owner_email == null;
-}
-
 /* The save checklist's rows: MINE only, in its order. A view-only collection is
  * never a save target, so it is not offered (no disabled variant). */
-export function saveTargets(collections: ExtCollection[]): ExtCollection[] {
+export function saveTargets(collections: Collection[]): Collection[] {
   return sortCollections(collections.filter(isMine));
 }
 
@@ -147,32 +114,42 @@ export function saveTargets(collections: ExtCollection[]): ExtCollection[] {
  * without the list mine cannot be told from shared. */
 export function savedCollections(
   collectionIds: readonly number[] | null | undefined,
-  collections: ExtCollection[] | null,
-): ExtCollection[] | null {
+  collections: Collection[] | null,
+): Collection[] | null {
   const ids = new Set(collectionIds ?? []);
   if (ids.size === 0) return [];
   if (collections == null) return null;
   return saveTargets(collections).filter((c) => ids.has(c.id));
 }
 
-/* Who else can read a SHARED note on a property sitting in `collectionIds` —
- * the SPA's collectionCache `shareAudience`, so the two clients never disagree:
- * for a collection I own, every recipient; for one shared with me, its owner.
- * De-duplicated and sorted, so the composer label is stable. */
-export function shareAudience(
-  collectionIds: readonly number[],
-  collections: ExtCollection[],
-): string[] {
-  const byId = new Map(collections.map((c) => [c.id, c] as const));
-  const emails = new Set<string>();
-  for (const id of collectionIds) {
-    const c = byId.get(id);
-    if (c == null) continue;
-    if (isMine(c)) {
-      for (const s of c.shared_with ?? []) if (s.email != null) emails.add(s.email);
-    } else if (c.owner_email != null) {
-      emails.add(c.owner_email);
-    }
-  }
-  return [...emails].sort();
+/* The side panel's line icons (the approved panel design's set), 16-unit grid,
+ * stroked in currentColor; `spark` is the AI agents' filled mark. */
+const LINE = {
+  pin: '<path d="M8 14s4.5-4.2 4.5-7.5a4.5 4.5 0 00-9 0C3.5 9.8 8 14 8 14z"/><circle cx="8" cy="6.5" r="1.5"/>',
+  out: '<path d="M9.5 3.5h3v3M12.5 3.5L7.5 8.5M11 9.5v3H3.5V5h3"/>',
+  more: '<circle cx="3.5" cy="8" r=".9" fill="currentColor"/><circle cx="8" cy="8" r=".9" fill="currentColor"/>'
+    + '<circle cx="12.5" cy="8" r=".9" fill="currentColor"/>',
+  close: '<path d="M6.5 4.5L10 8l-3.5 3.5"/>',
+  down: '<path d="M4.5 6.5L8 10l3.5-3.5"/>',
+  plus: '<path d="M8 3.5v9M3.5 8h9"/>',
+  arrow: '<path d="M3.5 8h9M9 4.5L12.5 8 9 11.5"/>',
+  send: '<path d="M8 12.5v-9M4 7.5l4-4 4 4"/>',
+  yield: '<path d="M4 12L12 4"/><circle cx="5" cy="5" r="1.6"/><circle cx="11" cy="11" r="1.6"/>',
+  flip: '<path d="M3.5 7.5a4.5 4.5 0 017.9-2.9M12.5 3v2.5H10M12.5 8.5a4.5 4.5 0 01-7.9 2.9M3.5 13v-2.5H6"/>',
+  reno: '<path d="M2.5 13.5h11M4 13.5V7l4-3 4 3v6.5M6.5 13.5v-3h3v3M8 1.5V4"/>',
+  scout: '<circle cx="7" cy="7" r="4.5"/><path d="M10.3 10.3L13.5 13.5"/>',
+  pencil: '<path d="M3 13l.6-2.6L10.8 3.2a1.1 1.1 0 011.6 0l.4.4a1.1 1.1 0 010 1.6L5.6 12.4z"/>',
+  trash: '<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5"/>',
+};
+const SPARK = '<path d="M7 1.8l1.45 3.75L12.2 7 8.45 8.45 7 12.2 5.55 8.45 1.8 7l3.75-1.45z"/>'
+  + '<path d="M12.6 10.4l.55 1.45 1.45.55-1.45.55-.55 1.45-.55-1.45-1.45-.55 1.45-.55z"/>';
+
+export type LineIcon = keyof typeof LINE;
+
+export function lineIcon(name: LineIcon): string {
+  return `<svg class="i" viewBox="0 0 16 16" aria-hidden="true">${LINE[name]}</svg>`;
+}
+
+export function sparkIcon(): string {
+  return `<svg viewBox="0 0 16 16" aria-hidden="true">${SPARK}</svg>`;
 }

@@ -46,7 +46,7 @@ every stored watchdog spec and saved preset, and breaking archived-run display (
 | Wave | Purpose | Test | Migration | Status |
 | --- | --- | --- | --- | --- |
 | W1 | Truth at the source: shared `derive_headline_area` across all 9 parsers, shared per-area price rail, per-basis floors | T3 | 423 | ✅ |
-| W2 | Heal stored damage: mmreality area + unit-price masquerade backfills | T3 | — | 🟨 all 4 dry-runs clean; **ceskereality quarantine WRITTEN**; realitymix + mmreality pending (see below) |
+| W2 | Heal stored damage: mmreality area + unit-price masquerade backfills | T3 | — | 🟨 all 4 dry-runs clean; **ceskereality quarantine WRITTEN**; mmreality pending (see below); realitymix ran 2026-11-01 |
 | W3 | Property-grain coherence: numerator and denominator from the same child | T1+T3 | 424 | ✅ |
 | W4 | **Keystone** — `measure_price_per_m2` + `measure_price_per_m2_basis` in SQL; 6 relations repointed | T1+T2 | 425 | ✅ |
 | W5 | Python + API call sites onto the named measure (`toolkit/measures.py`) | T1+T2 | 426 | ✅ |
@@ -388,7 +388,7 @@ a rule.
    | portal | dry-run | write |
    | --- | --- | --- |
    | ceskereality | 1 351 quarantine / 0 unconfirmed / 70 560 examined | ✅ **1 350 written**; `priced` 70 564 → 69 214 exactly, **zero snapshots appended** |
-   | realitymix | 2 222 quarantine / 0 unconfirmed / 62 398 examined | ⏳ pending (~2.5 h — the per-row `portal_raw_pages` read dominates) |
+   | realitymix | 2 222 quarantine / 0 unconfirmed / 62 398 examined | ✅ **1 871 written** 2026-11-01, of 92 133 examined |
    | bazos | **0 of 88 241**, by design | — nothing to write |
    | mmreality areas | 3 601 `area_m2` fixes, `estate_area` 0 → 3 601, 11 205 stamps | ⛔ **blocked on migration 438** |
 
@@ -528,7 +528,7 @@ a rule.
 
 ## HANDOFF — what a future session must do, and what it must not retry
 
-Three actions remain, all requiring the operator; none of them is code.
+Two actions remain, both requiring the operator; none of them is code.
 
 1. **Apply `migrations/438_listings_area_basis_check_plot.sql`.** Merged, NOT applied. It
    gates the mmreality heal AND the `area_basis` write pass, and it closes a latent drain
@@ -544,9 +544,8 @@ Three actions remain, all requiring the operator; none of them is code.
    gate blocks it from the agent side, so it runs in the Supabase SQL editor. Not urgent —
    migration 428 IS applied, so the function is already unreachable from the perimeter
    (`anon` and `authenticated` both false).
-3. **Run the realitymix quarantine write:**
-   `gh workflow run backfill_unit_price_masquerade.yml -f source=realitymix -f write=true`.
-   Independent of 438 — it touches only `price_czk` and `raw_json`.
+3. **The realitymix quarantine write ran** (2026-11-01: 92,133 rows examined, 1,871 quarantined); #2018 then
+   deleted its workflow and script.
 
 Then re-check the per-basis p05/median/p95 from `properties_map_mv` and confirm mmreality
 dum/prodej no longer reads ~5 701 Kč/m² on a ~905 m² median area (job 7 and `properties_map_mv`

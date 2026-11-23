@@ -13,35 +13,38 @@ W2-a the quarter was filled only on the point-in-polygon branch (`cast_obce_for_
 — 2026-09-11 audit, resolver-v4. Filling it off the bound entity fixes that by construction
 and deletes the query.
 
-FILL also places the row when BIND's pin election did not (W2-a3): **the portal pin when one
-was admissible, else the finest bound unit's own registry point.** 29 % of towned rows
-(8,706 of 29,892, measured 2026-09-12 08:05Z) carried `geom NULL` because the only position
-the resolver published was a pin, and a listing bound by NAME has none — so a row that knows
-its town would have vanished from W3's map, which re-sources lat/lng from `listing_location`
-with no fallback. The point is the registry's, so the granularity, the confidence and the
-radius are all unchanged: the LEVEL is what tells a reader how coarse the position is, and
-`disputed` is never set by this path — a town centre is not a disagreement with anything.
+FILL also places the row when `bind.place` did not (W2-a3) — no pin, or a pin outside the town
+the words bound or declared an area marker (v5.10, ruling Q3): **the finest bound entity's own
+registry point**, a část obce's at the centroid of its own doors (v5.8), since RÚIAN draws it no
+polygon. 29 % of towned rows (8,706 of 29,892, measured 2026-09-12 08:05Z) carried `geom NULL`
+because the only position the resolver published was a pin, and a listing bound by NAME has none
+— so a row that knows its town would have vanished from W3's map, which re-sources lat/lng from
+`listing_location` with no fallback. FILL's point never causes a dispute — a town centre is not a
+disagreement with anything (a row whose pin was set aside still carries `pin_outside_obec`).
+Since v5.8 the radius is never smaller than the placed-on entity's own reach (the část's
+farthest door, the polygon's `containment_radius_m`): a row on Praha's point said 1 km and
+could be 17.6 km off.
 
 ONE field may fall back to a claim when the registry has none: `psc`. The street and both
 house numbers are the REGISTER's or nothing — a house number is published only off a bound
 address point, and only a `č.p.` point publishes one (v5.5, D7: "Praha 8" used to become č.p. 8,
 and a cottage's č.ev. read as a č.p.); a č.ev. bind carries its `ruian_adm_kod` and no number.
-The ONE thing the registry does not get to respell is an OPERATOR correction, which is also the
-only survivorship rule that outlived the policy table: `bind.operator_fields` is the whole of it.
+An OPERATOR correction is no exception since W3: it outranks the portal's claim at the read and
+binds through the register like any claim.
 
 `katastr_kod` (PR-B, v5.4) is ONE rule under the same contract: **the single KÚ of the BOUND
-registry entity, else NULL** — a KÚ (or a ZSJ inside one) on the bound unit's chain; the one
-KÚ of a one-KÚ obec, which every entity inside it lies in; an address point's own KÚ; a street
-or část obce whose every RÚIAN door lies in one KÚ (the Q7 door rule). A portal pin never
-decides it, whatever the portal labels it: 66,165 idnes `no_exact_address` and 13,176 sreality
-`not_address` pins read as "precise" (`core.pin_is_precise`), so a pin-based KÚ would be a
-guess. Nothing else is NULL-masked specially: a foreign row loses it with every other code in
+registry entity, else NULL** — a KÚ on the bound unit's chain; the one KÚ of a one-KÚ obec,
+which every entity inside it lies in; an address point's own KÚ (one with no coordinates has
+none: its část's, W5); a street or část obce whose every RÚIAN door lies in one KÚ (the Q7 door
+rule). A portal pin never decides it, whatever the portal labels it: the labels a contract does not list as blurred read
+as "precise" (`core.pin_is_precise`; idnes `no_exact_address` and sreality `not_address` ARE
+blur-declared by their contracts since W1-c), so a pin-based KÚ would be a guess. Nothing else is NULL-masked specially: a foreign row loses it with every other code in
 `core`, and a disputed row keeps its bound entity's.
 """
 
 from __future__ import annotations
 
-from location_data.resolver.bind import Constraints, operator_fields
+from location_data.resolver.bind import Constraints
 from location_data.resolver.normalize import TYP_CP
 from location_data.resolver.types import (
     AddressPoint,
@@ -57,9 +60,6 @@ _LEVEL_FIELDS = {
     "okres": ("okres_kod", "okres_name"),
     "obec": ("obec_kod", "obec_name"),
     "cast_obce": ("cast_obce_kod", "cast_obce_name"),
-    # A Prague/Brno městský obvod is the quarter for serving purposes when no ČástObce
-    # sits on the chain; it never overwrites one that does.
-    "momc": ("cast_obce_kod", "cast_obce_name"),
 }
 
 # The two chain levels no listing may be placed at. Nothing binds them — they are the tail
@@ -74,10 +74,10 @@ def fill(
     constraints: Constraints,
     registry: RegistryView,
     *,
-    operator: dict[str, str] | None = None,
+    place: bool = True,
 ) -> Fill:
-    """-> the fifteen hierarchy/address values of the answer row, and its registry point."""
-    operator = operator or {}
+    """-> the fifteen hierarchy/address values of the answer row, and its registry point.
+    `place=False` (a pin or a street already placed the row) skips the point's one read."""
     values: dict[str, object] = {}
     chain = _chain(binding, registry)
     for unit in chain:
@@ -93,7 +93,7 @@ def fill(
         if binding.ruian_adm_kod is not None
         else None
     )
-    lat, lon = _registry_point(point, chain)
+    lat, lon, extent = _registry_point(point, chain, registry) if place else (None, None, None)
     return Fill(
         kraj_kod=values.get("kraj_kod"),          # type: ignore[arg-type]
         okres_kod=values.get("okres_kod"),        # type: ignore[arg-type]
@@ -112,19 +112,19 @@ def fill(
         # část obce or their town. One rule for all nine portals, and the deliberate cost of
         # it is coverage: a real street the mirror does not hold is dropped rather than
         # served as a name nothing can be joined to, filtered on, or de-duplicated by.
-        street_name=(operator.get("street_name") or binding.street_name),
-        house_number_cp=operator.get("house_number_cp") or _cp(point),
-        house_number_co=operator.get("house_number_co") or _co(point),
-        psc=operator.get("psc")
-        or (point.psc if point is not None and point.psc else constraints.psc),
+        street_name=binding.street_name,
+        house_number_cp=_cp(point),
+        house_number_co=_co(point),
+        psc=point.psc if point is not None and point.psc else constraints.psc,
         lat=lat,
         lon=lon,
+        extent_m=extent,
         katastr_kod=_katastr_kod(binding, chain, point, registry),
     )
 
 
 def position(filled: Fill, binding: Binding) -> Position:
-    """The position FILL publishes when BIND's pin election came back empty (W2-a3).
+    """The position FILL publishes when `bind.place` placed nothing (W2-a3, v5.10).
 
     It is a REGISTRY point, so nothing about it can contradict the row: CHECK's containment
     tests are asked of a portal pin only, because a point that came out of the mirror is
@@ -139,13 +139,15 @@ def position(filled: Fill, binding: Binding) -> Position:
         lon=filled.lon,
         origin="registry_point" if binding.target_kind == "address_point" else "admin_centroid",
         source_claim_ids=binding.source_claim_ids,
+        extent_m=filled.extent_m,
     )
 
 
 def _chain(binding: Binding, registry: RegistryView) -> tuple[AdminUnit, ...]:
-    """The registry read FILL makes for every row (the only other is `part_katastr_kod`, for
-    a část bound in a multi-KÚ obec). The finest bound unit first, so its own level lands on
-    the row alongside every ancestor, and a one-KÚ obec carries its sole KÚ."""
+    """The registry read FILL makes for every row (the only other is `part_point`, for a
+    bound část no pin placed or whose obec spans several KÚ). The finest bound unit first, so
+    its own level lands on the row alongside every ancestor, and a one-KÚ obec carries its
+    sole KÚ."""
     if binding.cast_obce_unit_id is not None:
         chain = tuple(registry.admin_chain(binding.cast_obce_unit_id))
         if chain:
@@ -172,36 +174,39 @@ def _katastr_kod(
     obec = next((unit for unit in chain if unit.level == "obec"), None)
     if obec is not None and obec.sole_katastr_kod is not None:
         return obec.sole_katastr_kod
-    if point is not None:
+    if point is not None and point.katastr_kod is not None:
         return point.katastr_kod
     if binding.target_kind == "street":
         return binding.street_katastr_kod
-    if binding.target_kind == "admin_unit" and chain and chain[0].level == "cast_obce":
-        return registry.part_katastr_kod(chain[0].unit_id)
+    if chain and chain[0].level == "cast_obce":
+        part = registry.part_point(chain[0].unit_id)
+        return None if part is None else part.katastr_kod
     return None
 
 
 def _registry_point(
-    point: AddressPoint | None, chain: tuple[AdminUnit, ...]
-) -> tuple[float | None, float | None]:
-    """The FINEST bound entity that HAS a point: the address point, else the first unit on
-    the chain carrying one.
+    point: AddressPoint | None, chain: tuple[AdminUnit, ...], registry: RegistryView,
+) -> tuple[float | None, float | None, float | None]:
+    """(lat, lon, reach) of the FINEST bound entity that HAS a point: the address point, else
+    a bound část obce's own doors, else the first unit on the chain carrying one.
 
     "Has one" is the whole subtlety, and it is why this walks instead of reading `chain[0]`.
-    RÚIAN draws no polygon for a část obce or a městský obvod, so the two levels a Czech
-    listing most often names by hand are exactly the two with no point of their own; a street
-    has none either (`ruian_streets` carries no geometry, which is also why BIND's street
-    candidate has no position). Each of them takes its TOWN's point rather than nothing —
-    coarser than the granularity says, and still the honest answer to "where is this?".
+    RÚIAN draws no polygon for a část obce, so a část takes the centroid of its doors (v5.8), as
+    a bound street does in BIND; a část with no door takes its TOWN's point — coarser than the
+    granularity says, and the radius then says so, since the reach is the polygon's.
     """
     if point is not None and point.lat is not None and point.lon is not None:
-        return point.lat, point.lon
+        return point.lat, point.lon, None
+    if chain and chain[0].level == "cast_obce":
+        part = registry.part_point(chain[0].unit_id)
+        if part is not None:
+            return part.lat, part.lon, part.extent_m
     for unit in chain:
         if unit.level in _UNPLACEABLE_LEVELS:
             continue
         if unit.lat is not None and unit.lon is not None:
-            return unit.lat, unit.lon
-    return None, None
+            return unit.lat, unit.lon, unit.extent_m
+    return None, None, None
 
 
 def _cp(point: AddressPoint | None) -> str | None:

@@ -1,6 +1,6 @@
 /* FilterForm — registry-driven filter renderer.
  *
- * Single component that any consumer (Watchdog, Browse, Settings preview)
+ * Single component that any consumer (Watchdog, Browse, sold comps)
  * can drop in to render the operator's filter controls. It reads
  * `FILTER_REGISTRY` from the generated TS file and dispatches on each
  * filter's `ui_control` to one of the shared widget primitives.
@@ -9,7 +9,6 @@
  *     scope="watchdog"
  *     state={spec}
  *     onChange={(id, val) => setSpec({ ...spec, [id]: val })}
- *     visibility={schema?.filters}            // optional matrix override
  *     exclude={['location', 'tags']}          // optional: skip filters
  *   />
  *
@@ -32,8 +31,8 @@ import {
 import {
   ControlGroup,
   DecimalField,
-  PickButton,
   Section,
+  SegmentedBar,
   TriRow,
   type TriValue,
 } from '@/components/controls';
@@ -81,16 +80,12 @@ interface FilterFormProps {
    *  min and max sides together. The parent must always treat the
    *  array as one transaction against the current filter state. */
   onChange: (updates: ReadonlyArray<FilterUpdate>) => void;
-  /** Optional visibility override. When supplied, only filters with
-   *  `visibility[scope] === true` render. When omitted, every filter
-   *  the registry declares for `scope` renders (the all-on default). */
-  visibility?: ReadonlyArray<{ id: string; visibility: Record<string, boolean> }>;
   /** Ids to skip even if the registry declares them. Use sparingly —
    *  for now, only when the host page renders its own widget for that
    *  filter (e.g. Watchdog's spatial-center inputs). */
   exclude?: ReadonlyArray<string>;
-  /** When set, render *only* the listed filter ids (after agenda /
-   *  visibility filtering). Lets a host page slice the registry into
+  /** When set, render *only* the listed filter ids (after agenda
+   *  filtering). Lets a host page slice the registry into
    *  its existing section layout. Min/max pairing still applies — pass
    *  either side of a pair and the matching sibling is auto-included. */
   includeOnly?: ReadonlyArray<string>;
@@ -136,23 +131,15 @@ export interface FormRow {
 export function formRows(
   scope: Agenda,
   {
-    visibility,
     exclude,
     includeOnly,
-  }: Pick<FilterFormProps, 'visibility' | 'exclude' | 'includeOnly'> = {},
+  }: Pick<FilterFormProps, 'exclude' | 'includeOnly'> = {},
 ): FormRow[] {
   const excludeSet = new Set(exclude ?? []);
-  const visibilityById = new Map(
-    (visibility ?? []).map((v) => [v.id, v.visibility]),
-  );
 
   let visibleFilters = FILTER_REGISTRY.filters.filter((f) => {
     if (!f.agendas.includes(scope)) return false;
     if (excludeSet.has(f.id)) return false;
-    if (visibilityById.size > 0) {
-      const cell = visibilityById.get(f.id);
-      if (cell && cell[scope] === false) return false;
-    }
     return true;
   });
 
@@ -194,7 +181,6 @@ export function FilterForm({
   scope,
   state,
   onChange,
-  visibility,
   exclude,
   includeOnly,
   labels,
@@ -203,7 +189,7 @@ export function FilterForm({
   customWidgets,
   bare,
 }: FilterFormProps) {
-  const rows = formRows(scope, { visibility, exclude, includeOnly });
+  const rows = formRows(scope, { exclude, includeOnly });
 
   const renderRow = ({ def: f, maxDef }: FormRow) => {
     const custom = customWidgets?.[f.id];
@@ -438,7 +424,7 @@ function FilterRow({
     case 'pill_group':
       return (
         <Caption label={label} bare={bare}>
-          <PillRow def={def} value={value as string | null} onChange={onChange} />
+          <RegistryBar def={def} label={label} value={value} onChange={onChange} />
         </Caption>
       );
 
@@ -514,17 +500,7 @@ function FilterRow({
       );
 
     case 'boolean':
-      return (
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-sm text-[var(--color-ink-2)]">{label}</span>
-          <PickButton
-            on={value === true}
-            onClick={() => onChange(value === true ? false : true)}
-          >
-            {value === true ? 'on' : 'off'}
-          </PickButton>
-        </div>
-      );
+      return <RegistryBar def={def} label={label} named value={value} onChange={onChange} />;
 
     case 'location':
       // Composite filter — host page renders its own location widget
@@ -550,41 +526,60 @@ function optionsFor(def: FilterDef): EnumOptionLite<string | number>[] {
   return [];
 }
 
-function PillRow({
+/* An on/off filter's off side, in the sidebar's words; its own label names the
+ * on side. Every surface drawing the filter reads this one list. */
+export const BOOLEAN_OFF: Readonly<Record<string, string>> = {
+  tom_observed_only: 'All ads',
+  with_estimates: 'All properties',
+  include_no_price: 'Priced only',
+};
+
+/* A registry pick-one as THE joined bar (operator ruling 2026-10-27): a
+ * pill_group's options, or an on/off's two segments "<off> | <label>". A
+ * nullable group has no "Vše" (operator, 2026-10-20): its "no constraint" state
+ * (`category_type` via the Pipeline chip, the phone feed's Vše scope) lights
+ * nothing, and clicking the lit segment returns to it; a group that is not
+ * nullable never empties. `named` names the bar itself, where no caption does;
+ * the Browse sidebar's Status line draws its bars with this too. */
+export function RegistryBar({
   def,
+  label,
+  named = false,
   value,
   onChange,
 }: {
   def: FilterDef;
-  value: string | null;
-  onChange: (v: string | null) => void;
+  label: string;
+  named?: boolean;
+  value: unknown;
+  onChange: (v: unknown) => void;
 }) {
-  const opts = optionsFor(def);
+  const name = named ? label : undefined;
+  if (def.ui_control === 'boolean') {
+    return (
+      <SegmentedBar
+        fill
+        label={name}
+        options={[
+          { value: false, label: BOOLEAN_OFF[def.id] ?? 'Off' },
+          { value: true, label },
+        ]}
+        value={value === true}
+        onChange={onChange}
+      />
+    );
+  }
+  const opts = optionsFor(def).map((o) => ({ value: String(o.value) as string | null, label: o.label }));
   if (opts.length === 0) return null;
-  /* No "Vše" pill (operator, 2026-10-20): a nullable group's "no constraint"
-   * state (FilterDef.nullable — `category_type` via the Pipeline chip, the
-   * phone feed's Vše scope) lights no pill, and clicking the selected pill
-   * returns to it. */
-  // Auto-fit grid instead of a fixed column count: each pill claims a
-  // ~4rem minimum and the browser packs as many per row as the group's
-  // current width allows, then stretches them to fill. So as the
-  // (resizable) sidebar widens, a trailing pill like "Ostatní" rejoins
-  // the row above instead of being stranded on its own line under a
-  // hardcoded 4-column cap. At the default narrow width this still lands
-  // ~4 across — unchanged from before.
   return (
-    <div className="grid gap-1 [grid-template-columns:repeat(auto-fit,minmax(4rem,1fr))]">
-      {opts.map((opt) => (
-        <PickButton
-          key={String(opt.value)}
-          on={value === opt.value}
-          onClick={() => onChange(value === opt.value ? null : String(opt.value))}
-          variant="solid"
-        >
-          {opt.label}
-        </PickButton>
-      ))}
-    </div>
+    <SegmentedBar
+      fill
+      label={name}
+      options={opts}
+      value={value == null ? null : String(value)}
+      onChange={onChange}
+      deselectable={def.nullable}
+    />
   );
 }
 

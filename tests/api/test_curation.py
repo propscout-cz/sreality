@@ -17,6 +17,7 @@ from typing import Any
 
 import psycopg
 import pytest
+from pydantic import ValidationError
 
 fastapi = pytest.importorskip("fastapi")
 TestClient = pytest.importorskip("fastapi.testclient").TestClient
@@ -542,14 +543,15 @@ def test_patch_tag_invalid_color_422(client, store):
 
 _T0 = datetime(2026, 5, 10)
 # _COLLECTION_PROJECTION: id, name, description, created_at, updated_at, listing_count,
-# monitoring_enabled, is_system, owner_email, shared_with.
-_COLL = (1, "x", None, _T0, _T0, 0, False, False, None, [])
-_SYSTEM = (6, "monitoring", None, _T0, _T0, 3, True, True, None, [])
+# monitoring_enabled, is_system, owner_email, shared_with, notify_kinds.
+_KINDS = ["price_drop", "price_rise", "inactive", "reactivated", "new_source"]
+_COLL = (1, "x", None, _T0, _T0, 0, False, False, None, [], _KINDS)
+_SYSTEM = (6, "monitoring", None, _T0, _T0, 3, True, True, None, [], _KINDS)
 _COLL_PAYLOAD = {
     "id": 1, "name": "x", "description": None,
     "created_at": "2026-05-10T00:00:00", "updated_at": "2026-05-10T00:00:00",
     "listing_count": 0, "monitoring_enabled": False, "is_system": False,
-    "owner_email": None, "shared_with": [],
+    "owner_email": None, "shared_with": [], "notify_kinds": _KINDS,
 }
 
 
@@ -580,6 +582,31 @@ def test_list_and_get_map_the_same_shape_as_create():
 # the tenant connection an unstamped INSERT fails the WITH CHECK closed, so
 # the column has to be in the statement AND carry the caller's account — a
 # regression here is silent (rows land unreachable, or worse, unscoped).
+
+def test_a_collection_keeps_the_events_it_is_set_to_tell_and_a_new_one_takes_the_default():
+    """notify_kinds (migration 735): left out of a create it is the column DEFAULT (every event a
+    collection tells); set, it is stored once each in order; a patch of it alone is an update."""
+    conn = ScriptConn([(lambda q: "INSERT INTO collections" in q, [_COLL])])
+    curation.create_collection(conn, _s.CreateCollectionIn(name="x"), account_id=_ACCT)
+    curation.create_collection(conn, _s.CreateCollectionIn(name="x", notify_kinds=["inactive", "price_drop"]),
+                               account_id=_ACCT)
+    (default_sql, default_params), (set_sql, set_params) = conn.executed
+    assert "VALUES (%s, %s, %s, %s, DEFAULT)" in default_sql and len(default_params) == 4
+    assert "VALUES (%s, %s, %s, %s, %s)" in set_sql and set_params[-1] == ["price_drop", "inactive"]
+    conn = ScriptConn([(lambda q: q.startswith("UPDATE collections"), [_COLL])])
+    curation.update_collection(conn, 1, _s.UpdateCollectionIn(notify_kinds=["new_source"]))
+    [(sql, params)] = conn.executed
+    assert "notify_kinds = coalesce(%s::text[], c.notify_kinds)" in sql
+    assert params == (None, False, None, None, ["new_source"], 1)
+
+
+@pytest.mark.parametrize(("kinds", "error"), [
+    ([], "at least one"), (["new"], "literal_error"),
+])
+def test_a_collection_refuses_the_kind_sets_its_check_would(kinds, error):
+    with pytest.raises(ValidationError, match=error):
+        _s.UpdateCollectionIn(notify_kinds=kinds)
+
 
 def test_create_collection_stamps_account_id():
     conn = ScriptConn([(lambda q: "INSERT INTO collections" in q, [_COLL])])
@@ -619,8 +646,29 @@ def test_update_collection_is_one_update_returning_the_collection():
     [(sql, params)] = conn.executed
     assert "name = CASE WHEN c.is_system THEN c.name ELSE coalesce(%s, c.name) END" in sql
     assert "RETURNING c.id, c.name" in sql
-    assert params == ("x", "d", None, 1)
+    assert params == ("x", True, "d", None, None, 1)
     assert conn.tx == ["commit"]
+
+
+@pytest.mark.parametrize(("payload", "set_description", "description"), [
+    ({"description": None}, True, None),   # an explicit null clears it, alone or not
+    ({"description": ""}, True, None),     # an empty text column is NULL, never ''
+    ({"description": "  "}, True, None),
+    ({"description": " kept "}, True, " kept "),
+    ({"name": "x"}, False, None),          # left out keeps it
+    ({"monitoring_enabled": True}, False, None),
+])
+def test_update_collection_tells_an_absent_description_from_a_cleared_one(payload, set_description, description):
+    conn = ScriptConn([(lambda q: q.startswith("UPDATE collections"), [_COLL])])
+    curation.update_collection(conn, 1, _s.UpdateCollectionIn.model_validate(payload))
+    [(sql, params)] = conn.executed
+    assert "description = CASE WHEN %s::boolean THEN %s::text ELSE c.description END" in sql
+    assert params[1:3] == (set_description, description)
+
+
+def test_a_new_collection_stores_an_empty_description_as_null():
+    assert _s.CreateCollectionIn(name="x", description="").description is None
+    assert _s.CreateCollectionIn(name="x", description="d").description == "d"
 
 
 def test_update_collection_not_owned_is_404_without_a_probe():
@@ -662,10 +710,12 @@ def test_update_collection_duplicate_name_is_409():
     assert exc.value.detail == "collection name already exists"
 
 
-def test_update_collection_empty_patch_is_422_and_touches_nothing():
+@pytest.mark.parametrize("payload", [{}, {"name": None}, {"monitoring_enabled": None}])
+def test_update_collection_empty_patch_is_422_and_touches_nothing(payload):
+    """A null name or flag is no change: those columns are NOT NULL, so null has nothing to clear."""
     conn = ScriptConn([])
     with pytest.raises(fastapi.HTTPException) as exc:
-        curation.update_collection(conn, 1, _s.UpdateCollectionIn())
+        curation.update_collection(conn, 1, _s.UpdateCollectionIn.model_validate(payload))
     assert exc.value.status_code == 422
     assert conn.executed == []
 
@@ -882,14 +932,14 @@ def test_list_notes_follows_a_merged_away_id_to_the_survivor():
     out = curation.list_notes(conn, 99)
     assert [n["property_id"] for n in out["data"]] == [42]
     reads = [p for q, p in conn.executed if "FROM property_notes" in q]
-    assert reads == [(42,)]
+    assert reads == [([42],)]
 
 
 def test_list_notes_unresolvable_id_reads_its_own_id():
     conn = ScriptConn([(lambda q: "RECURSIVE chain" in q, [])])
     assert curation.list_notes(conn, 7) == {"data": []}
     reads = [p for q, p in conn.executed if "FROM property_notes" in q]
-    assert reads == [(7,)]
+    assert reads == [([7],)]
 
 
 def test_delete_note_redirects_merged_away_to_survivor():
@@ -960,7 +1010,7 @@ def test_curation_writes_without_an_account_are_400(client, store, monkeypatch):
 _RECIPIENT = "33333333-3333-3333-3333-333333333333"
 _OWNER = "44444444-4444-4444-4444-444444444444"
 _SHARED = (7, "theirs", None, _T0, _T0, 2, False, False, "owner@x.cz",
-           [{"account_id": _RECIPIENT, "email": None}])
+           [{"account_id": _RECIPIENT, "email": None}], _KINDS)
 
 
 def _gate(q: str) -> bool:
@@ -983,7 +1033,7 @@ class _Opener:
 def test_the_collection_shape_keeps_its_order_and_appends_the_share_fields():
     assert list(curation._to_collection(_COLL)) == [
         "id", "name", "description", "created_at", "updated_at", "listing_count",
-        "monitoring_enabled", "is_system", "owner_email", "shared_with"]
+        "monitoring_enabled", "is_system", "owner_email", "shared_with", "notify_kinds"]
 
 
 def test_a_shared_collection_names_its_owner_and_reads_monitoring_as_the_callers():

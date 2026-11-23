@@ -397,7 +397,7 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
      / pipeline-bookmark for signed-in extension users — all three were 404'ing because
      `resolve_active_property_ids`' walk over `properties` returned zero rows under RLS
      deny-all (found while shipping this, not yet reported by the operator). `list_estimation_runs`
-     turned out **not** degraded (runs on the service-role conn). `admin_boundaries` left
+     turned out **not** degraded (runs on the service-role conn). `admin_boundaries` (dropped 729) left
      un-policied until a tenant-conn consumer needs it (Wave 3 matcher). Live regression:
      `test_a5_properties_readable_listings_still_deny_all`.
    - ~~**W1-3 (async job lane + periodic zombie sweep — Amendment A10)**~~ — **SHIPPED,
@@ -445,7 +445,7 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
    - Remaining: **extension agent-estimate quota UX** (switch the panel's estimate from
      `mode:'deterministic'` to metered `mode:'agent'` for entitled users, show "(X left)",
      swap the button to "upgrade" at 0 — no purchase flow yet; widen the 120 s poll window,
-     persist `run_id`); and Chrome Web Store submission (on hold per operator).
+     persist `run_id`); and Chrome Web Store submission (Unlisted, under way as spec #2261 since 2026-10-31).
    - **The platform-wide `API_TOKEN` rotation now has a full runbook:**
      `docs/design/api-token-rotation-and-spa-jwt-migration.md`. A 2026-07-23 two-account
      pen-test surfaced its live symptom: the **SPA sends the shared static `API_TOKEN`** (the
@@ -659,17 +659,51 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
     290's policy scopes the reads, the reorder and UPDATE/DELETE by id; `POST` stamps the
     account from `require_account_id`; migration 595 backfills ownerless rows to the operator's
     account and sets `account_id` NOT NULL; the SPA's preset calls send `jwt: true`. Behaviour:
-    `tests/api/test_filter_presets.py`. **Still owed, same shape:**
-    `/buildings*` (`api/main.py` `get_buildings` → `list_building_runs`, no account filter;
-    `building_runs` tenant RLS since migration 291); `POST /notifications/dispatches/{id}/estimate`, the
-    other, was deleted 2026-10-21 (notifications push W1a), as was `POST /notifications/matcher/run`
-    (any user ran the platform-wide producers). Also owed (audit F17): the share routes' 422 "No account
+    `tests/api/test_filter_presets.py`. **DONE 2026-10-26 — the `/buildings*` ROUTES** (agent platform M0, #2059):
+    every building route takes `require_admin`, so the API's account-blind reads and the paid extraction are the
+    operator's alone (the SPA's building page sits behind `RequireAdmin`); `/buildings` joined the admin prefixes
+    of `tests/api/test_admin_route_coverage.py`. **Still owed — the same data through the database:** a building
+    run is written on the service role, so it lands on the SYSTEM account, and 291's SYSTEM read arm serves every
+    `building_runs` row (and 292's `building_run_attachments`) to any signed-in caller through PostgREST; its child
+    estimation runs are SYSTEM too, listed by `GET /estimations` (`account_scope` adds SYSTEM) with each unit's
+    `input_spec`. `POST /notifications/dispatches/{id}/estimate` was deleted 2026-10-21 (notifications
+    push W1a), as was `POST /notifications/matcher/run` (any user ran the platform-wide producers). Also owed (audit F17): the share routes' 422 "No account
     uses this email" reveals which emails hold accounts. The AUTHENTICATION half of the remaining sweep closed 2026-10-13:
     `require_token` accepts a verified JWT (`api/dependencies.py` `_bearer`, the one reader of
     `Authorization`), so the SPA sends its session JWT everywhere and `VITE_API_TOKEN` is deleted
     from the bundle (same day); W4 (same day) deleted the static key itself — the API accepts only a
-    Supabase JWT, a machine signs in as its own Supabase user. The account-SCOPING of `/buildings*`
-    stays owed.
+    Supabase JWT, a machine signs in as its own Supabase user.
 
 **Housekeeping done 2026-07-20:** operator enabled Supabase Auth's leaked-password-protection
 toggle (Authentication → Sign In / Providers → Email → "Prevent use of leaked passwords").
+12. **Waitlist landing page on propscout.cz — TAKEN DOWN 2026-11-09 (operator ask), backed up as the git tag
+    `landing-page-v1`; was LIVE 2026-10-31 17:52Z (#2248, merge a4de3157; DNS switched by the operator).** The bare domain
+    now 302s to the app except the privacy page `/soukromi` (the Chrome Web Store listing and the extension link it);
+    the source stays built and tested, and bringing it back is the tag's bare-domain Caddy block (`frontend/Caddyfile`).
+    Operator ask: a conversion-oriented pre-launch page for Facebook/Instagram ads, primary action a waitlist signup.
+    Copy follows Joanna Wiebe's method (one reader: Czech flip + buy-to-rent investors; voice-of-customer mined from
+    1,233 Czech portal-app reviews and investor forums; vykání). Visuals are simplified redraws of production phone
+    screens with invented listings (no portal photo, broker, address or person; nothing from Browse, no agents).
+    Built: `frontend/landing/` + `src/landing/` (own Vite build, `vite.landing.config.ts`), Caddy serves it on the bare
+    domain only; `POST /waitlist` + `/answer` (open, honeypot + rate limit, 303) into `waitlist_signups` (mig 700);
+    cookie consent gates the Meta Pixel (`META_PIXEL_ID` empty = no tracker); proof numbers from prod as of 31. 10. 2026.
+    Controller: Limen Ventures s.r.o., IČO 14053179 (ARES; operator 2026-10-31, go-live approved the same day).
+    Live: `propscout.cz` on the vite service (Railway domain 216bdb3e; Cloudflare apex CNAME DNS-only, the redirect
+    rule now www → apex 302), declared in `.railway/railway.ts`. End-to-end check 17:53Z: signup id 1
+    (`utm_source=claude-test`, a test row, exclude or delete it) stored with consent version, variant and answer.
+    **Owed:** the Meta Pixel id (no tracker until then); a Czech lawyer's read of the consent + privacy text
+    (recommended, not yet done); a contact e-mail for `/soukromi` (the seat address stands in).
+    **Copy deck** (2026-10-31): the operator edits the copy in place in an artifact that mirrors the built pages
+    (https://claude.ai/artifact/BCWsBLb1Vj78wSdmJgd73x); edits land in its db, Claude applies them. Rebuild and
+    republish it after every landing change: `frontend/scripts/landing-copy-deck/README.md`.
+    Feature 5 (2026-10-31, operator ask): the Chrome extension, a browser window with the side sheet and the search-page
+    marks (no AI agents card).
+    Admin Sign-ups page (2026-10-31): Admin → Sign-ups lists the waitlist with the answers, the ad each came from, an
+    e-mail copy and a CSV download (`GET /admin/waitlist`); test sign-ups are marked and not counted.
+    **Later:** refreshing the proof numbers.
+13. **Email — APPROVED 2026-10-31, nothing built:** password reset, waitlist confirmation, waitlist invitation and
+    notification email through Resend; only an invited address may create an account; the introductory price is 399 Kč
+    a month including VAT. Plan, rulings and copy: `docs/design/email/PROGRAM.md`.
+    PR 1 done 2026-11-01: both domains verified, Supabase sends through Resend, the Czech reset email delivered.
+    PR 2: the waitlist confirmation (dark until `RESEND_API_KEY`, capped), one-click unsubscribe, privacy page, 399 Kč.
+    **Next:** PR 3 invitations, PR 4 notification email.

@@ -1,14 +1,13 @@
 """Hermetic tests for scripts.verify_pipeline — the registry and the harness that measures it.
 
 No DB: here we test the registry metadata, due selection, the registry projection, the pass's
-budget (deferral) and memo, the unmeasured paths, persistence, and migration_drift's cells. Each
+budget (deferral) and memo, the unmeasured paths and persistence. Each
 check's own rules are tested beside its module (tests/scripts/test_checks_*.py).
 """
 
 from __future__ import annotations
 
 import contextlib
-from collections import Counter
 import datetime as _dt
 import json
 import re
@@ -20,7 +19,7 @@ from pathlib import Path
 from scripts.checks import clock
 from scripts.checks import platform as platform_checks
 from scripts.checks.platform import check_migration_drift
-from scripts.migration_objects import MIGRATION_OBJECT_PROBE_SQL, SAFE_IDENT, load_migrations
+from scripts.migration_objects import MIGRATION_OBJECT_PROBE_SQL
 from scripts.verify_pipeline import (
     CHECKS,
     THRESHOLDS,
@@ -29,7 +28,6 @@ from scripts.verify_pipeline import (
 )
 
 T = THRESHOLDS
-_MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 
 
 def _registered(*keys: str) -> list[Check]:
@@ -53,7 +51,7 @@ def _hosted(host: str) -> list[str]:
 
 # The keys the worker's health lane measures (waves 3-6), in registry order; GitHub keeps two.
 _WORKER_KEYS = ["location_town_coverage", "jobs", "capacity", "llm", "scraping", "publishing",
-                "delisting", "coverage", "dedup", "notifications", "parsing", "data_quality",
+                "delisting", "coverage", "dedup", "notifications", "curation_sync", "parsing", "data_quality",
                 "text_extraction"]
 _GITHUB_KEYS = ["migration_drift", "outbound_url_conformance"]
 
@@ -419,10 +417,14 @@ def test_each_check_runs_under_its_own_budget(monkeypatch: Any) -> None:
     checks = [_stub("db", _peek("db")), _stub("probe", _peek("probe"), budget_s=120.0)]
     run_checks(None, {}, checks=checks, lane_budget_s=vp.lane_budget_for(checks))
     assert seen == {"db": "45000ms", "probe": "120000ms"}
-    # Wave 6: parsing reads the active stock several ways on four default budgets; W4's push ledger
-    # reads a few hundred rows on 5 s.
+    # The stock readers are sized for the Large compute (8 GB, 2026-11-05): parsing, coverage, the
+    # location scorecard and scraping's inflow; publishing, delisting and description reading since
+    # #2512. W4's push ledger reads a few hundred rows on 5 s, and so do the curation clock's two
+    # reads (migration 696).
     assert {c.key: c.budget_s for c in CHECKS if c.budget_s != clock.CHECK_BUDGET_S} == {
-        "parsing": 180.0, "outbound_url_conformance": 120.0, "notifications": 5.0}
+        "parsing": 300.0, "coverage": 150.0, "location_town_coverage": 120.0, "scraping": 90.0,
+        "publishing": 75.0, "delisting": 75.0, "text_extraction": 120.0,
+        "outbound_url_conformance": 120.0, "notifications": 5.0, "curation_sync": 5.0}
 
 
 # --- the registry ------------------------------------------------------------
@@ -432,7 +434,7 @@ def test_every_registered_check_is_declared_once_with_its_metadata() -> None:
     from scripts import verify_pipeline as vp
 
     keys = _keys()
-    assert len(keys) == len(set(keys)) == 15
+    assert len(keys) == len(set(keys)) == 16
     # Waves 3-6: the worker hosts the platform, portal, dedup, parsing and quality checks; GitHub
     # keeps for good what needs a checkout (migration_drift) or an address that is not the
     # scrapers' (the outbound probe).
@@ -468,6 +470,7 @@ def test_every_check_carries_its_page_section_and_owner_page() -> None:
         "coverage": ("portals", "/scrapers"),
         "dedup": ("dedup", "/autodedup/progress"),
         "notifications": ("platform", "/notifications"),
+        "curation_sync": ("platform", ""),
         "parsing": ("portals", "/scrapers"),
         "data_quality": ("data_quality", "/scrapers"),
         "text_extraction": ("data_quality", "/costs"),
@@ -506,16 +509,17 @@ def test_the_wave6_checks_carry_the_contracts_metadata() -> None:
                 c.owner_path)
 
     worker, github = "realtime-worker", "github-actions"
-    assert meta("parsing") == (quality.check_parsing, "portals", "alarm", worker, 21_600, 180.0,
+    assert meta("parsing") == (quality.check_parsing, "portals", "alarm", worker, 21_600, 300.0,
                                "Parsing", "cells", "/scrapers")
     # data_quality's owner is the per-portal page: no page renders value quality yet.
     assert meta("data_quality") == (quality.check_data_quality, "data_quality", "gauge", worker,
                                     21_600, 45.0, "Data quality", "cells", "/scrapers")
     assert meta("location_town_coverage") == (
-        quality.check_location_town_coverage, "data_quality", "gauge", worker, 21_600, 45.0,
-        "Location coverage", "cells", "/location-quality")
+        quality.check_location_town_coverage, "data_quality", "gauge", worker, 21_600, 120.0,
+        "Location quality", "cells", "/location-quality")
+    # Every 6 h on 120 s since #2512 (its stock read alone took 41-44 s on Large).
     assert meta("text_extraction") == (quality.check_text_extraction, "data_quality", "gauge",
-                                       worker, 3_600, 45.0, "Description reading", "cells",
+                                       worker, 21_600, 120.0, "Description reading", "cells",
                                        "/costs")
     assert meta("migration_drift") == (check_migration_drift, "platform", "alarm", github,
                                        3_600, 45.0, "Migration drift", "files", "")
@@ -528,21 +532,34 @@ def test_the_wave6_checks_carry_the_contracts_metadata() -> None:
     parsing, text = _by_key("parsing"), _by_key("text_extraction")
     assert (parsing.staleness_budget, parsing.due_after_s) == (_dt.timedelta(hours=18), 20_700)
     assert _hold(parsing.cadence_s) == _dt.timedelta(hours=11, minutes=30)
-    assert (text.staleness_budget, text.due_after_s) == (_dt.timedelta(hours=3), 3_240)
+    assert (text.staleness_budget, text.due_after_s) == (_dt.timedelta(hours=18), 20_700)
+    # publishing and delisting (every 30 min since #2512): stale after 90 min, recovered after 54 min.
+    for key in ("publishing", "delisting"):
+        alarm = _by_key(key)
+        assert (alarm.cadence_s, alarm.budget_s) == (1_800, 75.0), key
+        assert (alarm.staleness_budget, alarm.due_after_s) == (_dt.timedelta(minutes=90), 1_620), key
+        assert _hold(alarm.cadence_s) == _dt.timedelta(minutes=54), key
 
 
-def test_every_worker_alarm_due_at_once_fits_the_pass_and_gauges_defer() -> None:
-    """Wave 6 (D2): the thirteen worker budgets sum 680 s, past what one pass may take inside the
-    watcher's 600 s in-flight line, so the pass is capped at 500 s (the worker pins the
-    constant): every ALARM due at once fits (7 x 45 s + parsing's 180 s + notifications' 5 s =
-    500 s, alarms run first) and a gauge that no longer fits is deferred to the next 60 s tick.
-    GitHub's two checks owe 165 s."""
+def test_every_worker_alarm_due_at_once_fits_the_pass_but_the_last_and_gauges_defer() -> None:
+    """Wave 6 (D2): the fourteen worker budgets sum 1,165 s since the Large-compute budgets
+    (2026-11-05; publishing, delisting and description reading since #2512), past what one pass
+    may take inside the watcher's 600 s in-flight line, so the pass is capped at 500 s (the worker
+    pins the constant). Every ALARM due at once owes vp.WORKER_ALARMS_DUE_AT_ONCE_S (curation sync § 3.9, migration 696): alarms run first, in
+    registry order, so all but the last fit even when each spends its whole budget, and the last
+    (parsing) is deferred one 60 s tick, the tested capped-pass path; a gauge that no longer fits is
+    deferred likewise. GitHub's two checks owe 165 s. The literal 730 s is what
+    pipeline-verification.md and health-dashboard.md state."""
     from scripts import verify_pipeline as vp
 
     worker = [c for c in CHECKS if c.host == "realtime-worker"]
     alarms = [c for c in worker if c.cls == "alarm"]
-    assert (vp.lane_budget_for(alarms), vp.lane_budget_for(worker)) == (500.0, 680.0)
-    assert vp.lane_budget_for(alarms) <= 500.0 < vp.lane_budget_for(worker)
+    assert vp.WORKER_ALARMS_DUE_AT_ONCE_S == vp.lane_budget_for(alarms)
+    assert (vp.WORKER_ALARMS_DUE_AT_ONCE_S, vp.lane_budget_for(worker)) == (730.0, 1165.0), (
+        "the docs state 730 s: restate them")
+    assert alarms[-1].key == "parsing"
+    assert vp.lane_budget_for(alarms[:-1]) <= 500.0 < vp.WORKER_ALARMS_DUE_AT_ONCE_S
+    assert vp.WORKER_ALARMS_DUE_AT_ONCE_S - 500.0 <= alarms[-1].budget_s, "only the last alarm can defer"
     assert vp.lane_budget_for([c for c in CHECKS if c.host == "github-actions"]) == 165.0
 
 
@@ -598,6 +615,13 @@ def test_wave6_deleted_the_legacy_bodies_their_thresholds_and_shared_state() -> 
     assert not [k for k in THRESHOLDS if k.startswith(retired)]
 
 
+def test_a_lane_in_flight_is_judged_on_the_workers_pass_budget_not_a_threshold() -> None:
+    """#2026 (AC3): the two global in-flight keys are replaced by platform.LANE_PASS_BUDGET_S, a test-pinned mirror of
+    the worker's one pass budget; a job is judged on its own timeout_s (migration 682)."""
+    assert not [k for k in THRESHOLDS if k.startswith("jobs_lane_inflight_")]
+    assert (platform_checks.LANE_PASS_BUDGET_S, platform_checks.LANE_INFLIGHT_WARN_S) == (1800, 1200)
+
+
 def test_the_worker_heartbeat_is_the_watchers_to_judge_not_a_checks() -> None:
     """Wave 2: the pg_cron watcher's `worker` cell (migration 620) reads the heartbeat every
     5 min; the GitHub-hosted check sampled it every ~4.9 h, so it caught an outage of length
@@ -651,13 +675,14 @@ def test_the_gauges_are_the_ruled_standing_conditions_and_the_rest_are_alarms() 
 
 
 def test_each_check_keeps_the_cadence_of_the_lane_it_ran_in() -> None:
-    """The worker's alarms run every 10 minutes, capacity every 30, the coverage and description
-    reading gauges hourly, parsing and the location and data-quality gauges 6-hourly; on GitHub
-    migration_drift runs hourly and the URL probe weekly."""
+    """The worker's alarms run every 10 minutes, capacity, publishing and delisting every 30 (#2512),
+    curation_sync and the coverage gauge hourly, parsing and the location, data-quality and description
+    reading gauges 6-hourly; on GitHub migration_drift runs hourly and the URL probe weekly."""
     assert {k: _by_key(k).cadence_s for k in _WORKER_KEYS} == {
         "location_town_coverage": 21_600, "jobs": 600, "capacity": 1_800, "llm": 600,
-        "scraping": 600, "publishing": 600, "delisting": 600, "coverage": 3_600, "dedup": 600,
-        "notifications": 600, "parsing": 21_600, "data_quality": 21_600, "text_extraction": 3_600}
+        "scraping": 600, "publishing": 1_800, "delisting": 1_800, "coverage": 3_600, "dedup": 600,
+        "notifications": 600, "curation_sync": 3_600, "parsing": 21_600, "data_quality": 21_600,
+        "text_extraction": 21_600}
     assert {k: _by_key(k).cadence_s for k in _GITHUB_KEYS} == {
         "migration_drift": 3_600, "outbound_url_conformance": 604_800}
 
@@ -1186,7 +1211,7 @@ _WORKER_PASS_S = 500.0
 def test_a_check_due_alone_runs_on_the_workers_capped_pass(monkeypatch: Any, caplog: Any,
                                                            key: str) -> None:
     """The capped pass sizes its lane to the due budgets, so a check due alone gets a lane of its
-    own budget (45 s for the capacity alarm and the two hourly gauges, 180 s for parsing). The
+    own budget (the capacity alarm's, the coverage and description-reading gauges', parsing's). The
     lane's clock has moved by the time the check is weighed, and wave 6's first build deferred
     it on every tick until another check fell due with it. It runs, and nothing is deferred."""
     import dataclasses
@@ -1391,158 +1416,6 @@ def test_no_measured_status_reds_the_run(monkeypatch: Any) -> None:
         _run_main(monkeypatch, ["--exit-nonzero-on-fail"], [_returning("a", "fail")])
 
 
-# --- migration_drift (scripts/checks/platform.py): merged is not applied ---------
-
-
-class _DriftConn:
-    """Returns a canned presence verdict per (kind, ident) probe."""
-
-    def __init__(self, present: dict[tuple[str, str], bool], default: bool = True) -> None:
-        self._present = present
-        self._default = default
-        self.probed: list[tuple[str, str]] = []
-
-    def transaction(self) -> "_DriftConn":
-        return self
-
-    def cursor(self) -> "_DriftConn":
-        return self
-
-    def __enter__(self) -> "_DriftConn":
-        return self
-
-    def __exit__(self, *exc: Any) -> None:
-        return None
-
-    def execute(self, sql: str, params: Any = None) -> None:
-        if sql.startswith("SET LOCAL statement_timeout"):
-            return
-        self.probed = list(zip(params["kinds"], params["idents"]))
-
-    def fetchall(self) -> list[tuple[Any, ...]]:
-        return [(k, i, self._present.get((k, i), self._default)) for k, i in self.probed]
-
-
-def _window() -> list[Any]:
-    return load_migrations(_MIGRATIONS_DIR, newest=T["migration_drift_window"])
-
-
-def _file_cells(out: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    return {c["subject"]: c for c in out["details"]["cells"]}
-
-
-def _probeable(mig: Any) -> bool:
-    return any(SAFE_IDENT.match(o.ident) for o in mig.objects)
-
-
-def test_migration_drift_ok_when_everything_is_present() -> None:
-    """Wave 6 (D5): one cell per file of the window, OK ones included, so a file applied late
-    recovers on a measured OK and the all-applied state reads OK, never Not measured."""
-    conn = _DriftConn({}, default=True)
-    out = check_migration_drift(conn, T)
-    cells = _file_cells(out)
-    assert out["status"] == "ok" and out["value"] == 0
-    assert list(cells) == [m.filename for m in _window()]
-    assert conn.probed, "objects were probed"
-    probed = [m.filename for m in _window() if _probeable(m)]
-    assert probed and all(cells[f]["status"] == "ok" for f in probed)
-
-
-def test_migration_drift_fails_when_a_migration_is_wholly_absent() -> None:
-    """The 2026-08-25 signature: merged, never applied, so NONE of its objects
-    exist. Nothing else in the platform noticed for 29 hours.
-
-    The subject migration is DERIVED from the current window, like the
-    half-present test below, not hardcoded: this test used to pin migration 444's
-    `listings.discovered_at`, which silently stopped exercising the failure path
-    the moment 25 newer migrations pushed 444 out of `migration_drift_window` —
-    it then passed `default=True` for everything and asserted "fail" against an
-    all-present database, so it went red for the next PR to cross that boundary
-    rather than for any real drift.
-    """
-    migs = load_migrations(_MIGRATIONS_DIR, newest=T["migration_drift_window"])
-    # The target's objects must be DISJOINT from every other in-window migration's:
-    # two migrations may legitimately restate one object (468 and 471 both restate
-    # llm_calls' called_for CHECK), and marking a shared object absent fails BOTH,
-    # breaking the exactly-one assertion for a reason that is not drift.
-    target = next(
-        m for m in migs
-        if m.objects and all(SAFE_IDENT.match(o.ident) for o in m.objects)
-        and not any(
-            {(o.kind, o.ident) for o in m.objects} & {(o.kind, o.ident) for o in other.objects}
-            for other in migs if other is not m and other.objects))
-    conn = _DriftConn({(o.kind, o.ident): False for o in target.objects}, default=True)
-    out = check_migration_drift(conn, T)
-    cells = _file_cells(out)
-    assert out["status"] == "fail"
-    assert out["value"] == 1
-    assert cells[target.filename]["status"] == "fail"
-    assert [f for f, c in cells.items() if c["status"] == "fail"] == [target.filename]
-
-
-def test_migration_drift_only_warns_when_a_migration_is_half_present() -> None:
-    """Half-applied is ambiguous — a partial apply, or the parser mis-read the
-    file. Ambiguity warns; it must not page anyone at 3am."""
-    migs = load_migrations(_MIGRATIONS_DIR, newest=T["migration_drift_window"])
-    # The missing object must be declared by no other file in the window: a function that a later
-    # migration restates (health_liveness: 620, 621, 633, 655) would make those files fully absent.
-    declared = Counter((o.kind, o.ident) for m in migs for o in m.objects)
-    multi, gone = next((m, o) for m in migs if len(m.objects) >= 2
-                       for o in m.objects if declared[(o.kind, o.ident)] == 1)
-    conn = _DriftConn({(gone.kind, gone.ident): False}, default=True)
-    out = check_migration_drift(conn, T)
-    cells = _file_cells(out)
-    assert out["status"] == "warn"
-    assert cells[multi.filename]["status"] == "warn"
-    assert not [f for f, c in cells.items() if c["status"] == "fail"]
-
-
-def test_migration_drift_reports_its_own_blind_spot(monkeypatch: Any) -> None:
-    """Migrations that only drop, grant, or update data declare nothing to probe. They must be
-    COUNTED and named, not silently treated as passing — the failure mode this sprint already
-    hit with a test that never ran: each is a Not measured cell saying so."""
-    from scripts.migration_objects import Migration, MigrationObject
-
-    window = [Migration(700, "700_grants_only.sql", []),
-              Migration(701, "701_a_table.sql", [MigrationObject("relation", "public.t")]),
-              Migration(702, "702_odd_ident.sql", [MigrationObject("relation", "no such ident!")])]
-    monkeypatch.setattr(platform_checks, "load_migrations", lambda *a, **k: window)
-    conn = _DriftConn({}, default=True)
-    out = check_migration_drift(conn, T)
-    cells = _file_cells(out)
-    assert {f: c["status"] for f, c in cells.items()} == {
-        "700_grants_only.sql": "unknown", "701_a_table.sql": "ok", "702_odd_ident.sql": "unknown"}
-    assert "Unverifiable" in cells["700_grants_only.sql"]["message"]
-    assert out["status"] == "ok" and conn.probed == [("relation", "public.t")]
-
-
-@pytest.mark.parametrize("folder", ["missing", "empty"])
-def test_migration_drift_with_no_migration_files_is_not_measured(
-    folder: str, tmp_path: Path, monkeypatch: Any,
-) -> None:
-    """The worker image ships no migrations/ folder. Zero files probed is zero files
-    verified: it read `ok` ("All 0 checkable of the newest 0 migrations are present")."""
-    target = tmp_path / "migrations"
-    if folder == "empty":
-        target.mkdir()
-    monkeypatch.setattr(platform_checks, "_MIGRATIONS_DIR", target)
-    conn = _DriftConn({}, default=True)
-    out = check_migration_drift(conn, T)
-    assert out["status"] == "unknown" and out["value"] is None
-    assert out["details"]["skipped"] == "no migration files on this host"
-    assert "Not measured" in out["message"]
-    assert conn.probed == [], "nothing to probe, so no statement is sent"
-
-
-def test_migration_drift_probes_only_safe_identifiers() -> None:
-    """to_regclass raises on a malformed identifier instead of returning NULL,
-    which would turn one odd migration into a crashed check."""
-    conn = _DriftConn({}, default=True)
-    check_migration_drift(conn, T)
-    for _kind, ident in conn.probed:
-        assert SAFE_IDENT.match(ident), ident
-
-
 def test_a_lane_owes_every_check_it_runs_its_own_budget() -> None:
     from scripts import verify_pipeline as vp
 
@@ -1633,7 +1506,7 @@ def _unmeasured_results() -> list[dict[str, Any]]:
     sampled = _BoundConn({"": [(1, "remax", "byt", None, "https://www.remax-czech.cz/x/1")]})
     with mock.patch.object(platform_checks, "_MIGRATIONS_DIR",
                            Path("/no-such-checkout/migrations")):
-        no_migration_files = check_migration_drift(_DriftConn({}), T)
+        no_migration_files = check_migration_drift(_BoundConn(), T)
     return [
         *run_checks(None, {}, checks=[_stub("boom", _boom), _stub("slow", _cancelled),
                                       _stub("uncelled", _uncelled)]),

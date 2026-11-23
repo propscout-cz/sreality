@@ -4,8 +4,8 @@
  * Pure, so the page order, the closed-stage separator and the day count are
  * tested without a browser. The cards and stages are the board's own
  * (`pipeline_board_public`, `pipeline_stages_public`), ordered within a stage by
- * the board's default sort: the phone offers no sort and no filter, so it shows
- * what the desktop board shows before anyone touches its controls. */
+ * the board's default sort: the phone offers no sort, and of the board's
+ * filters only Lokalita (applied before the cards reach `stagePages`). */
 
 import { pragueDayKey } from './feed';
 import { czPlural, fmtTomDays } from './format';
@@ -98,10 +98,14 @@ export function writeLastStage(stageId: number, board: string | null = null): vo
   }
 }
 
-/* The page to open on: the remembered stage while it still exists, else the
- * entry stage (where a new card lands), else the first. */
-export function initialStageIndex(pages: ReadonlyArray<StagePage>, remembered: number | null): number {
-  const at = remembered == null ? -1 : pages.findIndex((p) => p.stage.id === remembered);
+/** The page to show: the stage on screen (`id`) while it exists. Once gone —
+ * archived elsewhere — the page now in its place, `previous` being the index it
+ * was last shown at: its neighbour. Before any page was shown (`previous` < 0:
+ * nothing remembered, or a remembered stage since gone), the entry stage (where a
+ * new card lands), else the first. */
+export function stageOnScreen(pages: ReadonlyArray<StagePage>, id: number | null, previous: number): number {
+  const at = id == null ? -1 : pages.findIndex((p) => p.stage.id === id);
   if (at >= 0) return at;
+  if (previous >= 0) return Math.max(0, Math.min(previous, pages.length - 1));
   return Math.max(0, pages.findIndex((p) => p.stage.is_entry));
 }

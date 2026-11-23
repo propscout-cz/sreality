@@ -10,6 +10,7 @@ on every deploy of the source.
 
 from __future__ import annotations
 
+from scraper import contact
 from scraper.portal_base import BasePortalClient
 from scraper.rate_ledger import build_rate_limiter
 from scraper.reas_parser import SOURCE
@@ -35,12 +36,8 @@ class ReasClient(BasePortalClient):
     """One page of the sold catalogue for one bounding box."""
 
     ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-    # reas.cz is a site we identify ourselves to rather than blend into: product,
-    # repo and purpose, no contact data (the `scraper.overpass_client` shape).
-    USER_AGENT = (
-        "sreality-tracker/0.1 (+https://github.com/waiff/sreality; "
-        "sold-transaction comparables)"
-    )
+    # reas.cz is a site we identify ourselves to rather than blend into.
+    USER_AGENT = contact.USER_AGENT
     USE_PROXY = False
 
     def fetch_sold_page(

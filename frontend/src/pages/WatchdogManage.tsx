@@ -13,12 +13,14 @@ import {
 } from '@/lib/api';
 import { watchdogKeys } from '@/lib/queries';
 import { enumLabel } from '@/lib/enums';
+import { CHANGE_META } from '@/lib/changeKinds';
 import { mapAreaLabel } from '@/lib/filters';
 import { fmtAbsolute, fmtCount, fmtRelative } from '@/lib/format';
 import { PPM2_UNIT, ppm2BasisOfCohort } from '@/lib/measure';
 import { portalScopeLabel } from '@/lib/portals';
 import type { WatchdogFilterSpec, WatchdogSubscription } from '@/lib/types';
 import { Th } from '@/components/table';
+import OverflowMenu from '@/components/OverflowMenu';
 
 export default function WatchdogManage() {
   const qc = useQueryClient();
@@ -77,25 +79,22 @@ function Header() {
   return (
     <header className="flex flex-wrap items-end justify-between gap-4">
       <div>
-        <p className="text-[0.7rem] tracking-[0.18em] uppercase text-[var(--color-ink-3)]">
-          Watchdog
-        </p>
         <h1
-          className="mt-1.5 text-[2.1rem] leading-tight"
+          className="text-[2.1rem] leading-tight"
           style={{ fontFamily: 'var(--font-display)', fontWeight: 600 }}
         >
           Manage watchdogs
         </h1>
         <p className="mt-2 text-sm text-[var(--color-ink-2)]">
-          A watchdog is a saved filter. The backend matcher fires a
-          notification when a freshly scraped listing matches the spec; its
-          alerts appear in Notifications.
+          A watchdog is a saved filter. It notifies you about the events you
+          chose on the properties it matches (new, price changes, delistings,
+          new portals); its alerts appear in Notifications.
         </p>
       </div>
       <div className="flex items-center gap-3">
         <Link
           to={ROUTES.browse.build()}
-          className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-white hover:bg-[var(--color-copper-2)] transition-colors"
+          className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--color-copper)] text-[var(--color-on-copper)] hover:bg-[var(--color-copper-2)] transition-colors"
           title="Watchdogs are created by saving a filter on the Browse page."
         >
           + New in Browse
@@ -123,7 +122,6 @@ function SubscriptionsTable({
               <Th align="left">Name</Th>
               <Th align="left">Filter summary</Th>
               <Th align="right">Fired</Th>
-              <Th align="left">Created</Th>
               <Th align="left">Status</Th>
               <Th align="right"> </Th>
             </tr>
@@ -163,20 +161,23 @@ function SubRow({
         >
           {sub.name}
         </Link>
+        <div
+          className="mt-0.5 text-[0.75rem] text-[var(--color-ink-3)]"
+          title={fmtAbsolute(sub.created_at)}
+        >
+          Created <span className="font-mono tabular-nums">{fmtRelative(sub.created_at)}</span>
+        </div>
       </td>
-      <td className="px-4 py-2.5 align-middle text-[var(--color-ink-2)] max-w-[420px]">
+      <td className="px-4 py-2.5 align-middle text-[var(--color-ink-2)] max-w-[540px]">
         <span className="block truncate" title={summary}>
           {summary}
         </span>
+        <div className="mt-0.5 text-[0.75rem] text-[var(--color-ink-3)]">
+          {sub.notify_kinds.map((k) => CHANGE_META[k].label).join(' · ')}
+        </div>
       </td>
       <td className="px-4 py-2.5 align-middle text-right tabular-nums text-[var(--color-ink-2)]">
         {fmtCount(sub.dispatch_count)}
-      </td>
-      <td
-        className="px-4 py-2.5 align-middle text-[var(--color-ink-3)] tabular-nums"
-        title={fmtAbsolute(sub.created_at)}
-      >
-        {fmtRelative(sub.created_at)}
       </td>
       <td className="px-4 py-2.5 align-middle">
         <button
@@ -208,13 +209,10 @@ function SubRow({
         >
           edit
         </Link>
-        <button
-          type="button"
-          onClick={onDelete}
-          className="text-[0.75rem] text-[var(--color-brick)] hover:underline underline-offset-2"
-        >
-          delete
-        </button>
+        <OverflowMenu
+          label={`Actions: ${sub.name}`}
+          items={[{ label: 'Smazat…', danger: true, onSelect: onDelete }]}
+        />
       </td>
     </tr>
   );
@@ -288,7 +286,8 @@ function summariseFilter(spec: WatchdogFilterSpec): string {
         : head,
     );
   }
-  if (spec.bounds) bits.push(mapAreaLabel(spec.bounds));
+  const area = spec.circle ?? spec.bounds;
+  if (area) bits.push(mapAreaLabel(area));
   if (spec.min_price_czk != null || spec.max_price_czk != null) {
     const lo = spec.min_price_czk != null ? `${spec.min_price_czk.toLocaleString()}` : '0';
     const hi = spec.max_price_czk != null ? `${spec.max_price_czk.toLocaleString()}` : '∞';

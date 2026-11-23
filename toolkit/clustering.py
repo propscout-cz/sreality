@@ -16,7 +16,6 @@ is ever resolved into a unit.
 
 from __future__ import annotations
 
-import math
 import random
 import statistics
 from typing import Any, Literal

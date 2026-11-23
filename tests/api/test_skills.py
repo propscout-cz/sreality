@@ -7,6 +7,7 @@ import json
 import pytest
 
 from api import skills as sk
+from api.agents.definition import DefinitionError
 from tests.api._fakes import _FakeConn, make_skill_row
 
 
@@ -30,46 +31,14 @@ def test_load_skill_raises_when_missing():
         sk.load_skill(conn, "nope")
 
 
-def test_update_skill_rejects_unknown_tool():
-    sk.AGENT_TOOL_NAMES = {"find_comparables_relaxed", "record_estimate"}
-    with pytest.raises(sk.SkillValidationError, match="unknown tool"):
-        sk._validate_allowed_tools(["find_comparables_relaxed", "boguscallout"])
-
-
-# The live registry (api/dependencies.py:_build_providers); the seeded skills
-# name only anthropic + gemini.
-_REGISTERED_PROVIDERS = {"anthropic", "gemini", "openai", "qwen", "oss"}
-
-
-def test_update_skill_accepts_preferred_model_naming_a_provider_subset():
-    sk.PROVIDER_NAMES = set(_REGISTERED_PROVIDERS)
-    try:
-        assert sk._validate_preferred_model({
-            "anthropic": "claude-sonnet-4-5",
-            "gemini": "gemini-2.5-pro",
-        }) == {"anthropic": "claude-sonnet-4-5", "gemini": "gemini-2.5-pro"}
-    finally:
-        sk.PROVIDER_NAMES = set()
-
-
-def test_update_skill_rejects_unknown_provider():
-    sk.PROVIDER_NAMES = set(_REGISTERED_PROVIDERS)
-    try:
-        with pytest.raises(sk.SkillValidationError, match="unknown provider"):
-            sk._validate_preferred_model(
-                {"anthropic": "x", "gemini": "y", "fake": "z"}
-            )
-    finally:
-        sk.PROVIDER_NAMES = set()
-
-
-def test_update_skill_rejects_empty_preferred_model():
-    sk.PROVIDER_NAMES = set(_REGISTERED_PROVIDERS)
-    try:
-        with pytest.raises(sk.SkillValidationError, match="provider"):
-            sk._validate_preferred_model({})
-    finally:
-        sk.PROVIDER_NAMES = set()
+def test_update_skill_checks_tools_against_the_estimators_own_list():
+    """Fail-closed since #2065: the check no longer depends on api.main having filled a global first."""
+    conn = _UpdateCapturingConn(make_skill_row())
+    with pytest.raises(DefinitionError, match="unknown tool 'boguscallout'"):
+        sk.update_skill(conn, "rental_estimator_v1", {"allowed_tools": ["find_comparables_relaxed", "boguscallout"]})
+    with pytest.raises(DefinitionError, match="no price"):
+        sk.update_skill(conn, "rental_estimator_v1", {"preferred_model": {"anthropic": "claude-unpriced-9"}})
+    assert conn.updates == []
 
 
 class _UpdateCapturingConn:
@@ -104,76 +73,27 @@ class _UpdateCapturingConn:
 
 def test_update_skill_saves_the_settings_payload_against_the_full_registry():
     """The Settings page resends the row's own two-provider map on every save."""
-    sk.AGENT_TOOL_NAMES = {
-        "find_comparables_relaxed", "analyze_distribution", "record_estimate",
-    }
-    sk.PROVIDER_NAMES = set(_REGISTERED_PROVIDERS)
-    try:
-        row = make_skill_row(name="rental_estimator_v1")
-        current = sk.load_skill(
-            _FakeConn(skills={"rental_estimator_v1": row}), "rental_estimator_v1",
-        )
-        conn = _UpdateCapturingConn(row)
-        sk.update_skill(conn, "rental_estimator_v1", {
-            "system_prompt": "you are a fox",
-            "allowed_tools": current.allowed_tools,
-            "preferred_model": current.preferred_model,
-            "limits": {
-                "max_iterations": current.limits.max_iterations,
-                "max_cost_usd": current.limits.max_cost_usd,
-                "wall_clock_timeout_s": current.limits.wall_clock_timeout_s,
-            },
-        })
-        assert len(conn.updates) == 1
-        assert json.loads(conn.updates[0]["preferred_model"]) == {
-            "anthropic": "claude-sonnet-4-5",
-            "gemini": "gemini-2.5-pro",
-        }
-    finally:
-        sk.AGENT_TOOL_NAMES = set()
-        sk.PROVIDER_NAMES = set()
-
-
-def test_update_skill_rejects_limit_out_of_range():
-    with pytest.raises(sk.SkillValidationError):
-        sk._validate_limits({
-            "max_iterations": 100,
-            "max_cost_usd": 1.0,
-            "wall_clock_timeout_s": 60.0,
-        })
-    with pytest.raises(sk.SkillValidationError):
-        sk._validate_limits({
-            "max_iterations": 10,
-            "max_cost_usd": -1.0,
-            "wall_clock_timeout_s": 60.0,
-        })
-
-
-def test_update_skill_accepts_well_formed_payload():
-    sk.AGENT_TOOL_NAMES = {"find_comparables_relaxed", "record_estimate"}
-    sk.PROVIDER_NAMES = set(_REGISTERED_PROVIDERS)
-    assert sk._validate_allowed_tools(["find_comparables_relaxed"]) == [
-        "find_comparables_relaxed"
-    ]
-    assert sk._validate_preferred_model({
+    row = make_skill_row(name="rental_estimator_v1")
+    current = sk.load_skill(_FakeConn(skills={"rental_estimator_v1": row}), "rental_estimator_v1")
+    conn = _UpdateCapturingConn(row)
+    sk.update_skill(conn, "rental_estimator_v1", {
+        "system_prompt": "you are a fox",
+        "allowed_tools": current.allowed_tools,
+        "preferred_model": current.preferred_model,
+        "limits": {
+            "max_iterations": current.limits.max_iterations,
+            "max_cost_usd": current.limits.max_cost_usd,
+            "wall_clock_timeout_s": current.limits.wall_clock_timeout_s,
+        },
+    })
+    assert len(conn.updates) == 1
+    assert json.loads(conn.updates[0]["preferred_model"]) == {
         "anthropic": "claude-sonnet-4-5",
         "gemini": "gemini-2.5-pro",
-    })["anthropic"] == "claude-sonnet-4-5"
-    assert sk._validate_limits({
-        "max_iterations": 8,
-        "max_cost_usd": 0.5,
-        "wall_clock_timeout_s": 90.0,
-    })["max_iterations"] == 8
-    sk.AGENT_TOOL_NAMES = set()
-    sk.PROVIDER_NAMES = set()
-
-
-def test_validate_str_rejects_empty():
-    with pytest.raises(sk.SkillValidationError):
-        sk._validate_str("", "system_prompt")
-    with pytest.raises(sk.SkillValidationError):
-        sk._validate_str("  ", "system_prompt")
-    assert sk._validate_str("ok", "system_prompt") == "ok"
+    }
+    assert json.loads(conn.updates[0]["limits"]) == {
+        "max_iterations": 12, "max_cost_usd": 1.0, "wall_clock_timeout_s": 120.0,
+    }
 
 
 def test_jsonb_dumps_round_trips_via_json():

@@ -21,7 +21,6 @@ from location_data.claims_intake import (
     _BATCH_INSERT_SQL,
     _BODIES_RESUME_SQL,
     _BODY_JOIN,
-    _CLAIM_WRITE_SQL,
     _FROM_LISTINGS,
     _LISTINGS_FULL_SQL,
     _LISTINGS_INCREMENTAL_SQL,
@@ -37,13 +36,10 @@ from location_data.claims_intake import (
     DEFAULT_MAX_SECONDS,
     MAX_BATCH_SIZE,
     MIN_BATCH_SIZE,
-    IntakeRefused,
     _row_from_record,
     extract_listing,
-    main,
-    stamp_mined_bodies,
-    write_result,
 )
+from location_data.claims_store import _WRITE_CLAIMS_SQL, write_claims
 from tests.location_data.claim_intake_fixtures import (
     SREALITY_POST_CUTOVER,
     SREALITY_TRUNCATED,
@@ -96,14 +92,14 @@ def test_claim_and_dirty_enqueue_are_one_statement():
         listing("sreality", SREALITY_POST_CUTOVER),
         entries_for("sreality"))
     with conn.cursor() as cur:
-        inserted, enqueued = write_result(cur, result)
+        changed, enqueued = write_claims(cur, result.claims)
 
-    claim_statements = [s for s, _ in conn.executed if "INSERT INTO location_claims" in s]
+    claim_statements = [(s, p) for s, p in conn.executed if "INSERT INTO location_claims" in s]
     assert len(claim_statements) == 1
-    one = claim_statements[0]
+    one, params = claim_statements[0]
     assert "INSERT INTO dirty_locations" in one
-    assert "'claim_insert'" in one
-    assert (inserted, enqueued) == (1, 1)
+    assert params["reason"] == "claim_insert"
+    assert (changed, enqueued) == (1, 1)
 
 
 def test_the_enqueue_bumps_a_row_that_is_already_queued():
@@ -117,7 +113,7 @@ def test_the_enqueue_bumps_a_row_that_is_already_queued():
         listing("sreality", SREALITY_POST_CUTOVER),
         entries_for("sreality"))
     with conn.cursor() as cur:
-        write_result(cur, result)
+        write_claims(cur, result.claims)
 
     one = next(s for s, _ in conn.executed if "INSERT INTO dirty_locations" in s)
     enqueue = " ".join(one.split()).lower().split("insert into dirty_locations")[1]
@@ -144,10 +140,10 @@ def test_the_lane_writes_claims_and_nothing_else():
             assert table not in sql, table
 
 
-def test_the_claim_write_dedupes_within_the_batch():
-    """Two listings can legitimately produce the same fingerprint (the tuple is time-free);
-    `ON CONFLICT` cannot arbitrate two rows inside ONE statement, so the batch dedupes."""
-    assert "DISTINCT ON (claim_fingerprint)" in _CLAIM_WRITE_SQL
+def test_the_claim_write_keeps_one_claim_per_key_within_the_batch():
+    """`ON CONFLICT DO UPDATE` cannot touch one row twice in ONE statement, so two claims of
+    one key in a batch arrive as one (the later observation)."""
+    assert "DISTINCT ON (listing_id, claim_type, licence_class)" in _WRITE_CLAIMS_SQL
 
 
 def test_a_refusal_is_counted_not_recorded():
@@ -159,7 +155,7 @@ def test_a_refusal_is_counted_not_recorded():
     assert dict(result.refusals) == {"sreality_payload_shape:absent": 1}
     conn = _Conn()
     with conn.cursor() as cur:
-        write_result(cur, result)
+        write_claims(cur, result.claims)
     assert [s for s, _ in conn.executed] == []
 
 
@@ -267,7 +263,7 @@ def test_the_lane_has_no_watermark_left_to_read():
 
 def test_the_resume_lookup_is_per_source_per_mode_and_needs_a_cursor():
     sql = " ".join(_RESUME_SQL.split())
-    assert "source IS NOT DISTINCT FROM %(source)s" in sql
+    assert _SOURCE_MATCH in sql
     assert "scan_mode = %(scan_mode)s" in sql
     assert "cursor_after_id IS NOT NULL" in sql
     # A completed incremental run is resumed from too: its cursor is a position in an
@@ -336,7 +332,25 @@ def test_the_batch_row_carries_the_cursor_and_the_mode_that_wrote_it():
     # An operator-anchored run's cursor does not certify that everything below it was
     # scanned.
     assert "AND resumable" in resume
-    assert "ORDER BY started_at DESC, id DESC" in resume
+    assert resume.endswith("ORDER BY id DESC LIMIT 1")
+
+
+# `source IS NOT DISTINCT FROM %(source)s`, spelled so a NULL source (every minute-lane call) folds
+# to `source IS NULL`: PG 17 keeps the IDF form as a one-row-estimate filter, and the newest-row
+# reads planned a seq scan + sort of the whole never-pruned ledger (prod EXPLAIN, 2026-11-14).
+_SOURCE_MATCH = "(source = %(source)s OR (source IS NULL AND %(source)s::text IS NULL))"
+
+
+@pytest.mark.parametrize("sql", [_RESUME_SQL, _BODIES_RESUME_SQL])
+def test_the_newest_batch_row_is_a_pkey_probe(sql):
+    """Each half alone still planned the scan: the IDF filter estimates one row whatever the
+    order, and an IS NULL key gives lcb_resume no order. `id` is insert order; `started_at` is
+    stamped by the same INSERT, so the newest row is the same row unless a lane overlaps
+    itself within milliseconds (1 of 90,074 rows on 2026-11-14), and either one is a cursor
+    its own run walked to."""
+    flat = " ".join(sql.split())
+    assert _SOURCE_MATCH in flat and "NOT DISTINCT" not in flat
+    assert "started_at" not in flat and flat.endswith("ORDER BY id DESC LIMIT 1")
 
 
 def test_the_bodies_pass_cursor_is_stamped_with_the_versions_it_is_valid_for():
@@ -352,11 +366,11 @@ def test_the_bodies_pass_cursor_is_stamped_with_the_versions_it_is_valid_for():
     sql = " ".join(_BODIES_RESUME_SQL.split())
     assert sql.startswith(
         "SELECT bodies_cursor_after_id, bodies_cursor_versions FROM location_claim_batches")
-    assert "source IS NOT DISTINCT FROM %(source)s" in sql
+    assert _SOURCE_MATCH in sql
     assert "scan_mode" not in sql
     # Terminal rows only: this run's own 'running' row would otherwise be the newest.
     assert "outcome IN ('ok', 'stopped', 'failed')" in sql
-    assert sql.endswith("ORDER BY started_at DESC, id DESC LIMIT 1")
+    assert sql.endswith("ORDER BY id DESC LIMIT 1")
     # No filter on either column: what the newest run stamped IS the answer, NULL included.
     assert "IS NOT NULL" not in sql
 
@@ -375,8 +389,8 @@ def test_the_version_set_is_a_canonical_projection_of_the_active_contracts():
 def test_no_write_statement_touches_an_existing_production_table():
     """The lane reads `listings` and writes only location_* / dirty_locations — plus the
     one mined-at stamp on `portal_raw_payloads`, which is the body store it just read."""
-    for sql in (_CLAIM_WRITE_SQL, _BATCH_INSERT_SQL, _STAMP_MINED_SQL):
-        lowered = sql.lower()
+    for sql in (_WRITE_CLAIMS_SQL, _BATCH_INSERT_SQL, _STAMP_MINED_SQL):
+        lowered = sql.lower().replace("do update", "do_upsert")
         for verb in ("insert into", "update ", "delete from"):
             for fragment in lowered.split(verb)[1:]:
                 target = fragment.strip().split()[0].strip("(")
@@ -614,7 +628,7 @@ def test_mine_readings_scopes_the_drain_to_the_ids_under_a_batch_of_its_own_lane
 
     def drain(c, **kwargs):
         seen.update(kwargs)
-        kwargs["stats"].update(readings_mined=2, claims_inserted=5)
+        kwargs["stats"].update(readings_mined=2, written=5)
 
     monkeypatch.setattr(claims_intake, "drain_readings", drain)
     stats = claims_intake.mine_readings(conn, [7, 3], max_seconds=30, statement_timeout=60)

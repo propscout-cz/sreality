@@ -25,6 +25,11 @@ is the tie-breaker). This track records sequencing + shipped state only.
 
 ## The simplification sprint (2026-09-11 →): one store, one lane, nine fields, no flags
 
+**2026-10-31 → the location data quality programme** (`docs/design/location-quality/PROGRAM.md`) holds the north star,
+the operator's rulings and waves W0–W8 that follow this sprint: one current claim per fact, one bound register
+entity, a pin inside the town the words bind, a measured radius, one scorecard, one resolve lane, one registry
+(the pre-mirror `admin_boundaries` table retired). This file keeps receiving the as-built bullet of each wave.
+
 **North star:** *every Czech listing has its town; one slim store answers every question; the app
 gets faster because there is less.* Every decision in this sprint is tested against those three
 clauses, in that order. CLAUDE.md rule 25 is the standing form. The audit that started it ("Where the
@@ -434,7 +439,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
     `region_id` / `okres_id` / `obec_id` / `cast_obce_id` — compiled in exactly two modules
     (`api/location_filter.py`, `frontend/src/lib/districtCodes.ts`) plus the two SQL bodies, all
     four tested against ONE shared table (`tests/fixtures/district_chip_plan.json`, read by pytest
-    AND vitest). `/maps/resolve` reads the RÚIAN mirror instead of `admin_boundaries` and gains the
+    AND vitest). `/maps/resolve` reads the RÚIAN mirror instead of `admin_boundaries` (dropped 729) and gains the
     `cast_obce` level — resolved BY NAME inside the PIP'd obec, because RÚIAN draws no polygon for
     `cast_obce`/`momc`, so a point can only ever place obec/okres/kraj. Deleted: the `locality`
     ILIKE half, the legacy name fallback, the `context` narrow as SQL, and the two sreality-only
@@ -616,7 +621,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
     wave-by-wave running log into the END STATE — the store's 26 columns by role, the one lane's two
     halves and their cursors, the eleven claim types and the contract rails, the resolver's four
     stages, the served-listing predicate, the red line, what deliberately stays outside the store
-    (`admin_boundaries`, `portal_raw_pages`, the two views that keep their width, `ScrapedListing`'s
+    (`admin_boundaries` (dropped 729), `portal_raw_pages`, the two views that keep their width, `ScrapedListing`'s
     page-reading fields, `CoordinateRule`'s historical `"geom_column"` literal) and ONE lessons list,
     one line each — **606 → 351 lines**; the rules 24+25 rationale went 74 → 29. The skills' location
     sections describe the end state only. `toolkit/filter_registry.py`'s city-quality prose now names
@@ -782,7 +787,8 @@ component is slimmed twice — each wave rewrites one component and slims its st
      DROP+CREATE views, so AFTER the deploy), **508** (W4-c, destructive — operator word + `pg_dump`,
      05:20–05:30 UTC, AFTER the deploy) — ALL APPLIED 2026-09-13, alongside the captain's **511**
      (backup), **512** (506's cancelled rebuild, re-run at 3600 s) and **513** (v1 of the pin-audit
-     surface retired, a precondition for 508). Left: **514** (W5, additive — BEFORE its merge: it
+     surface retired, a precondition for 508). **514** APPLIED too (confirmed 2026-10-30: `browse_projection`
+     carries the served predicate, as 522's header measured; W5, additive — BEFORE its merge: it
      only HIDES rows, so a database that has it while the old code runs is correct; the reverse would
      leak the exempted set into the watchdog).
   3. ~~**The later lock-free wave**: narrow `listings_public` + `portal_listing_counts`~~ — **DONE,
@@ -1161,7 +1167,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
   (first draft 1.77 s; 2.51 s with no category), a kraj + obec pair 44 ms as before. Outreach stores
   chips in `target.districts` (609 rewrote the stored id lists; 0 campaigns existed); the API refuses
   the old id lists (422 on a request, 409 on a stored target). No index: the arms OR five columns.
-- **ONE PIN — a property's location is its location ad — in review 2026-10-20 (636 not yet applied)** (operator rulings
+- **ONE PIN — a property's location is its location ad — delivered 2026-10-20 (migrations 635 + 636 applied)** (operator rulings
   of 2026-10-19, R1/R3/R5/R7–R9; migrations 635 + 636; `docs/design/one-pin/PROGRAM.md`). A property used to
   stand at its canonical ad's point, so two ads of one building could draw a ring where a sibling ad
   held the exact address. `properties.location_listing_ref_id` now points at the ad ranked first by a
@@ -1187,25 +1193,288 @@ component is slimmed twice — each wave rewrites one component and slims its st
   reader of the same surface and method (`page_readers.read_entry`). Also: realitymix's 'estimated'
   marker fires on an EMPTY `data-gps-*` (`html_marker.blank_attrs`; v6 declared it on no active ad),
   and its Prague quarter is read one crumb higher (`json_breadcrumb.levels_by_anchor`; 713 Prague
-  ads claimed none). Recovery measured once the bumps' re-mine drains. Unrecoverable here: the
-  ~15.6k idnes fallback ads whose line names only a town (idnes highlights the whole obec) — they
-  wait on the next item.
-- **Next (ruled 2026-10-25): the fallback point.** A část obce has no RÚIAN polygon, so FILL climbs
-  to its obec's point; place it at the centroid of its own address points as W18 places a street,
-  with a radius that is the set's extent (12,810 idnes + 10,875 realitymix quarter-level rows stood
-  on a town point; errors to 12.7 km against a declared 750 m). A `RESOLVER_VERSION` bump.
+  ads claimed none). Measured 2026-10-26 with the bumps' re-mine ~80 % through: active ads on a
+  town point idnes 18,931, realitymix 7,120, remax 475; street-grain ads +7,838 / +9,579 / +71
+  (19437599 stands on Mahulenina, 16 m from the portal's highlight). Unrecoverable here: the idnes
+  fallback ads whose line names only a town (idnes highlights the whole obec) — they wait on
+  v5.8's fallback point below.
 - **Owed (ONE PIN W3 hand-off): centroid radii drawn too small** — town 60.4 %, quarter 86.1 %
   containment of the exact point (measured 2026-10-19; street level 98.5 %). The ads agree where
   both are exact (p90 0 m); the misses are the radius, not the evidence. Calibrating a radius is a
   `RESOLVER_VERSION` bump through the ordinary lane.
+- **The fallback point — resolver v5.8, 2026-10-25** (operator ruling 2026-10-25; no migration). It
+  answers the item above for the rows FILL places; a blurred portal pin keeps its level constant. A
+  bound část obce no pin placed stands at the centroid of its own doors (`part_point`, which folds
+  `part_katastr_kod` — one question for its point and its KÚ), no longer on its town's point: 23,618
+  active quarter-level ads stood on a town point (Břevnov's doors: 1.1 km from 19437599's street,
+  where Prague's point was 9 km). A FILL placement's radius is floored by the placed-on entity's
+  reach — the část's farthest door (Břevnov 2.9 km), the polygon's `containment_radius_m` (Praha
+  17.6 km, against the 1 km and 750 m constants). The bump re-queues the corpus. Left: 266
+  městský-obvod rows still take their town's point (`momc_unit_id` carries no index). Measured
+  2026-10-30 with every row at v5.8: active ads on their town's point idnes 9,401 (was 22,124),
+  realitymix 743 (12,806), remax 327 (539), maxima 22. Autodedup
+  reads these points as `same_exact_pin` / `pin_pop` (any grain); a shared quarter centroid is a
+  smaller population than Prague's one point, which is an operator call for that program.
+- **The words decide — resolver v5.9, 2026-10-30** (operator ruling 2026-10-30; build #2192, gate #2193;
+  no migration). One row held two answers to "where": the named town (`obec_name` / PSČ claims) and the
+  portal's pin as the position; CHECK flagged `pin_outside_obec`, dropped the grain to obec and kept the
+  pin at a constant r = 1 km, so the list said one town and the map drew another. bazos places every ad
+  on a postal-area point ("Přibližná lokalita"; one Kolín pin carried 143 active ads from 34 obce;
+  19509113 "Jestřabí Lhota" stood 8.8 km off, inside Kolín). A DECLARED blurred pin outside the obec the
+  claims bound is no longer the position: `bind.place` leaves the row to FILL (the bound část's doors,
+  else the obec's point, radius floored by its reach); the pin stays evidence and the flag stays. Measured
+  2026-10-30 before the bump: 12,547 active rows move (bazos 12,543, realitymix 2, idnes 1, sreality 1);
+  12,582 served properties stood on a disputed bazos pin; ~2.9k of the moved rows bound a část and now
+  publish the quarter grain the bind always had (≈ 47 properties re-point their location ad at the next
+  rollup); ≤ 30 `country_conflict` / `pin_outside_cz` rows with a blurred pin move too. Every blur-declared
+  label counts (bazos approximate_location, idnes no_exact_address, sreality street/ward/quarter/
+  municipality/not_address, mmreality regional, maxima Circle/LineString, realitymix estimated). Costs
+  accepted with the ruling: a homonym town bound without a PSČ, or a bazos town the text reader misread,
+  now places the row at the wrong town's point; no boundary tolerance (a blurred pin just across the town
+  line moves to the town's point); autodedup's `same_exact_pin` / `pin_pop` see the moved ads stacked on
+  town and část points (re-decided lazily, never forced, as ruled for v5.8). Untouched, unruled: exact or
+  undeclared pins outside their town (realitymix 719, idnes 290, ceskereality 138 undeclared; sreality 188
+  declared `gps` — wrong pin or wrong name is not known; 565 realitymix ads sit > 20 km from their town),
+  the constant 1 km radius on a kept pin, and consumers reading `disputed` (only the Location Quality page
+  does). Rollout: the bump re-queues the corpus through the full-resolve sweep, whose GitHub cron fires
+  ~08–10Z (not 03:17), so `location_resolve.yml mode=full-resolve` is dispatched right after the deploy.
+- **The wave shadow — the programme's standing gate instrument, 2026-10-31** (#2225; as built:
+  `docs/design/location-quality/wave-shadow.md`). A wave that moves positions or quarter codes (W3, W4, W5,
+  W5b, W6) runs its movers through the engine before it deploys, with no production write and no brake:
+  `location_data.what_if` (post-wave positions over `drain.recompute`, the dry run's read path, now shared;
+  claim change `none` / `purge` / `remine`) → `autodedup.shadow` (the movers' blocks, sized and capped, the
+  rulings and the live scorer, exported in-process without a ledger row) → `harness shadow` (PASS = E111
+  clean and no ruled pair moved against its ruling; PARTIAL when ids were cut or a mover sat outside the
+  cohort; the recent `same` rulings counted apart; D83 edges touching a mover printed). "Approved-split
+  sessions" in PROGRAM.md now reads as the rulings ledger inside the affected blocks. Runs where the secrets
+  live as the dispatch-only `location_wave_shadow.yml` (no cron, off the job runner, like
+  `backup_before_drop.yml`). First use: W4 (PR #2220), then W3. With W3 (#2223) `what_if.restate` is
+  deleted (a re-mine replaces each mined key, a tombstone removes it, under the one read) and
+  `what_if --claims purge` reads every claim of its ids raw and applies the purge's keeper rule. W5 built
+  the id-grain export block (`ids`) for the movers that sit in no block today. Only the blocks a ruling is
+  inside are exported (a ruling-free block cannot fail; `--all-blocks` opts out; the `ids` block always
+  is): W4's 515 blocks needed 14 groups, 116 kept need 6.
 - **Owed — two copies the subtraction mandate still carries** (rules-wording audit, 2026-10-01; rule 25
   now reads as practised: a net-positive location PR says why in its body, and the operator rules on
-  it). `operator_corrections.py`'s write is its own transcription of the 18-column claim INSERT, the
-  23-argument `location_claim_fingerprint()` call and the enqueue CTE beside
-  `claims_intake._CLAIM_INSERT_CTES` — one fingerprint function, two copies of its argument list.
-  And `claims_intake.extract_listing` keeps a sreality-only branch, the `sreality_payload_shape:`
+  it). `claims_intake.extract_listing` keeps a sreality-only branch, the `sreality_payload_shape:`
   refusal that sized W4's refetch cohort (closed 2026-09-10); `verify_pipeline` carries its own SQL
-  mirror of the shape test.
+  mirror of the shape test. (The other, the operator's transcription of the claim INSERT, went with W3.)
+- **W4 — realitymix@8 — built 2026-10-31** (#2219, PR #2220, gate #2222; no migration; no `RESOLVER_VERSION`
+  bump). The `estimated` marker reads `div#map` alone: where the agency gave no GPS the server writes its own
+  geocode of the address onto `#print-map` (dropping "okres X": Beroun -> Moravský Beroun) and leaves
+  `#map` blank, and v7's first-match read of the print node never saw it (3,622 of the 3,656 declared
+  rows have both nodes blank). ~11k active pinned ads (7.4k–15.1k; ≤ 19,527 on the 0.01″ grid) become
+  declared estimates: under v5.9 ~610 obec-grain pins outside their town stand at the town point, and
+  ~6.6k street-bound geocodes yield to the RÚIAN street point (the W18 ladder as it stands: a register
+  street point beats a blurred pin). The dead C6 `odbl` branch is deleted; the geocode is filed `portal`,
+  declared `estimated`. Rollout: merge AFTER W2 is live (its queue order drains `claim_insert` rows ahead of
+  the full sweep), then `gh workflow run location_claims_intake.yml --ref main` by hand — the only
+  projector; ~102k stored bodies re-mine in 2–3 chained runs (~1 h), ~526k claims re-insert until W3
+  purges the v7 copies. The standing autodedup shadow gate (PROGRAM.md) runs before the re-mine.
+  Acceptance (gate #2222): realitymix outside cell ≤ 110 (from 712), 0 declared pins outside, 0 off-grid
+  declared; W5 (Q3) takes the undeclared rest. Rollback is entry-scoped
+  (`--retract realitymix@8 --extractor-id rm.det.agency_est_flag`), never a whole-version retract.
+- **W3 — one current claim per fact — built 2026-10-31** (#2223; PR-1 migration 699, PR-2 migration 702;
+  `resolver:v5.9.1`; merges after W4's #2220). `location_claims` holds ONE claim per listing, claim type and
+  author (`location_claims_key`): ONE keyed upsert, `claims_store.write_claims`, writes it for the lane and
+  the operator (whose hand copy goes), only when a value changes (in place; A → B → A ends on A; the enqueue
+  only for a changed listing), provenance the entry that FIRST stated the value. ONE read, `DISTINCT ON
+  (listing_id, claim_type)` operator first, no version window. Deleted: BIND's seven tie rules (pin
+  election, first PSČ / street / last address point, blur OR'd across claims, two-street pooling, the
+  operator's register bypass), the readings DELETE (ruling Q4 = A: a silent reading keeps the value), the
+  23-argument fingerprint and its Python mirror, the hand-copied operator statement. `html_marker` gains
+  `absent: retract` (bazos@10, idnes@7, realitymix@9): a node that fails its marker test retracts the
+  blur, which a presence detector could never clear. A payload body that becomes latest again is re-mined;
+  the text lane retries an empty location block (1,915 stored ones re-marked). Rollout (design § 5): the
+  autodedup shadow gate, then the R2 backup + batched purge (≈ 8.8 M rows, `location_claims_retire.yml`'s
+  last run), 699, merge + deploy, the v5.9.1 sweep, the scoped re-mine of the purge receipt; PR-2 (707:
+  the fingerprint column, its index, both functions; the purge script) after one green intake tick.
+  **Purge done 2026-11-01: 9,312,771 rows deleted, 6,000,747 keys kept, backup 15,313,392 rows in R2.** A
+  retract or an activation is followed by one full re-mine of that source (R4). Acceptance: 0 duplicate
+  keys, ≈ 5.98 M rows, the ≈ 250 wrongly blurred sreality/mmreality rows read precise, multi-pin ads serve
+  the current pin. Design: `docs/design/location-quality/w3-one-claim-per-fact.md`.
+- **W5 — resolver v5.10 — built 2026-10-31** (#2251; no migration; `resolver:v5.10`; merges after W3).
+  One truth (ruling Q3): where the words bound the row a pin is its position only inside the bound obec's
+  pip polygon (no tolerance) and never when the portal declares an area marker (bazos
+  `approximate_location`); without words (R7/R8) the pin names its town. v5.9's declared-blurred exception
+  and CHECK's coarsening go; the grain is the row's finest key (`grade.grain_of`, the one writer). Quarter =
+  část obce only (Q1): MOMC is a match key (`MATCH_LEVELS`, `composite.part_of`), SO and ZSJ no level; a
+  part claim matches like a town name and a street keeps the claimed část where it has doors (Q2); an
+  address point with no coordinates takes its část's KÚ. The wave shadow gains the `ids` export block.
+  Measured 2026-10-31 16Z: 1,353 pins outside their town and 23,297 bazos postal pins move to the bound
+  entity's point at its reach; 2,834 MOMC codes and 200 SO ties re-bind; grain ≠ finest key 736 → 0.
+  Rollout: shadow PASS on every slice, merge, W2's reconcile sweeps. Design:
+  `docs/design/location-quality/w5-resolver-v5-10.md`.
+
+- **W1 — one location scorecard — built 2026-10-31** (#2218; migration 698; location data quality
+  programme, rulings Q3/Q6/Q7). `location_quality_by_source` defines every location quality number
+  once (long shape; cohorts listing / served / sample / queue; service_role only); the
+  `location_town_coverage` gauge, relabelled "Location quality", reads it in two statements and emits
+  67 cells with fixed lines: `{p}/town` unresolved red until zero, `{p}/town_withheld` page-withheld
+  Watch, `{p}/ku`, `{p}/outside` (strict pip containment), `{p}/street` (Wilson upper bound under a
+  fixed per-portal floor: Watch at first, Problem since ruling W1-b),
+  `{p}/accuracy` (Watch only until W6), four `served/*` cells at the location ad, `registry`,
+  `freshness/version`, `freshness/evidence`. Apply 698 BEFORE the merge (the worker reads it, no
+  fallback). Day one on the 10-31 13:09Z export: every portal's `outside` plus `served/outside`
+  Problem (11,568 published, bazos 10,459), 0 unresolved, 27 page-withheld. **PR 2 built 2026-10-31**
+  (no migration): the Location Quality page renders the stored row through Health's `HEALTH_QUERY`;
+  its two routes, the toolkit aggregates, its thresholds, the audit waterfall's reader, the pin-audit
+  summary reader and the `!AUDIT POLOH` badge are deleted (product −884/+251, tests −449/+224).
+  **W1 finished 2026-11-01** (rulings W1-b, W1-c, W1-d): street floors red; migration 719 drops the
+  audit waterfall, its producer and the pin-audit counters (destructive: applied only on the
+  operator's yes), the cron through `refresh_matview`; the archive-denominator script deleted.
+- **W2 of the location quality programme — one resolve lane — built 2026-10-31** (#2215; ruling Q9 of
+  2026-10-31; migration 697, applied after the deploy; the programme: `docs/design/location-quality/PROGRAM.md`).
+  The worker is the only runtime of the resolver: `drain.reconcile` sweeps the corpus when the
+  process's (resolver version, registry label) pair changes (active listings first), the drain claims
+  by `(reason = 'full_sweep'), next_eligible_at, listing_id` so evidence always beats backfill, and a
+  boot that changed nothing sweeps 0 rows. Deleted: `.github/workflows/location_resolve.yml` (both
+  crons), the `location_full_resolve` job, the drain CLI's writing modes (`--dry-run` stays), the
+  `realtime_location_resolve_enabled` flag (the interval is the one control), five dead queue reasons,
+  the three refetch knobs and the red-line sweep arm (13,224 no-op re-resolves a day, 99.8 % inactive).
+  The refetch lane ticks hourly, a constant (every 6 h since #2506).
+- **W7 — RÚIAN loader, full partitions, read levels only — built 2026-11-01, not rolled out** (#2342; migration 718
+  NOT applied; rulings Q1, Q10, Q13 and three of 2026-11-01; as built + rollout: `docs/design/location-quality/w7-registry.md`).
+  Praha's okres is 9999, read from the pack like every obec's; the loader stages 8 levels (SO, ZSJ, ORP, POU out, 24,225
+  units retired by SCD-2) and 6 of the pack's layers; 3 relations and 6 unread columns go; one Praha tree in CI. **Next:** the
+  shadow, merge, backup, migration, then `location_registry_load.yml` re-enabled and vintage 20261031 dispatched once no
+  full sweep is queued. Acceptance from 49,900 active Praha rows with okres NULL (179,398 all) and a Praha cell in okres pivots.
+- **W8-2 — the translation table and the price-stats re-key — built 2026-11-03, not rolled out** (#2362 §2-5, §8; rulings
+  Q10a-d; migrations 722 additive, 723 destructive, neither applied). `ruian_translation` holds the 6,258 sreality keys;
+  each price-stats run confirms or adds keys from active ads and never moves a stored row; observations, no-data and
+  metrics are keyed by `obec_id`; the series route is `/cities/{obec_id}/series`. Deleted: the suggest/PiP/by-name
+  resolution, the cities file, `--resolve-only` and the workflow's `resolve` mode. **Next:** backup, workflow disabled,
+  722, parity (§8 step 3), 723, merge, re-enable, dispatch dataset 9.
+- **W8-3 + W8-4 — admin_boundaries retires onto the RÚIAN mirror — built 2026-11-03, not rolled out** (#2362 §7-8;
+  rulings Q11, Q12b, Q13; defaults D3-D8; migrations 725 additive, 726 and 727 destructive before the merge, 728 and
+  729 destructive after the deploy; none applied). One polygon read, `ruian_unit_render` (current version, by
+  `(level, code)`), and one population store, `obec_population` (by code and year). Moved: broker footprint and the
+  admin kraj list (register names), the Datasets picker, choropleth and growth RPC, sold comps (cell box, work list,
+  `sold_coverage` by pip), the kraje and rent-map overlays, city proximity (`home_obec_pop` = the bound town's
+  population), curated cities (`obec_kod`, Hodonín relinked to 586021), the population loader and the seed's
+  insert-time bind. Dropped (729): `admin_boundaries` and its view, `price_stat_localities`, `city_population`, the
+  six price-stat entity columns, `curated_cities.default_radius_m` and the view columns only the old SPA read.
+  Deleted: `scripts/ingest_boundaries.py`, its test and workflow, the growth-shape RPC and its SPA fallback, the
+  curated circle fallback, the seed's population and relink paths, `csu_population`'s by-name half. A rail
+  (`tests/test_admin_boundaries_unread.py`) keeps every retired name out of the code. **Next:** backup, 725, 726, the full
+  proximity rebuild (`scripts/recompute_city_proximity --full`, receipt R1/R2), 727, parity, merge, deploy, 728,
+  backup, 729, overlays re-rendered.
+- **W3b — the address picker — built 2026-10-31** (#2247; ruling Q5; no migration; design
+  `docs/design/location-quality/w3b-address-picker.md`). An admin's pencil on the property page's
+  address line: Browse's place typeahead, `/maps/resolve`'s new `address_point` arm (one door within
+  300 m), and `POST /location/corrections {property_id, pick}` → `operator_corrections.submit_pick`,
+  the four picker types on every ad (tombstones for the unstated ones; `pick: null` clears), then the
+  location ad resolves at once. R1 (b): a detach clears the pick on the ads it moved. Deleted: the
+  Location Quality inspector and correction form, `/location/listing/*`, `toolkit/location_quality.py`.
+  Owed: ~20 real Mapy address picks on production before the merge (the 300 m door slack).
+- **W6-c1 — where every point came from — built 2026-11-06** (#2361; rulings Q2 and Q3 of 2026-11-02; migration 733,
+  additive; as built: `docs/architecture.md`, the scorecard's red line paragraph). `location_position_mv` (hourly at
+  :07; 4× a day since #2506) gives every active ad, and every ad the consumer rule refuses in any status, its point KIND by geometric
+  identity (`location_steps.position_kind_sql`; `unexplained` shown, not judged) and its grain class; a DB-lane replay
+  over the mini mirror holds each kind to the resolver's `Position.origin`. The scorecard gains the `position` metric,
+  stored on each `{p}/town` cell as `positions` (the street cell's grain mix went: nothing read it); Location Quality
+  draws the "Positions" grid (grain heads in `pinPrecisionShort` words), the "By kind" strip, the "No location answer
+  · every status" entry and the "Ads" list (`location_position_audit_public`, admin-gated, the list in the URL; a
+  cell's list is the reading's cohort, kind rule and live grain). Measured 2026-11-05: 404,687 active ads, 0
+  unexplained, 182,048 (45 %) on their own pin below address grain.
+- **W6-c2 — the old pin audit retires — built 2026-11-22** (#2361; operator ruling 2026-11-22 on Q2; migration 765,
+  destructive, applied after the merge with an R2 backup; revert in `migrations/reverts/`). `/new-dedup/pin-audit`, its
+  page and lib, `!AUDIT POLOH`, `location_pin_audit_mv`, its cron `refresh-location-pin-audit` and its
+  `derived_artifacts` row are gone; the "No location answer" entry lists those rows.
+- **The property waterfall — built 2026-11-08** (#2443; spec #2441 Part 2, ruling Q18; no migration; as built:
+  `docs/design/location-quality/PROGRAM.md` § W1). `served/town` stores `grains`; Location Quality draws every
+  published property once at its location ad's finest level, one table pinning gauge and page. The four unread
+  `by_portal` facts on the served cells are deleted. **Next:** the settlement-unit view (#2460) after FILL places them.
+- **W5c — three precision levels — ruled 2026-11-07/08, not built** (#2474; the precision grill's rulings in
+  `docs/design/location-quality/PROGRAM.md`). One stored value: RÚIAN door, portal-exact (explicit labels only, about
+  27.9k ads) or approximate; one reading in Browse, the map and the detail page; no contract change. **Next:** after W5b
+  (#2339), which waits for the next engine deploy and its designator-veto fix (operator ruling 2026-11-08).
+- **Mapy exit, Stage A — built 2026-11-13** (#2454; spec #2441 Part 6; rulings Q3 a, Q5, 2026-11-07 on `backup_w4`,
+  2026-11-13 on the suggest cache; migration 739, destructive, backup waived; as built: `docs/architecture.md` § rule 17
+  and § the Mapy-powered location search). The geocoder, its `MAPY_GEOCODE_ENABLED` switch and tests, the seed's Mapy
+  block and its workflow's write grant, inputs and Mapy secrets, the 300 s suggest cache, the duplicated
+  containing-obec helper (the MF hand-off reads the resolver's view) and the worker's Mapy key copy (wizard) are gone;
+  739 drops `curated_cities.centroid/source/source_confidence` and `backup_w4` uncopied, `obec_kod` unique. The seed
+  refuses an unknown city or CSV column by name. **Next:** Mapy's latency baseline for #2465 is read from 7 days after
+  the deploy (no cached answers); Stage B (#2455) after the switch-over's soak.
+- **The pick record — built 2026-11-08** (#2445; spec #2441 Part 1, ruling Q10; migration 737, additive; as built:
+  `docs/architecture.md` § the pick record). Every place box's resolve carries `pick {text, rank}`; `/maps/resolve`
+  records one row after the answer for a verified non-automation caller; 12-month pg_cron retention. The switch-over
+  (#2453) stopped the recording. **Next:** the one DELETE after #2453 deploys (operator's OK); Stage B drop (#2455).
+- **Own place search — built 2026-11-08** (#2449; spec #2441 Part 4, rulings Q2 c, Q12 a; migration 738, additive; as
+  built: `docs/architecture.md` § own place search). `POST /places/suggest` answers chips (level, code, name, context,
+  point) for kraj, okres, obec, část and street: exact, prefix, then fuzzy; within a tier served properties of any
+  deal type, then population, then code; one ranking for every box, no count returned. Two service-role read models
+  (`place_served_counts` hourly at :37, `place_facts` in the registry load's finish step) and the gazetteer's btree
+  swapped for `text_pattern_ops` (net 0 indexes). No caller yet. **Next:** gate #2465 → switch-over #2453 (deletes the
+  Mapy search path, Q2 c); settlement units #2461 on the same module.
+- **Place shortcuts — built 2026-11-09** (#2450; spec #2441 Part 4, story 43; no migration; as built:
+  `docs/architecture.md` § own place search). The registry load's finish step writes each městská část's quarter
+  pairs (`ruian_admin_unit_relations`, type `momc_cast_obce`) at its version from open doors, on the stable code; a
+  retired door gives none, a re-run adds none. "Praha 6" answers one `momc` row whose `places` are its quarters' chips,
+  read at the gazetteer's version and ranked by the sum of their served properties; no pair at that version, no row.
+  **Next:** v4 has no pairs, so no shortcut answers until a finishing-only re-dispatch of `20261031` (first check that
+  no later `registry_versions` row exists: doors are unversioned) or the 12-01 load; verify 382 pairs at v4, 10 for
+  Praha 6, before the gate's run #2465 (its eval stops on a momc question with no pair); the row label and
+  "expanded" notice ride with #2453.
+- **Address rows — built 2026-11-09** (#2451; spec #2441 Part 4, stories 44, 53; no migration; as built:
+  `docs/architecture.md` § own place search). A street or a village with a house number also answers RÚIAN doors
+  (`adresni_misto`: the one label, its town's okres, the door's point, its street's chip or null) from ONE batched read
+  over every exact namesake street and část at the gazetteer's version; a bare number is tried as č.p. and as č.o.,
+  only a marked č.ev. is read as a č.ev. number (a č.ev. door's č.o. answers like any č.o.). Door rows follow the whole text's exact rows and precede its similar ones (a
+  builder decision for the operator), so they can fill the list. The door label moved from `api/maps.py` to
+  `place_search.DOOR_LABEL_SQL`, which the address picker imports. **Next:** gate #2465 with dictated address
+  questions (#2452): an address typed with its town answers since #2485 (below), and the eval scores
+  every door by kód ADM, as a streetless or č.ev. door's label never names the typed č.p. or č.ev. number; SPA #2453 (the street chip and fly-to; the
+  picker saves `{adresni_misto, door code}` if addresses pass).
+- **Addresses typed with their town — built 2026-11-09** (#2485; spec #2441 Part 4, story 53; no migration, no new
+  index; as built: `docs/architecture.md` § own place search). "Nádražní 12, Kolín", "Kolín, Nádražní 12" and
+  "Nádražní 12 Kolín" answer only the doors in a town of that exact name (an obec, část obce or městská část, every
+  homonym kept; an okres or a kraj never), so the town, not the served counts, decides which same-named street
+  answers; a town that names nothing answers no door; "12a" is the č.o.'s letter. Each reading is one statement, the
+  whole text's always last, so a text with no town answers as before ("12a" aside). **Next:** the gate's run #2465
+  weighs the forms not read (a dash; a PSČ; a městská část without its register suffix is read since #2497, below). An
+  okres is never the town, so production's "Lhota 25, Kladno" answers no door: its Lhota is an obec of okres Kladno, not
+  inside obec Kladno.
+- **Town first, a městská část by its number — built 2026-11-13** (#2497; operator rulings 2026-11-13; no migration,
+  no registry reload, no resolver change; as built: `docs/architecture.md` § own place search). On an exact name tie
+  the obec answers before its namesake okres or část ("Jihlava"). A městská část is exact by its number, Arabic or
+  Roman, with or without the register's suffix, in the name read and the address town: "Pardubice 2" answers Pardubice
+  II, "Plzeň 2" Plzeň 2-Slovany, "Nádražní 9, Plzeň 2" its door there; "Praha 1" never makes Praha 10–19 exact, and a
+  numbered část obce ("Kolín III") is not covered. Each new arm is an index condition (production EXPLAIN in the PR).
+  **Next:** the gate's run #2465, then the switch-over #2453, whose rows show each level.
+- **Every unit by its number — built 2026-11-13** (#2499; operator ruling 2026-11-13; no migration). The #2497 rule
+  covers every level: "Kolín 3" answers the část Kolín III, "Liberec 1" Liberec I-Staré Město, "Horka 2" the obec Horka
+  II before its namesake část, "Nádražní 12, Kolín 3" the door in Kolín III. A suffix follows the number after a hyphen
+  or a dot, never a space, so "Jablonné v Podještědí" (a preposition "v") is no numbered name.
+- **The simulated gate run's gaps — built 2026-11-17** (#2548; operator rulings 2026-11-17; no migration; as built:
+  `docs/architecture.md` § own place search). 244 register-written questions scored 86.5 % top-1 and 95.1 % top-5
+  (bars 90 / 97). Fixed: a street or část with its town and no number ("Masarykova, Brno", "Praha 6 Dejvice"); a street
+  exact under every abbreviation spelling ("nám."/"náměstí"); "okres X"; "Praha6"; place-name typos at 0.55; and "town
+  first" narrowed to a town above its own okres and kraj (Praha's Karlín before the village). Re-run: 231 / 242 of 244,
+  posted on #2465. **2026-11-22:** gate parts (2)–(4) on the same simulation (rulings 2026-11-22): speed own p50 206 ms ≤
+  Mapy 309 ms; addresses 26 / 25 of 26 after one strike, so the switch-over takes the "addresses passed" scope; and a
+  town leads its okres or kraj only with one in twenty of its served properties (#2612). **Next:** re-score part (1)
+  after #2612 deploys, then the switch-over #2453 and the operator's OK.
+- **The switch-over — built 2026-11-22** (#2453; spec #2441 Part 4; gate #2465 parts (1)–(4) met on the simulation,
+  rulings 2026-11-17 and 2026-11-22; no migration; as built: `docs/architecture.md` § every place box on own place
+  search). Every place box (Browse, watchdog edit, pipeline, outreach, Datasets, phone sheets, the admin address
+  picker) asks only `POST /places/suggest`; a row is the chip, a městská část adds its quarters, an address its street
+  (no street: no chip, a notice), the map flies by the shared zoom table. Deleted: `api/maps.py` (suggest proxy, key
+  failover, resolve binder), the pick writer and `deps.is_automation`, the SPA's Mapy row type, badge map and Browse's
+  Mapy zoom table. **Next:** after deploy, the place box smoke, then the picks DELETE (operator OK 2026-11-22); Stage
+  B (#2455): keys, Seznam.cz lines, revocation, the table drop.
+- **The gate's eval — built 2026-11-09** (#2452; spec #2441 Part 4 (1)–(4), Q2 c, ruling 2026-11-08; no migration; as
+  built: `docs/architecture.md` § the gate's eval). `scripts/place_search_gate_eval.py`, read-only on production:
+  picks only through `picks_between`, in one READ ONLY transaction closed before any request; only `POST
+  /places/suggest` as the non-admin smoke account, never Mapy; both latency medians from the API host's HTTP log
+  through the pinned Railway CLI (Mapy's 7 days read before the prefix replay); dictated addresses scored by kód ADM;
+  a local HTML report for the look, outside any checkout, deleted after. A question from an earlier window is left
+  out; a window is scored only up to the day its 200th question landed; a momc question with no quarter pair stops
+  the run. Test: `tests/api/test_place_search_gate_eval_live.py` (migrations lane). **Next:** gate #2465, whose
+  clock starts when this deploys (window 1 from 2026-11-09; comment the first day and the questions so far there);
+  before its run, the finishing-only re-dispatch of `20261031` for the momc pairs (0 at v4), the address count ruled
+  on #2465 and, by the soft order, #2461 (else the window is re-scored); removal at Stage B #2455.
 
 Standing rulings that bind every wave: no labelling campaign, ever (joint review is the gate); the
 ceskereality contract is settled (headline = granularity, `exact` = backup); no scope creep into LLM
@@ -1628,7 +1897,7 @@ all closed, several proven against a throwaway PostgreSQL 18 built from `.deb` f
   `listings_without_a_fixture_body`, so coverage arriving with a portal PR is itself a reviewed diff.
 - **W2-1 / W2-0** (#1045, #1048): per-reader substrate legality (a contract entry can no longer
   declare a transform or guard its reader will never consult) and the archive denominator every
-  W2 gate is a share of.
+  W2 gate is a share of (a one-off script, deleted 2026-11-01, location quality W1).
 - **W2-2 evidence-bearing claims + the archived-HTML re-mine lane** (no migration — 382 already
   carries every evidence column and CHECK): `Claim` gains the D7 evidence set (`payload_id`,
   `payload_sha256`, `evidence_quote`, `span_start`, `span_end`, `payload_scope_version`) plus
@@ -1639,7 +1908,7 @@ all closed, several proven against a throwaway PostgreSQL 18 built from `.deb` f
   `surface='archived_html'` (C9), the page's own `page_kind` (C10),
   `snapshot_anchor='unanchored_latest_fetch'` (C4), plus the archived arm of the coordinate
   ladder (`ARCHIVED_COORDINATE_RULES`, one detail-map entry per portal; the `mapy_affected` veto
-  above the substrate branch; realitymix's Nominatim fallback is `'odbl'`). Evidence is refused in
+  above the substrate branch; realitymix's Nominatim fallback is `'odbl'` (branch deleted 2026-10-31, W4: it emitted 0 rows ever)). Evidence is refused in
   Python, never by the CHECK. Also: C7 now counts distinct **sources**, so one portal read two
   ways is one voice, and `tests/location_data/test_lane_identifiers.py` makes every `LANE` /
   `JOB_NAME` / `CONCURRENCY_GROUP` / version constant globally unique. **Inert on merge,
@@ -3091,7 +3360,7 @@ seeded; nothing writes.
   `renderable_as_point`, `pin_collision_class`, `location_disputed`). Cohort =
   `b.is_active AND (b.region_id = ANY(:kraje) OR p.kraj_kod = ANY(:kraje))` — the UNION, so a property
   one side puts inside the two kraje and the other outside shows up as a disagreement. Legacy and
-  new use the same code space (`admin_boundaries.id` IS the RÚIAN KOD: `region_id` = `kraj_kod`),
+  new use the same code space (`admin_boundaries.id` (dropped 729) IS the RÚIAN KOD: `region_id` = `kraj_kod`),
   which is what makes an old-vs-new join by code honest.
 - **The new side is the design, verbatim, in one place** (`toolkit/location_compare.py`, 16
   module-level `*_SQL` constants, PREPARE-clean, `level` a bound parameter never interpolated):

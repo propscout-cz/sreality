@@ -2,15 +2,18 @@
 
 Session A takes the lane's lease and opens a transaction; session B — the worker's shutdown
 path, or a `release_lease=` dispatch — releases A's lease and commits; A's fence
-(`rt_lease.hold`, `RT_LEASE_HOLD_SQL`) must then find no live row and raise. Against `now()` —
+(`rt_lease.hold`, `job_lease.fence`) must then find no live row and raise. Against `now()` —
 A's transaction START, earlier than B's release — the row would still read live and A would
 commit beside the next holder: the fake has one clock and cannot tell the two apart, so this
 runs on Postgres. And a release that comes AFTER A's fence waits for A's commit (the row lock).
 
-E948, EXECUTED too: `RT_LEASE_RELEASE_PREDECESSOR_SQL` ends a dead predecessor's live lease
-(this hostname and pid, a second before this boot) and nothing else, its read-only twin
-`RT_LEASE_PREDECESSOR_SQL` names the same row and ends nothing, and the cast of either never
+E948, EXECUTED too: `job_lease.end_predecessor` ends a dead predecessor's live lease (this
+hostname and pid, a second before this boot) and nothing else, its read-only twin
+`job_lease.predecessor` names the same row and ends nothing, and the cast of either never
 reaches a holder of another shape, which the fake can only model.
+
+#2109, EXECUTED: the lease is a `scheduled_jobs` row, an ended one keeps who held it (the Health
+cell's clock), and the job runner's pause reaches it.
 
 Both run in CI's migrations job (`TEST_DATABASE_URL`), each test on a lease name of its own,
 deleted after.
@@ -55,7 +58,7 @@ def sessions(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Any, Any]]:
         a.close()
         b.close()
         with _session() as conn, conn.cursor() as cur:
-            cur.execute("DELETE FROM autodedup.rt_lease WHERE name = %s", (name,))
+            cur.execute("DELETE FROM scheduled_jobs WHERE job_name = %s", (name,))
 
 
 def test_a_lease_released_mid_transaction_fails_the_fence(sessions: tuple[Any, Any]) -> None:
@@ -117,3 +120,46 @@ def test_no_other_lease_is_named_or_released_and_no_cast_fails(sessions: tuple[A
     assert rt_lease.release_predecessor(a, "host-a", 1, 200) is None
     row = rt_lease.current(a)
     assert (row["holder"], row["live"]) == (holder, True)
+
+
+def _row(conn: Any) -> tuple:
+    with conn.cursor() as cur:
+        cur.execute("SELECT lease_holder, lease_expires_at > now(), last_outcome, due_at, registry_at"
+                    "  FROM scheduled_jobs WHERE job_name = %s", (rt_lease.NAME,))
+        return cur.fetchone()
+
+
+def test_the_lease_is_an_unscheduled_row_that_keeps_its_holder_after_the_end(
+        sessions: tuple[Any, Any]) -> None:
+    a, b = sessions
+    assert rt_lease.take(a, "host-a:1:100", 600)
+    assert _row(a) == ("host-a:1:100", True, "running", None, None)
+    assert not rt_lease.take(b, "host-b:1:100", 600), "one holder at a time"
+    rt_lease.release(b, "host-a:1:100")
+    assert _row(a) == ("host-a:1:100", False, None, None, None)
+    assert rt_lease.current(a)["holder"] == "host-a:1:100"
+    assert rt_lease.take(b, "host-b:1:100", 600), "the lane is free at once"
+    rt_lease.release(a, "host-a:1:100")
+    assert _row(a)[:2] == ("host-b:1:100", True), "a release names its holder"
+
+
+def test_a_row_never_taken_reads_as_no_lease(sessions: tuple[Any, Any]) -> None:
+    a, _b = sessions
+    with a.cursor() as cur:
+        cur.execute("INSERT INTO scheduled_jobs (job_name, cadence, runner) VALUES (%s, '10 minutes', 'test')",
+                    (rt_lease.NAME,))
+    assert rt_lease.current(a) is None
+    assert rt_lease.take(a, "host-a:1:100", 600)
+
+
+def test_a_paused_row_refuses_the_take_and_says_it_may_be_why(sessions: tuple[Any, Any]) -> None:
+    from scraper import job_lease
+    from datetime import datetime, timedelta, timezone
+
+    a, _b = sessions
+    assert rt_lease.take(a, "host-a:1:100", 600)
+    rt_lease.release(a, "host-a:1:100")
+    job_lease.pause(a, rt_lease.NAME, until=datetime.now(timezone.utc) + timedelta(hours=1),
+                    note="test", by="test")
+    assert not rt_lease.take(a, "host-a:1:200", 600)
+    assert "paused" in rt_lease.describe(a)

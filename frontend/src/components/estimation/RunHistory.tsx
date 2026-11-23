@@ -1,10 +1,12 @@
-import { SectionLabel } from '@/components/section';
+import { PanelGroup } from '@/components/Panel';
 import { Th, cellClass, type Column } from '@/components/table';
 import { fmtAbsolute, fmtDateSlash, fmtTime24 } from '@/lib/format';
 
 /* The append-only ledger under a property's figures, newest first; a click
  * selects that row's card. Our runs and the Valuo valuations each name their
- * columns after the "when" every ledger starts with, in their own language. */
+ * columns after the "when" every ledger starts with, in their own language.
+ * A group inside its section card (C7, L3): a title and count over a rule-soft
+ * line, never a box; its heads are L4. */
 export default function RunHistory<T extends { id: number; created_at: string }>({
   title, rows, columns, selectedId, onPick, when, viewing,
 }: {
@@ -17,15 +19,11 @@ export default function RunHistory<T extends { id: number; created_at: string }>
   viewing: string;
 }) {
   return (
-    <div className="mt-7">
-      <div className="flex items-baseline justify-between">
-        <SectionLabel>{title}</SectionLabel>
-        <p className="text-[0.7rem] tracking-wide text-[var(--color-ink-3)] font-mono tabular-nums">{rows.length}</p>
-      </div>
-      <div className="mt-3 border border-[var(--color-rule)] rounded-[var(--radius-md)] overflow-hidden">
+    <PanelGroup title={title} count={rows.length}>
+      <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="bg-[var(--color-paper-2)]">
+            <tr>
               <Th size="xs">{when}</Th>
               {columns.map((c) => <Th key={c.header} size="xs" align={c.align}>{c.header}</Th>)}
             </tr>
@@ -61,6 +59,6 @@ export default function RunHistory<T extends { id: number; created_at: string }>
           </tbody>
         </table>
       </div>
-    </div>
+    </PanelGroup>
   );
 }

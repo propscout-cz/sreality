@@ -13,6 +13,7 @@ import { DEFAULT_FILTERS } from '@/lib/filters';
 import { DEFAULT_SORT, dismissalKeys, pipelineKeys, type PipelineMembers } from '@/lib/queries';
 import type { PipelineStage } from '@/lib/types';
 import { usePipelineCard } from './usePipelineCard';
+import { watchReads } from '@/test/reads';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -36,12 +37,15 @@ function setup() {
     pageParams: [null],
   });
   qc.setQueryData(browseKeys.count(OUT), 2);
+  qc.setQueryData(browseKeys.map(OUT, 200), { points: [] });
+  qc.setQueryData(browseKeys.stats(OUT, { rows: [], cols: [], measure: 'ppm2' }), { cells: [] });
+  const { reread } = watchReads(qc);
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={qc}>{children}</QueryClientProvider>
   );
   const { result } = renderHook(() => usePipelineCard(), { wrapper });
   const rows = () => qc.getQueryData<InfiniteData<Page>>(CARDS)!.pages[0].rows.map((r) => r.property_id);
-  return { qc, result, rows };
+  return { qc, result, rows, reread };
 }
 
 describe('usePipelineCard settles Browse', () => {
@@ -50,40 +54,38 @@ describe('usePipelineCard settles Browse', () => {
     vi.mocked(api.addPipelineCard).mockReturnValue(
       new Promise((resolve) => (land = () => resolve({} as never))),
     );
-    const { qc, result, rows } = setup();
-    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    const { qc, result, rows, reread } = setup();
 
     act(() => result.current.add.mutate(42));
     await waitFor(() => expect(rows()).toEqual([43]));
     expect(qc.getQueryData(browseKeys.count(OUT))).toBe(1);
-    expect(invalidate).not.toHaveBeenCalled();
+    expect(reread(['map'])).toBe(false);
 
     await act(async () => land());
-    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['map', OUT] }));
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['stats', OUT] });
-    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['cards', OUT] });
+    await waitFor(() => expect(reread(['map', OUT])).toBe(true));
+    expect(reread(['stats', OUT])).toBe(true);
+    expect(reread(['cards', OUT])).toBe(false);
     expect(rows()).toEqual([43]);
   });
 
   it('puts the card back and re-reads every Browse read when the write fails', async () => {
     vi.mocked(api.addPipelineCard).mockRejectedValue(new Error('HTTP 500'));
-    const { qc, result, rows } = setup();
-    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+    const { qc, result, rows, reread } = setup();
 
     act(() => result.current.add.mutate(42));
-    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['cards'] }));
+    await waitFor(() => expect(reread(['cards'])).toBe(true));
     expect(rows()).toEqual([42, 43]);
     expect(qc.getQueryData(browseKeys.count(OUT))).toBe(2);
   });
 
   it('an add that lifts a dismissal re-reads every Browse read: the row may come back anywhere', async () => {
     vi.mocked(api.addPipelineCard).mockResolvedValue({} as never);
-    const { qc, result } = setup();
+    const { qc, result, reread } = setup();
     qc.setQueryData(dismissalKeys.state(99), true);
-    const invalidate = vi.spyOn(qc, 'invalidateQueries');
 
     act(() => result.current.add.mutate(99));
-    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ['cards'] }));
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['map'] });
+    await waitFor(() => expect(reread(['cards'])).toBe(true));
+    expect(reread(['map'])).toBe(true);
+    expect(reread(dismissalKeys.state(99))).toBe(true);
   });
 });

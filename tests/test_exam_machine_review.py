@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import pathlib
-import typing
 from typing import Any
 
 import pytest
@@ -180,13 +179,6 @@ def test_the_module_never_touches_image_tag_labels() -> None:
     assert "create table tag_exam_machine_reviews" in mig
     assert "'review_exam_image'" in mig
     assert "revoke all on tag_exam_machine_reviews from anon, authenticated" in mig
-
-
-def test_the_called_for_value_is_in_the_literal() -> None:
-    from api.llm_client import CalledFor
-    from toolkit import exam_machine_review as mr
-
-    assert mr.CALLED_FOR in typing.get_args(CalledFor)
 
 
 # ------------------------------------------------------------------ the lane

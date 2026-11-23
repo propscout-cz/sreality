@@ -13,12 +13,16 @@
  * signed-out tab off every page.
  */
 
+import type { WaitlistResponse } from './waitlist';
+import type { AccountLimit, AgentRunOptions } from './agentRunOptions';
+import type { AgentProposal, AgentRun, AgentRunRow, AgentRunStatus, AgentRunStep, StartAgentRun } from './agentRuns';
 import { isAuthRetryableFetchError } from '@supabase/supabase-js';
 import type {
   Attachment,
   BuildingAttachment,
   BuildingRun,
   Collection,
+  CollectionKind,
   CollectionWithProperties,
   ConfirmBuildingUnitsIn,
   UpdateBuildingInputsIn,
@@ -35,6 +39,7 @@ import type {
   PipelineShareMode,
   PipelineShares,
   PipelineStage,
+  PipelineStageRole,
   SkillRefinement,
   Tag,
   TagColor,
@@ -44,11 +49,13 @@ import type {
   WatchdogDispatch,
   WatchdogDispatchesResponse,
   WatchdogFilterSpec,
+  WatchdogKind,
   WatchdogSeenFilter,
   WatchdogSubscription,
   FilterPreset,
   FilterPresetGroup,
 } from './types';
+import type { BoardRow } from './brokerBoard';
 import type { DistrictChip, PresetSpec } from './filters';
 import type { WaterfallRow } from './locationWaterfall';
 import type { SavedSetLayout } from './savedSetLayout';
@@ -300,8 +307,8 @@ async function requestBlob(path: string, opts: RequestOptions = {}): Promise<Blo
   }
 }
 
-/* Generic verbs used by lib/maps.ts (and any other future module that
- * needs raw GET/POST without going through a feature-specific wrapper). */
+/* Generic verbs for a module that needs raw GET/POST without a
+ * feature-specific wrapper (lib/places, lib/priceMap). */
 export const apiGet = <T>(
   path: string,
   params?: Record<string, QueryValue>,
@@ -639,6 +646,192 @@ export const listSkills = (
     query: { include_archived: options.includeArchived ?? false },
   });
 
+/* The propscout.cz waitlist, newest first, for the admin Sign-ups page (GET /admin/waitlist, admin-only). */
+export const fetchWaitlistSignups = (): Promise<WaitlistResponse> => request<WaitlistResponse>('/admin/waitlist');
+
+/* Agent runs (api/routes/agent_runs.py): never acted for, so no wrapper here takes `actAs`. */
+export const fetchAgentRunOptions = (): Promise<AgentRunOptions> => request<AgentRunOptions>('/runs/options');
+export const fetchAgentRuns = (): Promise<{ data: AgentRunRow[]; truncated: boolean }> =>
+  request<{ data: AgentRunRow[]; truncated: boolean }>('/runs');
+export const fetchAgentRun = (id: number): Promise<AgentRun> => request<AgentRun>(`/runs/${id}`);
+export const fetchAgentRunSteps = (id: number): Promise<{ data: AgentRunStep[] }> =>
+  request<{ data: AgentRunStep[] }>(`/runs/${id}/steps`);
+export const fetchAgentRunFile = (runId: number, fileId: number): Promise<Blob> =>
+  requestBlob(`/runs/${runId}/files/${fileId}`);
+export const fetchAgentRunProposals = (id: number): Promise<{ data: AgentProposal[] }> =>
+  request<{ data: AgentProposal[] }>(`/runs/${id}/proposals`);
+export const applyAgentProposal = (id: number, index: number): Promise<AgentProposal> =>
+  request<AgentProposal>(`/runs/${id}/proposals/${index}/apply`, { method: 'POST' });
+export const undoAgentProposal = (id: number, index: number): Promise<AgentProposal> =>
+  request<AgentProposal>(`/runs/${id}/proposals/${index}/undo`, { method: 'POST' });
+export const startAgentRun = (body: StartAgentRun): Promise<{ id: number; status: AgentRunStatus; created: boolean }> =>
+  request<{ id: number; status: AgentRunStatus; created: boolean }>('/runs', { method: 'POST', json: body });
+export const setAgentRunLimit = (dailyLimitUsd: number): Promise<AccountLimit> =>
+  request<AccountLimit>('/runs/limit', { method: 'PUT', json: { daily_limit_usd: dailyLimitUsd } });
+/* What the RÚIAN register states about a property's building (GET /properties/{id}/building). A coded value
+ * carries its label and whether the code means the register does not know. */
+export interface RegisterCode {
+  code: number;
+  /* null: a code our list of labels does not hold. */
+  label: string | null;
+  unknown: boolean;
+}
+export interface RegisterBuilding {
+  code: number;
+  iskn_building_id: number | null;
+  house_numbers: number[];
+  house_number_kind: string | null;
+  /* The register's date, and the period derived from it: equal ends are one year, a null start is open
+   * ("until 1919"); a period wider than a year means the register holds a placeholder date. */
+  completed: { on: string; from: number | null; to: number } | null;
+  /* Floors below ground count too, so this can exceed an ad's figure. */
+  floors: number | null;
+  dwellings: number | null;
+  entrances: number;
+  built_up_area_m2: number | null;
+  floor_area_m2: number | null;
+  enclosed_volume_m3: number | null;
+  valid_from: string;
+  /* The newest clean load of the building's obec; null when none is on record. */
+  source_date: string | null;
+  usage: RegisterCode | null;
+  construction: RegisterCode | null;
+  lift: RegisterCode | null;
+  heating: RegisterCode | null;
+  water: RegisterCode | null;
+  sewer: RegisterCode | null;
+  gas: RegisterCode | null;
+  /* The zones and regimes the register lists for the building (heritage, nature, water source…); empty = none
+   * stated. A null label is a code our list does not hold. Absent on an answer from an API one deploy behind. */
+  protection?: { code: number; label: string | null }[];
+}
+export const fetchPropertyBuilding = (propertyId: number): Promise<{ building: RegisterBuilding | null }> =>
+  request<{ building: RegisterBuilding | null }>(`/properties/${propertyId}/building`);
+/* A registered sale in a property's building (GET /properties/{id}/building/sales), newest first. */
+export interface BuildingSale {
+  source: string;
+  source_record_id: string;
+  sold_at: string;
+  price_czk: number;
+  asking_last_czk: number | null;
+  category_main: string;
+  disposition: string | null;
+  area_m2: number | null;
+  /* The cadastre's own form, "<č.p.>/<unit number>"; null for a whole building. */
+  unit_label: string | null;
+  source_url: string | null;
+  price_per_m2: number | null;
+  price_per_m2_basis: string | null;
+}
+export const fetchPropertyBuildingSales = (propertyId: number): Promise<{ sales: BuildingSale[] }> =>
+  request<{ sales: BuildingSale[] }>(`/properties/${propertyId}/building/sales`);
+/* Cadastre prices the caller's own account bought for a property's building (GET/POST
+ * /properties/{id}/building/prices). A deed has ONE price for everything it transfers. */
+export interface CadastreDeedProperty {
+  kind: 'jednotka' | 'stavba' | 'parcela' | 'pravo_stavby';
+  iskn_id: number;
+  label: string;
+}
+export interface CadastreDeed {
+  proceeding: string;
+  kind: string;
+  price: number | null;
+  currency: string | null;
+  signed_on: string | null;
+  /* When the transfer took legal effect: the date a sale is dated by. */
+  effective_on: string | null;
+  entered_on: string | null;
+  properties: CadastreDeedProperty[];
+  /* What we hold of the same sale (a deed over exactly one unit only). reas: a held sale with the deed's unit and
+   * price, named by its id. ad: an advertisement in the building that asked exactly the deed's price, which lends
+   * its area. Absent from an older API. */
+  match?: {
+    source: 'reas' | 'ad'; source_record_id: string | null; property_id: number | null; area_m2: number | null;
+    disposition: string | null; price_per_m2: number | null; price_per_m2_basis: string | null;
+  } | null;
+}
+export interface CadastreUnit {
+  unit_iskn_id: number;
+  purchase: { id: number; status: 'pending' | 'ordered' | 'done' | 'paid_unread'; cost_czk: number | null;
+    fetch_sent: boolean; file_kept: boolean; fetching: boolean; gone: boolean };
+  /* area_state: stated = a number; empty = the report's area element is blank (the cadastre records none);
+   * unknown = no such element where the schema puts it, so we could not tell (NOT the cadastre's statement).
+   * shape: the report's element paths under the unit, names only. */
+  facts: { floor_area_m2: number | null; area_state: 'stated' | 'empty' | 'unknown'; shape: string[];
+    use_code: string | null; use_label: string | null; share_num: number | null; share_den: number | null } | null;
+}
+export interface BuildingPrices {
+  /* false: the property's door names no building the cadastre knows, so nothing can be asked. */
+  available: boolean;
+  login_set: boolean;
+  /* ČÚZK refused the stored login during a purchase: nothing is sent on it until it is saved again. */
+  login_refused: boolean;
+  price_czk: number;
+  /* A purchase run of this account is live right now (any building): every request meanwhile changes nothing. */
+  running: boolean;
+  /* The newest purchase that did not end uncharged. pending/ordered: in flight, continued by its id.
+   * fetch_sent: the charging fetch was sent, so it may have been charged. paid_unread: paid (or possibly paid) and
+   * its deeds not stored; continuing reads the kept file (file_kept) or fetches the report again, both free. */
+  purchase: { id: number; status: 'pending' | 'ordered' | 'done' | 'paid_unread'; cost_czk: number | null;
+              object_count: number | null; fetch_sent: boolean; file_kept: boolean;
+              /* A fetch was sent moments ago and may still be being served: nothing fetches again meanwhile. */
+              fetching: boolean;
+              /* ČÚZK said the report no longer exists: there is nothing left to try again. */
+              gone: boolean;
+              requested_at: string; finished_at: string | null } | null;
+  /* The deeds of the newest purchase that holds any. */
+  deeds: CadastreDeed[];
+  /* One unit's "Informace o jednotkách", 10 Kč each, only for a unit named in a bought deed. Per unit asked about:
+   * its newest purchase that did not end uncharged, and the newest facts read of it (null until read). Absent
+   * from an older API. */
+  unit_price_czk?: number;
+  units?: CadastreUnit[];
+  /* On a POST's answer: null when the request did what it asked; else why it did nothing (the state is as it stood). */
+  notice?: 'busy' | 'in_flight' | 'preparing' | 'fetching' | 'time' | 'login' | null;
+}
+export const fetchBuildingPrices = (propertyId: number): Promise<BuildingPrices> =>
+  request<BuildingPrices>(`/properties/${propertyId}/building/prices`);
+/* One request on the caller's own ČÚZK account; `costCzk` is the price the card showed. Plain: a new purchase.
+ * `repeat`: a new one of a building already paid for (the server refuses that otherwise). `resume`: continue that
+ * one purchase, which can never start another. */
+export const buyBuildingPrices = (
+  propertyId: number, costCzk: number, how: { repeat?: boolean; resume?: number } = {},
+): Promise<BuildingPrices> =>
+  request<BuildingPrices>(`/properties/${propertyId}/building/prices`, {
+    method: 'POST',
+    json: { cost_czk: costCzk, ...(how.resume != null ? { resume: how.resume } : how.repeat ? { repeat: true } : {}) },
+  });
+/* The same request for ONE unit's information (its own price, its own purchases). */
+export const buyBuildingUnit = (
+  propertyId: number, unitIsknId: number, costCzk: number, how: { repeat?: boolean; resume?: number } = {},
+): Promise<BuildingPrices> =>
+  request<BuildingPrices>(`/properties/${propertyId}/building/units/${unitIsknId}`, {
+    method: 'POST',
+    json: { cost_czk: costCzk, ...(how.resume != null ? { resume: how.resume } : how.repeat ? { repeat: true } : {}) },
+  });
+export const cancelBuildingUnitPurchase = (
+  propertyId: number, unitIsknId: number, purchaseId: number,
+): Promise<BuildingPrices> =>
+  request<BuildingPrices>(`/properties/${propertyId}/building/units/${unitIsknId}`, {
+    method: 'POST', json: { cancel: purchaseId } });
+/* Give a purchase in flight up. Sends nothing to ČÚZK and costs nothing; one whose fetch had been sent then reads
+ * as possibly paid. */
+export const cancelBuildingPurchase = (propertyId: number, purchaseId: number): Promise<BuildingPrices> =>
+  request<BuildingPrices>(`/properties/${propertyId}/building/prices`, { method: 'POST', json: { cancel: purchaseId } });
+/* An account's own ČÚZK WSDP login. The password goes up once and never comes back. */
+export interface CuzkLoginState {
+  set: boolean;
+  username: string | null;
+  checked_at: string | null;
+  refused?: boolean;
+}
+export const fetchCuzkLogin = (): Promise<CuzkLoginState> => request<CuzkLoginState>('/account/cuzk-login');
+export const saveCuzkLogin = (login: { username: string; password: string }): Promise<CuzkLoginState> =>
+  request<CuzkLoginState>('/account/cuzk-login', { method: 'PUT', json: login });
+export const removeCuzkLogin = (): Promise<void> => request<void>('/account/cuzk-login', { method: 'DELETE' });
+export const cancelAgentRun = (id: number): Promise<{ id: number; status: AgentRunStatus }> =>
+  request<{ id: number; status: AgentRunStatus }>(`/runs/${id}/cancel`, { method: 'POST' });
+
 export const getSkill = (name: string): Promise<Skill> =>
   request<Skill>(`/admin/skills/${encodeURIComponent(name)}`);
 
@@ -818,10 +1011,9 @@ export interface NewDedupCandidateStats {
   top_towns: NewDedupCandidateTownRow[];
   distribution: NewDedupCandidateDistributionRow[];
   funnel: NewDedupCandidateFunnelRow[];
-  /* W16 — THE CHAIN, stamped by the lane with the SHARED step keys, the same
-   * shape `location_audit_waterfall` writes hourly for the audit page. One row
-   * type for both readouts; the browser sums and subtracts nothing. Optional
-   * because a run generated before W16 has none. */
+  /* W16 — THE CHAIN, stamped by the lane with the SHARED step keys; the browser
+   * sums and subtracts nothing. Optional because a run generated before W16 has
+   * none. */
   waterfall?: WaterfallRow[];
   /* When the lane COUNTED those rows — the funnel re-reads `listings` live at the
    * end of a run, so this, and not the generation row's completed_at, is what the
@@ -2244,7 +2436,7 @@ export const updatePortalLimits = (
 
 /* ----- rent map: MF Cenová mapa nájemného (migration 132) ------------------
  * Revision history + manual upload + on-demand fetch, all on the bearer-gated
- * /admin/* surface. The same data also auto-grabs monthly via fetch_rent_map.yml. */
+ * /admin/* surface. The same data also auto-grabs monthly via the job runner's rent_map. */
 
 export interface RentMapRevision {
   source_revision: number;
@@ -2287,7 +2479,7 @@ export function uploadRentMapFile(file: File): Promise<RentMapIngestResult> {
 }
 
 /* ----- condition scoring: per-kraj enablement ------------------------------
- * GET returns every kraj (admin_boundaries level='kraj') with its enabled
+ * GET returns every kraj (the RÚIAN register's kraj codes) with its enabled
  * flag + count of unscored active listings; PUT replaces the full enabled
  * list (app_settings.condition_scoring_enabled_region_ids) and returns the
  * same payload. Condition scoring is parked (rule 14): its workflows are
@@ -2323,8 +2515,9 @@ export const updateConditionScoringRegions = (
 
 /* Per-kraj CLIP-tagging drain priority. GET every kraj with its priority flag +
  * active-listing volume; PUT replaces the full priority list
- * (app_settings.clip_tagging_priority_region_ids). The scheduled clip_tag runs read
- * the same key — a priority kraj is drained (tags + embeddings) before the global sweep. */
+ * (app_settings.clip_tagging_priority_region_ids). The runner's clip job reads the same
+ * key — a priority kraj is drained (tags + embeddings) after the photos stored in the last
+ * 45 min and before the global sweep. */
 export interface ClipTaggingRegion {
   id: number;
   name: string;
@@ -2347,55 +2540,6 @@ export const updateClipTaggingRegions = (
   request<{ data: ClipTaggingRegionsPayload }>(
     '/admin/clip-tagging/regions',
     { method: 'PUT', json: { priority_region_ids: priorityRegionIds } },
-  );
-
-/* ----- filter registry + visibility (PR 1 / migration 059) ----------------
- * The canonical filter list lives in toolkit/filter_registry.py. `getFilterSchema`
- * returns the live registry plus the agenda × filter visibility matrix.
- * `getFilterVisibility` is the same matrix without the registry — convenient
- * when the SPA already has the static codegen output and only needs the
- * operator's overrides. `setFilterVisibility` toggles one cell. */
-
-import type {
-  Agenda,
-  FilterDef,
-  UiControl,
-  FilterType,
-} from '@/lib/filterRegistry.generated';
-
-export type { Agenda, FilterDef, UiControl, FilterType };
-
-export interface FilterSchemaEntry extends FilterDef {
-  visibility: Record<Agenda, boolean>;
-}
-
-export interface FilterSchemaPayload {
-  agendas: Agenda[];
-  categories: string[];
-  ui_controls: UiControl[];
-  filters: FilterSchemaEntry[];
-}
-
-export interface FilterVisibilityRow {
-  agenda: Agenda;
-  filter_id: string;
-  enabled: boolean;
-}
-
-export const getFilterSchema = (): Promise<FilterSchemaPayload> =>
-  request<FilterSchemaPayload>('/admin/filter-schema');
-
-export const getFilterVisibility = (): Promise<{ data: FilterVisibilityRow[] }> =>
-  request<{ data: FilterVisibilityRow[] }>('/admin/filter-visibility');
-
-export const setFilterVisibility = (
-  agenda: Agenda,
-  filterId: string,
-  enabled: boolean,
-): Promise<FilterVisibilityRow> =>
-  request<FilterVisibilityRow>(
-    `/admin/filter-visibility/${encodeURIComponent(agenda)}/${encodeURIComponent(filterId)}`,
-    { method: 'PUT', json: { enabled } },
   );
 
 /* ----- curation (U2.6) ---------------------------------------------------
@@ -2435,6 +2579,7 @@ export const updateCollection = (
     name?: string | null;
     description?: string | null;
     monitoring_enabled?: boolean;
+    notify_kinds?: CollectionKind[];
   },
 ): Promise<Collection> =>
   request<Collection>(`/collections/${id}`, {
@@ -2676,11 +2821,12 @@ export const undismissProperty = (
 
 export const addPipelineCard = (
   property_id: number,
-  { actAs }: Acting = {},
+  /* `stage_id`: a live, open stage to add at (the viewing prompt); absent = the entry stage. */
+  { actAs, stage_id }: Acting & { stage_id?: number } = {},
 ): Promise<{ property_id: number; stage_key: string; stage_label?: string; added: boolean }> =>
   request<{ property_id: number; stage_key: string; stage_label?: string; added: boolean }>(
     '/pipeline/cards',
-    { method: 'POST', json: { property_id }, actAs },
+    { method: 'POST', json: stage_id != null ? { property_id, stage_id } : { property_id }, actAs },
   );
 
 export const removePipelineCard = (
@@ -2731,6 +2877,8 @@ export const updatePipelineStage = (
     is_entry?: boolean;
     /* Explicit null clears the badge back to the ordinal fallback. */
     code?: string | null;
+    /* A role moves onto this stage from whichever held it; null clears it (migration 734). */
+    role?: PipelineStageRole | null;
   },
   { actAs }: Acting = {},
 ): Promise<PipelineStage> =>
@@ -2801,6 +2949,7 @@ export const createWatchdogSubscription = (input: {
   name: string;
   filter_spec: WatchdogFilterSpec;
   is_active?: boolean;
+  notify_kinds?: WatchdogKind[];
 }): Promise<WatchdogSubscription> =>
   request<WatchdogSubscription>('/notifications/subscriptions', {
     method: 'POST',
@@ -2813,6 +2962,7 @@ export const updateWatchdogSubscription = (
     name?: string;
     filter_spec?: WatchdogFilterSpec;
     is_active?: boolean;
+    notify_kinds?: WatchdogKind[];
   },
 ): Promise<WatchdogSubscription> =>
   request<WatchdogSubscription>(
@@ -3487,11 +3637,11 @@ export const runPriceStatDataset = (
  * MANUALLY (mailto/copy) then marks it sent. No automated email send in v1.
  * All endpoints are bearer-gated (PII). */
 
+/* The campaign's cohort: its place, category and deal type, live properties (api/outreach CampaignTarget). */
 export interface OutreachTargetSpec {
   districts?: DistrictChip[];
   category_main?: string | null;
   category_type?: string | null;
-  metric?: string;
 }
 
 export interface OutreachCampaign {
@@ -3534,16 +3684,8 @@ export interface OutreachMessage {
   notes: string | null;
 }
 
-export interface OutreachTarget {
-  broker_id: number;
-  display_name: string | null;
-  primary_email: string | null;
-  primary_phone: string | null;
-  firm_name: string | null;
-  firm_domain: string | null;
-  active_property_count: number;
-  property_count: number;
-}
+/* A campaign's candidate: a broker board row (api/outreach select_targets), contacts unmasked. */
+export type OutreachTarget = BoardRow;
 
 export interface OutreachSuppression {
   broker_id: number;
@@ -3655,8 +3797,8 @@ export interface BrokerMergeBroker {
   primary_phone: string | null;
   source_count: number;
   distinct_source_count: number;
-  active_property_count: number;
-  property_count: number;
+  active_properties: number;
+  properties: number;
 }
 
 export interface BrokerMergeCandidate {
@@ -4540,6 +4682,9 @@ export interface AutodedupResidualFilters {
   min_score?: number | null;
   source_pair?: string | null;
   verdict?: string | null;
+  /* Only pairs whose two ads print one advertiser's order code (`listings.ad_reference`,
+   * normalised and population-capped server-side). Sent only when on. */
+  shared_code?: boolean | null;
   sort?: 'score_desc' | 'random' | null;
   seed?: string | null;
 }

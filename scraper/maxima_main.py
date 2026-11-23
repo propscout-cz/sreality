@@ -100,6 +100,8 @@ class MaximaPortal(portal_runner.PortalDefaults):
     pages only once per run."""
 
     source = SOURCE
+    walk_every_s = 6 * 3600
+    walk_timeout_s = 30 * 60
     index_rate = 1.0
     total_is_count = True  # walk_category's total is len(seen): only agenda totals exist
 

@@ -5,12 +5,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import { AuthProvider } from './lib/auth';
 import { isTransientApiError } from './lib/api';
+import { applySyncQueryDefaults } from './lib/curationSync';
 import { createMutationCache } from './lib/mutationCache';
-import { applyTheme, readStoredTheme } from './lib/theme';
+import { applyAppearance } from './lib/theme';
 import { registerServiceWorker } from './lib/serviceWorker';
 import './styles/globals.css';
 
-applyTheme(readStoredTheme());
+applyAppearance();
 registerServiceWorker();
 
 /* The global "a write failed" toast — see lib/mutationCache. */
@@ -22,6 +23,13 @@ const queryClient = new QueryClient({
     queries: {
       staleTime: 60_000,
       gcTime: 5 * 60_000,
+      /* Off, and it stays off: a focus refetch would re-read every mounted
+       * query, market data included, at each alt-tab. The curation sync owner
+       * (lib/curationSyncOwner, mounted by AuthProvider) supersedes it for
+       * curation: focus, a show, reconnecting and a write in another tab each
+       * read the curation clock, and only what moved is re-read
+       * (docs/design/curation-sync.md, Decision 12). The rest follows its
+       * staleTime at the next mount. */
       refetchOnWindowFocus: false,
       /* One more attempt ONLY when it can help: a network blip or a
        * 502/503/504/520 (the API answers a busy database with 503 db_busy;
@@ -37,6 +45,13 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+/* For the client's whole life: no curation read refetches on reconnect. The curation
+ * sync owner (lib/curationSyncOwner) is the one reconnect path for curation, but it
+ * runs only while someone is signed in and Supabase is configured; outside that,
+ * a curation read follows its staleTime at its next mount. A hidden tab
+ * reconnecting re-reads nothing. */
+applySyncQueryDefaults(queryClient);
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

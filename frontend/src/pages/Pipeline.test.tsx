@@ -5,17 +5,29 @@
  * stage move — is extracted into the pure `planMove` and unit-tested directly.
  * A render smoke test then pins the board's columns and the trash → confirm →
  * remove flow (stage moves are drag-only; the select fallback was removed).
+ * A drop is driven through the board's own DndContext onDragEnd, recorded below.
  */
 
 import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+import type {
+  Active,
+  ClientRect,
+  DndContextProps,
+  DragCancelEvent,
+  DragEndEvent,
+  DragStartEvent,
+  DroppableContainer,
+} from '@dnd-kit/core';
 
-import Pipeline, { planMove } from './Pipeline';
+import Pipeline, { boardCollision, planMove } from './Pipeline';
 import type { Collection, PipelineBoardCard, PipelineStage, PropertySource, Tag } from '@/lib/types';
 import * as api from '@/lib/api';
 import * as queries from '@/lib/queries';
+import { pipelineKeys, type CityIndexDefinition, type CuratedCity } from '@/lib/queries';
+import { PIPELINE_CLOSED_LANE_WIDTH } from '@/lib/pipelineCardSize';
 import * as brokersApi from '@/lib/brokers';
 import { createMutationCache } from '@/lib/mutationCache';
 import * as toast from '@/lib/toast';
@@ -28,6 +40,10 @@ import {
 } from '@/lib/acting';
 import { BOARD_GONE_MESSAGE } from '@/lib/pipelineShares';
 import { NewPropertyProvider } from '@/components/NewPropertyProvider';
+import { watchReads } from '@/test/reads';
+import { revalidateTables } from '@/lib/curationSync';
+import { isOwed } from '@/lib/revalidate';
+import { COLLECTION_KINDS } from '@/lib/notifyKinds';
 
 /* Every read the page makes has to be named here: the factories spread the
    real module, so an unnamed one runs for real and fails SOFT (request()
@@ -47,6 +63,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     sharePipeline: vi.fn(),
     unsharePipeline: vi.fn(),
     createPipelineStage: vi.fn(),
+    updatePipelineStage: vi.fn(),
     ingestListing: vi.fn(),
     addPipelineCard: vi.fn(),
   };
@@ -68,6 +85,32 @@ vi.mock('@/lib/queries', async (importOriginal) => {
     fetchPropertyCollectionMemberSet: vi.fn(),
     fetchPropertyTagMemberSet: vi.fn(),
     fetchPropertySourcesByPropertyIds: vi.fn(),
+    fetchCuratedCities: vi.fn(),
+    fetchCityIndexDefinitions: vi.fn(),
+    fetchCityIndexValues: vi.fn(),
+  };
+});
+
+/* The real drag gesture can't be driven in jsdom, so the board's two dnd-kit
+   seams are recorded instead: what each droppable registers under which id, and
+   the DndContext's props, whose onDragEnd a test then calls as a drop would. */
+const dnd = vi.hoisted(() => ({
+  droppables: new Map<string, unknown>(),
+  context: null as DndContextProps | null,
+}));
+vi.mock('@dnd-kit/core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@dnd-kit/core')>();
+  const { createElement } = await import('react');
+  return {
+    ...actual,
+    useDroppable: (args: Parameters<typeof actual.useDroppable>[0]) => {
+      dnd.droppables.set(String(args.id), args.data);
+      return actual.useDroppable(args);
+    },
+    DndContext: (props: DndContextProps) => {
+      dnd.context = props;
+      return createElement(actual.DndContext, props);
+    },
   };
 });
 
@@ -186,6 +229,17 @@ const CARD_INACTIVE: PipelineBoardCard = {
   is_active: false,
 };
 
+// A closed deal: its stage is terminal, so it sits behind the Uzavřené lane.
+const CARD_LOST: PipelineBoardCard = {
+  ...CARD_DUM,
+  property_id: 45,
+  stage_id: 9,
+  sreality_id: 444,
+  listing_id: 444,
+  display_label: 'Luční, Plzeň',
+  obec: 'Plzeň',
+};
+
 const collection = (id: number, name: string): Collection => ({
   id,
   name,
@@ -197,6 +251,7 @@ const collection = (id: number, name: string): Collection => ({
   is_system: false,
   owner_email: null,
   shared_with: [],
+  notify_kinds: COLLECTION_KINDS.map((k) => k.kind),
 });
 
 // Šortlist holds a board property; Archiv holds none — only the first earns a chip.
@@ -238,12 +293,24 @@ const STAGES: PipelineStage[] = [
   { id: 3, key: 'offer', label: 'Nabídka', position: 3, color: 'teal', is_terminal: false, is_entry: false, code: null },
 ];
 
-function renderBoard(entry = '/pipeline') {
-  // The app's own MutationCache, so a failed write's global toast is real.
-  const qc = new QueryClient({
+/* P22: two terminal stages after the live ones, as the default board's are. */
+const STAGES_CLOSED: PipelineStage[] = [
+  ...STAGES,
+  { id: 9, key: 'lost', label: '9. Lost', position: 9, color: 'sand', is_terminal: true, is_entry: false, code: '9' },
+  { id: 10, key: 'bought', label: '9. Bought', position: 10, color: 'sage', is_terminal: true, is_entry: false, code: '9' },
+];
+
+/* The header row the stage headers are pinned in (BoardFrame). */
+const headerRowOf = (label: string) => screen.getByText(label).parentElement!.parentElement!;
+
+// The app's own MutationCache, so a failed write's global toast is real.
+const boardClient = () =>
+  new QueryClient({
     mutationCache: createMutationCache(),
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
+
+function renderBoard(entry = '/pipeline', qc: QueryClient = boardClient()) {
   return render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[entry]}>
@@ -358,15 +425,18 @@ describe('<Pipeline> board', () => {
     // Both stage columns render their header label.
     expect(screen.getByText('Zájem')).toBeInTheDocument();
     expect(screen.getByText('Nabídka')).toBeInTheDocument();
-    // Enriched card content: street + MF yield + broker name linking to the broker page.
+    // No terminal stage, no folded lane: the board is its live columns only.
+    expect(screen.queryByText('Uzavřené')).toBeNull();
+    // Enriched card content: street + broker name linking to the broker page.
     expect(screen.getByText('Sadová')).toBeInTheDocument();
-    expect(screen.getByText(/MF\s*4,3\s*%/)).toBeInTheDocument();
     /* The broker line is a DECORATION now: the card paints without it and it
        arrives on its own query, so this is findBy (async) rather than getBy.
        That asymmetry is the feature — the assertions above it all passed
        before this resolves. */
     const broker = await screen.findByText('Jan Novák');
     expect(broker.closest('a')).toHaveAttribute('href', '/brokers/7');
+    expect(broker.closest('a')).toHaveAttribute('target', '_blank');
+    expect(broker.closest('a')).toHaveClass('card-action');
     expect(broker.closest('a')).toHaveAttribute(
       'title',
       expect.stringContaining('jan@remax.cz'),
@@ -376,15 +446,21 @@ describe('<Pipeline> board', () => {
   /* The board is a triage surface worked a column at a time, so following a
      card must not unload it — the property link opens in a NEW TAB. `rel` rides
      along so the opened document can't reach back through `window.opener`.
-     The link is the address, which leads the card; the price below it is a
-     figure, not a second way in. */
-  it('opens the property in a new tab from the address line', async () => {
+     The link is the address, which leads the card, and it is stretched over
+     the whole card (`.stretched-link`), so the card opens from anywhere; the
+     controls sit above it (`card-action`). The price is a figure inside the
+     card, never a second link. */
+  it('opens the property in a new tab from anywhere on the card', async () => {
     renderBoard();
     const place = await screen.findByText('Sadová');
     const link = place.closest('a');
     expect(link).toHaveAttribute('href', '/property/42');
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
+    expect(link).toHaveClass('stretched-link');
+    for (const name of ['Přetáhnout kartu do jiné fáze', 'Odebrat z pipeline']) {
+      expect(screen.getAllByRole('button', { name })[0]).toHaveClass('card-action');
+    }
 
     const price = screen.getByText(/5\s*000\s*000/);
     expect(price.closest('a')).toBeNull();
@@ -444,7 +520,7 @@ describe('<Pipeline> board', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('Zájem')).toBeInTheDocument();
     expect(screen.getByText('Sadová')).toBeInTheDocument();
-    expect(screen.getByText(/MF\s*4,3\s*%/)).toBeInTheDocument();
+    expect(screen.getByText(/5\s*000\s*000/)).toBeInTheDocument();
     // Decoration: absent, and no loading string stands in for the board.
     expect(screen.queryByText('Jan Novák')).not.toBeInTheDocument();
     expect(screen.queryByText('Načítání…')).not.toBeInTheDocument();
@@ -757,11 +833,148 @@ describe('<Pipeline> board', () => {
     expect(screen.getByRole('button', { name: 'Typ' })).toBeInTheDocument();
   });
 
+  /* D2: a stage edit re-reads what lib/curationSync's `pipeline_stages` row feeds —
+     the members map too, whose stage label, colour and code every funnel badge renders. */
+  it('a new stage re-reads the stages, the board and the members map', async () => {
+    vi.mocked(api.createPipelineStage).mockResolvedValue(STAGES[0]);
+    const qc = boardClient();
+    qc.setQueryData(pipelineKeys.members, new Map());
+    renderBoard('/pipeline', qc);
+    fireEvent.click(await screen.findByRole('button', { name: 'Spravovat fáze' }));
+    const reads = watchReads(qc);
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Nová fáze' }), { target: { value: 'Nová' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Přidat' }));
+    await waitFor(() => expect(reads.reread(pipelineKeys.members)).toBe(true));
+    expect(reads.reread(pipelineKeys.stages)).toBe(true);
+    expect(reads.reread(pipelineKeys.board)).toBe(true);
+    reads.stop();
+  });
+
+  /* D3 (lib/useServerDraft): a stage field follows the server while untouched, so
+     a rename made elsewhere shows in the open editor and a focus and blur of the
+     untouched field writes nothing back over it. */
+  it('an outside rename followed by focus and blur of an untouched field writes nothing (D3)', async () => {
+    const qc = boardClient();
+    renderBoard('/pipeline', qc);
+    fireEvent.click(await screen.findByRole('button', { name: 'Spravovat fáze' }));
+    const label = await screen.findByDisplayValue('Nabídka');
+    const code = within(label.closest('li')!).getByRole('textbox', { name: 'Značka fáze' });
+
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(
+      STAGES.map((st) => (st.id === 3 ? { ...st, label: 'Nabídka (jinde)', code: '3' } : st)),
+    );
+    await act(async () => {
+      await revalidateTables(qc, ['pipeline_stages']);
+    });
+    await waitFor(() => expect(label).toHaveValue('Nabídka (jinde)'));
+    expect(code).toHaveValue('3');
+
+    fireEvent.focus(label);
+    fireEvent.blur(label);
+    fireEvent.focus(code);
+    fireEvent.blur(code);
+    expect(api.updatePipelineStage).not.toHaveBeenCalled();
+  });
+
+  it('keeps a typed stage name over a change made elsewhere, and saves only that name', async () => {
+    vi.mocked(api.updatePipelineStage).mockResolvedValue({ ...STAGES[1], label: 'Moje nabídka' });
+    const qc = boardClient();
+    renderBoard('/pipeline', qc);
+    fireEvent.click(await screen.findByRole('button', { name: 'Spravovat fáze' }));
+    const label = await screen.findByDisplayValue('Nabídka');
+    fireEvent.focus(label);
+    fireEvent.change(label, { target: { value: 'Moje nabídka ' } });
+
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(
+      STAGES.map((st) => (st.id === 3 ? { ...st, label: 'Nabídka (jinde)', code: '3' } : st)),
+    );
+    await act(async () => {
+      await revalidateTables(qc, ['pipeline_stages']);
+    });
+    expect(label).toHaveValue('Moje nabídka ');
+
+    fireEvent.blur(label);
+    await waitFor(() => expect(api.updatePipelineStage).toHaveBeenCalledWith(3, { label: 'Moje nabídka' }));
+    expect(api.updatePipelineStage).toHaveBeenCalledTimes(1);
+  });
+
+  /* The row stays open after a save: a rename made elsewhere that lands between
+     the save and its re-read is what the field shows next, never written over. */
+  it('a saved stage name follows the server after, even a rename made elsewhere meanwhile', async () => {
+    vi.mocked(api.updatePipelineStage).mockClear().mockResolvedValue({ ...STAGES[1], label: 'Moje nabídka' });
+    const qc = boardClient();
+    renderBoard('/pipeline', qc);
+    fireEvent.click(await screen.findByRole('button', { name: 'Spravovat fáze' }));
+    const label = await screen.findByDisplayValue('Nabídka');
+
+    /* Renamed elsewhere after this save commits and before its re-read starts. */
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(
+      STAGES.map((st) => (st.id === 3 ? { ...st, label: 'Jejich nabídka' } : st)),
+    );
+    fireEvent.focus(label);
+    fireEvent.change(label, { target: { value: 'Moje nabídka' } });
+    fireEvent.blur(label);
+    await waitFor(() => expect(api.updatePipelineStage).toHaveBeenCalledWith(3, { label: 'Moje nabídka' }));
+    await waitFor(() => expect(label).toHaveValue('Jejich nabídka'));
+
+    fireEvent.focus(label);
+    fireEvent.blur(label);
+    expect(api.updatePipelineStage).toHaveBeenCalledTimes(1);
+  });
+
+  /* Migration 734: the viewing role marks one stage whatever its name; the toggle sends the
+     role, a second press clears it, and a closed stage can be neither marked nor un-closed into one. */
+  it('marks a stage as the viewing stage and clears it again', async () => {
+    vi.mocked(api.updatePipelineStage).mockClear().mockResolvedValue({ ...STAGES[1], role: 'viewing' });
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES_CLOSED);
+    const qc = boardClient();
+    renderBoard('/pipeline', qc);
+    fireEvent.click(await screen.findByRole('button', { name: 'Spravovat fáze' }));
+    const row = (await screen.findByDisplayValue('Nabídka')).closest('li')!;
+    const toggle = within(row).getByRole('button', { name: 'Fáze prohlídky' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(toggle);
+    await waitFor(() => expect(api.updatePipelineStage).toHaveBeenCalledWith(3, { role: 'viewing' }));
+
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(
+      STAGES_CLOSED.map((st) => (st.id === 3 ? { ...st, role: 'viewing' as const } : st)),
+    );
+    await act(async () => {
+      await revalidateTables(qc, ['pipeline_stages']);
+    });
+    await waitFor(() => expect(within(row).getByRole('button', { name: 'Fáze prohlídky' })).toHaveAttribute('aria-pressed', 'true'));
+    expect(within(row).getByRole('checkbox')).toBeDisabled();
+    fireEvent.click(within(row).getByRole('button', { name: 'Fáze prohlídky' }));
+    await waitFor(() => expect(api.updatePipelineStage).toHaveBeenCalledWith(3, { role: null }));
+
+    const closed = screen.getByDisplayValue('9. Lost').closest('li')!;
+    expect(within(closed).getByRole('button', { name: 'Fáze prohlídky' })).toBeDisabled();
+  });
+
   it('names the stage-manager create field by its visible words', async () => {
     renderBoard();
     fireEvent.click(await screen.findByRole('button', { name: 'Spravovat fáze' }));
     const create = await screen.findByRole('textbox', { name: 'Nová fáze' });
     expect(create).toHaveAccessibleName('Nová fáze');
+  });
+
+  /* Section cards (operator ruling 2026-10-28): the stage manager is one card like
+     Sdílení — its title the region's name, the stages its count, never a small-caps label.
+     Adding a stage stays the body's last row: a title bar holds buttons and links only (C6). */
+  it('opens the stage manager as the Fáze pipeline section card, its count the stages', async () => {
+    renderBoard();
+    fireEvent.click(await screen.findByRole('button', { name: 'Spravovat fáze' }));
+    const card = await screen.findByRole('region', { name: 'Fáze pipeline' });
+    expect(card.tagName).toBe('SECTION');
+    expect(card).toHaveClass('border', 'bg-[var(--color-paper-2)]', 'rounded-[var(--radius-md)]');
+    const title = within(card).getByRole('heading', { level: 2, name: 'Fáze pipeline' });
+    expect(title).not.toHaveClass('uppercase');
+    expect(title.nextElementSibling).toHaveTextContent(String(STAGES.length));
+    const bar = title.parentElement!;
+    expect(within(bar).queryByRole('textbox', { name: 'Nová fáze' })).toBeNull();
+    expect(within(card).getByRole('textbox', { name: 'Nová fáze' })).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Přidat' })).not.toHaveClass('uppercase');
+    expect(within(card).getByDisplayValue('Nabídka')).toBeInTheDocument();
   });
 
   it('trash → confirm removes the card via removePipelineCard', async () => {
@@ -883,6 +1096,339 @@ describe('<Pipeline> board', () => {
     // The card without a link offers nothing.
     expect(screen.getAllByRole('link', { name: /^Artifact:/ })).toHaveLength(1);
   });
+
+  /* P19 (2026-10-27, widened by the operator): no city-index strip on the
+     card at all, so the board stops reading the indexes too. Praha has
+     readings here, so before the ruling the card in it drew the strip. */
+  it('draws no city-index strip on a card in a curated city, and reads no city indexes', async () => {
+    const city = {
+      city_id: 1,
+      name: 'Praha',
+      kraj_name: 'Hlavní město Praha',
+      population: 1_300_000,
+      population_as_of_year: 2024,
+      obec_kod: 554782,
+    } as CuratedCity;
+    const def = {
+      index_name: 'celkove_hodnoceni',
+      label_cs: 'Celkové hodnocení',
+      label_en: null,
+      category: 'overall',
+      scale_min: 0,
+      scale_max: 10,
+      higher_is_better: true,
+      sort_order: 0,
+    } as CityIndexDefinition;
+    const fetchers = [
+      queries.fetchCuratedCities,
+      queries.fetchCityIndexDefinitions,
+      queries.fetchCityIndexValues,
+    ] as const;
+    for (const fn of fetchers) vi.mocked(fn).mockClear();
+    vi.mocked(queries.fetchCuratedCities).mockResolvedValue([city]);
+    vi.mocked(queries.fetchCityIndexDefinitions).mockResolvedValue([def]);
+    vi.mocked(queries.fetchCityIndexValues).mockResolvedValue([
+      { city_id: 1, index_name: 'celkove_hodnoceni', value: 7.4 },
+    ]);
+    renderBoard();
+    expect(await screen.findByText('Jan Novák')).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: /Kvalita obce/ })).toBeNull();
+    for (const fn of fetchers) expect(fn).not.toHaveBeenCalled();
+  });
+
+  /* P20: the MF yield beside the dims line is a Velké-card detail. */
+  it('shows the MF yield on Velké cards only', async () => {
+    renderBoard();
+    expect(await screen.findByText('Sadová')).toBeInTheDocument();
+    expect(screen.queryByText(/Výnos MF\s*4,3\s*%/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Střední' }));
+    expect(screen.queryByText(/Výnos MF\s*4,3\s*%/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Velké' }));
+    expect(screen.getByText(/Výnos MF\s*4,3\s*%/)).toHaveAttribute(
+      'title',
+      'Hrubý výnos dle cenové mapy nájemného MF (nájem ÷ cena)',
+    );
+  });
+
+  /* P22: the terminal stages fold into ONE narrow lane — a row per closed
+     stage with its count — after the live columns. */
+  it('folds the terminal stages into one Uzavřené lane, a row and count per closed stage', async () => {
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES_CLOSED);
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_LOST]);
+    renderBoard();
+    expect(await screen.findByRole('list', { name: 'Zájem' })).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Nabídka' })).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: '9. Lost' })).toBeNull();
+    expect(screen.queryByRole('list', { name: '9. Bought' })).toBeNull();
+
+    const headerRow = headerRowOf('Zájem');
+    expect(within(headerRow).getByText('Uzavřené')).toBeInTheDocument();
+    expect(within(headerRow).queryByText('9. Lost')).toBeNull();
+    expect(within(headerRow).queryByText('9. Bought')).toBeNull();
+
+    const lane = screen.getByRole('list', { name: 'Uzavřené' });
+    const rows = within(lane).getAllByRole('button');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveAccessibleName('9. Lost · 1');
+    expect(rows[1]).toHaveAccessibleName('9. Bought · 0');
+    for (const row of rows) expect(row).toHaveAttribute('aria-expanded', 'false');
+    // Folded: the closed card is counted, not drawn.
+    expect(screen.queryByText('Luční')).toBeNull();
+    // The page's own count still holds every card on the board.
+    expect(screen.getByText(/nemovitostí/).textContent).toBe('2 nemovitostí');
+  });
+
+  /* A row opens its stage's cards in the lane, under the rows, which never
+     move; one at a time. The lane widens to a column then, header and body
+     from one value so the pinned header row still scrolls with the board. */
+  it("opens a closed stage's cards from its row, one at a time, and folds them back", async () => {
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES_CLOSED);
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_LOST]);
+    renderBoard();
+    const lost = await screen.findByRole('button', { name: '9. Lost · 1' });
+    const bought = screen.getByRole('button', { name: '9. Bought · 0' });
+    const header = screen.getByText('Uzavřené').parentElement!;
+    const body = screen.getByRole('list', { name: 'Uzavřené' }).parentElement!;
+    expect(header.className).toContain(PIPELINE_CLOSED_LANE_WIDTH);
+    expect(body.className).toContain(PIPELINE_CLOSED_LANE_WIDTH);
+    expect(lost).not.toHaveAttribute('aria-controls');
+
+    fireEvent.click(lost);
+    expect(lost).toHaveAttribute('aria-expanded', 'true');
+    const opened = screen.getByRole('list', { name: '9. Lost' });
+    expect(lost).toHaveAttribute('aria-controls', opened.id);
+    expect(within(opened).getByText('Luční')).toBeInTheDocument();
+    // The same card as in any column: the handle, the trash, the broker line's slot.
+    expect(within(opened).getByLabelText('Přetáhnout kartu do jiné fáze')).toBeInTheDocument();
+    expect(within(opened).getByRole('button', { name: 'Odebrat z pipeline' })).toBeInTheDocument();
+    expect(header.className).toContain('w-72');
+    expect(body.className).toContain('w-72');
+    // The rows stay first: a drop target never moves when a row opens.
+    expect(
+      screen.getByRole('list', { name: 'Uzavřené' }).compareDocumentPosition(opened) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.click(bought);
+    expect(lost).toHaveAttribute('aria-expanded', 'false');
+    expect(bought).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.queryByRole('list', { name: '9. Lost' })).toBeNull();
+    expect(screen.getByRole('list', { name: '9. Bought' })).toHaveTextContent('—');
+
+    fireEvent.click(bought);
+    expect(bought).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('list', { name: '9. Bought' })).toBeNull();
+    expect(header.className).toContain(PIPELINE_CLOSED_LANE_WIDTH);
+  });
+
+  /* The rows count the FILTERED board, like the column headers do. */
+  it('counts a closed row under the active filters', async () => {
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES_CLOSED);
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_LOST]);
+    renderBoard();
+    expect(await screen.findByRole('button', { name: '9. Lost · 1' })).toBeInTheDocument();
+    await openMenu('Typ');
+    fireEvent.click(screen.getByRole('button', { name: 'Byty' }));
+    expect(await screen.findByRole('button', { name: '9. Lost · 0' })).toBeInTheDocument();
+  });
+
+  /* Rule #22: closing a deal is a MOVE into a terminal stage. Each row is a
+     drop target under the stage's own droppable id, so a release on it goes
+     through the same planMove → usePipelineCard.move as a column drop. */
+  it('closes a deal by dropping it on a closed row: a stage move, never a remove', async () => {
+    dnd.droppables.clear();
+    vi.mocked(api.movePipelineCard).mockClear().mockResolvedValue({
+      property_id: 42,
+      stage_id: 10,
+      stage_key: 'bought',
+    });
+    vi.mocked(api.removePipelineCard).mockClear();
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES_CLOSED);
+    // The re-read is held open, so what the rows show is the move's own patch.
+    vi.mocked(queries.fetchPipelineBoard)
+      .mockResolvedValueOnce([CARDS[0], CARD_LOST])
+      .mockReturnValue(new Promise(() => {}));
+    renderBoard();
+    expect(await screen.findByRole('button', { name: '9. Bought · 0' })).toBeInTheDocument();
+    expect(dnd.droppables.get('stage:10')).toEqual({ closed: true });
+    expect(dnd.droppables.get('stage:9')).toEqual({ closed: true });
+    expect(dnd.droppables.has('stage:1')).toBe(true);
+    expect(dnd.droppables.get('stage:1')).toBeUndefined();
+    expect(dnd.context?.collisionDetection).toBe(boardCollision);
+
+    await act(async () => {
+      dnd.context?.onDragEnd?.({
+        active: { id: 'card:42' },
+        over: { id: 'stage:10' },
+      } as unknown as DragEndEvent);
+    });
+    await waitFor(() => expect(api.movePipelineCard).toHaveBeenCalledWith(42, 10));
+    expect(api.removePipelineCard).not.toHaveBeenCalled();
+    expect(await screen.findByRole('button', { name: '9. Bought · 1' })).toBeInTheDocument();
+    expect(screen.queryByText('Sadová')).toBeNull();
+  });
+
+  /* Decision 10 (docs/design/curation-sync.md): a drag holds the board, the
+     members map and the stages from pick-up to drop, so nothing repaints under
+     the card in hand; what was owed meanwhile lands after the drop. */
+  describe('a drag holds the board', () => {
+    const pickUp = () =>
+      act(async () => {
+        dnd.context?.onDragStart?.({ active: { id: 'card:42' } } as unknown as DragStartEvent);
+      });
+
+    it('a remote target during a drag lands after the drop', async () => {
+      const qc = boardClient();
+      renderBoard('/pipeline', qc);
+      expect(await screen.findByText('Sadová')).toBeInTheDocument();
+      await pickUp();
+
+      /* Changed elsewhere: another card added, as the curation clock would re-read it. */
+      const moved = { ...CARDS[0], stage_id: 3 };
+      vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([moved, CARD_DUM]);
+      const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
+      await act(async () => {
+        await revalidateTables(qc, ['property_pipeline', 'pipeline_stages']);
+      });
+      expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
+      expect(screen.queryByText('Lesní')).toBeNull();
+
+      await act(async () => {
+        dnd.context?.onDragEnd?.({
+          active: { id: 'card:42' },
+          over: { id: 'stage:3' },
+        } as unknown as DragEndEvent);
+      });
+      await waitFor(() => expect(api.movePipelineCard).toHaveBeenCalledWith(42, 3));
+      expect(await screen.findByText('Lesní')).toBeInTheDocument();
+      /* The drag's parked read and the move's settle are one board read. */
+      expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before + 1);
+    });
+
+    it('a drag that starts while a board re-read is in flight shows no repaint mid-drag', async () => {
+      const qc = boardClient();
+      renderBoard('/pipeline', qc);
+      expect(await screen.findByText('Sadová')).toBeInTheDocument();
+
+      let land: (cards: PipelineBoardCard[]) => void = () => {};
+      vi.mocked(queries.fetchPipelineBoard)
+        .mockReturnValueOnce(new Promise((resolve) => (land = resolve)))
+        .mockResolvedValue([CARDS[0], CARD_DUM]);
+      act(() => {
+        void revalidateTables(qc, ['property_pipeline']);
+      });
+      await pickUp();
+      await act(async () => {
+        land([CARDS[0], CARD_DUM]);
+        await new Promise((resolve) => setTimeout(resolve, 0)); // query-core notifies on a timer
+      });
+      /* The read in flight at pick-up was cancelled and owed, never painted. */
+      expect(qc.getQueryData<PipelineBoardCard[]>(pipelineKeys.board)?.some((c) => c.property_id === 43)).toBe(false);
+      expect(screen.queryByText('Lesní')).toBeNull();
+
+      await act(async () => {
+        dnd.context?.onDragCancel?.({ active: { id: 'card:42' } } as unknown as DragCancelEvent);
+      });
+      expect(await screen.findByText('Lesní')).toBeInTheDocument();
+    });
+
+    it('an unmount mid-drag lets go: the parked board read is paid on the next mount', async () => {
+      const qc = boardClient();
+      const view = renderBoard('/pipeline', qc);
+      expect(await screen.findByText('Sadová')).toBeInTheDocument();
+      await pickUp();
+
+      vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_DUM]);
+      const before = vi.mocked(queries.fetchPipelineBoard).mock.calls.length;
+      await act(async () => {
+        await revalidateTables(qc, ['property_pipeline']);
+      });
+      expect(queries.fetchPipelineBoard).toHaveBeenCalledTimes(before);
+      expect(isOwed(qc, pipelineKeys.board)).toBe(true);
+
+      /* Gone with the card in hand: no drop, no cancel. A hold left behind would
+         cancel the next mount's read and owe it again. */
+      view.unmount();
+      renderBoard('/pipeline', qc);
+      expect(await screen.findByText('Lesní')).toBeInTheDocument();
+      expect(isOwed(qc, pipelineKeys.board)).toBe(false);
+    });
+  });
+
+  /* The skeleton promises "no reflow, no jump": with the stages warm it is
+     already the live columns plus the folded lane, never a column per closed
+     stage that then collapses. */
+  it('draws the folded lane in the skeleton too', async () => {
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES_CLOSED);
+    vi.mocked(queries.fetchPipelineBoard).mockReturnValue(new Promise(() => {}));
+    renderBoard();
+    expect(await screen.findByText('Uzavřené')).toBeInTheDocument();
+    expect(screen.getByText('Načítání pipeline…')).toBeInTheDocument();
+    expect(screen.getAllByText('9. Lost')).toHaveLength(1);
+    expect(screen.getAllByText('9. Bought')).toHaveLength(1);
+    const headerRow = headerRowOf('Uzavřené');
+    expect(within(headerRow).getByText('Zájem')).toBeInTheDocument();
+    expect(within(headerRow).queryByText('9. Lost')).toBeNull();
+  });
+});
+
+/* P22's drop targeting. Rows are ~2rem tall and the drag ghost 4.5rem to
+ * ~22rem, so an overlap rule would close a deal into whichever row the ghost
+ * covered most. A row is hit by a POINT — the pointer, or on a keyboard drag
+ * (no pointer) the ghost's centre; the columns keep their overlap rule. */
+describe('boardCollision', () => {
+  const box = (left: number, top: number, width: number, height: number): ClientRect => ({
+    left,
+    top,
+    width,
+    height,
+    right: left + width,
+    bottom: top + height,
+  });
+  const droppable = (id: string, closed: boolean) =>
+    ({
+      id,
+      key: id,
+      data: { current: closed ? { closed: true } : undefined },
+      disabled: false,
+      node: { current: null },
+      rect: { current: null },
+    }) as DroppableContainer;
+  // The last live column, stretched to the board's height, then two rows of the lane.
+  const containers = [droppable('stage:3', false), droppable('stage:9', true), droppable('stage:10', true)];
+  const rects = new Map([
+    ['stage:3', box(0, 0, 288, 1000)],
+    ['stage:9', box(304, 0, 208, 32)],
+    ['stage:10', box(304, 36, 208, 32)],
+  ]);
+  const active = { id: 'card:42', data: { current: undefined }, rect: { current: { initial: null, translated: null } } } as Active;
+  const hit = (ghost: ClientRect, pointer: { x: number; y: number } | null) =>
+    boardCollision({
+      active,
+      collisionRect: ghost,
+      droppableRects: rects,
+      droppableContainers: containers,
+      pointerCoordinates: pointer,
+    }).map((c) => c.id);
+
+  it('closes into the row under the pointer, not the row the ghost covers most', () => {
+    // The ghost covers row 9 for 32px and row 10 for 16px; the pointer is on row 10.
+    expect(hit(box(310, -20, 256, 72), { x: 400, y: 50 })[0]).toBe('stage:10');
+  });
+
+  it('never picks a row the pointer is not on, falling back to the columns', () => {
+    // The ghost spans the column's edge and both rows; the pointer is in the gap.
+    expect(hit(box(250, 0, 256, 72), { x: 296, y: 50 })).toEqual(['stage:3']);
+  });
+
+  it('on a keyboard drag, closes into the row under the ghost\'s centre', () => {
+    expect(hit(box(300, 16, 256, 72), null)[0]).toBe('stage:10');
+  });
+
+  it('on a keyboard drag, keeps the column a ghost mostly covers over a row its edge touches', () => {
+    // Plain overlap would score row 9 (0.17) over the column (0.03).
+    expect(hit(box(160, 0, 256, 72), null)).toEqual(['stage:3']);
+  });
 });
 
 /* Pipeline sharing (migration 641, design §3.5): the switcher, a shared board
@@ -971,6 +1517,20 @@ describe('<Pipeline> shared boards', () => {
     expect(api.fetchArtifactLinks).not.toHaveBeenCalledWith({ actAs: 'owner-r' });
     expect(screen.getByText('petr@example.cz')).toBeInTheDocument();
     expect(screen.getByText(/jen ke čtení/, { selector: 'span' })).toBeInTheDocument();
+  });
+
+  /* P22 on a read board: the rows open for reading, the cards in them carry
+     no handle or trash, like every card on it. */
+  it('opens a closed row on a read board for reading, with no drag or trash in it', async () => {
+    vi.mocked(queries.fetchPipelineStages).mockResolvedValue(STAGES_CLOSED);
+    vi.mocked(queries.fetchPipelineBoard).mockResolvedValue([CARDS[0], CARD_LOST]);
+    setActiveBoard(READ);
+    renderBoard();
+    fireEvent.click(await screen.findByRole('button', { name: '9. Lost · 1' }));
+    const opened = screen.getByRole('list', { name: '9. Lost' });
+    expect(within(opened).getByText('Luční')).toBeInTheDocument();
+    expect(within(opened).queryByLabelText('Přetáhnout kartu do jiné fáze')).toBeNull();
+    expect(within(opened).queryByRole('button', { name: 'Odebrat z pipeline' })).toBeNull();
   });
 
   it('gives an edit board drag, trash, the stage editor and the owner\'s tags — all as the owner', async () => {
@@ -1087,6 +1647,19 @@ describe('<Pipeline> shared boards', () => {
       expect(api.unsharePipeline).not.toHaveBeenCalled();
       fireEvent.click(within(list).getByRole('button', { name: 'Přestat sdílet' }));
       await waitFor(() => expect(api.unsharePipeline).toHaveBeenCalledWith('acc-b', 'shared_with'));
+    });
+
+    /* Section cards (operator ruling 2026-10-28): the block is one card, its
+       title the region's name and the recipients its count. */
+    it('opens as the Sdílení section card, its count the recipients', async () => {
+      renderBoard();
+      fireEvent.click(await screen.findByRole('button', { name: 'Sdílení · 1' }));
+      const card = screen.getByRole('region', { name: 'Sdílení' });
+      expect(card.tagName).toBe('SECTION');
+      expect(card).toHaveClass('border', 'bg-[var(--color-paper-2)]', 'rounded-[var(--radius-md)]');
+      expect(within(card).getByRole('heading', { level: 2, name: 'Sdílení' }).nextElementSibling)
+        .toHaveTextContent('1');
+      expect(card.parentElement).not.toHaveClass('border');
     });
   });
 });
