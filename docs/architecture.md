@@ -765,9 +765,8 @@ rules. Identify which one a task belongs to before you start.
   `browse_list` (an UNLOGGED table rebuilt blue-green; the list, its counts, the map pins and
   the tile counts all read it since migration 630, and 631 dropped the map's `properties_map_mv`)
   — a plain SELECT grant to `authenticated`, no RLS, read directly when "show dismissed" is on and
-  otherwise through its `browse_list_visible` INVOKER twin (migration 537); the location-audit
-  matview `location_pin_audit_mv` (no RLS) and its successor, the admin-gated view `location_position_audit_public` over the
-  service-role matview `location_position_mv` (migration 733); two RLS-scoped tables in `lib/auth.tsx` (`entitlements`, own row only;
+  otherwise through its `browse_list_visible` INVOKER twin (migration 537); the location position audit, the admin-gated
+  view `location_position_audit_public` over the service-role matview `location_position_mv` (migration 733); two RLS-scoped tables in `lib/auth.tsx` (`entitlements`, own row only;
   `plans`); and page-specific RPCs (e.g.
   `browse_stats_properties`, `browse_map_cells`, `sold_comparables`). Most RPCs are
   `SECURITY INVOKER`: they read as the caller and cannot see past its grants and RLS. The
@@ -2419,7 +2418,7 @@ renumber.** Navigate by area:
     (`claims_common.COHORT_LOCATION_FROM`, spatial-first: the place, then the live property it
     locates, then that property's canonical advert as the comparable), and the extension's label
     beside the property's MF. A surface about ONE advert (`listings_public`,
-    `location_pin_audit_mv`, autodedup, the location census) keeps that advert's own row. Only
+    autodedup, the location census) keeps that advert's own row. Only
     the place moves: price, area, photos, link and every fact stay the canonical advert's, and
     past estimation runs stay as they ran (rule 12). The six amenities (balcony, lift, parking,
     terrace, garage, cellar) are a union over every advert, active or not, and the energy rating
@@ -5859,8 +5858,8 @@ reads "Přibližná poloha") and the "By kind" strip; every number opens the "Ad
 verbatim), kind rule and live grain to live listings, so a cell's list differs from its number only by churn since the
 reading, whose time the list shows beside its own exact count. A separate entry, "No location answer · every status",
 carries its list's exact count and opens the matview's `none` rows in every status and portal (`snapshot_kind`; town
-evidence, a sibling with a point, a queued re-resolve), the rows the old audit page lists. That page and
-`location_pin_audit_mv` stay until the operator has compared the two (W6-c2 deletes them).
+evidence, a sibling with a point, a queued re-resolve), the rows the old audit page listed. W6-c2 (operator ruling
+2026-11-22, migration 765) deleted that page, `location_pin_audit_mv`, its cron and its registry row.
 
 **ONE LABEL, ONE CODE PREDICATE.** Every surface renders `location_display_label(...)` (migration
 503, one IMMUTABLE SQL function over seven columns): foreign country code, else street + čp/čo +
@@ -5928,19 +5927,12 @@ that view appends since 636) and path C candidate generation
 (`toolkit/dedup_candidates_sql`); `toolkit/comparables._shared_filter_where` needs no clause because
 its `ll.geom IS NOT NULL` is the same rule minus the foreign arm. **DETAIL STAYS REACHABLE**:
 `listings_public`, `properties_public` and `pipeline_board_public` are read by id, so a direct link,
-the extension, the audit page's own links and an operator's pipeline card (rule 22 operator state)
+the extension and an operator's pipeline card (rule 22 operator state)
 all keep working on an unresolved listing. Measured at the ruling: 44,702 of 711,600 Browse rows,
 2,953 of them still-live ads. The `location_town_coverage` gauge reports the count per portal as the
-`hidden` fact of its `{portal}/town` cell — a workload number that never moves a status. The operator watches the same
-set on `/new-dedup/pin-audit`, whose relation `location_pin_audit_mv` (migration 524) IS that
-definition — every listing that fails `SERVED_LOCATION_PREDICATE` and nothing else, refreshed hourly
-by pg_cron, leading the nav with its count — so the page and the rule can never describe different
-sets. W15 widened that cohort from ~44 k to ~80 k by retiring the served set: a delisted listing with
-no decided location is a finding like any other, and live-vs-delisted is one of the page's `quality`
-filters rather than a reason to hide the row. It carries no map: the whole subject is rows with no point to draw. Migration 510's
-property-and-legacy-pin version of that relation stays on disk as history (append-only, rule 1); it
-was retired by 513 because it read five `properties` place columns 508 drops, and 514 re-creates the
-name on inputs that cannot expire the same way.
+`hidden` fact of its `{portal}/town` cell — a workload number that never moves a status. The rows themselves are the
+position audit's "No location answer" entry on Location quality; the old `/new-dedup/pin-audit` page and its
+`location_pin_audit_mv` went in W6-c2 (migration 765; record below).
 
 **THE REBUILD BUDGET SCALES WITH THE CORPUS** (W13, migration 522, after the 2026-09-14 freeze).
 `browse_list` is a whole-relation rebuild of `browse_projection` on pg_cron (`*/15`, hourly at :45 since
@@ -6088,7 +6080,8 @@ per-listing statement gets, and cancelling it threw the whole batch away.
 * **A column drop under a live pg_cron schedule does not raise** — it breaks the job silently on a
   later tick, so the schedule is unscheduled IN the migration, ahead of its tables.
 
-**Pin-loss audit page — RETIRED 2026-09-13 (migration 513), kept here for the record.** The ruling
+**Pin-loss audit page — RETIRED 2026-09-13 (migration 513), re-created by 514, RETIRED again 2026-11-22 (W6-c2,
+migration 765: page, matview, cron and registry row), kept here for the record.** The ruling
 it was built for landed (503 now allows zero new pin loss, exempting the audited residue), and its
 matview depended on the five `properties` place columns W4-c drops, so 508 could not run while it
 existed. 513 drops the matview, both functions and the hourly cron job; the page is unrouted. The
@@ -6134,22 +6127,22 @@ booleans are rendered from `location_data/location_steps.py`, which also declare
 their order and each key's shape; `has_town` carries dedup's obec RANK floor and `located_no_town` is
 the plain complement. Wording lives in `frontend/src/lib/locationSteps.ts`, one file holding Czech and
 English for every key, so a better sentence costs no migration and a step cannot be renamed on one
-page only; the hidden set's two states carry ONE Czech name (`STATE_LABEL` in `LocationPinAudit.tsx`).
+page only.
 A candidate run stamps those keys into `candidate_generations.stats.waterfall` with the losses and
 shares already computed by the lane. The rail is `tests/test_location_steps_vocabulary.py`.
-`quality` buckets the set on active/delisted × `has_claims` — and since W15 `listings.is_active` is
-the page's ONLY live/delisted notion; the SPA page `/new-dedup/pin-audit` filters on those four axes
+`quality` bucketed the set on active/delisted × `has_claims` — and since W15 `listings.is_active` was
+the page's ONLY live/delisted notion; the SPA page `/new-dedup/pin-audit` filtered on those four axes
 plus the sibling flag; W1 deleted its overview matrix, state totals and split (read from
-`location_pin_audit_summary()`), so the one number on it is the exact count of the filtered list. The cohort is ONE arm — `listings` LEFT JOINed
+`location_pin_audit_summary()`), so the one number on it was the exact count of the filtered list. The cohort was ONE arm — `listings` LEFT JOINed
 to `listing_location`, `WHERE NOT <the consumer rule>` — instead of 514's union of two candidate
-sets, and the cohort CTE is MATERIALIZED so the evidence and snapshot laterals run once per cohort
-row (~80 k) and not once per listing. Refreshed hourly by pg_cron through `refresh_matview` (since
-719; `refresh-location-pin-audit`, guarded so the replay container skips it) with the budget armed **in
+sets, and the cohort CTE was MATERIALIZED so the evidence and snapshot laterals ran once per cohort
+row (~80 k) and not once per listing. It was refreshed hourly by pg_cron through `refresh_matview` (from
+719 until 765; `refresh-location-pin-audit`, guarded so the replay container skips it) with the budget armed **in
 the cron command** — migration 371's rule, or the refresh would silently die at the 120 s database
 default. Rule 25's deletion parity did not apply: it was an operator-requested review surface with
 a stated end. While it was live it led the TOP-LEVEL nav as `!AUDIT POLOH` (admin-only, first entry,
 badged with the unfiltered row count), not buried in the NEW DEDUP dropdown, because it was a
-decision waiting on the operator. Since 2026-10-27 (redesign ruling P33) it is the first item of the
+decision waiting on the operator. From 2026-10-27 (redesign ruling P33) it was the first item of the
 Admin menu; its count left the Admin trigger with W1.
 **The map's container carries an inline `position/inset/size` style and that is NOT redundant with
 Tailwind's `absolute inset-0`**: `globals.css` imports `maplibre-gl.css` AFTER `tailwindcss`, so the

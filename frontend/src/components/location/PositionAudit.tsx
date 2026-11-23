@@ -264,8 +264,7 @@ export function NoAnswerEntry({ open, onOpen }: { open: boolean; onOpen: () => v
       ) : (
         <div className="flex flex-wrap items-baseline gap-x-4 gap-y-2">
           <p className="text-[0.78rem] leading-relaxed text-[var(--color-ink-2)] max-w-[52rem]">
-            Ads in any status with no point and no determination abroad, the rows the pin audit page lists; the
-            grid counts only active ads.
+            Ads in any status with no point and no determination abroad; the grid counts only active ads.
           </p>
           {n != null ? (
             <button

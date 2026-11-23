@@ -1,6 +1,6 @@
 /* The position audit's list read and grid vocabulary (W6-c, migration 733).
  *
- * The stub records the PostgREST chain instead of hitting a server (as lib/pinAudit.test does): every method returns
+ * The stub records the PostgREST chain instead of hitting a server: every method returns
  * the same recorder and the recorder is thenable, so the builder's real shape is what the assertions read. */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
