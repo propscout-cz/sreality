@@ -21,10 +21,11 @@ THE SCOPE ROW IS THE ONE ROLLOUT CONTROL (E904). A dry run is the default and wr
 deal types and its area; a row that is absent or names no area merges nothing. It is re-read
 before EVERY group (E39), so emptying its area on /settings stops a run between two groups, and
 a run's own arguments can narrow it and never widen it. A group is inside the area only when
-EVERY advert its merge would move (the members and every other advert on the involved
-properties) is LOCATED in one of its blocks by its live `listing_location` row (`town:` =
+every MEMBER is LOCATED in one of its blocks by its live `listing_location` row (`town:` =
 obec_kod, `quarter:` = cast_obce_kod, `district:` = okres_kod) — never by the engine's own
-blocking key, which names a quarter or nothing where the scope names the town.
+blocking key, which names a quarter or nothing where the scope names the town. The other
+adverts on the involved properties ride along and are not asked (E989): the scope, a
+`listing_ids` scope included, bounds which GROUPS merge, not which adverts a merge moves.
 
 D7 holds: nothing here reads `property_merge_events`, and only `toolkit.property_identity` writes
 it (the chokepoint's merge rows, `source='autodedup'` saying who merged; a detach's undone stamps;

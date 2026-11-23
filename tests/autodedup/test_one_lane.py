@@ -1340,6 +1340,7 @@ def test_the_whole_scope_row_is_re_read_before_every_group() -> None:
     assert out["counts"]["applied"] == 1 and out["counts"]["skipped_at_apply"] == 1, (
         "E39: the narrowed row no longer admits group 20's members, yet it merged — "
         "recheck_group reads no scope")
+    assert out["skipped_at_apply"][0]["reasons"] == [AP.SKIP_MEMBER_OUT_OF_SCOPE]
     assert db.listings[21]["property_id"] == 400
 
 

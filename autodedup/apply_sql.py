@@ -56,9 +56,9 @@ select p.id, p.status, p.category_type, p.category_main, p.first_seen_at
 """
 
 # EVERY listing on the involved properties, not only the group's members: a merge moves all
-# of a property's children, so the negatives, the size, category and scope checks (location
-# included, as MEMBERS_SQL reads it) and the carry-along check read the whole set — at plan time
-# and again inside each group's transaction. Columns in `apply.Member` order.
+# of a property's children, so the negatives and the category checks read the whole set — at
+# plan time and again inside each group's transaction (the scope reads the members, E989).
+# Columns in `apply.Member` order.
 PROPERTY_LISTINGS_SQL = """
 select l.id, l.property_id, l.category_type, l.category_main, ll.obec_kod, ll.cast_obce_kod,
        ll.okres_kod

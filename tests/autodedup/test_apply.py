@@ -1188,6 +1188,8 @@ def test_the_apply_time_recheck_re_reads_the_scope_over_the_members() -> None:
     result = A.apply_plan(db, plan, dry_run=False, merge=db.merge(calls))
     assert calls == [] and result["counts"]["skipped_at_apply"] == 2, (
         "E39: a member the scope no longer admits merged — recheck_group reads no scope")
+    assert {row["cluster_key"]: row["reasons"] for row in result["skipped_at_apply"]} == {
+        20: [A.SKIP_MEMBER_OUT_OF_SCOPE], 30: [A.SKIP_MEMBER_OUT_OF_SCOPE]}
 
 
 @pytest.mark.parametrize("ruled", [False, True])
