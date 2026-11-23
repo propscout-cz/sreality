@@ -102,6 +102,8 @@ import type { BrowseViewState, TabKey } from '@/lib/browseState';
 const ListingMap = lazyChunk(() => import('@/components/ListingMap'));
 /* Lazy: the dialog mounts only on "Create watchdog", so it stays out of the first visit. */
 const CreateWatchdogModal = lazyChunk(() => import('@/components/CreateWatchdogModal'));
+/* Opened on Merge only: its ad cards stay out of the first-visit bundle. */
+const MergeConfirmDialog = lazyChunk(() => import('@/components/MergeConfirmDialog'));
 
 export interface BrowseFeatures {
   /* The saved-set bars (filter presets; the Stats tab's dashboards) — page only. */
@@ -199,7 +201,15 @@ export default function BrowseExperience({
 
   /* Merge mode (page only): one statement of letters over the cards. */
   const mergeMode = useMergeMode();
-  const mergeMut = useMergeProperties(mergeMode.exit);
+  /* The merge waits for one look at everything it would join (MergeConfirmDialog). */
+  const [mergeConfirmOpen, setMergeConfirmOpen] = useState(false);
+  const exitMergeMode = mergeMode.exit;
+  const mergeMut = useMergeProperties(
+    useCallback(() => {
+      setMergeConfirmOpen(false);
+      exitMergeMode();
+    }, [exitMergeMode]),
+  );
   const handleLocationPick = useCallback((row: PlaceRow) => {
     const to = flyToPlace(row);
     if (to) setMapFlyTo({ ...to, ts: Date.now() });
@@ -626,8 +636,18 @@ export default function BrowseExperience({
                 <MergeBar
                   merge={mergeMode}
                   merging={mergeMut.isPending}
-                  onMerge={() => mergeMut.mutate(mergeMode.letters)}
+                  onMerge={() => setMergeConfirmOpen(true)}
                 />
+                {mergeConfirmOpen && (
+                  <Suspense fallback={null}>
+                    <MergeConfirmDialog
+                      groups={mergeMode.groups}
+                      merging={mergeMut.isPending}
+                      onConfirm={() => mergeMut.mutate(mergeMode.letters)}
+                      onClose={() => setMergeConfirmOpen(false)}
+                    />
+                  </Suspense>
+                )}
               </div>
             )}
           </div>

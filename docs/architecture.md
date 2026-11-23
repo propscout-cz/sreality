@@ -2686,7 +2686,9 @@ renumber.** Navigate by area:
     statement of letters over the cards (`lib/useMergeMode`: a letter key marks the focused
     card — the pointer focuses the card it is over, Tab moves card to card — a click writes the
     active letter; every card keeps its pipeline, collection, dismissal and note marks,
-    read-only, and the bar lists each letter's properties with their marks, MS16) posts
+    read-only, and the bar lists each letter's properties with their marks, MS16; the bar's
+    Merge opens `MergeConfirmDialog`, every ad of every named property with its photos under
+    the letter it will become, and only that dialog's button, ruling 2026-11-23) posts
     `{letters: {property_id: "A"}}` to `POST /properties/merge`, the split's statement shape and
     codec (`letter_tokens`); `property_identity.merge_letters` merges each letter held by two or
     more properties through `merge_property_set` under its own group, all in ONE transaction
