@@ -63,6 +63,7 @@ import {
 import { usePageTitle } from '@/lib/pageTitle';
 import { portalLabel } from '@/lib/portals';
 import MergeBar from '@/components/MergeBar';
+import MergeConfirmDialog from '@/components/MergeConfirmDialog';
 import AppliedFilterPills from '@/components/AppliedFilterPills';
 import FilterPresetBar from '@/components/FilterPresetBar';
 import type { FilterPreset } from '@/lib/types';
@@ -199,7 +200,15 @@ export default function BrowseExperience({
 
   /* Merge mode (page only): one statement of letters over the cards. */
   const mergeMode = useMergeMode();
-  const mergeMut = useMergeProperties(mergeMode.exit);
+  /* The merge waits for one look at everything it would join (MergeConfirmDialog). */
+  const [mergeConfirmOpen, setMergeConfirmOpen] = useState(false);
+  const exitMergeMode = mergeMode.exit;
+  const mergeMut = useMergeProperties(
+    useCallback(() => {
+      setMergeConfirmOpen(false);
+      exitMergeMode();
+    }, [exitMergeMode]),
+  );
   const handleLocationPick = useCallback((row: PlaceRow) => {
     const to = flyToPlace(row);
     if (to) setMapFlyTo({ ...to, ts: Date.now() });
@@ -626,8 +635,16 @@ export default function BrowseExperience({
                 <MergeBar
                   merge={mergeMode}
                   merging={mergeMut.isPending}
-                  onMerge={() => mergeMut.mutate(mergeMode.letters)}
+                  onMerge={() => setMergeConfirmOpen(true)}
                 />
+                {mergeConfirmOpen && (
+                  <MergeConfirmDialog
+                    groups={mergeMode.groups}
+                    merging={mergeMut.isPending}
+                    onConfirm={() => mergeMut.mutate(mergeMode.letters)}
+                    onClose={() => setMergeConfirmOpen(false)}
+                  />
+                )}
               </div>
             )}
           </div>
