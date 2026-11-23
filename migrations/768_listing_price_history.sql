@@ -163,18 +163,7 @@ grant execute on function public.listing_price_history(bigint, bigint) to servic
 -- ---------------------------------------------------------------------------
 -- 3. THE BOOK carries the broker's own first and last price of the property.
 -- ---------------------------------------------------------------------------
-alter table public.broker_book
-  add column if not exists first_price_czk bigint,
-  add column if not exists last_price_czk  bigint;
-
-comment on column public.broker_book.first_price_czk is
-  'listing_price_history(lead advert, broker).first_price_czk (migration 768): the first price the broker asked '
-  'for the property, over the lead advert (the first of the broker''s adverts in the property''s canonical '
-  'order) and the broker''s own same-portal predecessors. NULL with no priced advert, or not yet recomputed.';
-comment on column public.broker_book.last_price_czk is
-  'listing_price_history(lead advert, broker).last_price_czk (migration 768): the lead advert''s last price. '
-  'measure_price_change_pct(first_price_czk, last_price_czk) is the broker''s price change on the property.';
-
+-- The view before the table: the pass's book write locks them in that order too.
 -- 692's body, with the lead advert picked beside the fold and its history appended. A qual on property_id is
 -- still a qual on a grouping column of the inner select, so it applies below the aggregate.
 create or replace view public.broker_book_projection as
@@ -212,6 +201,18 @@ comment on view public.broker_book_projection is
   'the broker''s ads. Read only by the property maintenance pass, which stores it in broker_book.';
 
 revoke all on public.broker_book_projection from public, anon, authenticated;
+
+alter table public.broker_book
+  add column if not exists first_price_czk bigint,
+  add column if not exists last_price_czk  bigint;
+
+comment on column public.broker_book.first_price_czk is
+  'listing_price_history(lead advert, broker).first_price_czk (migration 768): the first price the broker asked '
+  'for the property, over the lead advert (the first of the broker''s adverts in the property''s canonical '
+  'order) and the broker''s own same-portal predecessors. NULL with no priced advert, or not yet recomputed.';
+comment on column public.broker_book.last_price_czk is
+  'listing_price_history(lead advert, broker).last_price_czk (migration 768): the lead advert''s last price. '
+  'measure_price_change_pct(first_price_czk, last_price_czk) is the broker''s price change on the property.';
 
 do $post$
 declare
