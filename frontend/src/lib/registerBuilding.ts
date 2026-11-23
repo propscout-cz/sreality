@@ -44,6 +44,8 @@ export function completionFact(completed: RegisterBuilding['completed']): Regist
 }
 
 export function registerFacts(b: RegisterBuilding, ad: AdFacts): RegisterFact[] {
+  /* An API one deploy behind this bundle serves no list yet: no row then, never a throw. */
+  const protection: RegisterBuilding['protection'] | undefined = b.protection;
   const lift: RegisterFact = { label: 'Výtah', value: coded(b.lift) };
   if (b.lift?.code === LIFT_NO && ad.has_lift === true) lift.note = 'inzerát uvádí výtah';
   if (b.lift?.code === LIFT_YES && ad.has_lift === false) lift.note = 'inzerát uvádí bez výtahu';
@@ -64,10 +66,10 @@ export function registerFacts(b: RegisterBuilding, ad: AdFacts): RegisterFact[] 
     { label: 'Podlahová plocha', value: area(b.floor_area_m2) },
     /* Not only heritage: the list holds nature and water-source zones too, so the row names no kind. An empty
      * list is the register stating none, which is not the same as not knowing. */
-    {
+    ...(protection == null ? [] : [{
       label: 'Ochrana',
-      value: b.protection.length ? b.protection.map((p) => p.label ?? `kód ${p.code}`).join(', ') : 'registr žádnou neuvádí',
-    },
+      value: protection.length ? protection.map((p) => p.label ?? `kód ${p.code}`).join(', ') : 'registr žádnou neuvádí',
+    }]),
   ];
 }
 

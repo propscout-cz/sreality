@@ -56,6 +56,11 @@ describe('registerFacts', () => {
     expect(row('Ochrana', { has_lift: null }, b).value).toBe('první, kód 99');
   });
 
+  it('shows no protection row, and does not throw, on an answer from an API that serves no list yet', () => {
+    const { protection: _, ...older } = BUILDING;
+    expect(registerFacts(older as RegisterBuilding, { has_lift: null }).some((f) => f.label === 'Ochrana')).toBe(false);
+  });
+
   it('says the register states none, which is not a gap in what it knows', () => {
     expect(row('Ochrana').value).toBe('registr žádnou neuvádí');
   });
