@@ -270,7 +270,7 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
       )}
       {showsCadastre(rows) ? (
         <p className="text-xs text-[var(--color-ink-3)]">
-          Cena z katastru je za celou listinu a katastr neuvádí plochu. Kde přesně tu cenu před prodejem žádal jediný
+          Cena z katastru je za celou listinu a cenová sestava plochu neuvádí. Kde přesně tu cenu před prodejem žádal jediný
           inzerát v tomto domě, je plocha a dispozice převzatá z něj (označeno „inzerát“); jinak je řádek bez ceny za
           m². Ceny z katastru vidí jen váš účet. Zdroj: ČÚZK.
         </p>
@@ -304,13 +304,16 @@ function UnitInfo({ unit, ask }: { unit: CadastreUnit | null; ask: UnitAsk | nul
     const title = [f.use_label ? `využití: ${f.use_label}` : null, share].filter(Boolean).join(', ') || undefined;
     return (
       <span className={UNIT_NOTE} title={title}>
-        {f.floor_area_m2 != null ? `katastr: ${fmtArea(f.floor_area_m2)}` : 'katastr plochu neeviduje'}
+        {f.floor_area_m2 != null ? `katastr: ${fmtArea(f.floor_area_m2)}`
+          : f.area_state === 'empty' ? 'katastr plochu neeviduje' : 'plochu se v sestavě nepodařilo zjistit'}
         {share ? ` · ${share}` : ''}
       </span>
     );
   }
   const p = unit?.purchase;
-  if (p?.fetching) return <span className={UNIT_NOTE}>vyzvedává se…</span>;
+  if (p?.fetching) {
+    return <span className={UNIT_NOTE}>{p.status === 'paid_unread' ? 'vyžádáno, čeká se na odpověď' : 'vyzvedává se…'}</span>;
+  }
   if (p && (p.status === 'pending' || p.status === 'ordered')) {
     return ask ? (
       <>
@@ -328,8 +331,8 @@ function UnitInfo({ unit, ask }: { unit: CadastreUnit | null; ask: UnitAsk | nul
     const again = p.file_kept ? 'přečíst znovu (zdarma)' : p.gone ? null : `vyzvednout znovu (celkem nejvýše ${ask?.price ?? ''} Kč)`;
     return (
       <>
-        <span className={UNIT_NOTE} title="Sestava mohla být zaúčtována; ověříte to ve vyúčtování svého účtu u ČÚZK">
-          zaplaceno, nepřečteno
+        <span className={UNIT_NOTE} title="Ověříte to ve vyúčtování svého účtu u ČÚZK">
+          {p.cost_czk != null ? 'zaplaceno, nepřečteno' : 'mohlo být zaúčtováno, nepřečteno'}
         </span>
         {ask && again ? (
           <button type="button" className={UNIT_ACT} onClick={() => ask.resume(p.id)}>{again}</button>

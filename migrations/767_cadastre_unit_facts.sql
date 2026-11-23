@@ -13,7 +13,17 @@
 -- cadastre_unit_facts: what the report states of the unit itself, the buying account's own (ruling 2026-11-22):
 -- floor area (recorded by the cadastre since 2024, so often absent), the way of use, the share of the building's
 -- common parts. The report also names the unit's OWNERS (name, address, birth number): no column here holds
--- them, and the stored file has that part cut out before it is kept (operator ruling 2026-11-23).
+-- them, and the file kept for a unit purchase is a new document holding only the text of the leaves we read and
+-- the report's element names (operator ruling 2026-11-23). That holds in the database, not only in the code:
+-- `raw_cut` marks a kept file as that cut document, and a CHECK refuses a file on a unit row without it. Code
+-- that predates this file knows no `raw_cut`, so if it ever serves again (a rollback) and is asked to continue
+-- a unit purchase, its write of the uncut file is refused. ROLLBACK RULE all the same: before older code
+-- serves again, end every kind = 'unit' row in pending, ordered or paid_unread (older code would show it as the
+-- building's purchase).
+--
+-- `area_state` keeps three answers apart: 'stated', 'empty' (the element is there and blank: the cadastre
+-- records no floor area) and 'unknown' (no such leaf where the schema puts it: not the cadastre's statement).
+-- `shape` is the report's element paths under the unit, names only, so one bought report shows the real layout.
 --
 -- Service-role only, like 763: RLS on, no policy, no grant to anon or authenticated.
 --
@@ -24,7 +34,8 @@ set local lock_timeout = '5s';
 
 alter table public.cadastre_price_purchases
   add column if not exists kind text not null default 'prices',
-  add column if not exists unit_iskn_id bigint;
+  add column if not exists unit_iskn_id bigint,
+  add column if not exists raw_cut boolean not null default false;
 
 do $constraints$
 begin
@@ -35,6 +46,10 @@ begin
   if not exists (select 1 from pg_constraint where conname = 'cadastre_price_purchases_unit_iff_unit_kind') then
     alter table public.cadastre_price_purchases
       add constraint cadastre_price_purchases_unit_iff_unit_kind check ((kind = 'unit') = (unit_iskn_id is not null));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'cadastre_price_purchases_unit_file_is_cut') then
+    alter table public.cadastre_price_purchases
+      add constraint cadastre_price_purchases_unit_file_is_cut check (kind = 'prices' or raw_report is null or raw_cut);
   end if;
 end
 $constraints$;
@@ -51,6 +66,8 @@ create table if not exists public.cadastre_unit_facts (
   unit_iskn_id  bigint  not null,
   label         text    not null,
   floor_area_m2 numeric(10, 2),
+  area_state    text    not null check (area_state in ('stated', 'empty', 'unknown')),
+  shape         text[]  not null default '{}',
   use_code      text,
   use_label     text,
   share_num     bigint,
@@ -89,12 +106,13 @@ begin
   end loop;
   if (select count(*) from information_schema.columns
        where table_schema = 'public' and table_name = 'cadastre_price_purchases'
-         and column_name in ('kind', 'unit_iskn_id')) <> 2 then
-    raise exception '767 did not land: cadastre_price_purchases lacks kind or unit_iskn_id';
+         and column_name in ('kind', 'unit_iskn_id', 'raw_cut')) <> 3 then
+    raise exception '767 did not land: cadastre_price_purchases lacks kind, unit_iskn_id or raw_cut';
   end if;
   if (select count(*) from pg_constraint
        where conrelid = 'public.cadastre_price_purchases'::regclass
-         and conname in ('cadastre_price_purchases_kind_check', 'cadastre_price_purchases_unit_iff_unit_kind')) <> 2 then
+         and conname in ('cadastre_price_purchases_kind_check', 'cadastre_price_purchases_unit_iff_unit_kind',
+                         'cadastre_price_purchases_unit_file_is_cut')) <> 3 then
     raise exception '767 did not land: a kind constraint is missing';
   end if;
   if to_regclass('public.cadastre_price_purchases_in_flight_kind_uq') is null

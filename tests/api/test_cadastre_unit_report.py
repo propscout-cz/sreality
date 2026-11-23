@@ -24,31 +24,56 @@ def _doc(*, area: str = "", owners: bool = True, stray: str = "", units: int = 1
             "<PLATNOST>k 23.11.2026</PLATNOST></InformaceOJednotkach>").encode()
 
 
-def test_the_unit_is_read_with_its_use_and_share_and_an_unrecorded_area_is_unknown():
-    assert report.parse(_doc()) == report.UnitFacts(
-        iskn_id=1005719101, label="1161/10", floor_area_m2=None, use_code="1", use_label="byt byt.z.",
-        share_num=344, share_den=35966)
+def _area_doc(element: str) -> bytes:
+    return _doc().replace(b"<PODLAHOVA_PLOCHA></PODLAHOVA_PLOCHA>", element.encode())
+
+
+def test_the_unit_is_read_with_its_use_and_share():
+    facts = report.parse(_doc())
+    assert (facts.iskn_id, facts.label, facts.use_code, facts.use_label, facts.share_num, facts.share_den) == (
+        1005719101, "1161/10", "1", "byt byt.z.", 344, 35966)
 
 
 @pytest.mark.parametrize(("stated", "read"), [("34.40", "34.40"), ("34,4", "34.4"), ("120", "120")])
 def test_a_recorded_floor_area_is_read_as_stated(stated, read):
-    assert report.parse(_doc(area=stated)).floor_area_m2 == Decimal(read)
+    facts = report.parse(_doc(area=stated))
+    assert (facts.floor_area_m2, facts.area_state) == (Decimal(read), "stated")
 
 
-def test_the_kept_file_holds_only_what_is_read_and_reads_the_same():
-    kept = report.redact(_doc(area="34.40", stray="<VAZBA_JPV><TEXT>ve prospěch: Novotná</TEXT></VAZBA_JPV>"))
-    for gone in (b"VLASTNICTVI", b"oprav_subjekt", b"755101", "Novotná".encode(), "Dlouhá".encode(), b"VAZBA_JPV",
-                 b"PARCELY", b"Praha", b"PLATNOST"):
+@pytest.mark.parametrize(("element", "state"), [
+    ("<PODLAHOVA_PLOCHA></PODLAHOVA_PLOCHA>", "empty"),  # there and blank: the cadastre records none
+    ("<PODLAHOVA_PLOCHA/>", "empty"),
+    ("", "unknown"),                                      # as in ČÚZK's published sample: no such element
+    ("<PODLAHOVA_PLOCHA><m2>34</m2></PODLAHOVA_PLOCHA>", "unknown"),  # not a leaf: another layout than the schema's
+    ("<PLOCHA>34</PLOCHA>", "unknown"),
+])
+def test_an_area_we_could_not_find_is_not_the_cadastres_statement(element, state):
+    facts = report.parse(_area_doc(element))
+    assert (facts.floor_area_m2, facts.area_state) == (None, state)
+
+
+def test_the_reports_shape_is_its_element_names_and_nothing_else():
+    shape = report.parse(_area_doc("<PLOCHA>34</PLOCHA>")).shape
+    assert {"PLOCHA", "BUD_PODIL/citatel", "CISLO_JED/jednotka/id", "VLASTNICTVI/SUBJEKTY/SUBJEKT/VLA_IDENT/oprav_subjekt/rc6"} <= set(shape)
+    assert not any(value in " ".join(shape) for value in ("Novotná", "755101", "344", "Dlouhá"))
+
+
+def test_the_kept_file_holds_only_the_text_of_the_leaves_we_read_and_reads_the_same():
+    full = _doc(area="34.40", stray="<VAZBA_JPV><TEXT>ve prospěch: Novotná</TEXT></VAZBA_JPV>").replace(
+        b"<citatel>344</citatel>", b"<citatel kdo='Novotna'>344<oprav_subjekt>x</oprav_subjekt></citatel>ocas Novotna")
+    kept = report.redact(full)
+    for gone in (b"Novotn", b"755101", "Dlouhá".encode(), b"Praha", b"kdo=", b"ocas", b"1516"):
         assert gone not in kept
-    assert report.parse(kept) == report.parse(_doc(area="34.40"))
-    assert report.redact(kept) == kept, "cutting twice changes nothing"
+    assert report.parse(kept).shape == report.parse(full).shape, "the names survive, as names"
+    plain = _doc(area="34.40")
+    assert report.parse(report.redact(plain)) == report.parse(plain)
+    assert report.redact(report.redact(plain)) == report.redact(plain), "cutting twice changes nothing"
 
 
-@pytest.mark.parametrize("tag", sorted(report._PERSONAL - {"VLASTNICTVI", "SUBJEKT"}))
-def test_a_personal_field_among_the_kept_ones_refuses_the_file(tag):
-    inside = _doc().replace(b"<citatel>", f"<{tag}>x</{tag}><citatel>".encode())
-    with pytest.raises(report.UnitReportError, match="personal"):
-        report.redact(inside)
+def test_a_leaf_that_carries_children_is_not_copied():
+    kept = report.redact(_doc().replace(b"<VYUZ_TYP>byt byt.z.</VYUZ_TYP>",
+                                        b"<VYUZ_TYP>byt<prijmeni>Novotna</prijmeni></VYUZ_TYP>"))
+    assert b"Novotna" not in kept and report.parse(kept).use_label is None
 
 
 def test_an_error_never_quotes_the_document():
@@ -62,3 +87,9 @@ def test_an_error_never_quotes_the_document():
 def test_anything_else_is_not_this_report(document):
     with pytest.raises(report.UnitReportError):
         report.parse(document)
+
+
+@pytest.mark.parametrize("document", [b"not xml", b"<Jine><prijmeni>Novotna</prijmeni></Jine>"])
+def test_what_is_not_the_report_is_not_cut_down(document):
+    with pytest.raises(report.UnitReportError):
+        report.redact(document)

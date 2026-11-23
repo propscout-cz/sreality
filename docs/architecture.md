@@ -6209,8 +6209,11 @@ ruling 2026-11-22).
 deed the account already bought for the building (`POST /properties/{id}/building/units/{iskn_id}`). Stored in
 `cadastre_unit_facts`, the buying account's own: floor area (the cadastre records it only since 2024; NULL = not
 recorded), use, share of the common parts. The report names the unit's OWNERS (name, address, birth number):
-nothing reads them, and that part is cut out before the file is kept; if the cut fails the file is not kept at
-all (operator ruling 2026-11-23). The card shows what was read beside the row; it feeds no per-m² figure yet.
+nothing reads them, and the kept file is a new document holding only the text of the leaves we read plus the
+report's element names; a CHECK refuses any other file on a unit's row, so code older than 767 cannot store one
+(operator ruling 2026-11-23). ROLLBACK RULE: before older code serves again, end every `kind = 'unit'` row in
+`pending`/`ordered`/`paid_unread`. `area_state` keeps "the cadastre records none" (`empty`) apart from "we found
+no such element" (`unknown`). The card shows what was read beside the row; it feeds no per-m² figure yet.
 
 **A bought deed borrows, never stores, an area (ruling 2026-11-23).** ČÚZK's price report states no area. A deed
 over exactly one unit is matched at READ time (`api/cadastre_deed_matches.py`) to what we hold of the same sale: a

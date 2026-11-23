@@ -68,7 +68,8 @@ unless ČÚZK said the report is gone, and a new purchase of the building may be
 TWO KINDS, ONE MACHINE (migration 767). A purchase is of a `Kind`: the building's price report, or one unit's
 "Informace o jednotkách" (10 Kč, only for a unit named in a deed the account already bought). Everything above
 holds for both; a kind differs only in what is ordered, the price it may cost, what is stored from the file, and
-this: a unit's report names the unit's owners, so that part is cut out before the file is kept, and if the cut
+this: a unit's report names the unit's owners, so the file kept is a new document holding only the leaves we
+read (`cadastre_unit_report.redact`; the database refuses any other file on a unit's row), and if the cut
 fails the file is not kept at all (the cost is recorded and the answer is read from memory; if that fails too,
 the purchase is paid and unread with no file, and fetching it again is free while ČÚZK serves it). Every statement names the kind and the unit, so neither reads as the other's.
 
@@ -345,16 +346,18 @@ def _status(conn: psycopg.Connection, account_id: uuid.UUID, purchase_id: int) -
 
 
 def keep_fetched(conn: psycopg.Connection, account_id: uuid.UUID, purchase_id: int, cost_czk: int | None,
-                 document: bytes) -> None:
+                 document: bytes, *, cut: bool = False) -> None:
     """The fetched file and what it cost, before anything reads it. Never fenced and never dropped: ČÚZK has
-    answered the charging fetch, so whatever the row says now, it becomes a paid purchase with its file."""
+    answered the charging fetch, so whatever the row says now, it becomes a paid purchase with its file. `cut`:
+    the document is a unit report already cut down (`cadastre_unit_report.redact`); the database refuses any other
+    file on a unit's purchase (migration 767)."""
     with conn.cursor() as cur:
         cur.execute(
-            "update cadastre_price_purchases set cost_czk = %s, raw_report = %s, "
+            "update cadastre_price_purchases set cost_czk = %s, raw_report = %s, raw_cut = %s, "
             "       fetch_sent_at = coalesce(fetch_sent_at, now()), "
             "       status = case when status = 'failed' then 'paid_unread' else status end "
             "where id = %s and account_id = %s and status in ('ordered', 'paid_unread', 'failed')",
-            (cost_czk, cuzk_login.seal(document), purchase_id, account_id),
+            (cost_czk, cuzk_login.seal(document), cut, purchase_id, account_id),
         )
         kept = cur.rowcount == 1
     if not kept and _status(conn, account_id, purchase_id) != "done":
@@ -426,11 +429,11 @@ def finish(conn: psycopg.Connection, account_id: uuid.UUID, purchase_id: int,
             cur.execute(
                 """
                 insert into cadastre_unit_facts (purchase_id, account_id, unit_iskn_id, label, floor_area_m2,
-                                                 use_code, use_label, share_num, share_den)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                                 area_state, shape, use_code, use_label, share_num, share_den)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
-                (purchase_id, account_id, facts.iskn_id, facts.label, facts.floor_area_m2, facts.use_code,
-                 facts.use_label, facts.share_num, facts.share_den),
+                (purchase_id, account_id, facts.iskn_id, facts.label, facts.floor_area_m2, facts.area_state,
+                 list(facts.shape), facts.use_code, facts.use_label, facts.share_num, facts.share_den),
             )
 
 
@@ -491,7 +494,8 @@ select distinct on (p.unit_iskn_id)
        p.status in ('ordered', 'paid_unread') and p.raw_report is null
          and p.fetch_sent_at > now() - make_interval(secs => {FETCH_COOL_S}) as fetching,
        coalesce(p.error like '{_GONE}%%', false) as gone,
-       f.id is not null as read, f.floor_area_m2, f.use_code, f.use_label, f.share_num, f.share_den
+       f.id is not null as read, f.floor_area_m2, f.area_state, f.shape, f.use_code, f.use_label, f.share_num,
+       f.share_den
   from cadastre_price_purchases p
   left join lateral (
          -- the newest facts the account holds of the unit: a later purchase that read none must not hide them
@@ -502,7 +506,7 @@ select distinct on (p.unit_iskn_id)
  order by p.unit_iskn_id, p.requested_at desc, p.id desc
 """
 _UNIT_PURCHASE = ("id", "status", "cost_czk", "fetch_sent", "file_kept", "fetching", "gone")
-_UNIT_FACTS = ("floor_area_m2", "use_code", "use_label", "share_num", "share_den")
+_UNIT_FACTS = ("floor_area_m2", "area_state", "shape", "use_code", "use_label", "share_num", "share_den")
 
 
 def state(conn: psycopg.Connection, account_id: uuid.UUID, building_code: int) -> dict[str, Any]:
@@ -830,7 +834,7 @@ def _talk(run: _Run, building: Building, purchase: Purchase, kind: Kind, *, slee
                     keep_cost_only(conn, run.account_id, purchase.id, cost, f"not kept: {exc}")
                 return
         with run.opener() as conn:
-            keep_fetched(conn, run.account_id, purchase.id, cost, document)
+            keep_fetched(conn, run.account_id, purchase.id, cost, document, cut=kind.unit_iskn_id is not None)
 
     try:
         _fetched, document = run.call(wsdp_client.fetch_report, report_id, before=mark_sent, then=keep)

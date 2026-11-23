@@ -963,7 +963,7 @@ def _unit_report(iskn_id: int, *, area: str = "", stray: str = "") -> bytes:
         "<InformaceOJednotkach><KATASTR><STAVBY><STAVBA><JEDNOTKY><JEDNOTKA><ZP_VYUZITI>1</ZP_VYUZITI>"
         f"<CISLO_JED><jednotka><id>{iskn_id}</id><cp_ident>565</cp_ident><jed_ident>14</jed_ident></jednotka>"
         "</CISLO_JED><VYUZ_TYP>byt byt.z.</VYUZ_TYP><BUD_PODIL><citatel>344</citatel><jmenovatel>35966</jmenovatel>"
-        f"{stray}</BUD_PODIL><PODLAHOVA_PLOCHA>{area}</PODLAHOVA_PLOCHA><PLOMBY>{OWNER}</PLOMBY><VLASTNICTVI><LV><cislo_tel>1</cislo_tel></LV>"
+        f"</BUD_PODIL><PODLAHOVA_PLOCHA>{area}</PODLAHOVA_PLOCHA>{stray}<PLOMBY>{OWNER}</PLOMBY><VLASTNICTVI><LV><cislo_tel>1</cislo_tel></LV>"
         f"<SUBJEKTY><SUBJEKT><VLA_IDENT><oprav_subjekt><rc6>755101</rc6><prijmeni>{OWNER}</prijmeni></oprav_subjekt>"
         "</VLA_IDENT></SUBJEKT></SUBJEKTY></VLASTNICTVI></JEDNOTKA></JEDNOTKY></STAVBA></STAVBY></KATASTR>"
         "</InformaceOJednotkach>").encode()
@@ -1013,8 +1013,10 @@ def test_a_units_information_is_bought_by_the_same_machine_and_leaves_the_prices
         "unit_iskn_id": cuzk.unit,
         "purchase": {"id": _id(conn, me), "status": "done", "cost_czk": 10, "fetch_sent": True, "file_kept": False,
                      "fetching": False, "gone": False},
-        "facts": {"floor_area_m2": 34.4, "use_code": "1", "use_label": "byt byt.z.", "share_num": 344,
-                  "share_den": 35966}}]
+        "facts": {"floor_area_m2": 34.4, "area_state": "stated", "shape": after["units"][0]["facts"]["shape"],
+                  "use_code": "1", "use_label": "byt byt.z.", "share_num": 344, "share_den": 35966}}]
+    assert "PODLAHOVA_PLOCHA" in after["units"][0]["facts"]["shape"] and "PLOMBY" in after["units"][0]["facts"]["shape"]
+    assert prices.state(conn, _account(conn), BUILDING.code)["units"] == [], "the buyer's own, nobody else's"
     with pytest.raises(prices.AlreadyBought):  # the unit's own repeat guard, and the building's is untouched
         cuzk.buy(me)
     with pytest.raises(prices.AlreadyBought):
@@ -1025,7 +1027,8 @@ def test_a_unit_whose_area_the_cadastre_does_not_record_reads_as_unknown_not_zer
     me = _account(conn)
     cuzk = _UnitCuzk(monkeypatch, conn, me)
     cuzk.buy(me)
-    assert prices.state(conn, me, BUILDING.code)["units"][0]["facts"]["floor_area_m2"] is None
+    facts = prices.state(conn, me, BUILDING.code)["units"][0]["facts"]
+    assert (facts["floor_area_m2"], facts["area_state"]) == (None, "empty")
 
 
 def test_only_a_unit_named_in_a_deed_the_account_bought_can_be_asked_about(conn, monkeypatch):
@@ -1048,22 +1051,25 @@ def test_the_kept_file_of_a_unit_never_holds_its_owners(conn, monkeypatch):
     assert _unit_rows(conn, me) == [("paid_unread", 9101, 10, True, cuzk.unit)]
     kept = cuzk_login.unseal(bytes(conn.execute(
         "select raw_report from cadastre_price_purchases where id = %s", (_id(conn, me),)).fetchone()[0]))
-    assert b"VLASTNICTVI" not in kept and OWNER.encode() not in kept and b"755101" not in kept
-    assert b"PLOMBY" not in kept, "only the fields we read are kept, whatever else the report holds"
+    assert OWNER.encode() not in kept and b"755101" not in kept, "neither the owner nor the seal's text"
+    assert b"<p>PLOMBY</p>" in kept and b"<PLOMBY>" not in kept, "what else the report holds is kept as a name only"
     assert b"<citatel>344</citatel>" in kept, "everything we read is still there"
 
 
-def test_a_unit_file_that_cannot_be_cut_down_is_never_kept_and_what_it_states_is_still_read(conn, monkeypatch):
+def test_the_database_refuses_an_uncut_file_on_a_units_purchase(conn, monkeypatch):
+    """What code older than migration 767 would write if it ever continued a unit's purchase (a rollback)."""
+    import psycopg
+
     me = _account(conn)
     cuzk = _UnitCuzk(monkeypatch, conn, me)
-    cuzk.document = _unit_report(cuzk.unit, stray=f"<oprav_subjekt><prijmeni>{OWNER}</prijmeni></oprav_subjekt>")
-    kept: list[bytes] = []
-    keep = prices.keep_fetched
-    monkeypatch.setattr(prices, "keep_fetched", lambda c, a, p, cost, doc: (kept.append(doc), keep(c, a, p, cost, doc))[1])
-    cuzk.buy(me)
-    assert kept == [], "a personal field sat among the fields we keep: nothing of the file was stored"
-    assert _unit_rows(conn, me) == [("done", 9101, 10, False, cuzk.unit)] and _lease_free(conn, me)
-    assert prices.state(conn, me, BUILDING.code)["units"][0]["facts"]["share_num"] == 344
+    cuzk.ready_after = 99
+    with pytest.raises(prices.InProgress):
+        cuzk.buy(me)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute("update cadastre_price_purchases set raw_report = %s where id = %s",
+                     (cuzk_login.seal(cuzk.document), _id(conn, me)))
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute("update cadastre_price_purchases set unit_iskn_id = null where id = %s", (_id(conn, me),))
 
 
 def test_a_unit_answer_that_is_not_the_report_ends_paid_with_no_file_and_is_fetched_again_for_free(conn, monkeypatch):

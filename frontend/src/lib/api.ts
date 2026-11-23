@@ -754,8 +754,11 @@ export interface CadastreUnit {
   unit_iskn_id: number;
   purchase: { id: number; status: 'pending' | 'ordered' | 'done' | 'paid_unread'; cost_czk: number | null;
     fetch_sent: boolean; file_kept: boolean; fetching: boolean; gone: boolean };
-  facts: { floor_area_m2: number | null; use_code: string | null; use_label: string | null;
-    share_num: number | null; share_den: number | null } | null;
+  /* area_state: stated = a number; empty = the report's area element is blank (the cadastre records none);
+   * unknown = no such element where the schema puts it, so we could not tell (NOT the cadastre's statement).
+   * shape: the report's element paths under the unit, names only. */
+  facts: { floor_area_m2: number | null; area_state: 'stated' | 'empty' | 'unknown'; shape: string[];
+    use_code: string | null; use_label: string | null; share_num: number | null; share_den: number | null } | null;
 }
 export interface BuildingPrices {
   /* false: the property's door names no building the cadastre knows, so nothing can be asked. */
@@ -779,8 +782,8 @@ export interface BuildingPrices {
   /* The deeds of the newest purchase that holds any. */
   deeds: CadastreDeed[];
   /* One unit's "Informace o jednotkách", 10 Kč each, only for a unit named in a bought deed. Per unit asked about:
-   * its newest purchase that did not end uncharged, and what it read (null until read). floor_area_m2 null = the
-   * cadastre records no floor area for the unit (it does so only since 2024). Absent from an older API. */
+   * its newest purchase that did not end uncharged, and the newest facts read of it (null until read). Absent
+   * from an older API. */
   unit_price_czk?: number;
   units?: CadastreUnit[];
   /* On a POST's answer: null when the request did what it asked; else why it did nothing (the state is as it stood). */
