@@ -156,7 +156,7 @@ function BrokerDetailDesktop() {
           </header>
 
           {/* Stats strip */}
-          <div className="mt-6 grid grid-cols-[1fr_1fr_1fr_minmax(0,1.7fr)] border border-[var(--color-rule)] rounded-[var(--radius-md)] divide-x divide-[var(--color-rule-soft)] bg-[var(--color-paper-2)]">
+          <div className={`mt-6 grid ${dossier.price_change ? 'grid-cols-[1fr_1fr_1fr_minmax(0,1.7fr)]' : 'grid-cols-3'} border border-[var(--color-rule)] rounded-[var(--radius-md)] divide-x divide-[var(--color-rule-soft)] bg-[var(--color-paper-2)]`}>
             <Stat
               label="Nemovitosti"
               value={b.active_properties}
@@ -165,7 +165,7 @@ function BrokerDetailDesktop() {
             />
             <Stat label="Kanceláře" value={dossier.memberships.length} hint="historicky" />
             <Stat label="Regiony" value={dossier.region_shares.length} hint="kde inzeruje" />
-            <PriceChangeStat figures={dossier.price_change} />
+            {dossier.price_change && <PriceChangeStat figures={dossier.price_change} />}
           </div>
 
           {/* Section cards, 16 px apart (system.md § Section cards). */}

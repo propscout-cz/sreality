@@ -218,14 +218,13 @@ def get_broker(conn: Any, broker_id: int) -> dict[str, Any] | None:
             "ORDER BY last_seen_at DESC NULLS LAST", params)
         memberships = cur.fetchall()
         region_shares, categories = footprint(cur, broker_id)
-        prices = price_change(cur, broker_id)
         contacts = _contacts(cur, broker_id)
     for coll in (broker, *memberships):
         for k in ("first_seen_at", "last_seen_at"):
             if k in coll:
                 coll[k] = _iso(coll[k])
     data = {"broker": broker, "memberships": memberships, "region_shares": region_shares,
-            "categories": categories, "price_change": prices, "contacts": contacts}
+            "categories": categories, "contacts": contacts}
     return _envelope("broker_detail", data, {"broker_id": broker_id}, 1, broker.get("last_seen_at"))
 
 
@@ -290,6 +289,8 @@ _FOOTPRINT_SQL = f"""
 # against their last. `priced` = the properties with a price to compare, `repriced` = those whose last price differs
 # from the first (`cut` below it, `raised` above); the median is over the repriced ones only, since most properties
 # never move and a median over all of them is 0 for nine brokers in ten (production, 2026-11-23).
+# NOT in the dossier yet (#2633): the book's price pair is written by the maintenance pass, so until one full sweep
+# has run on this code the filled rows are the recently changed properties only, and their share is not the book's.
 _PRICE_CHANGE_SQL = f"""
     SELECT grouping(b.is_active) = 1 AS every, b.is_active,
            count(*) FILTER (WHERE x.pct IS NOT NULL) AS priced,
@@ -307,14 +308,17 @@ _PRICE_CHANGE_KEYS = ("priced", "repriced", "cut", "raised", "median_pct")
 
 def price_change(cur: Any, broker_id: int) -> dict[str, dict[str, Any]]:
     """The broker's price figures over every property of the book (`all`), those with an ad of theirs still running
-    (`active`) and the rest (`inactive`). The median answers from MIN_N repriced properties up (a dict_row cursor)."""
-    out = {k: {"priced": 0, "repriced": 0, "cut": 0, "raised": 0, "median_pct": None}
+    (`active`) and the rest (`inactive`). The share answers from MIN_N priced properties up, the median from MIN_N
+    repriced ones (a dict_row cursor)."""
+    out = {k: {"priced": 0, "repriced": 0, "cut": 0, "raised": 0, "repriced_pct": None, "median_pct": None}
            for k in ("all", "active", "inactive")}
     cur.execute(_PRICE_CHANGE_SQL, {"broker_id": broker_id})
     for r in cur.fetchall():
         figures = {k: r[k] for k in _PRICE_CHANGE_KEYS}
         if figures["repriced"] < MIN_N:
             figures["median_pct"] = None
+        figures["repriced_pct"] = (100 * figures["repriced"] / figures["priced"]
+                                   if figures["priced"] >= MIN_N else None)
         out["all" if r["every"] else "active" if r["is_active"] else "inactive"] = figures
     return out
 

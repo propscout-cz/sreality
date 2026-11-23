@@ -271,6 +271,15 @@ _RECOMPUTE_BATCH_SQL = f"""
       JOIN listings l ON l.id = s.listing_id
       JOIN batch b ON b.id = l.property_id
       GROUP BY l.property_id
+    ),
+    -- The price figures are the canonical advert's history (MS10, migration 768): the one definition
+    -- the broker book and the broker inventory read too, here over every same-portal predecessor.
+    -- MATERIALIZED, one call per canonical advert: as a lateral in the UPDATE's FROM the planner put
+    -- it on the outer side of a nested loop and re-ran every aggregate above once per advert.
+    prices AS MATERIALIZED (
+      SELECT c.property_id AS pid, h.*
+      FROM canon c
+      CROSS JOIN LATERAL listing_price_history(c.id, NULL) h
     )
     UPDATE properties p SET
 {_ROLLUP_SET}
@@ -281,9 +290,7 @@ _RECOMPUTE_BATCH_SQL = f"""
     LEFT JOIN storey sy ON sy.pid = r.pid
     LEFT JOIN stated sd ON sd.pid = r.pid
     LEFT JOIN changes ch ON ch.pid = r.pid
-    -- The price figures are the canonical advert's history (MS10, migration 768): the one definition
-    -- the broker book and the broker inventory read too, here over every same-portal predecessor.
-    CROSS JOIN LATERAL listing_price_history(c.id, NULL) ph
+    LEFT JOIN prices ph ON ph.pid = r.pid
     WHERE p.id = r.pid
       AND {_ROLLUP_CHANGED}
 """

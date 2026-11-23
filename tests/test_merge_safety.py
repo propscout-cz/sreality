@@ -31,7 +31,9 @@ def test_every_price_step_reader_reads_the_one_view_and_none_keeps_a_window():
     from api import notifications as nf
     from scripts.recompute_property_stats import _RECOMPUTE_BATCH_SQL
 
-    history = MIGRATION.with_name("768_listing_price_history.sql").read_text()
+    from tests.migration_defs import latest_definition
+
+    history = latest_definition("listing_price_history").read_text()
     history = history.split("create or replace function public.listing_price_history", 1)[1].split("$function$;", 1)[0]
     assert "listing_price_history(c.id, NULL)" in _RECOMPUTE_BATCH_SQL
     assert not re.search(r"\bover\s*\(", _RECOMPUTE_BATCH_SQL, re.I), "the rollup keeps a window of its own"

@@ -117,9 +117,11 @@ export default function PhoneBrokerDetail() {
       <Facts b={b} />
       {/* Section cards like the phone property page's (operator ruling 2026-10-28). */}
       <div className="space-y-4 border-t border-[var(--color-rule)] p-4">
-        <Panel title="Změna ceny">
-          <PriceChange figures={dossier.price_change} />
-        </Panel>
+        {dossier.price_change && (
+          <Panel title="Změna ceny">
+            <PriceChange figures={dossier.price_change} />
+          </Panel>
+        )}
         <Panel title="Působnost">
           <Footprint shares={dossier.region_shares} />
           <Types rows={dossier.categories} />

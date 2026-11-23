@@ -1679,17 +1679,23 @@ def test_a_tenth_portal_is_offered_only_with_its_read_model_lines():
 def test_the_price_history_is_the_canonical_adverts_lineage():
     """MS10: the price figures are `listing_price_history` of the canonical advert (migration 768), the one
     definition the broker book reads too, and the rollup spells no lineage of its own."""
-    from pathlib import Path
 
     from scripts.recompute_property_stats import _RECOMPUTE_BATCH_SQL
 
     sql = " ".join(_RECOMPUTE_BATCH_SQL.split())
     assert sql.startswith("WITH batch AS (")
-    assert "CROSS JOIN LATERAL listing_price_history(c.id, NULL) ph" in sql
+    # One call per canonical advert, materialized: as a lateral in the UPDATE's FROM the planner re-ran
+    # every aggregate of the batch once per advert (production, 2026-11-23).
+    assert ("prices AS MATERIALIZED ( SELECT c.property_id AS pid, h.* FROM canon c "
+            "CROSS JOIN LATERAL listing_price_history(c.id, NULL) h )") in sql
+    assert "LEFT JOIN prices ph ON ph.pid = r.pid" in sql
+    assert sql.count("listing_price_history(") == 1
     assert "measure_price_change_pct(ph.first_price_czk, ph.last_price_czk)" in sql
     for own in ("RECURSIVE", "listing_price_steps", "lineage", "/ "):
         assert own not in sql
-    body = " ".join(Path("migrations/768_listing_price_history.sql").read_text().split())
+    from tests.migration_defs import latest_definition
+
+    body = " ".join(latest_definition("listing_price_history").read_text().split())
     assert ("where l.property_id = k.pid and l.source = k.source "
             "and l.last_seen_at < k.first_seen_at and l.first_seen_at < k.first_seen_at") in body
     assert "order by l.last_seen_at desc, l.id desc limit 1" in body

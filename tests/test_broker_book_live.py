@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
+from psycopg.rows import dict_row
 
 from api.broker_review import merge_brokers, unmerge_group
 from scripts.recompute_property_stats import (
@@ -338,11 +339,18 @@ def test_the_dossier_and_the_inventory_read_the_brokers_price_changes(cur: Any) 
         ads[ad] = last
         properties_changed(cur.connection, [pid])
 
-    figures = brokers.get_broker(cur.connection, broker)["data"]["price_change"]
-    assert figures["all"] == {"priced": 6, "repriced": 5, "cut": 4, "raised": 1, "median_pct": pytest.approx(-6.0)}
-    assert figures["active"] == {"priced": 4, "repriced": 4, "cut": 3, "raised": 1, "median_pct": None}
-    assert figures["inactive"] == {"priced": 2, "repriced": 1, "cut": 1, "raised": 0, "median_pct": None}
-    assert brokers.get_broker(cur.connection, _broker(cur))["data"]["price_change"]["all"]["priced"] == 0
+    with cur.connection.cursor(row_factory=dict_row) as dcur:
+        figures = brokers.price_change(dcur, broker)
+        assert brokers.price_change(dcur, _broker(cur))["all"]["priced"] == 0
+    assert figures["all"] == {"priced": 6, "repriced": 5, "cut": 4, "raised": 1,
+                              "repriced_pct": pytest.approx(500 / 6), "median_pct": pytest.approx(-6.0)}
+    # Under MIN_N priced properties neither the share nor the median answers: 4 of 4 is not "100 %".
+    assert figures["active"] == {"priced": 4, "repriced": 4, "cut": 3, "raised": 1,
+                                 "repriced_pct": None, "median_pct": None}
+    assert figures["inactive"] == {"priced": 2, "repriced": 1, "cut": 1, "raised": 0,
+                                   "repriced_pct": None, "median_pct": None}
+    # The dossier does not carry the figures until the book is filled by one full sweep (#2633).
+    assert "price_change" not in brokers.get_broker(cur.connection, broker)["data"]
 
     rows = {r["listing_id"]: r for r in brokers.broker_listings(cur.connection, broker)["data"]}
     assert set(rows) == set(ads)

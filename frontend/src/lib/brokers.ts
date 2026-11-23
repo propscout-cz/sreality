@@ -126,12 +126,14 @@ export interface BrokerListing {
 /* How much a broker changes prices, over the properties of their book: `priced`
  * have a first and a last price of the broker's own to compare, `repriced` end
  * on a different price than they began (`cut` lower, `raised` higher). The
- * median is over the repriced ones and NULL under the server's minimum count. */
+ * share of repriced among priced and the median over the repriced ones are the
+ * server's, each NULL under its minimum count. */
 export interface BrokerPriceFigures {
   priced: number;
   repriced: number;
   cut: number;
   raised: number;
+  repriced_pct: number | null;
   median_pct: number | null;
 }
 
@@ -144,14 +146,12 @@ export const BROKER_PRICE_SCOPES: ReadonlyArray<{ value: BrokerPriceScope; label
   { value: 'inactive', label: 'Neaktivní' },
 ];
 
-const NO_PRICE_FIGURES: BrokerPriceFigures = { priced: 0, repriced: 0, cut: 0, raised: 0, median_pct: null };
-
 /* One slice in words, for both shells: the share of priced properties that were
  * repriced, the median change among them, and the counts behind both. */
 export function priceChangeSummary(f: BrokerPriceFigures): { share: string; median: string | null; hint: string } {
   if (f.priced === 0) return { share: '—', median: null, hint: 'žádná cena k porovnání' };
   return {
-    share: fmtPct((f.repriced / f.priced) * 100, { digits: 0 }),
+    share: f.repriced_pct == null ? '—' : fmtPct(f.repriced_pct, { digits: 0 }),
     median: f.median_pct == null ? null : `medián ${fmtPct(f.median_pct, { signed: true })}`,
     hint: `přeceněno ${fmtCount(f.repriced)} z ${fmtCount(f.priced)} · ${fmtCount(f.cut)} zlevněno, ${fmtCount(f.raised)} zdraženo`,
   };
@@ -184,7 +184,8 @@ export interface BrokerDossier {
   memberships: BrokerMembership[];
   region_shares: BrokerRegionShare[];
   categories: BrokerCategoryShare[];
-  price_change: Record<BrokerPriceScope, BrokerPriceFigures>;
+  /* Absent until the API serves it (#2633): the shells then draw no price tile. */
+  price_change?: Record<BrokerPriceScope, BrokerPriceFigures>;
   contacts?: BrokerContact[];
   pii_masked: boolean;
 }
@@ -377,9 +378,7 @@ export async function fetchBrokerDossier(
     if (!r?.data) throw new ApiError('malformed /brokers response', 0, r);
     // Absent metadata means we can't prove the caller is an admin — assume masked
     // so a missing flag under-promises rather than showing a blank as "no contact".
-    // An API one deploy behind sends no price figures: read as none, never a crash.
-    const none = { all: NO_PRICE_FIGURES, active: NO_PRICE_FIGURES, inactive: NO_PRICE_FIGURES };
-    return { ...r.data, price_change: r.data.price_change ?? none, pii_masked: r.metadata?.pii_masked ?? true };
+    return { ...r.data, pii_masked: r.metadata?.pii_masked ?? true };
   } catch (err) {
     if (isAnsweredNotFound(err)) return null;
     throw err;

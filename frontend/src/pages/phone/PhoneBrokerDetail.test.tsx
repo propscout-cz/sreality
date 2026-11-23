@@ -86,9 +86,9 @@ const dossier = (broker: Partial<brokers.BrokerPublic> = {}): brokers.BrokerDoss
     { category_main: 'byt', category_type: 'pronajem', properties: 5, active_properties: 2 },
   ],
   price_change: {
-    all: { priced: 50, repriced: 10, cut: 8, raised: 2, median_pct: -7.3 },
-    active: { priced: 35, repriced: 4, cut: 4, raised: 0, median_pct: null },
-    inactive: { priced: 15, repriced: 6, cut: 4, raised: 2, median_pct: -9 },
+    all: { priced: 50, repriced: 10, cut: 8, raised: 2, repriced_pct: 20, median_pct: -7.3 },
+    active: { priced: 35, repriced: 4, cut: 4, raised: 0, repriced_pct: 11.43, median_pct: null },
+    inactive: { priced: 15, repriced: 6, cut: 4, raised: 2, repriced_pct: 40, median_pct: -9 },
   },
   pii_masked: true,
 });
@@ -208,6 +208,13 @@ describe('<BrokerDetail> on the phone', () => {
     fireEvent.click(within(card).getByRole('button', { name: 'Neaktivní' }));
     expect(card).toHaveTextContent('přeceněno 6 z 15 · 4 zlevněno, 2 zdraženo');
     expect(card).toHaveTextContent(/40\s%/);
+  });
+
+  it('draws no price card while the dossier carries no figures', async () => {
+    vi.mocked(brokers.fetchBrokerDossier).mockResolvedValue({ ...dossier(), price_change: undefined });
+    renderPage();
+    expect(await screen.findByRole('region', { name: 'Působnost' })).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Změna ceny' })).not.toBeInTheDocument();
   });
 
   it('tells an unknown broker from a failed read', async () => {

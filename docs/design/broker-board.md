@@ -25,7 +25,7 @@ its one view `broker_book_projection` over the ads of the broker's identities on
 | `started_at` | `min(first_seen_at)`: the start `measure_tom_days` uses (617); `first_seen_at` is the drain's first WRITE (444) |
 | `ended_at` | NULL while any of the broker's ads on the property is active, else `max(last_seen_at)` |
 | `tom_observed` | `measure_tom_observed` (625) of the broker's first ad in `browse_projection`'s order (category first, `first_seen_at`, id) |
-| `first_price_czk`, `last_price_czk` | `listing_price_history` (768) of the broker's LEAD ad (their first in the property's canonical order) over the broker's own same-portal predecessors: the first price the broker asked and their last. `measure_price_change_pct` of the pair is the broker's price change on the property; NULL with no priced ad |
+| `first_price_czk`, `last_price_czk` | `listing_price_history` (768) of the broker's LEAD ad (their first in the property's canonical order) over the broker's own same-portal predecessors: the first price the broker asked and their last. `measure_price_change_pct` of the pair is the broker's price change on the property; NULL when the lead ad has no price (the lead is chosen price-blind). Not the property's own figure: another broker's predecessors are left out |
 
 A property counts once per broker in volume and in speed; an identity not yet resolved to an active broker has no
 row (its property reads unattributed). Service role only.

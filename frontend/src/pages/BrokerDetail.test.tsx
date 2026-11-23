@@ -67,9 +67,9 @@ const dossier = (broker: Partial<brokers.BrokerPublic>): brokers.BrokerDossier =
   region_shares: [],
   categories: [],
   price_change: {
-    all: { priced: 50, repriced: 10, cut: 8, raised: 2, median_pct: -7.3 },
-    active: { priced: 35, repriced: 4, cut: 4, raised: 0, median_pct: null },
-    inactive: { priced: 0, repriced: 0, cut: 0, raised: 0, median_pct: null },
+    all: { priced: 50, repriced: 10, cut: 8, raised: 2, repriced_pct: 20, median_pct: -7.3 },
+    active: { priced: 35, repriced: 4, cut: 4, raised: 0, repriced_pct: 11.43, median_pct: null },
+    inactive: { priced: 0, repriced: 0, cut: 0, raised: 0, repriced_pct: null, median_pct: null },
   },
   pii_masked: true,
 });
@@ -333,6 +333,13 @@ describe('<BrokerDetail> price changes', () => {
 
     fireEvent.click(within(group).getByRole('button', { name: 'Neaktivní' }));
     expect(tile).toHaveTextContent('žádná cena k porovnání');
+  });
+
+  it('draws no price tile while the dossier carries no figures', async () => {
+    vi.mocked(brokers.fetchBrokerDossier).mockResolvedValue({ ...dossier({}), price_change: undefined });
+    renderPage();
+    expect(await screen.findByText('Regiony')).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Změna ceny' })).not.toBeInTheDocument();
   });
 
   it('marks each ad with its own price change, and leaves an unpriced one blank', async () => {
