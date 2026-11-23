@@ -2,7 +2,8 @@
 stands at (`listing_location.ruian_adm_kod` -> `ruian_address_points.stavebni_objekt_code`). Register values only,
 as stated, each code with its label and whether it means "not known"; nothing here is merged with what an ad says.
 The completion period is DERIVED from the register's date (`ruian_completion_period`), so the date rides with it.
-Protection codes are stored but not served: their code list is not seeded yet.
+Protection is the register's own list of zones and regimes the building stands in (heritage, nature, water
+source and others), each code with its label; an empty list means the register states none.
 A property with no door, or whose door names no building, has none."""
 
 from __future__ import annotations
@@ -32,6 +33,10 @@ select b.code,
          where bl.obec_kod = ap.obec_kod and bl.error is null) as source_date,
        (select count(*) from ruian_address_points a
          where a.stavebni_objekt_code = b.code and a.valid_to is null) as entrances,
+       -- A code the seeded list does not hold keeps its number, as the coded facts below do.
+       (select coalesce(jsonb_agg(jsonb_build_object('code', c.code, 'label', l.label) order by c.code), '[]'::jsonb)
+          from unnest(b.protection_codes) as c(code)
+          left join ruian_code_labels l on l.code_list = 'protection' and l.code = c.code) as protection,
        {coded}
   from properties p
   left join listing_location ll on ll.listing_id = p.location_listing_ref_id
@@ -79,5 +84,6 @@ def load_building(conn: Any, property_id: int) -> dict[str, Any] | None:
         # The newest clean load of the door's obec; None when there is none on record.
         "source_date": row["source_date"].isoformat() if row["source_date"] is not None else None,
     }
+    out["protection"] = row["protection"]
     out.update({name: row[name] for name in _CODED})
     return out

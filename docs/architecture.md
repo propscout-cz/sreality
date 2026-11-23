@@ -6199,8 +6199,8 @@ location programme's work, not this one's.
 - **Three things a reader must know.** `floors` counts floors below ground, so it differs from an ad's count by
   design: the card names that basis and never flags it against the ad. `completed_on` is a 31 December placeholder (1919 … 2000) for most older buildings and is shown as a
   period MARKED as derived, with the register's own date beside it (`ruian_completion_period`; the bounds follow
-  the census age bands, an inference to check against the loaded data). Protection codes are stored but not
-  served: their code list is not seeded. The register calls these attributes non-reference data: a wrong record is possible,
+  the census age bands, an inference to check against the loaded data). Protection is served as `[{code, label}]` (list seeded by migration 766,
+  ČÚZK's "způsob ochrany nemovitosti": not only heritage); an empty list is the register stating none. The register calls these attributes non-reference data: a wrong record is possible,
   which is why the ad's differing value is shown beside it, not replaced.
 
 **An account's own ČÚZK login (#2597).** `account_cuzk_logins` (migration 759), entered in the avatar menu's dialog,

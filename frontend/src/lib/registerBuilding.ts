@@ -62,6 +62,15 @@ export function registerFacts(b: RegisterBuilding, ad: AdFacts): RegisterFact[] 
     { label: 'Plyn', value: coded(b.gas) },
     { label: 'Zastavěná plocha', value: area(b.built_up_area_m2) },
     { label: 'Podlahová plocha', value: area(b.floor_area_m2) },
+    /* Not only heritage: the list holds nature and water-source zones too, so the row names no kind. An empty
+     * list is the register stating none; a missing one (an API one deploy behind) is a gap like any unknown fact.
+     * Joined by "; " because the register's own labels hold commas. */
+    {
+      label: 'Ochrana',
+      value: b.protection == null ? null
+        : b.protection.length ? b.protection.map((p) => p.label ?? `kód ${p.code}`).join('; ')
+        : 'registr žádnou neuvádí',
+    },
   ];
 }
 

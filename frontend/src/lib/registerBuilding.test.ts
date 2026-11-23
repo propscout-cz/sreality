@@ -9,7 +9,7 @@ const BUILDING: RegisterBuilding = {
   built_up_area_m2: 1612, floor_area_m2: null, enclosed_volume_m3: null, valid_from: '2023-12-18',
   source_date: '2026-10-31', usage: code(6, 'bytový dům'), construction: code(4, 'Stěnové panely'),
   lift: code(1, 'S výtahem'), heating: code(2, 'Centrální dálkové'), water: code(1, 'S vodovodem'),
-  sewer: code(1, 'Přípoj'), gas: code(9, 'Nezjištěno', true),
+  sewer: code(1, 'Přípoj'), gas: code(9, 'Nezjištěno', true), protection: [],
 };
 const row = (label: string, ad = { has_lift: null as boolean | null }, b: RegisterBuilding = BUILDING) =>
   registerFacts(b, ad).find((f) => f.label === label)!;
@@ -51,7 +51,23 @@ describe('registerFacts', () => {
       .toEqual({ label: 'Výtah', value: null });
   });
 
-  it('serves no protection row until its code list is seeded', () => {
-    expect(registerFacts(BUILDING, { has_lift: null }).some((f) => /chran/i.test(f.label))).toBe(false);
+  it('names every protection the register lists, under a row that names no kind', () => {
+    const b = { ...BUILDING, protection: [{ code: 18, label: 'první' }, { code: 99, label: null }] };
+    expect(row('Ochrana', { has_lift: null }, b).value).toBe('první; kód 99');
+  });
+
+  it('keeps two protections two when a label holds a comma', () => {
+    const b = { ...BUILDING, protection: [
+      { code: 17, label: 'pam. zóna - budova, pozemek v památkové zóně' }, { code: 18, label: 'nemovitá kulturní památka' }] };
+    expect(row('Ochrana', { has_lift: null }, b).value!.split('; ')).toHaveLength(2);
+  });
+
+  it('shows a gap, and does not throw, on an answer from an API that serves no list yet', () => {
+    const { protection: _, ...older } = BUILDING;
+    expect(row('Ochrana', { has_lift: null }, older)).toEqual({ label: 'Ochrana', value: null });
+  });
+
+  it('says the register states none, which is not a gap in what it knows', () => {
+    expect(row('Ochrana').value).toBe('registr žádnou neuvádí');
   });
 });
