@@ -3,13 +3,16 @@ stands at (`listing_location.ruian_adm_kod` -> `ruian_address_points.stavebni_ob
 as stated, each code with its label and whether it means "not known"; nothing here is merged with what an ad says.
 The completion period is DERIVED from the register's date (`ruian_completion_period`), so the date rides with it.
 Protection codes are stored but not served: their code list is not seeded yet.
-A property with no door, or whose door names no building, has none."""
+A property with no door, or whose door names no building, has none; nor has one that holds a plot ad
+(`api/building_scope.py`)."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from psycopg.rows import dict_row
+
+from api.building_scope import holds_no_building_ad
 
 _CODED = ("usage", "construction", "lift", "heating", "water", "sewer", "gas")
 
@@ -37,8 +40,9 @@ select b.code,
   left join listing_location ll on ll.listing_id = p.location_listing_ref_id
   left join ruian_address_points ap on ap.kod_adm = ll.ruian_adm_kod
   left join ruian_building_objects b on b.code = ap.stavebni_objekt_code and b.valid_to is null
+   and not {out_of_scope}
  where p.id = %s and p.status = 'active'
-""".format(coded=",\n       ".join(
+""".format(out_of_scope=holds_no_building_ad("p"), coded=",\n       ".join(
     # A code the seeded list does not hold keeps its number: it is a value, not a gap.
     f"case when b.{name}_code is not null then coalesce("
     f"(select jsonb_build_object('code', l.code, 'label', l.label, 'unknown', l.unknown) from ruian_code_labels l"
