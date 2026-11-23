@@ -65,6 +65,14 @@ sends nothing and needs no login). `paid_unread` is retried for free by id (the 
 file, or one that can no longer be decrypted, the report is fetched again, which ČÚZK does not charge twice)
 unless ČÚZK said the report is gone, and a new purchase of the building may be confirmed beside it.
 
+TWO KINDS, ONE MACHINE (migration 767). A purchase is of a `Kind`: the building's price report, or one unit's
+"Informace o jednotkách" (10 Kč, only for a unit named in a deed the account already bought). Everything above
+holds for both; a kind differs only in what is ordered, the price it may cost, what is stored from the file, and
+this: a unit's report names the unit's owners, so the file kept is a new document holding only the leaves we
+read (`cadastre_unit_report.redact`; the database refuses any other file on a unit's row), and if the cut
+fails the file is not kept at all (the cost is recorded and the answer is read from memory; if that fails too,
+the purchase is paid and unread with no file, and fetching it again is free while ČÚZK serves it). Every statement names the kind and the unit, so neither reads as the other's.
+
 Every call a run sends is one row of the login-check ledger (`cuzk_login.admit_check`, #2608), admitted before it
 leaves and settled by its own answer. No database connection is held while waiting on ČÚZK. Everything is the
 buying account's own (operator ruling 2026-11-22): every statement names the account (service-role connection)."""
@@ -83,12 +91,13 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from api import cadastre_deed_matches, cadastre_price_report, cuzk_login, wsdp_client
+from api import cadastre_deed_matches, cadastre_price_report, cadastre_unit_report, cuzk_login, wsdp_client
 from api.building_scope import holds_no_building_ad
 
 LOG = logging.getLogger(__name__)
 
 PRICE_CZK = 50  # ČÚZK's price list, item 5010; one output covers up to 200 properties of one type (vyhláška 358/2013)
+UNIT_PRICE_CZK = 10  # item 5004, "Informace o bytech a nebytových prostorech (jednotkách)": 10 Kč a unit
 POLL_EVERY_S = 2
 POLL_FOR_S = 30
 # No call to ČÚZK is started later than this into a request, so the request ends within RUN_S + CALL_MAX_S: inside
@@ -175,6 +184,33 @@ class Building:
 
 
 @dataclass(frozen=True)
+class Kind:
+    """Which paid output a purchase is: the building's price report, or one unit's information (migration 767).
+    The machine is the same for both; a kind supplies what is ordered, its price, what is cut from the file
+    before it is kept, and what is stored from it. Every statement over `cadastre_price_purchases` names the kind
+    and the unit (`_OF`), so the two never read as each other's."""
+    name: str
+    price_czk: int
+    unit_iskn_id: int | None = None
+
+    @property
+    def of(self) -> tuple[str, int | None]:
+        return self.name, self.unit_iskn_id
+
+
+PRICES = Kind("prices", PRICE_CZK)
+_OF = "kind = %s and unit_iskn_id is not distinct from %s"
+
+
+def unit(iskn_id: int) -> Kind:
+    return Kind("unit", UNIT_PRICE_CZK, iskn_id)
+
+
+class NoUnit(LookupError):
+    """The unit is in no deed this account bought for the building: only such a unit can be asked about."""
+
+
+@dataclass(frozen=True)
 class Purchase:
     id: int
     status: str
@@ -233,19 +269,19 @@ def _purchase(row: tuple[Any, ...] | None) -> Purchase | None:
                     bool(row[5]), bool(row[6]))
 
 
-def bought_at(conn: psycopg.Connection, account_id: uuid.UUID, building_code: int) -> Any:
-    """When the account last paid for this building's report (read or not); None when it never did."""
+def bought_at(conn: psycopg.Connection, account_id: uuid.UUID, building_code: int, kind: Kind = PRICES) -> Any:
+    """When the account last paid for this output (read or not); None when it never did."""
     with conn.cursor() as cur:
         cur.execute(
             "select max(coalesce(finished_at, requested_at)) from cadastre_price_purchases "
-            "where account_id = %s and building_code = %s and status in ('done', 'paid_unread')",
-            (account_id, building_code),
+            f"where account_id = %s and building_code = %s and {_OF} and status in ('done', 'paid_unread')",
+            (account_id, building_code, *kind.of),
         )
         return cur.fetchone()[0]
 
 
 def target(conn: psycopg.Connection, account_id: uuid.UUID, building: Building, *, resume: int | None,
-           repeat: bool) -> Purchase | None:
+           repeat: bool, kind: Kind = PRICES) -> Purchase | None:
     """Which purchase this request is about; None for a new one. A resume names a purchase that can still be
     continued: one in flight, one paid and unread that ČÚZK has not said is gone (or whose file is kept), or a
     finished one whose kept file held no deed."""
@@ -253,9 +289,9 @@ def target(conn: psycopg.Connection, account_id: uuid.UUID, building: Building, 
         if resume is not None:
             cur.execute(
                 f"select {_PURCHASE_COLS} from cadastre_price_purchases "
-                "where id = %s and account_id = %s and building_code = %s "
+                f"where id = %s and account_id = %s and building_code = %s and {_OF} "
                 "and (status in ('pending', 'ordered', 'paid_unread') or (status = 'done' and raw_report is not null))",
-                (resume, account_id, building.code),
+                (resume, account_id, building.code, *kind.of),
             )
             named = _purchase(cur.fetchone())
             if named is None or (named.gone and named.kept is None):
@@ -263,22 +299,22 @@ def target(conn: psycopg.Connection, account_id: uuid.UUID, building: Building, 
             return named
         cur.execute(
             "select 1 from cadastre_price_purchases "
-            "where account_id = %s and building_code = %s and status in ('pending', 'ordered')",
-            (account_id, building.code),
+            f"where account_id = %s and building_code = %s and {_OF} and status in ('pending', 'ordered')",
+            (account_id, building.code, *kind.of),
         )
         if cur.fetchone() is not None:
             raise InProgress("in_flight")
-    if not repeat and (at := bought_at(conn, account_id, building.code)) is not None:
+    if not repeat and (at := bought_at(conn, account_id, building.code, kind)) is not None:
         raise AlreadyBought(at)
     return None
 
 
-def _start(conn: psycopg.Connection, account_id: uuid.UUID, building: Building) -> Purchase:
+def _start(conn: psycopg.Connection, account_id: uuid.UUID, building: Building, kind: Kind = PRICES) -> Purchase:
     with conn.cursor() as cur:
         cur.execute(
-            "insert into cadastre_price_purchases (account_id, building_code, iskn_building_id) "
-            f"values (%s, %s, %s) returning {_PURCHASE_COLS}",
-            (account_id, building.code, building.iskn_id),
+            "insert into cadastre_price_purchases (account_id, building_code, iskn_building_id, kind, unit_iskn_id) "
+            f"values (%s, %s, %s, %s, %s) returning {_PURCHASE_COLS}",
+            (account_id, building.code, building.iskn_id, *kind.of),
         )
         return _purchase(cur.fetchone())  # type: ignore[return-value]
 
@@ -310,21 +346,39 @@ def _status(conn: psycopg.Connection, account_id: uuid.UUID, purchase_id: int) -
 
 
 def keep_fetched(conn: psycopg.Connection, account_id: uuid.UUID, purchase_id: int, cost_czk: int | None,
-                 document: bytes) -> None:
+                 document: bytes, *, cut: bool = False) -> None:
     """The fetched file and what it cost, before anything reads it. Never fenced and never dropped: ČÚZK has
-    answered the charging fetch, so whatever the row says now, it becomes a paid purchase with its file."""
+    answered the charging fetch, so whatever the row says now, it becomes a paid purchase with its file. `cut`:
+    the document is a unit report already cut down (`cadastre_unit_report.redact`); the database refuses any other
+    file on a unit's purchase (migration 767)."""
     with conn.cursor() as cur:
         cur.execute(
-            "update cadastre_price_purchases set cost_czk = %s, raw_report = %s, "
+            "update cadastre_price_purchases set cost_czk = %s, raw_report = %s, raw_cut = %s, "
             "       fetch_sent_at = coalesce(fetch_sent_at, now()), "
             "       status = case when status = 'failed' then 'paid_unread' else status end "
             "where id = %s and account_id = %s and status in ('ordered', 'paid_unread', 'failed')",
-            (cost_czk, cuzk_login.seal(document), purchase_id, account_id),
+            (cost_czk, cuzk_login.seal(document), cut, purchase_id, account_id),
         )
         kept = cur.rowcount == 1
     if not kept and _status(conn, account_id, purchase_id) != "done":
         LOG.error("CADASTRE fetched report not kept: purchase=%s", purchase_id)
         raise PaidUnread(str(purchase_id))
+
+
+def keep_cost_only(conn: psycopg.Connection, account_id: uuid.UUID, purchase_id: int, cost_czk: int | None,
+                   error: str) -> None:
+    """The charging fetch answered and its file must not be kept: the purchase is paid and unread, with no file.
+    Never fenced, like `keep_fetched`."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "update cadastre_price_purchases set cost_czk = %s, status = 'paid_unread', error = %s, "
+            "       fetch_sent_at = coalesce(fetch_sent_at, now()), finished_at = coalesce(finished_at, now()) "
+            "where id = %s and account_id = %s and status in ('ordered', 'paid_unread', 'failed') "
+            "and raw_report is null",
+            (cost_czk, error[:200], purchase_id, account_id),
+        )
+        if cur.rowcount != 1:
+            LOG.error("CADASTRE unkept report not marked: purchase=%s", purchase_id)
 
 
 def mark_unread(conn: psycopg.Connection, account_id: uuid.UUID, purchase_id: int, error: str) -> None:
@@ -342,10 +396,11 @@ def mark_unread(conn: psycopg.Connection, account_id: uuid.UUID, purchase_id: in
 
 
 def finish(conn: psycopg.Connection, account_id: uuid.UUID, purchase_id: int,
-           deeds: list[cadastre_price_report.Deed]) -> None:
+           deeds: list[cadastre_price_report.Deed], *, facts: cadastre_unit_report.UnitFacts | None = None) -> None:
     """Store the deeds and clear the kept file. A report that held no deed keeps its file: "the cadastre knows no
     price" and "we read none" look the same from here, and the file is the only proof of which; it can be read
-    again later. A purchase already finished with its file cleared keeps the deeds it has."""
+    again later. A purchase already finished with its file cleared keeps the deeds it has. A unit's report always
+    holds its unit (`facts`), so its file is always cleared."""
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(
             "update cadastre_price_purchases set status = 'done', error = null, "
@@ -353,7 +408,7 @@ def finish(conn: psycopg.Connection, account_id: uuid.UUID, purchase_id: int,
             "       raw_report = case when %s then null else raw_report end "
             "where id = %s and account_id = %s "
             "and (status in ('ordered', 'paid_unread') or (status = 'done' and raw_report is not null))",
-            (bool(deeds), purchase_id, account_id),
+            (bool(deeds) or facts is not None, purchase_id, account_id),
         )
         if cur.rowcount != 1:
             if _status(conn, account_id, purchase_id) != "done":
@@ -370,14 +425,32 @@ def finish(conn: psycopg.Connection, account_id: uuid.UUID, purchase_id: int,
                  deed.effective_on, deed.entered_on,
                  Jsonb([{"kind": p.kind, "iskn_id": p.iskn_id, "label": p.label} for p in deed.properties])),
             )
+        if facts is not None:
+            cur.execute(
+                """
+                insert into cadastre_unit_facts (purchase_id, account_id, unit_iskn_id, label, floor_area_m2,
+                                                 area_state, shape, use_code, use_label, share_num, share_den)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (purchase_id, account_id, facts.iskn_id, facts.label, facts.floor_area_m2, facts.area_state,
+                 list(facts.shape), facts.use_code, facts.use_label, facts.share_num, facts.share_den),
+            )
 
 
-def _read(conn_of: Opener, account_id: uuid.UUID, purchase_id: int, document: bytes) -> None:
-    """A fetched file → stored deeds; a file that cannot be read ends the purchase as paid and unread, kept."""
+def _read(conn_of: Opener, account_id: uuid.UUID, purchase_id: int, document: bytes, kind: Kind = PRICES) -> None:
+    """A fetched file → what it states, stored; a file that cannot be read ends the purchase as paid and unread,
+    kept. A unit's report must be about the unit that was asked for."""
     try:
-        deeds = cadastre_price_report.parse(document)
+        deeds: list[cadastre_price_report.Deed] = []
+        facts = None
+        if kind.unit_iskn_id is None:
+            deeds = cadastre_price_report.parse(document)
+        else:
+            facts = cadastre_unit_report.parse(document)
+            if facts.iskn_id != kind.unit_iskn_id:
+                raise cadastre_unit_report.UnitReportError(f"a report about unit {facts.iskn_id}")
         with conn_of() as conn:
-            finish(conn, account_id, purchase_id, deeds)
+            finish(conn, account_id, purchase_id, deeds, facts=facts)
     except PaidUnread:
         raise
     except Exception as exc:
@@ -393,7 +466,7 @@ select id, status, cost_czk, object_count, requested_at, finished_at,
          and fetch_sent_at > now() - make_interval(secs => {FETCH_COOL_S}) as fetching,
        coalesce(error like '{_GONE}%%', false) as gone
   from cadastre_price_purchases
- where account_id = %s and building_code = %s and status <> 'failed'
+ where account_id = %s and building_code = %s and kind = 'prices' and status <> 'failed'
  order by requested_at desc, id desc
  limit 1
 """
@@ -405,11 +478,35 @@ select d.id, d.purchase_id, d.proceeding, d.kind, d.price, d.currency, d.signed_
   from cadastre_deeds d
  where d.account_id = %s
    and d.purchase_id = (select p.id from cadastre_price_purchases p
-                         where p.account_id = %s and p.building_code = %s and p.status = 'done'
+                         where p.account_id = %s and p.building_code = %s and p.kind = 'prices'
+                           and p.status = 'done'
                            and exists (select 1 from cadastre_deeds x where x.purchase_id = p.id)
                          order by p.requested_at desc, p.id desc limit 1)
  order by d.effective_on desc nulls last, d.proceeding
 """
+
+
+# Each unit the account asked about: its newest purchase that did not end uncharged, and what that one read.
+_UNITS_SQL = f"""
+select distinct on (p.unit_iskn_id)
+       p.unit_iskn_id, p.id, p.status, p.cost_czk, p.fetch_sent_at is not null as fetch_sent,
+       p.raw_report is not null as file_kept,
+       p.status in ('ordered', 'paid_unread') and p.raw_report is null
+         and p.fetch_sent_at > now() - make_interval(secs => {FETCH_COOL_S}) as fetching,
+       coalesce(p.error like '{_GONE}%%', false) as gone,
+       f.id is not null as read, f.floor_area_m2, f.area_state, f.shape, f.use_code, f.use_label, f.share_num,
+       f.share_den
+  from cadastre_price_purchases p
+  left join lateral (
+         -- the newest facts the account holds of the unit: a later purchase that read none must not hide them
+         select x.* from cadastre_unit_facts x
+          where x.account_id = p.account_id and x.unit_iskn_id = p.unit_iskn_id
+          order by x.id desc limit 1) f on true
+ where p.account_id = %s and p.building_code = %s and p.kind = 'unit' and p.status <> 'failed'
+ order by p.unit_iskn_id, p.requested_at desc, p.id desc
+"""
+_UNIT_PURCHASE = ("id", "status", "cost_czk", "fetch_sent", "file_kept", "fetching", "gone")
+_UNIT_FACTS = ("floor_area_m2", "area_state", "shape", "use_code", "use_label", "share_num", "share_den")
 
 
 def state(conn: psycopg.Connection, account_id: uuid.UUID, building_code: int) -> dict[str, Any]:
@@ -421,6 +518,8 @@ def state(conn: psycopg.Connection, account_id: uuid.UUID, building_code: int) -
         purchase = cur.fetchone()
         cur.execute(_DEEDS_SQL, (account_id, account_id, building_code))
         deeds = cur.fetchall()
+        cur.execute(_UNITS_SQL, (account_id, building_code))
+        units = cur.fetchall()
     running = cuzk_login.run_live(conn, account_id)
     # The card re-reads this state every few seconds while a run is live; the match is not worth that (it scans
     # `listing_location` for the building's doors), so it waits for the run to end.
@@ -431,6 +530,12 @@ def state(conn: psycopg.Connection, account_id: uuid.UUID, building_code: int) -
                     "finished_at": purchase["finished_at"].isoformat() if purchase["finished_at"] else None}
     return {
         "price_czk": PRICE_CZK,
+        "unit_price_czk": UNIT_PRICE_CZK,
+        "units": [{"unit_iskn_id": u["unit_iskn_id"], "purchase": {k: u[k] for k in _UNIT_PURCHASE},
+                   "facts": ({**{k: u[k] for k in _UNIT_FACTS},
+                              "floor_area_m2": float(u["floor_area_m2"]) if u["floor_area_m2"] is not None else None}
+                             if u["read"] else None)}
+                  for u in units],
         "running": running,
         "purchase": purchase,
         "deeds": [{**{k: v for k, v in d.items() if k not in ("id", "purchase_id")},
@@ -524,24 +629,39 @@ def _release(opener: Opener, account_id: uuid.UUID, token: uuid.UUID) -> None:
         LOG.exception("CADASTRE lease not released: account=%s", account_id)
 
 
-def _read_kept(opener: Opener, account_id: uuid.UUID, purchase: Purchase) -> bool:
+def _read_kept(opener: Opener, account_id: uuid.UUID, purchase: Purchase, kind: Kind = PRICES) -> bool:
     """Read a purchase's kept file again (free: nothing is sent). False when the file can no longer be decrypted."""
     try:
         document = cuzk_login.unseal(purchase.kept or b"")
     except (cuzk_login.Unreadable, cuzk_login.NotConfigured):
         return False
-    _read(opener, account_id, purchase.id, document)
+    _read(opener, account_id, purchase.id, document, kind)
     return True
 
 
+def _unit_in_a_bought_deed(conn: psycopg.Connection, account_id: uuid.UUID, building_code: int, iskn_id: int) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            "select 1 from cadastre_deeds d join cadastre_price_purchases p on p.id = d.purchase_id "
+            "where d.account_id = %s and p.account_id = %s and p.building_code = %s and p.kind = 'prices' "
+            "and d.properties @> %s limit 1",
+            (account_id, account_id, building_code, Jsonb([{"kind": "jednotka", "iskn_id": iskn_id}])),
+        )
+        return cur.fetchone() is not None
+
+
 def buy(account_id: uuid.UUID, property_id: int, *, opener: Opener, repeat: bool = False,
-        resume: int | None = None, sleep: Callable[[float], None] = time.sleep,
+        resume: int | None = None, kind: Kind = PRICES, sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic) -> Building:
-    """Start the account's purchase of the property's building's price report, or continue the purchase `resume`
-    names, and store its deeds. Holds the account's login lease from before its first call to its end."""
+    """Start the account's purchase of the property's building's price report (or, `kind`, of one unit's
+    information), or continue the purchase `resume` names, and store what it states. Holds the account's login
+    lease from before its first call to its end."""
     started = clock()
     with opener() as conn:
         building = building_of(conn, property_id)
+        if kind.unit_iskn_id is not None and not _unit_in_a_bought_deed(conn, account_id, building.code,
+                                                                        kind.unit_iskn_id):
+            raise NoUnit(str(kind.unit_iskn_id))
     wsdp_client.base_url()  # a misconfigured address sends nothing, so it must spend nothing
     token = uuid.uuid4()
     with opener() as conn:
@@ -553,16 +673,17 @@ def buy(account_id: uuid.UUID, property_id: int, *, opener: Opener, repeat: bool
         # No login is stored, so no run can be live. Reading a file that is already kept sends nothing and needs
         # none; everything else does.
         with opener() as conn:
-            purchase = target(conn, account_id, building, resume=resume, repeat=repeat) if resume is not None else None
+            purchase = (target(conn, account_id, building, resume=resume, repeat=repeat, kind=kind)
+                        if resume is not None else None)
         if purchase is None or purchase.kept is None:
             raise NoLogin(str(account_id))
-        if not _read_kept(opener, account_id, purchase):
+        if not _read_kept(opener, account_id, purchase, kind):
             raise PaidUnread(str(purchase.id))
         return building
     give_back = True
     try:
-        _run(account_id, building, token, held, opener=opener, repeat=repeat, resume=resume, sleep=sleep,
-             clock=clock, started=started)
+        _run(account_id, building, token, held, opener=opener, repeat=repeat, resume=resume, kind=kind,
+             sleep=sleep, clock=clock, started=started)
     except ChargeUncertain:
         # The fetch may still be being served. The lease is left to go stale, so nothing of this account talks to
         # ČÚZK until this request's own call cannot be alive any more.
@@ -574,7 +695,8 @@ def buy(account_id: uuid.UUID, property_id: int, *, opener: Opener, repeat: bool
     return building
 
 
-def cancel(account_id: uuid.UUID, property_id: int, purchase_id: int, *, opener: Opener) -> Building:
+def cancel(account_id: uuid.UUID, property_id: int, purchase_id: int, *, opener: Opener,
+           kind: Kind = PRICES) -> Building:
     """Give up a purchase in flight, sending nothing: the way out when it cannot be continued. One that was never
     fetched ends `failed` (nothing charged: an unfetched report costs nothing); one whose fetch was sent ends
     `paid_unread` (it may have been charged), and the building can then be bought anew with the confirmed repeat.
@@ -592,9 +714,9 @@ def cancel(account_id: uuid.UUID, property_id: int, purchase_id: int, *, opener:
             cur.execute(
                 "update cadastre_price_purchases set finished_at = now(), error = 'given up by the user', "
                 "       status = case when fetch_sent_at is null then 'failed' else 'paid_unread' end "
-                "where id = %s and account_id = %s and building_code = %s and status in ('pending', 'ordered') "
-                "and raw_report is null",
-                (purchase_id, account_id, building.code),
+                f"where id = %s and account_id = %s and building_code = %s and {_OF} "
+                "and status in ('pending', 'ordered') and raw_report is null",
+                (purchase_id, account_id, building.code, *kind.of),
             )
             if cur.rowcount != 1:
                 raise NotResumable(str(purchase_id))
@@ -605,12 +727,12 @@ def cancel(account_id: uuid.UUID, property_id: int, purchase_id: int, *, opener:
 
 
 def _run(account_id: uuid.UUID, building: Building, token: uuid.UUID, held: cuzk_login.Leased, *, opener: Opener,
-         repeat: bool, resume: int | None, sleep: Callable[[float], None], clock: Callable[[], float],
+         repeat: bool, resume: int | None, kind: Kind, sleep: Callable[[float], None], clock: Callable[[], float],
          started: float) -> None:
     with opener() as conn:
-        purchase = target(conn, account_id, building, resume=resume, repeat=repeat)
+        purchase = target(conn, account_id, building, resume=resume, repeat=repeat, kind=kind)
     if purchase is not None and purchase.kept is not None:
-        if _read_kept(opener, account_id, purchase):  # free: nothing is sent, so the login is not looked at
+        if _read_kept(opener, account_id, purchase, kind):  # free: nothing is sent, so the login is not looked at
             return
         if purchase.status == "done":
             raise PaidUnread(str(purchase.id))  # its deeds are stored; only the proof of an empty report is lost
@@ -625,32 +747,39 @@ def _run(account_id: uuid.UUID, building: Building, token: uuid.UUID, held: cuzk
     with opener() as conn, conn.transaction():
         first_check = cuzk_login.admit_check(conn, account_id, held.username)
         if purchase is None:
-            purchase = _start(conn, account_id, building)
+            purchase = _start(conn, account_id, building, kind)
     run = _Run(account_id, token, held, first_check, opener, started, clock)
     try:
-        _talk(run, building, purchase, sleep=sleep, clock=clock)
+        _talk(run, building, purchase, kind, sleep=sleep, clock=clock)
     finally:
         run.unused()
 
 
-def _talk(run: _Run, building: Building, purchase: Purchase, *, sleep: Callable[[float], None],
+def _order(run: _Run, building: Building, kind: Kind) -> tuple[wsdp_client.Report, int]:
+    """Order the kind's report: (the report, how many properties it covers)."""
+    if kind.unit_iskn_id is not None:
+        return run.call(wsdp_client.generate_unit_info, kind.unit_iskn_id), 1
+    units = run.call(wsdp_client.find_units, building.iskn_id)
+    if len(units) > wsdp_client.MAX_PRICE_OBJECTS:
+        raise TooManyUnits(len(units))
+    object_type, ids = ("JED_S", [u.iskn_id for u in units]) if units else ("STA_S", [building.iskn_id])
+    return run.call(wsdp_client.generate_prices, object_type, ids), len(ids)
+
+
+def _talk(run: _Run, building: Building, purchase: Purchase, kind: Kind, *, sleep: Callable[[float], None],
           clock: Callable[[], float]) -> None:
     """The run's conversation with ČÚZK: order if not ordered, wait for the report, fetch it once, store it."""
     report_id = purchase.report_id
     if report_id is None:
         try:
-            units = run.call(wsdp_client.find_units, building.iskn_id)
-            if len(units) > wsdp_client.MAX_PRICE_OBJECTS:
-                raise TooManyUnits(len(units))
-            object_type, ids = ("JED_S", [u.iskn_id for u in units]) if units else ("STA_S", [building.iskn_id])
-            ordered = run.call(wsdp_client.generate_prices, object_type, ids)
+            ordered, covered = _order(run, building, kind)
         except (wsdp_client.WsdpError, TooManyUnits) as exc:
             run.close(purchase.id, ("pending",), "status = 'failed', error = %s, finished_at = now()",
                       (f"{type(exc).__name__}: {exc}"[:200],))
             raise
         report_id = ordered.id
         run.move(purchase.id, ("pending",), "status = 'ordered', report_id = %s, object_count = %s",
-                 (report_id, len(ids)))
+                 (report_id, covered))
 
     fetch_sent = purchase.fetch_sent or purchase.status == "paid_unread"
 
@@ -681,7 +810,7 @@ def _talk(run: _Run, building: Building, purchase: Purchase, *, sleep: Callable[
             raise InProgress("preparing")
         sleep(POLL_EVERY_S)
 
-    if report.state == _UNCHARGED and (report.price_czk is None or report.price_czk > PRICE_CZK):
+    if report.state == _UNCHARGED and (report.price_czk is None or report.price_czk > kind.price_czk):
         # ČÚZK shows it as never fetched, so nothing was charged whatever we sent before; and it will not be.
         run.close(purchase.id, ("ordered", "paid_unread"),
                   "status = 'failed', error = %s, finished_at = now(), fetch_sent_at = null",
@@ -694,8 +823,18 @@ def _talk(run: _Run, building: Building, purchase: Purchase, *, sleep: Callable[
     def keep(answer: tuple[wsdp_client.Report, bytes]) -> None:
         fetched, document = answer
         cost = fetched.price_czk if fetched.price_czk is not None else report.price_czk
+        if kind.unit_iskn_id is not None:
+            # A unit's report names its owners: what is kept is only what we read of the unit. A file that cannot
+            # be cut down is not kept at all: the cost is recorded, and the read below (of the answer in memory)
+            # then finishes the purchase or ends it paid and unread with no file.
+            try:
+                document = cadastre_unit_report.redact(document)
+            except cadastre_unit_report.UnitReportError as exc:
+                with run.opener() as conn:
+                    keep_cost_only(conn, run.account_id, purchase.id, cost, f"not kept: {exc}")
+                return
         with run.opener() as conn:
-            keep_fetched(conn, run.account_id, purchase.id, cost, document)
+            keep_fetched(conn, run.account_id, purchase.id, cost, document, cut=kind.unit_iskn_id is not None)
 
     try:
         _fetched, document = run.call(wsdp_client.fetch_report, report_id, before=mark_sent, then=keep)
@@ -708,4 +847,4 @@ def _talk(run: _Run, building: Building, purchase: Purchase, *, sleep: Callable[
         if exc.reason == "service" and exc.status == wsdp_client.REPORT_GONE:
             gone(f"report {report_id}: error 304 at the fetch", sent=True)
         raise ChargeUncertain(str(report_id)) from exc
-    _read(run.opener, run.account_id, purchase.id, document)
+    _read(run.opener, run.account_id, purchase.id, document, kind)

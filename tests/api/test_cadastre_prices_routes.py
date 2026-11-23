@@ -41,7 +41,8 @@ def bought(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
 
     def buy(account: uuid.UUID, pid: int, **kw: Any) -> None:
-        calls.append({"account": account, "property": pid, "repeat": kw["repeat"], "resume": kw["resume"]})
+        calls.append({"account": account, "property": pid, "repeat": kw["repeat"], "resume": kw["resume"]}
+                     | ({"unit": kw["kind"].unit_iskn_id} if kw["kind"].unit_iskn_id is not None else {}))
 
     monkeypatch.setattr(cadastre_prices, "buy", buy)
     return calls
@@ -84,8 +85,8 @@ def test_a_property_without_a_building_offers_nothing(client: Any, monkeypatch: 
         raise cadastre_prices.NoBuilding(pid)
 
     monkeypatch.setattr(cadastre_prices, "building_of", none)
-    assert client.get(URL).json() == {"available": False, "price_czk": 50, "running": False, "purchase": None,
-                                      "deeds": [], "login_set": True, "login_refused": False}
+    assert client.get(URL).json() == {"available": False, "price_czk": 50, "unit_price_czk": 10, "units": [],
+                                      "running": False, "purchase": None, "deeds": [], "login_set": True, "login_refused": False}
 
 
 @pytest.mark.parametrize("body", [{}, {"cost_czk": 0}, {"cost_czk": "50"}, {"cost_czk": True}, [50],
@@ -256,3 +257,31 @@ def test_prices_are_never_bought_or_read_for_another_account(client: Any, bought
     kwargs = {"json": PAY} if method == "post" else {}
     assert getattr(client, method)(URL, headers={"X-Act-As": str(_OTHER)}, **kwargs).status_code == 403
     assert bought == []
+
+
+UNIT_URL = "/properties/7/building/units/18873306"
+
+
+def test_a_units_information_costs_ten_crowns_and_names_its_unit(client: Any, bought: list) -> None:
+    assert client.post(UNIT_URL, json={"cost_czk": 50}).status_code == 409, "the building's price is not this one's"
+    assert bought == []
+    assert client.post(UNIT_URL, json={"cost_czk": 10}).status_code == 200
+    assert bought == [{"account": _ME, "property": 7, "repeat": False, "resume": None, "unit": 18873306}]
+
+
+def test_a_unit_outside_the_accounts_deeds_is_refused_in_czech(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    def refuse(*a: Any, **kw: Any) -> None:
+        raise cadastre_prices.NoUnit("1")
+
+    monkeypatch.setattr(cadastre_prices, "buy", refuse)
+    answer = client.post(UNIT_URL, json={"cost_czk": 10})
+    assert answer.status_code == 422 and "Nic nebylo odesláno" in answer.json()["detail"]
+
+
+def test_an_unread_units_report_is_not_said_to_be_stored(client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    def unread(*a: Any, **kw: Any) -> None:
+        raise cadastre_prices.PaidUnread("1")
+
+    monkeypatch.setattr(cadastre_prices, "buy", unread)
+    assert "uložená" not in client.post(UNIT_URL, json={"cost_czk": 10}).json()["detail"]
+    assert "uložená" in client.post(URL, json=PAY).json()["detail"]

@@ -545,8 +545,9 @@ they answer are stated at the top of `api/cuzk_login.py`): past one, a 429 and n
 (`api/cadastre_prices.py`, migration 763; `GET`/`POST /properties/{id}/building/prices`, both in `_NEVER_ACTS`) spends
 money on the account's ČÚZK login, so ONE run per account uses that login at a time: the purchase lease on the login's
 own row (`cuzk_login.lease`/`renew`/`release`), renewed before every call. Its states, who may move each and on what
-guard head the module; its rows (`cadastre_price_purchases`, `cadastre_deeds`) are the buyer's alone, every statement
-naming the account. One ledger row per run, admitted before its first call.
+guard head the module; its rows (`cadastre_price_purchases`, `cadastre_deeds`, `cadastre_unit_facts`) are the buyer's
+alone, every statement naming the account. A second kind on the same machine (migration 767,
+`POST /properties/{id}/building/units/{iskn_id}`): one unit's information, whose kept file never holds the owners. One ledger row per run, admitted before its first call.
 
 **Fourth instance — the run routes (`api/routes/agent_runs.py`, #2071).** `require_account_id` on the router (all in
 `_NEVER_ACTS`), so a start lands on the user's oldest membership, with no picker. Reads take `TenantConn` and name no account

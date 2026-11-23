@@ -11,11 +11,13 @@ vi.mock('@/lib/api', async (orig) => ({
   fetchBuildingPrices: vi.fn(),
   buyBuildingPrices: vi.fn(),
   cancelBuildingPurchase: vi.fn(),
+  buyBuildingUnit: vi.fn(),
+  cancelBuildingUnitPurchase: vi.fn(),
 }));
 
 import {
-  ApiError, buyBuildingPrices, cancelBuildingPurchase, fetchBuildingPrices, fetchPropertyBuildingSales,
-  type BuildingPrices, type BuildingSale,
+  ApiError, buyBuildingPrices, buyBuildingUnit, cancelBuildingPurchase, cancelBuildingUnitPurchase, fetchBuildingPrices,
+  fetchPropertyBuildingSales, type BuildingPrices, type BuildingSale, type CadastreUnit,
 } from '@/lib/api';
 import BuildingSalesCard from './BuildingSalesCard';
 
@@ -23,6 +25,8 @@ const sales = vi.mocked(fetchPropertyBuildingSales);
 const prices = vi.mocked(fetchBuildingPrices);
 const buy = vi.mocked(buyBuildingPrices);
 const cancel = vi.mocked(cancelBuildingPurchase);
+const buyUnit = vi.mocked(buyBuildingUnit);
+const cancelUnit = vi.mocked(cancelBuildingUnitPurchase);
 
 const SALE: BuildingSale = {
   source: 'reas', source_record_id: '1_unit_22906291-105-37', sold_at: '2025-03-14', price_czk: 6450000,
@@ -49,6 +53,21 @@ const ORDERED: BuildingPrices = {
   ...READY, purchase: { ...PURCHASE, status: 'ordered', cost_czk: null, fetch_sent: false, finished_at: null },
 };
 const STEP = 'Potvrzení placeného načtení';
+const UNIT_STEP = 'Potvrzení placeného načtení jednotky';
+/* A deed over one unit, and the 10 Kč question about that unit. */
+const ONE_UNIT: BuildingPrices = {
+  ...BOUGHT, unit_price_czk: 10, units: [],
+  deeds: [{ ...BOUGHT.deeds[0], properties: [{ kind: 'jednotka', iskn_id: 77, label: '565/31' }] }],
+};
+const UNIT_PURCHASE: CadastreUnit['purchase'] = {
+  id: 41, status: 'done', cost_czk: 10, fetch_sent: true, file_kept: false, fetching: false, gone: false,
+};
+const FACTS: NonNullable<CadastreUnit['facts']> = {
+  floor_area_m2: null, area_state: 'empty', shape: [], use_code: '1', use_label: 'byt', share_num: 344, share_den: 35966,
+};
+const withUnit = (unit: Partial<CadastreUnit>): BuildingPrices => ({
+  ...ONE_UNIT, units: [{ unit_iskn_id: 77, purchase: UNIT_PURCHASE, facts: null, ...unit }],
+});
 
 function mount() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -58,6 +77,8 @@ function mount() {
 beforeEach(() => {
   sales.mockReset().mockResolvedValue({ sales: [] });
   prices.mockReset().mockResolvedValue(NONE);
+  buyUnit.mockReset();
+  cancelUnit.mockReset();
   buy.mockReset().mockResolvedValue(BOUGHT);
   cancel.mockReset().mockResolvedValue(READY);
 });
@@ -254,5 +275,59 @@ describe('<BuildingSalesCard>', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Zaplatit 50 Kč a načíst' }));
     expect(await screen.findByText(/ČÚZK neodpověděl nebo odpověděl chybou/)).toBeInTheDocument();
     await waitFor(() => expect(prices.mock.calls.length).toBeGreaterThan(1));
+  });
+
+  it('never buys a unit\'s information on one click: the step names 10 Kč and that the area may be missing', async () => {
+    prices.mockResolvedValue(ONE_UNIT);
+    buyUnit.mockResolvedValue(withUnit({ facts: FACTS }));
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'z katastru · 10 Kč' }));
+    expect(buyUnit).not.toHaveBeenCalled();
+    const step = screen.getByRole('group', { name: UNIT_STEP });
+    expect(step.textContent).toContain('565/31');
+    expect(step.textContent).toContain('10 Kč');
+    expect(step.textContent).toContain('platí se i tak');
+    fireEvent.click(screen.getByRole('button', { name: 'Zaplatit 10 Kč a načíst' }));
+    await waitFor(() => expect(buyUnit).toHaveBeenCalledWith(7, 77, 10, { unit: 77, repeat: false }));
+    expect(await screen.findByText(/katastr plochu neeviduje · podíl 344\/35966/)).toBeTruthy();
+    expect(buy).not.toHaveBeenCalled();
+  });
+
+  it('keeps "the cadastre records none" apart from "we could not find it"', async () => {
+    prices.mockResolvedValue(withUnit({ facts: { ...FACTS, area_state: 'unknown' } }));
+    mount();
+    expect(await screen.findByText(/plochu se v sestavě nepodařilo zjistit/)).toBeTruthy();
+    expect(screen.queryByText(/katastr plochu neeviduje/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /z katastru · 10 Kč/ })).toBeNull();
+  });
+
+  it('continues or gives up a unit\'s purchase in flight by its id, and never starts another', async () => {
+    prices.mockResolvedValue(withUnit({ purchase: { ...UNIT_PURCHASE, status: 'ordered', cost_czk: null, fetch_sent: false } }));
+    buyUnit.mockResolvedValue(ONE_UNIT);
+    cancelUnit.mockResolvedValue(ONE_UNIT);
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'dokončit (10 Kč)' }));
+    await waitFor(() => expect(buyUnit).toHaveBeenCalledWith(7, 77, 10, { unit: 77, resume: 41 }));
+    expect(screen.queryByRole('group', { name: UNIT_STEP })).toBeNull();
+  });
+
+  it('says a unit report with nothing kept may have been charged, and buys anew only behind the step', async () => {
+    prices.mockResolvedValue(withUnit({ purchase: { ...UNIT_PURCHASE, status: 'paid_unread', cost_czk: null, gone: true } }));
+    buyUnit.mockResolvedValue(ONE_UNIT);
+    mount();
+    expect(await screen.findByText('mohlo být zaúčtováno, nepřečteno')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /přečíst znovu|vyzvednout znovu/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'načíst nově · 10 Kč' }));
+    expect(buyUnit).not.toHaveBeenCalled();
+    expect(screen.getByRole('group', { name: UNIT_STEP }).textContent).toContain('už jednou platili');
+    fireEvent.click(screen.getByRole('button', { name: 'Zaplatit 10 Kč a načíst' }));
+    await waitFor(() => expect(buyUnit).toHaveBeenCalledWith(7, 77, 10, { unit: 77, repeat: true }));
+  });
+
+  it('offers no unit question without a usable login, and none on a deed over several units', async () => {
+    prices.mockResolvedValue({ ...ONE_UNIT, login_set: false });
+    mount();
+    await screen.findByText('565/31');
+    expect(screen.queryByRole('button', { name: /z katastru · 10 Kč/ })).toBeNull();
   });
 });

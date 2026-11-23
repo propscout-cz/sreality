@@ -191,3 +191,11 @@ def test_the_server_is_verified_against_the_bundle_requests_used() -> None:
     assert len(loaded) > 50, "certifi's bundle is loaded, not an empty store"
     from pathlib import Path
     assert Path(certifi.where()).is_file()
+
+
+def test_a_units_information_is_ordered_for_exactly_that_unit(sent):
+    sent["answer"] = (FIX / "cenyNem_bldg311151306_1gen.resp.xml").read_bytes()  # every order answers alike
+    assert w.generate_unit_info(18866306, "u", "p") == w.Report(222936340011, "čeká", None)
+    assert sent["url"].endswith("/sestavy") and sent["headers"]["SOAPAction"].endswith(':sestavy:GenerujInfoOJednotkach"')
+    assert ("<typ:GenerujInfoOJednotkachRequest><typ:jednotkaId>18866306</typ:jednotkaId><typ:format>xml</typ:format>"
+            "</typ:GenerujInfoOJednotkachRequest>") in sent["data"]

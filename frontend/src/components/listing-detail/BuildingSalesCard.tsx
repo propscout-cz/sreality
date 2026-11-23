@@ -4,7 +4,8 @@ import ErrorBanner from '@/components/ErrorBanner';
 import Panel, { PANEL_ACTION, PanelEmpty } from '@/components/Panel';
 import { Th } from '@/components/table';
 import {
-  buyBuildingPrices, cancelBuildingPurchase, fetchBuildingPrices, fetchPropertyBuildingSales, type BuildingPrices,
+  buyBuildingPrices, buyBuildingUnit, cancelBuildingPurchase, cancelBuildingUnitPurchase, fetchBuildingPrices, fetchPropertyBuildingSales,
+  type BuildingPrices, type CadastreUnit,
 } from '@/lib/api';
 import { saleRows, showsCadastre, type SaleRow } from '@/lib/buildingSales';
 import { fmtArea, fmtCzk, fmtDateSlash, fmtMeasuredPricePerM2 } from '@/lib/format';
@@ -36,6 +37,13 @@ const NOTICE: Record<string, string> = {
   login: 'Uložené přihlášení k ČÚZK teď nelze použít (bylo změněno či odmítnuto, nebo se na něj právě čeká). Nic dalšího se neodeslalo.',
 };
 
+/* The same answers for a unit's request, where the building's wording would mislead. */
+const UNIT_NOTICE: Record<string, string> = {
+  in_flight: 'Načtení této jednotky už je rozpracované, nové se proto nezačalo. Pokračujte v rozpracovaném.',
+  preparing: 'ČÚZK sestavu o jednotce ještě připravuje. Nic nebylo zaúčtováno; za chvíli zvolte u řádku „dokončit“.',
+  fetching: 'Sestava o jednotce se právě vyzvedává. Nic dalšího se neodeslalo.',
+};
+
 type How = { repeat?: boolean; resume?: number; cancel?: number };
 
 export default function BuildingSalesCard({ propertyId }: { propertyId: number }) {
@@ -49,7 +57,8 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
     queryKey: pricesKey(propertyId),
     queryFn: () => fetchBuildingPrices(propertyId),
     /* The read calls nothing at ČÚZK, so watching a live run costs nothing. */
-    refetchInterval: (q) => (q.state.data?.running || q.state.data?.purchase?.fetching ? LIVE_POLL_MS : false),
+    refetchInterval: (q) => (q.state.data?.running || q.state.data?.purchase?.fetching
+      || q.state.data?.units?.some((u) => u.purchase.fetching) ? LIVE_POLL_MS : false),
   });
   const [confirming, setConfirming] = useState(false);
   const buy = useMutation({
@@ -60,6 +69,16 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
     /* A refusal can change what the card may offer (a login ČÚZK refused, a purchase that ended). */
     onError: () => void queryClient.invalidateQueries({ queryKey: pricesKey(propertyId) }),
     onSettled: () => setConfirming(false),
+  });
+  /* One unit's information (10 Kč): the same two steps, the same server-side run and lease. */
+  const [askingUnit, setAskingUnit] = useState<{ id: number; label: string | null; repeat: boolean } | null>(null);
+  const unitBuy = useMutation({
+    mutationFn: (how: { unit: number; resume?: number; repeat?: boolean; cancel?: number }) => (how.cancel != null
+      ? cancelBuildingUnitPurchase(propertyId, how.unit, how.cancel)
+      : buyBuildingUnit(propertyId, how.unit, pricesQ.data?.unit_price_czk ?? 0, how)),
+    onSuccess: (state) => queryClient.setQueryData<BuildingPrices>(pricesKey(propertyId), state),
+    onError: () => void queryClient.invalidateQueries({ queryKey: pricesKey(propertyId) }),
+    onSettled: () => setAskingUnit(null),
   });
 
   const prices = pricesQ.data;
@@ -73,12 +92,15 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
   const unread = purchase?.status === 'paid_unread' ? purchase : null;
   const paidBefore = bought ?? unread;
   /* A live request (this tab's or another's) holds the account's ČÚZK login: nothing may be asked beside it. */
-  const live = buy.isPending || !!prices?.running;
+  const live = buy.isPending || unitBuy.isPending || !!prices?.running;
+  const unitPrice = prices?.unit_price_czk ?? 0;
+  const unitsById = new Map((prices?.units ?? []).map((u) => [u.unit_iskn_id, u]));
   /* A fetch was sent moments ago and may still be being served: it is not sent again until that cannot be. */
   const fetching = !!purchase?.fetching;
   const loginUsable = !!prices?.login_set && !prices.login_refused;
   const canPay = !!prices?.available && loginUsable && !live;
   const notice = buy.data?.notice ? NOTICE[buy.data.notice] : undefined;
+  const unitNotice = unitBuy.data?.notice ? UNIT_NOTICE[unitBuy.data.notice] ?? NOTICE[unitBuy.data.notice] : undefined;
 
   let accessory = null;
   if (canPay && inFlight && !fetching) {
@@ -191,7 +213,27 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
           </button>
         </div>
       ) : null}
+      {askingUnit && canPay && unitPrice > 0 ? (
+        <div role="group" aria-label="Potvrzení placeného načtení jednotky"
+          className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-3 py-2 text-[0.78rem] text-[var(--color-ink-2)]">
+          <span className="min-w-0 flex-1">
+            {askingUnit.repeat
+              ? `Za údaje o jednotce ${askingUnit.label ?? ''} jste už jednou platili nebo o ně žádali. Nové načtení stojí dalších ${unitPrice} Kč na vašem účtu u ČÚZK.`
+              : `Údaje o jednotce ${askingUnit.label ?? ''} z katastru stojí ${unitPrice} Kč na vašem účtu u ČÚZK.`}
+            {' '}Katastr eviduje podlahovou plochu až od roku 2024; u starší jednotky ji uvádět nemusí a platí se i tak.
+          </span>
+          <button type="button" className={PANEL_ACTION}
+            onClick={() => unitBuy.mutate({ unit: askingUnit.id, repeat: askingUnit.repeat })}>
+            Zaplatit {unitPrice} Kč a načíst
+          </button>
+          <button type="button" className={PANEL_ACTION} onClick={() => setAskingUnit(null)}>
+            Zrušit
+          </button>
+        </div>
+      ) : null}
       {buy.isError ? <ErrorBanner flush title="Nenačteno:" message={buy.error.message} /> : null}
+      {unitBuy.isError ? <ErrorBanner flush title="Jednotka nenačtena:" message={unitBuy.error.message} /> : null}
+      {unitNotice ? <p role="status" className={NOTE}>{unitNotice}</p> : null}
       {rows.length === 0 ? (
         <PanelEmpty>
           Žádný prodej v tomto domě zatím neevidujeme.{purchase ? '' : ' Z katastru zatím nenačteno.'}
@@ -212,14 +254,23 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => <SaleRowView key={row.key} row={row} propertyId={propertyId} />)}
+              {rows.map((row) => (
+                <SaleRowView key={row.key} row={row} propertyId={propertyId}
+                  unit={row.unit_iskn_id != null ? unitsById.get(row.unit_iskn_id) ?? null : null}
+                  ask={canPay && unitPrice > 0 && row.unit_iskn_id != null ? {
+                    price: unitPrice,
+                    start: (repeat: boolean) => setAskingUnit({ id: row.unit_iskn_id!, label: row.unit, repeat }),
+                    resume: (id: number) => unitBuy.mutate({ unit: row.unit_iskn_id!, resume: id }),
+                    cancel: (id: number) => unitBuy.mutate({ unit: row.unit_iskn_id!, cancel: id }),
+                  } : null} />
+              ))}
             </tbody>
           </table>
         </div>
       )}
       {showsCadastre(rows) ? (
         <p className="text-xs text-[var(--color-ink-3)]">
-          Cena z katastru je za celou listinu a katastr neuvádí plochu. Kde přesně tu cenu před prodejem žádal jediný
+          Cena z katastru je za celou listinu a cenová sestava plochu neuvádí. Kde přesně tu cenu před prodejem žádal jediný
           inzerát v tomto domě, je plocha a dispozice převzatá z něj (označeno „inzerát“); jinak je řádek bez ceny za
           m². Ceny z katastru vidí jen váš účet. Zdroj: ČÚZK.
         </p>
@@ -232,7 +283,77 @@ const CELL = 'px-2.5 py-2 whitespace-nowrap';
 const LINK = 'underline decoration-[var(--color-rule-strong)] underline-offset-2 hover:text-[var(--color-copper)]';
 const NUM = `${CELL} text-right font-mono text-[13px] tabular-nums`;
 
-function SaleRowView({ row, propertyId }: { row: SaleRow; propertyId: number }) {
+interface UnitAsk {
+  price: number;
+  start: (repeat: boolean) => void;
+  resume: (purchaseId: number) => void;
+  cancel: (purchaseId: number) => void;
+}
+
+const UNIT_NOTE = 'ml-1.5 font-sans text-xs text-[var(--color-ink-3)]';
+const UNIT_ACT = `ml-1.5 font-sans text-xs ${LINK}`;
+
+/* What the account's purchase of this unit's information says, or the way to it. Every state says truthfully
+ * whether money moved and has a way forward: in flight is continued by its id or given up (which sends nothing);
+ * paid and unread is read again (free only when its file is kept), or bought anew behind the confirm step. Facts
+ * as the cadastre states them: an area it does not record is said so, never shown as a gap that looks unasked. */
+function UnitInfo({ unit, ask }: { unit: CadastreUnit | null; ask: UnitAsk | null }) {
+  if (unit?.facts) {
+    const f = unit.facts;
+    const share = f.share_num != null && f.share_den != null ? `podíl ${f.share_num}/${f.share_den}` : null;
+    const title = [f.use_label ? `využití: ${f.use_label}` : null, share].filter(Boolean).join(', ') || undefined;
+    return (
+      <span className={UNIT_NOTE} title={title}>
+        {f.floor_area_m2 != null ? `katastr: ${fmtArea(f.floor_area_m2)}`
+          : f.area_state === 'empty' ? 'katastr plochu neeviduje' : 'plochu se v sestavě nepodařilo zjistit'}
+        {share ? ` · ${share}` : ''}
+      </span>
+    );
+  }
+  const p = unit?.purchase;
+  if (p?.fetching) {
+    return <span className={UNIT_NOTE}>{p.status === 'paid_unread' ? 'vyžádáno, čeká se na odpověď' : 'vyzvedává se…'}</span>;
+  }
+  if (p && (p.status === 'pending' || p.status === 'ordered')) {
+    return ask ? (
+      <>
+        <button type="button" className={UNIT_ACT} onClick={() => ask.resume(p.id)}>
+          dokončit ({p.fetch_sent ? 'celkem nejvýše ' : ''}{ask.price} Kč)
+        </button>
+        <button type="button" className={UNIT_ACT} onClick={() => ask.cancel(p.id)}
+          title={p.fetch_sent ? 'Nic se neodešle; sestava už mohla být zaúčtována' : 'Nic se neodešle a nic se nezaúčtuje'}>
+          zrušit
+        </button>
+      </>
+    ) : <span className={UNIT_NOTE}>rozpracováno</span>;
+  }
+  if (p && p.status === 'paid_unread') {
+    const again = p.file_kept ? 'přečíst znovu (zdarma)' : p.gone ? null : `vyzvednout znovu (celkem nejvýše ${ask?.price ?? ''} Kč)`;
+    return (
+      <>
+        <span className={UNIT_NOTE} title="Ověříte to ve vyúčtování svého účtu u ČÚZK">
+          {p.cost_czk != null ? 'zaplaceno, nepřečteno' : 'mohlo být zaúčtováno, nepřečteno'}
+        </span>
+        {ask && again ? (
+          <button type="button" className={UNIT_ACT} onClick={() => ask.resume(p.id)}>{again}</button>
+        ) : null}
+        {ask && !p.file_kept ? (
+          <button type="button" className={UNIT_ACT} onClick={() => ask.start(true)}>načíst nově · {ask.price} Kč</button>
+        ) : null}
+      </>
+    );
+  }
+  if (!ask) return null;
+  return (
+    <button type="button" className={UNIT_ACT} onClick={() => ask.start(false)}>
+      z katastru · {ask.price} Kč
+    </button>
+  );
+}
+
+function SaleRowView({ row, propertyId, unit, ask }: {
+  row: SaleRow; propertyId: number; unit: CadastreUnit | null; ask: UnitAsk | null;
+}) {
   const link = advertLink(row);
   const price = row.price_czk == null ? '—' : row.currency && row.currency !== 'CZK'
     ? `${row.price_czk.toLocaleString('cs-CZ')} ${row.currency}`
@@ -258,6 +379,7 @@ function SaleRowView({ row, propertyId }: { row: SaleRow; propertyId: number }) 
             inzerát
           </a>
         )}
+        {row.unit_iskn_id != null ? <UnitInfo unit={unit} ask={ask} /> : null}
       </td>
       <td className={NUM}>{price}</td>
       <td className={NUM}>{fmtMeasuredPricePerM2(row.price_per_m2, ppm2BasisFromToken(row.price_per_m2_basis))}</td>
