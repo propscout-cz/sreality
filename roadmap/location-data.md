@@ -1383,6 +1383,10 @@ component is slimmed twice — each wave rewrites one component and slims its st
   `docs/design/location-quality/PROGRAM.md` § W1). `served/town` stores `grains`; Location Quality draws every
   published property once at its location ad's finest level, one table pinning gauge and page. The four unread
   `by_portal` facts on the served cells are deleted. **Next:** the settlement-unit view (#2460) after FILL places them.
+- **W5c — three precision levels — ruled 2026-11-07/08, not built** (#2474; the precision grill's rulings in
+  `docs/design/location-quality/PROGRAM.md`). One stored value: RÚIAN door, portal-exact (explicit labels only, about
+  27.9k ads) or approximate; one reading in Browse, the map and the detail page; no contract change. **Next:** after W5b
+  (#2339), which waits for the next engine deploy and its designator-veto fix (operator ruling 2026-11-08).
 - **Mapy exit, Stage A — built 2026-11-13** (#2454; spec #2441 Part 6; rulings Q3 a, Q5, 2026-11-07 on `backup_w4`,
   2026-11-13 on the suggest cache; migration 739, destructive, backup waived; as built: `docs/architecture.md` § rule 17
   and § the Mapy-powered location search). The geocoder, its `MAPY_GEOCODE_ENABLED` switch and tests, the seed's Mapy
