@@ -116,6 +116,7 @@ def _property(conn, door: int, *categories: str) -> int:
     (("dum", "pozemek"), False),  # one plot ad is enough, although the property shows the house
 ])
 def test_the_building_reads_serve_no_property_that_holds_a_plot_or_other_ad(conn, world, categories, served):
+    from api import cadastre_prices
     from api.property_building import load_building
     from api.property_building_sales import load_building_sales
 
@@ -128,6 +129,11 @@ def test_the_building_reads_serve_no_property_that_holds_a_plot_or_other_ad(conn
     property_id = _property(conn, ADM, *categories)
     building = load_building(conn, property_id)
     assert (building is not None, len(load_building_sales(conn, property_id))) == (served, int(served))
+    if served:  # the purchase asks the same question before it orders anything
+        assert cadastre_prices.building_of(conn, property_id).code == BUILDING.code
+    else:
+        with pytest.raises(cadastre_prices.NoBuilding):
+            cadastre_prices.building_of(conn, property_id)
 
 
 def test_a_changed_building_gets_a_new_row_and_the_old_one_is_closed(conn, world):
