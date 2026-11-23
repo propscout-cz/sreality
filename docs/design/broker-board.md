@@ -25,6 +25,7 @@ its one view `broker_book_projection` over the ads of the broker's identities on
 | `started_at` | `min(first_seen_at)`: the start `measure_tom_days` uses (617); `first_seen_at` is the drain's first WRITE (444) |
 | `ended_at` | NULL while any of the broker's ads on the property is active, else `max(last_seen_at)` |
 | `tom_observed` | `measure_tom_observed` (625) of the broker's first ad in `browse_projection`'s order (category first, `first_seen_at`, id) |
+| `first_price_czk`, `last_price_czk` | `listing_price_history` (768) of the broker's LEAD ad (their first in the property's canonical order) over the broker's own same-portal predecessors: the first price the broker asked and their last. `measure_price_change_pct` of the pair is the broker's price change on the property; NULL with no priced ad |
 
 A property counts once per broker in volume and in speed; an identity not yet resolved to an active broker has no
 row (its property reads unattributed). Service role only.
@@ -55,6 +56,11 @@ n = `exited` + `not_exited`; share = `exited` / n, shown from n ≥ `MIN_N` (5);
 (z = 1.96, `toolkit.measures.wilson_lower`); `unknown` is its own count, never in n. Label: **„Opustilo trh do N dní
 (prodáno nebo staženo, ne nutně prodej)"** (no portal says sold). An indexless portal's spell (`web`, the `Portal`
 seam) answers no speed: its end is never observed. A coverage line names the cohort's portals that publish no broker.
+
+**Price change** (the dossier, 2026-11-23): over the book's rows with a price pair, the share whose last price
+differs from the first and the median change among those, from `MIN_N` repriced up; all rows, active or inactive
+(`toolkit.brokers.price_change`). Never a mean or a median over every row: placeholder prices reach +1,379,800 %,
+and nine brokers in ten have a median of 0. Not on the board, and no rank.
 
 ## Waves
 

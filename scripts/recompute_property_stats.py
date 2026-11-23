@@ -22,8 +22,8 @@
    takes a property's place from it. The six amenities are a union over every advert and the
    energy rating the best class any advert states (MS6); every other physical fact is the first
    non-empty value in the canonical order. The price
-   figures are the canonical advert's lineage (MS10): its own and its same-portal predecessors'
-   `listing_price_steps` plus one handover step per link, the total compounded. Lifecycle: any advert active, min/max seen, newest snapshot;
+   figures are the canonical advert's lineage (MS10): `listing_price_history` (migration 768), its own and its
+   same-portal predecessors' `listing_price_steps` plus one handover step per link, the total compounded. Lifecycle: any advert active, min/max seen, newest snapshot;
    the portal lists and one newest-advert date per offered portal (MS19). `repr_since` is
    stamped when the canonical advert changes, or when a property the full sweep reset to no ads
    gains one (the price alerts start there). `city_proximity_computed_at` is cleared when the

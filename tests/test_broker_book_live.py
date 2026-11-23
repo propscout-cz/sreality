@@ -318,6 +318,40 @@ def test_the_book_holds_each_brokers_own_first_and_last_price(cur: Any) -> None:
     assert cur.fetchone()[0] == pytest.approx(-10.0)
 
 
+def test_the_dossier_and_the_inventory_read_the_brokers_price_changes(cur: Any) -> None:
+    """The dossier counts the book's priced, repriced, cut and raised properties, all and by the row's status, with a
+    median over the repriced ones from MIN_N up; an inventory row carries its own ad's change."""
+    from toolkit import brokers
+
+    now, broker = _now(cur), _broker(cur)
+    identity = _identity(cur, broker)
+    ads = {}
+    for last, active in ((4_500_000, True), (4_000_000, True), (4_800_000, True), (5_250_000, True),
+                         (4_700_000, False), (5_000_000, False), (None, True)):
+        pid = _property(cur)
+        ad = _ad(cur, pid, identity, now - 30 * _D, now if active else now - 2 * _D, active=active,
+                 price=last)
+        if last is not None:
+            _snapshot(cur, ad, 5_000_000, 30 * 24)
+            if last != 5_000_000:
+                _snapshot(cur, ad, last, 10 * 24)
+        ads[ad] = last
+        properties_changed(cur.connection, [pid])
+
+    figures = brokers.get_broker(cur.connection, broker)["data"]["price_change"]
+    assert figures["all"] == {"priced": 6, "repriced": 5, "cut": 4, "raised": 1, "median_pct": pytest.approx(-6.0)}
+    assert figures["active"] == {"priced": 4, "repriced": 4, "cut": 3, "raised": 1, "median_pct": None}
+    assert figures["inactive"] == {"priced": 2, "repriced": 1, "cut": 1, "raised": 0, "median_pct": None}
+    assert brokers.get_broker(cur.connection, _broker(cur))["data"]["price_change"]["all"]["priced"] == 0
+
+    rows = {r["listing_id"]: r for r in brokers.broker_listings(cur.connection, broker)["data"]}
+    assert set(rows) == set(ads)
+    for ad, last in ads.items():
+        want = None if last is None else pytest.approx((last - 5_000_000) / 50_000)
+        assert rows[ad]["price_change_pct"] == want
+        assert rows[ad]["price_change_count"] == (0 if last in (None, 5_000_000) else 1)
+
+
 def test_tom_observed_follows_the_brokers_first_ad_in_the_projection_order(cur: Any) -> None:
     """browse_projection's order (migration 669) over all the broker's identities: an ad with a category first, then
     first_seen_at, then id. Seeded on a fresh (portal, category) pair: its first day is a sweep by definition (not

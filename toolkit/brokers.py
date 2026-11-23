@@ -20,6 +20,8 @@ from typing import Any
 from psycopg.rows import dict_row
 
 from toolkit import _now_iso
+from toolkit.measures import price_change_pct_sql
+from toolkit.stats_registry import MIN_N
 
 MAX_BATCH = 1000
 _REDACTED = "[redacted]"
@@ -216,24 +218,35 @@ def get_broker(conn: Any, broker_id: int) -> dict[str, Any] | None:
             "ORDER BY last_seen_at DESC NULLS LAST", params)
         memberships = cur.fetchall()
         region_shares, categories = footprint(cur, broker_id)
+        prices = price_change(cur, broker_id)
         contacts = _contacts(cur, broker_id)
     for coll in (broker, *memberships):
         for k in ("first_seen_at", "last_seen_at"):
             if k in coll:
                 coll[k] = _iso(coll[k])
     data = {"broker": broker, "memberships": memberships, "region_shares": region_shares,
-            "categories": categories, "contacts": contacts}
+            "categories": categories, "price_change": prices, "contacts": contacts}
     return _envelope("broker_detail", data, {"broker_id": broker_id}, 1, broker.get("last_seen_at"))
 
 
+# Each ad with its own price history (migration 768), bounded to the broker's ads: the percent from the first price of
+# its oldest same-portal predecessor to its last, and the steps between them. The page is cut before the history is
+# read, so only the rows returned pay for one.
+_BROKER_LISTINGS_SQL = f"""
+    SELECT v.*, {price_change_pct_sql("h.first_price_czk", "h.last_price_czk")}::float8 AS price_change_pct,
+           h.changes AS price_change_count
+    FROM (SELECT * FROM broker_listings_public WHERE broker_id = %s
+          ORDER BY is_active DESC, last_seen_at DESC NULLS LAST LIMIT %s) v
+    CROSS JOIN LATERAL listing_price_history(v.listing_id, v.broker_id) h
+    ORDER BY v.is_active DESC, v.last_seen_at DESC NULLS LAST
+"""
+
+
 def broker_listings(conn: Any, broker_id: int, *, limit: int = 500) -> dict[str, Any]:
-    """A broker's listings (active first), via broker_listings_public."""
+    """A broker's listings (active first), via broker_listings_public, each with its price change."""
     limit = max(1, min(int(limit), 2000))
     with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(
-            "SELECT * FROM broker_listings_public WHERE broker_id = %s "
-            "ORDER BY is_active DESC, last_seen_at DESC NULLS LAST LIMIT %s",
-            (broker_id, limit))
+        cur.execute(_BROKER_LISTINGS_SQL, (broker_id, limit))
         rows = cur.fetchall()
     fresh = max((r["last_seen_at"] for r in rows if r.get("last_seen_at")), default=None)
     for r in rows:
@@ -271,6 +284,39 @@ _FOOTPRINT_SQL = f"""
     GROUP BY GROUPING SETS ((l.region_id, k.name), (l.category_main, l.category_type))
     ORDER BY active_properties DESC, properties DESC, k.name, l.category_main, l.category_type
 """
+
+
+# How much the broker changes prices, over the book (migration 768): per property, the broker's own first price
+# against their last. `priced` = the properties with a price to compare, `repriced` = those whose last price differs
+# from the first (`cut` below it, `raised` above); the median is over the repriced ones only, since most properties
+# never move and a median over all of them is 0 for nine brokers in ten (production, 2026-11-23).
+_PRICE_CHANGE_SQL = f"""
+    SELECT grouping(b.is_active) = 1 AS every, b.is_active,
+           count(*) FILTER (WHERE x.pct IS NOT NULL) AS priced,
+           count(*) FILTER (WHERE x.pct <> 0) AS repriced,
+           count(*) FILTER (WHERE x.pct < 0) AS cut,
+           count(*) FILTER (WHERE x.pct > 0) AS raised,
+           (percentile_cont(0.5) WITHIN GROUP (ORDER BY x.pct) FILTER (WHERE x.pct <> 0))::float8 AS median_pct
+    FROM broker_book b
+    CROSS JOIN LATERAL (SELECT {price_change_pct_sql("b.first_price_czk", "b.last_price_czk")} AS pct) x
+    WHERE b.broker_id = %(broker_id)s
+    GROUP BY GROUPING SETS ((), (b.is_active))
+"""
+_PRICE_CHANGE_KEYS = ("priced", "repriced", "cut", "raised", "median_pct")
+
+
+def price_change(cur: Any, broker_id: int) -> dict[str, dict[str, Any]]:
+    """The broker's price figures over every property of the book (`all`), those with an ad of theirs still running
+    (`active`) and the rest (`inactive`). The median answers from MIN_N repriced properties up (a dict_row cursor)."""
+    out = {k: {"priced": 0, "repriced": 0, "cut": 0, "raised": 0, "median_pct": None}
+           for k in ("all", "active", "inactive")}
+    cur.execute(_PRICE_CHANGE_SQL, {"broker_id": broker_id})
+    for r in cur.fetchall():
+        figures = {k: r[k] for k in _PRICE_CHANGE_KEYS}
+        if figures["repriced"] < MIN_N:
+            figures["median_pct"] = None
+        out["all" if r["every"] else "active" if r["is_active"] else "inactive"] = figures
+    return out
 
 
 def footprint(cur: Any, broker_id: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:

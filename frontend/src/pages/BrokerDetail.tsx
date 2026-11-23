@@ -5,9 +5,13 @@ import { useNewTabProps } from '@/lib/linkGestures';
 import { useQuery } from '@tanstack/react-query';
 import {
   BROKER_LISTINGS_LIMIT,
+  BROKER_PRICE_SCOPES,
   fetchBrokerDossier,
   fetchBrokerListings,
+  priceChangeSummary,
   type BrokerListing,
+  type BrokerPriceFigures,
+  type BrokerPriceScope,
   type BrokerRegionShare,
   type BrokerMembership,
 } from '../lib/brokers';
@@ -15,6 +19,7 @@ import { fmtCount, fmtCzk, fmtArea, fmtRelative } from '../lib/format';
 import { advertLink, portalBadge } from '../lib/portals';
 import { SegmentedBar } from '../components/controls';
 import BrokerContactCard from '@/components/BrokerContactCard';
+import PriceDelta from '@/components/PriceDelta';
 import { brokerContact } from '@/lib/brokerContact';
 import Panel, { PanelEmpty } from '@/components/Panel';
 import { useExploreBrokerModal } from '@/components/ExploreBrokerModal';
@@ -151,7 +156,7 @@ function BrokerDetailDesktop() {
           </header>
 
           {/* Stats strip */}
-          <div className="mt-6 grid grid-cols-3 border border-[var(--color-rule)] rounded-[var(--radius-md)] divide-x divide-[var(--color-rule-soft)] bg-[var(--color-paper-2)]">
+          <div className="mt-6 grid grid-cols-[1fr_1fr_1fr_minmax(0,1.7fr)] border border-[var(--color-rule)] rounded-[var(--radius-md)] divide-x divide-[var(--color-rule-soft)] bg-[var(--color-paper-2)]">
             <Stat
               label="Nemovitosti"
               value={b.active_properties}
@@ -160,6 +165,7 @@ function BrokerDetailDesktop() {
             />
             <Stat label="Kanceláře" value={dossier.memberships.length} hint="historicky" />
             <Stat label="Regiony" value={dossier.region_shares.length} hint="kde inzeruje" />
+            <PriceChangeStat figures={dossier.price_change} />
           </div>
 
           {/* Section cards, 16 px apart (system.md § Section cards). */}
@@ -246,6 +252,32 @@ function Stat({
         )}
       </p>
       {hint && <p className="mt-1 text-[0.62rem] text-[var(--color-ink-4)]">{hint}</p>}
+    </div>
+  );
+}
+
+/* How much the broker changes prices (migration 768): the share of their priced
+ * properties that end on another price than the broker first asked, and the
+ * median change among those. Over the whole book like its neighbours, not the
+ * inventory's Typ / Nabídka selection; the switch is the status Nemovitosti counts. */
+function PriceChangeStat({ figures }: { figures: Record<BrokerPriceScope, BrokerPriceFigures> }) {
+  const labelId = useId();
+  const [scope, setScope] = useState<BrokerPriceScope>('all');
+  const { share, median, hint } = priceChangeSummary(figures[scope]);
+  return (
+    <div className="px-4 py-3">
+      <div className="flex items-center justify-between gap-2">
+        <p id={labelId} className="text-[0.6rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
+          Změna ceny
+        </p>
+        <SegmentedBar aria={{ 'aria-labelledby': labelId }} options={BROKER_PRICE_SCOPES} value={scope}
+          onChange={setScope} />
+      </div>
+      <p className="mt-1 font-[family-name:var(--font-mono)] tabular-nums text-[1.35rem] leading-none text-[var(--color-ink)]">
+        {share}
+        {median && <span className="text-[var(--color-ink-4)] text-sm"> · {median}</span>}
+      </p>
+      <p className="mt-1 text-[0.62rem] text-[var(--color-ink-4)]">{hint}</p>
     </div>
   );
 }
@@ -382,7 +414,7 @@ function Inventory({
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="border-b border-[var(--color-rule)] bg-[var(--color-paper-2)] text-left">
-                {['Lokalita', 'Typ', 'Plocha', 'Cena', 'Portál', 'Viděno'].map((h) => (
+                {['Lokalita', 'Typ', 'Plocha', 'Cena', 'Změna ceny', 'Portál', 'Viděno'].map((h) => (
                   <th
                     key={h}
                     className="px-3 py-2 font-normal whitespace-nowrap text-[var(--color-ink-3)] text-xs"
@@ -420,6 +452,9 @@ function Inventory({
                     </td>
                     <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-right">
                       {fmtCzk(l.price_czk)}
+                    </td>
+                    <td className="px-3 py-1.5 whitespace-nowrap">
+                      <PriceDelta pct={l.price_change_pct} changes={l.price_change_count} muted={!l.is_active} />
                     </td>
                     <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-3)] font-[family-name:var(--font-sans)]">
                       {link ? (

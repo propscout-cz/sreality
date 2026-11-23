@@ -47,6 +47,8 @@ const listing = (l: Partial<brokers.BrokerListing>): brokers.BrokerListing =>
     is_active: true,
     last_seen_at: new Date().toISOString(),
     property_id: 11,
+    price_change_pct: null,
+    price_change_count: 0,
     ...l,
   }) as brokers.BrokerListing;
 
@@ -64,6 +66,11 @@ const dossier = (broker: Partial<brokers.BrokerPublic>): brokers.BrokerDossier =
   memberships: [],
   region_shares: [],
   categories: [],
+  price_change: {
+    all: { priced: 50, repriced: 10, cut: 8, raised: 2, median_pct: -7.3 },
+    active: { priced: 35, repriced: 4, cut: 4, raised: 0, median_pct: null },
+    inactive: { priced: 0, repriced: 0, cut: 0, raised: 0, median_pct: null },
+  },
   pii_masked: true,
 });
 
@@ -305,5 +312,42 @@ describe('<BrokerDetail> section cards', () => {
     expect(countOf(card('Kanceláře'))).toBe('0');
     expect(countOf(card('Inventář'))).toBe('0');
     expect(within(card('Inventář')).getByText('Žádné inzeráty.').closest('.border')).toBe(card('Inventář'));
+  });
+});
+
+/* Migration 768: how much the broker changes prices. The tile reads the book's
+ * figures under one status at a time; an inventory row carries its own ad's change. */
+describe('<BrokerDetail> price changes', () => {
+  it('shows the share repriced and the median, and switches the status slice', async () => {
+    renderPage();
+    const group = await screen.findByRole('group', { name: 'Změna ceny' });
+    const tile = group.parentElement!.parentElement!;
+    expect(within(group).getByRole('button', { name: 'Vše' })).toHaveAttribute('aria-pressed', 'true');
+    expect(tile).toHaveTextContent(/20\s%/);
+    expect(tile).toHaveTextContent(/medián -7,3\s%/);
+    expect(tile).toHaveTextContent('přeceněno 10 z 50 · 8 zlevněno, 2 zdraženo');
+
+    fireEvent.click(within(group).getByRole('button', { name: 'Aktivní' }));
+    expect(tile).toHaveTextContent('přeceněno 4 z 35 · 4 zlevněno, 0 zdraženo');
+    expect(tile).not.toHaveTextContent('medián');
+
+    fireEvent.click(within(group).getByRole('button', { name: 'Neaktivní' }));
+    expect(tile).toHaveTextContent('žádná cena k porovnání');
+  });
+
+  it('marks each ad with its own price change, and leaves an unpriced one blank', async () => {
+    vi.mocked(brokers.fetchBrokerListings).mockResolvedValue([
+      listing({ listing_id: 1, price_change_pct: -4.2, price_change_count: 1 }),
+      listing({ listing_id: 2, price_change_pct: 0, price_change_count: 0 }),
+      listing({ listing_id: 3, price_czk: null, price_change_pct: null, price_change_count: 0 }),
+    ]);
+    renderPage();
+    const table = await screen.findByRole('table');
+    expect(within(table).getByRole('columnheader', { name: 'Změna ceny' })).toBeInTheDocument();
+    const cells = within(table).getAllByRole('row').slice(1).map((r) => within(r).getAllByRole('cell')[4]);
+    expect(cells[0].querySelector('span')).toHaveAttribute('title', expect.stringContaining('Pokles'));
+    expect(cells[0]).toHaveTextContent(/4,2\s%/);
+    expect(cells[1].querySelector('span')).toHaveAttribute('title', 'Cena se od prvního záznamu nezměnila');
+    expect(cells[2]).toBeEmptyDOMElement();
   });
 });
