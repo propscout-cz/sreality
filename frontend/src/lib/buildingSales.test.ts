@@ -63,6 +63,9 @@ describe('saleRows', () => {
     const two = [{ kind: 'jednotka' as const, iskn_id: 1, label: 'a' }, { kind: 'jednotka' as const, iskn_id: 2, label: 'b' }];
     expect(saleRows([], [deed({ properties: two })])[0].unit_iskn_id).toBeNull();
     expect(saleRows([SALE], [])[0].unit_iskn_id).toBeNull();
+    const confirming = deed({ match: { source: 'reas', source_record_id: SALE.source_record_id, property_id: null,
+      area_m2: null, disposition: null, price_per_m2: null, price_per_m2_basis: null } });
+    expect(saleRows([SALE], [confirming])[0].unit_iskn_id).toBe(1);
   });
 
   it('gives an unmatched deed no area and no per-m² figure', () => {

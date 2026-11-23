@@ -69,8 +69,8 @@ TWO KINDS, ONE MACHINE (migration 767). A purchase is of a `Kind`: the building'
 "Informace o jednotkách" (10 Kč, only for a unit named in a deed the account already bought). Everything above
 holds for both; a kind differs only in what is ordered, the price it may cost, what is stored from the file, and
 this: a unit's report names the unit's owners, so that part is cut out before the file is kept, and if the cut
-fails the file is not kept at all (the purchase is then paid and unread with no file, and fetching it again is
-free while ČÚZK serves it). Every statement names the kind and the unit, so neither reads as the other's.
+fails the file is not kept at all (the cost is recorded and the answer is read from memory; if that fails too,
+the purchase is paid and unread with no file, and fetching it again is free while ČÚZK serves it). Every statement names the kind and the unit, so neither reads as the other's.
 
 Every call a run sends is one row of the login-check ledger (`cuzk_login.admit_check`, #2608), admitted before it
 leaves and settled by its own answer. No database connection is held while waiting on ČÚZK. Everything is the
@@ -493,7 +493,11 @@ select distinct on (p.unit_iskn_id)
        coalesce(p.error like '{_GONE}%%', false) as gone,
        f.id is not null as read, f.floor_area_m2, f.use_code, f.use_label, f.share_num, f.share_den
   from cadastre_price_purchases p
-  left join cadastre_unit_facts f on f.purchase_id = p.id and f.account_id = p.account_id
+  left join lateral (
+         -- the newest facts the account holds of the unit: a later purchase that read none must not hide them
+         select x.* from cadastre_unit_facts x
+          where x.account_id = p.account_id and x.unit_iskn_id = p.unit_iskn_id
+          order by x.id desc limit 1) f on true
  where p.account_id = %s and p.building_code = %s and p.kind = 'unit' and p.status <> 'failed'
  order by p.unit_iskn_id, p.requested_at desc, p.id desc
 """
@@ -816,14 +820,15 @@ def _talk(run: _Run, building: Building, purchase: Purchase, kind: Kind, *, slee
         fetched, document = answer
         cost = fetched.price_czk if fetched.price_czk is not None else report.price_czk
         if kind.unit_iskn_id is not None:
-            # A unit's report names its owners: the file is kept without that part, or (if the cut fails) not at
-            # all. The purchase is then paid with no file, and ČÚZK serves the report again for free.
+            # A unit's report names its owners: what is kept is only what we read of the unit. A file that cannot
+            # be cut down is not kept at all: the cost is recorded, and the read below (of the answer in memory)
+            # then finishes the purchase or ends it paid and unread with no file.
             try:
                 document = cadastre_unit_report.redact(document)
             except cadastre_unit_report.UnitReportError as exc:
                 with run.opener() as conn:
                     keep_cost_only(conn, run.account_id, purchase.id, cost, f"not kept: {exc}")
-                raise PaidUnread(str(purchase.id)) from exc
+                return
         with run.opener() as conn:
             keep_fetched(conn, run.account_id, purchase.id, cost, document)
 

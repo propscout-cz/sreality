@@ -35,17 +35,26 @@ def test_a_recorded_floor_area_is_read_as_stated(stated, read):
     assert report.parse(_doc(area=stated)).floor_area_m2 == Decimal(read)
 
 
-def test_the_kept_file_has_no_ownership_part_and_reads_the_same():
-    kept = report.redact(_doc(area="34.40"))
-    for gone in (b"VLASTNICTVI", b"oprav_subjekt", b"755101", "Novotná".encode(), "Dlouhá".encode()):
+def test_the_kept_file_holds_only_what_is_read_and_reads_the_same():
+    kept = report.redact(_doc(area="34.40", stray="<VAZBA_JPV><TEXT>ve prospěch: Novotná</TEXT></VAZBA_JPV>"))
+    for gone in (b"VLASTNICTVI", b"oprav_subjekt", b"755101", "Novotná".encode(), "Dlouhá".encode(), b"VAZBA_JPV",
+                 b"PARCELY", b"Praha", b"PLATNOST"):
         assert gone not in kept
     assert report.parse(kept) == report.parse(_doc(area="34.40"))
     assert report.redact(kept) == kept, "cutting twice changes nothing"
 
 
-def test_a_personal_field_outside_the_ownership_part_refuses_the_file():
+@pytest.mark.parametrize("tag", sorted(report._PERSONAL - {"VLASTNICTVI", "SUBJEKT"}))
+def test_a_personal_field_among_the_kept_ones_refuses_the_file(tag):
+    inside = _doc().replace(b"<citatel>", f"<{tag}>x</{tag}><citatel>".encode())
     with pytest.raises(report.UnitReportError, match="personal"):
-        report.redact(_doc(stray="<oprav_subjekt><prijmeni>Novotná</prijmeni></oprav_subjekt>"))
+        report.redact(inside)
+
+
+def test_an_error_never_quotes_the_document():
+    with pytest.raises(report.UnitReportError) as raised:
+        report.parse(_doc(area="Novotná"))
+    assert "Novotná" not in str(raised.value)
 
 
 @pytest.mark.parametrize("document", [b"not xml", b"<CenoveUdajeDleNemovitosti/>", _doc(units=0), _doc(units=2),

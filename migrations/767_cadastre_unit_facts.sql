@@ -87,6 +87,16 @@ begin
       raise exception '767 did not land: % holds a privilege on cadastre_unit_facts', v_role;
     end if;
   end loop;
+  if (select count(*) from information_schema.columns
+       where table_schema = 'public' and table_name = 'cadastre_price_purchases'
+         and column_name in ('kind', 'unit_iskn_id')) <> 2 then
+    raise exception '767 did not land: cadastre_price_purchases lacks kind or unit_iskn_id';
+  end if;
+  if (select count(*) from pg_constraint
+       where conrelid = 'public.cadastre_price_purchases'::regclass
+         and conname in ('cadastre_price_purchases_kind_check', 'cadastre_price_purchases_unit_iff_unit_kind')) <> 2 then
+    raise exception '767 did not land: a kind constraint is missing';
+  end if;
   if to_regclass('public.cadastre_price_purchases_in_flight_kind_uq') is null
      or to_regclass('public.cadastre_price_purchases_in_flight_uq') is not null then
     raise exception '767 did not land: the in-flight index was not replaced';

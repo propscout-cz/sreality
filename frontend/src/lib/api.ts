@@ -806,6 +806,11 @@ export const buyBuildingUnit = (
     method: 'POST',
     json: { cost_czk: costCzk, ...(how.resume != null ? { resume: how.resume } : how.repeat ? { repeat: true } : {}) },
   });
+export const cancelBuildingUnitPurchase = (
+  propertyId: number, unitIsknId: number, purchaseId: number,
+): Promise<BuildingPrices> =>
+  request<BuildingPrices>(`/properties/${propertyId}/building/units/${unitIsknId}`, {
+    method: 'POST', json: { cancel: purchaseId } });
 /* Give a purchase in flight up. Sends nothing to ČÚZK and costs nothing; one whose fetch had been sent then reads
  * as possibly paid. */
 export const cancelBuildingPurchase = (propertyId: number, purchaseId: number): Promise<BuildingPrices> =>

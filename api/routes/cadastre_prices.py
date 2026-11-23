@@ -117,6 +117,8 @@ def post_building_prices(
 
 _PAID_UNREAD_UNIT = ("ČÚZK sestavu o jednotce vydal a zaúčtoval, ale nepodařilo se ji přečíst. Zkusit to lze znovu bez "
                      "placení; nic dalšího se neúčtuje.")
+_GONE_UNCHARGED_UNIT = ("ČÚZK objednanou sestavu už nenabízí. Nebyla vyzvednuta, takže nebylo nic zaúčtováno. Údaje o "
+                        "jednotce můžete načíst znovu.")
 _NO_UNIT = ("Na tuto jednotku se zde zeptat nelze: není v žádné listině, kterou jste pro tuto budovu načetli z "
             "katastru. Nic nebylo odesláno ani zaúčtováno.")
 
@@ -186,8 +188,9 @@ def _post(account_id: uuid.UUID, property_id: int, body: Any, kind: cadastre_pri
     except cadastre_prices.TooManyUnits:
         raise HTTPException(status_code=422, detail=_TOO_MANY) from None
     except cadastre_prices.ReportGone as exc:
-        raise HTTPException(status_code=409,
-                            detail=_GONE_MAYBE_CHARGED if exc.possibly_charged else _GONE_UNCHARGED) from None
+        gone = _GONE_MAYBE_CHARGED if exc.possibly_charged else (
+            _GONE_UNCHARGED if kind.unit_iskn_id is None else _GONE_UNCHARGED_UNIT)
+        raise HTTPException(status_code=409, detail=gone) from None
     except cadastre_prices.ChargeUncertain:
         LOG.error("CADASTRE charging fetch sent, answer lost: account=%s property=%s", account_id, property_id)
         raise HTTPException(status_code=502, detail=_UNCERTAIN) from None

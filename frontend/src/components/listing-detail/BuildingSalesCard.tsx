@@ -4,7 +4,7 @@ import ErrorBanner from '@/components/ErrorBanner';
 import Panel, { PANEL_ACTION, PanelEmpty } from '@/components/Panel';
 import { Th } from '@/components/table';
 import {
-  buyBuildingPrices, buyBuildingUnit, cancelBuildingPurchase, fetchBuildingPrices, fetchPropertyBuildingSales,
+  buyBuildingPrices, buyBuildingUnit, cancelBuildingPurchase, cancelBuildingUnitPurchase, fetchBuildingPrices, fetchPropertyBuildingSales,
   type BuildingPrices, type CadastreUnit,
 } from '@/lib/api';
 import { saleRows, showsCadastre, type SaleRow } from '@/lib/buildingSales';
@@ -37,6 +37,13 @@ const NOTICE: Record<string, string> = {
   login: 'Uložené přihlášení k ČÚZK teď nelze použít (bylo změněno či odmítnuto, nebo se na něj právě čeká). Nic dalšího se neodeslalo.',
 };
 
+/* The same answers for a unit's request, where the building's wording would mislead. */
+const UNIT_NOTICE: Record<string, string> = {
+  in_flight: 'Načtení této jednotky už je rozpracované, nové se proto nezačalo. Pokračujte v rozpracovaném.',
+  preparing: 'ČÚZK sestavu o jednotce ještě připravuje. Nic nebylo zaúčtováno; za chvíli zvolte u řádku „dokončit“.',
+  fetching: 'Sestava o jednotce se právě vyzvedává. Nic dalšího se neodeslalo.',
+};
+
 type How = { repeat?: boolean; resume?: number; cancel?: number };
 
 export default function BuildingSalesCard({ propertyId }: { propertyId: number }) {
@@ -50,7 +57,8 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
     queryKey: pricesKey(propertyId),
     queryFn: () => fetchBuildingPrices(propertyId),
     /* The read calls nothing at ČÚZK, so watching a live run costs nothing. */
-    refetchInterval: (q) => (q.state.data?.running || q.state.data?.purchase?.fetching ? LIVE_POLL_MS : false),
+    refetchInterval: (q) => (q.state.data?.running || q.state.data?.purchase?.fetching
+      || q.state.data?.units?.some((u) => u.purchase.fetching) ? LIVE_POLL_MS : false),
   });
   const [confirming, setConfirming] = useState(false);
   const buy = useMutation({
@@ -63,10 +71,11 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
     onSettled: () => setConfirming(false),
   });
   /* One unit's information (10 Kč): the same two steps, the same server-side run and lease. */
-  const [askingUnit, setAskingUnit] = useState<{ id: number; label: string | null } | null>(null);
+  const [askingUnit, setAskingUnit] = useState<{ id: number; label: string | null; repeat: boolean } | null>(null);
   const unitBuy = useMutation({
-    mutationFn: (how: { unit: number; resume?: number }) =>
-      buyBuildingUnit(propertyId, how.unit, pricesQ.data?.unit_price_czk ?? 0, how),
+    mutationFn: (how: { unit: number; resume?: number; repeat?: boolean; cancel?: number }) => (how.cancel != null
+      ? cancelBuildingUnitPurchase(propertyId, how.unit, how.cancel)
+      : buyBuildingUnit(propertyId, how.unit, pricesQ.data?.unit_price_czk ?? 0, how)),
     onSuccess: (state) => queryClient.setQueryData<BuildingPrices>(pricesKey(propertyId), state),
     onError: () => void queryClient.invalidateQueries({ queryKey: pricesKey(propertyId) }),
     onSettled: () => setAskingUnit(null),
@@ -91,6 +100,7 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
   const loginUsable = !!prices?.login_set && !prices.login_refused;
   const canPay = !!prices?.available && loginUsable && !live;
   const notice = buy.data?.notice ? NOTICE[buy.data.notice] : undefined;
+  const unitNotice = unitBuy.data?.notice ? UNIT_NOTICE[unitBuy.data.notice] ?? NOTICE[unitBuy.data.notice] : undefined;
 
   let accessory = null;
   if (canPay && inFlight && !fetching) {
@@ -207,10 +217,13 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
         <div role="group" aria-label="Potvrzení placeného načtení jednotky"
           className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-md)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] px-3 py-2 text-[0.78rem] text-[var(--color-ink-2)]">
           <span className="min-w-0 flex-1">
-            Údaje o jednotce {askingUnit.label ?? ''} z katastru stojí {unitPrice} Kč na vašem účtu u ČÚZK. Katastr
-            eviduje podlahovou plochu až od roku 2024; u starší jednotky ji uvádět nemusí a platí se i tak.
+            {askingUnit.repeat
+              ? `Za údaje o jednotce ${askingUnit.label ?? ''} jste už jednou platili nebo o ně žádali. Nové načtení stojí dalších ${unitPrice} Kč na vašem účtu u ČÚZK.`
+              : `Údaje o jednotce ${askingUnit.label ?? ''} z katastru stojí ${unitPrice} Kč na vašem účtu u ČÚZK.`}
+            {' '}Katastr eviduje podlahovou plochu až od roku 2024; u starší jednotky ji uvádět nemusí a platí se i tak.
           </span>
-          <button type="button" className={PANEL_ACTION} onClick={() => unitBuy.mutate({ unit: askingUnit.id })}>
+          <button type="button" className={PANEL_ACTION}
+            onClick={() => unitBuy.mutate({ unit: askingUnit.id, repeat: askingUnit.repeat })}>
             Zaplatit {unitPrice} Kč a načíst
           </button>
           <button type="button" className={PANEL_ACTION} onClick={() => setAskingUnit(null)}>
@@ -220,6 +233,7 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
       ) : null}
       {buy.isError ? <ErrorBanner flush title="Nenačteno:" message={buy.error.message} /> : null}
       {unitBuy.isError ? <ErrorBanner flush title="Jednotka nenačtena:" message={unitBuy.error.message} /> : null}
+      {unitNotice ? <p role="status" className={NOTE}>{unitNotice}</p> : null}
       {rows.length === 0 ? (
         <PanelEmpty>
           Žádný prodej v tomto domě zatím neevidujeme.{purchase ? '' : ' Z katastru zatím nenačteno.'}
@@ -245,8 +259,9 @@ export default function BuildingSalesCard({ propertyId }: { propertyId: number }
                   unit={row.unit_iskn_id != null ? unitsById.get(row.unit_iskn_id) ?? null : null}
                   ask={canPay && unitPrice > 0 && row.unit_iskn_id != null ? {
                     price: unitPrice,
-                    start: () => setAskingUnit({ id: row.unit_iskn_id!, label: row.unit }),
+                    start: (repeat: boolean) => setAskingUnit({ id: row.unit_iskn_id!, label: row.unit, repeat }),
                     resume: (id: number) => unitBuy.mutate({ unit: row.unit_iskn_id!, resume: id }),
+                    cancel: (id: number) => unitBuy.mutate({ unit: row.unit_iskn_id!, cancel: id }),
                   } : null} />
               ))}
             </tbody>
@@ -268,41 +283,66 @@ const CELL = 'px-2.5 py-2 whitespace-nowrap';
 const LINK = 'underline decoration-[var(--color-rule-strong)] underline-offset-2 hover:text-[var(--color-copper)]';
 const NUM = `${CELL} text-right font-mono text-[13px] tabular-nums`;
 
-interface UnitAsk { price: number; start: () => void; resume: (purchaseId: number) => void }
+interface UnitAsk {
+  price: number;
+  start: (repeat: boolean) => void;
+  resume: (purchaseId: number) => void;
+  cancel: (purchaseId: number) => void;
+}
 
-/* What the account's purchase of this unit's information says, or the way to it. Facts as the cadastre states
- * them: an area it does not record is said so, never shown as a gap that looks unasked. */
+const UNIT_NOTE = 'ml-1.5 font-sans text-xs text-[var(--color-ink-3)]';
+const UNIT_ACT = `ml-1.5 font-sans text-xs ${LINK}`;
+
+/* What the account's purchase of this unit's information says, or the way to it. Every state says truthfully
+ * whether money moved and has a way forward: in flight is continued by its id or given up (which sends nothing);
+ * paid and unread is read again (free only when its file is kept), or bought anew behind the confirm step. Facts
+ * as the cadastre states them: an area it does not record is said so, never shown as a gap that looks unasked. */
 function UnitInfo({ unit, ask }: { unit: CadastreUnit | null; ask: UnitAsk | null }) {
   if (unit?.facts) {
     const f = unit.facts;
     const share = f.share_num != null && f.share_den != null ? `podíl ${f.share_num}/${f.share_den}` : null;
     const title = [f.use_label ? `využití: ${f.use_label}` : null, share].filter(Boolean).join(', ') || undefined;
     return (
-      <span className="ml-1.5 font-sans text-xs text-[var(--color-ink-3)]" title={title}>
+      <span className={UNIT_NOTE} title={title}>
         {f.floor_area_m2 != null ? `katastr: ${fmtArea(f.floor_area_m2)}` : 'katastr plochu neeviduje'}
         {share ? ` · ${share}` : ''}
       </span>
     );
   }
-  if (!ask) return null;
   const p = unit?.purchase;
-  if (p && p.fetching) return null;
+  if (p?.fetching) return <span className={UNIT_NOTE}>vyzvedává se…</span>;
   if (p && (p.status === 'pending' || p.status === 'ordered')) {
-    return (
-      <button type="button" className={`ml-1.5 font-sans text-xs ${LINK}`} onClick={() => ask.resume(p.id)}>
-        dokončit (nejvýše {ask.price} Kč)
-      </button>
-    );
+    return ask ? (
+      <>
+        <button type="button" className={UNIT_ACT} onClick={() => ask.resume(p.id)}>
+          dokončit ({p.fetch_sent ? 'celkem nejvýše ' : ''}{ask.price} Kč)
+        </button>
+        <button type="button" className={UNIT_ACT} onClick={() => ask.cancel(p.id)}
+          title={p.fetch_sent ? 'Nic se neodešle; sestava už mohla být zaúčtována' : 'Nic se neodešle a nic se nezaúčtuje'}>
+          zrušit
+        </button>
+      </>
+    ) : <span className={UNIT_NOTE}>rozpracováno</span>;
   }
   if (p && p.status === 'paid_unread') {
-    return p.gone && !p.file_kept ? null : (
-      <button type="button" className={`ml-1.5 font-sans text-xs ${LINK}`} onClick={() => ask.resume(p.id)}>
-        zkusit přečíst znovu (zdarma)
-      </button>
+    const again = p.file_kept ? 'přečíst znovu (zdarma)' : p.gone ? null : `vyzvednout znovu (celkem nejvýše ${ask?.price ?? ''} Kč)`;
+    return (
+      <>
+        <span className={UNIT_NOTE} title="Sestava mohla být zaúčtována; ověříte to ve vyúčtování svého účtu u ČÚZK">
+          zaplaceno, nepřečteno
+        </span>
+        {ask && again ? (
+          <button type="button" className={UNIT_ACT} onClick={() => ask.resume(p.id)}>{again}</button>
+        ) : null}
+        {ask && !p.file_kept ? (
+          <button type="button" className={UNIT_ACT} onClick={() => ask.start(true)}>načíst nově · {ask.price} Kč</button>
+        ) : null}
+      </>
     );
   }
+  if (!ask) return null;
   return (
-    <button type="button" className={`ml-1.5 font-sans text-xs ${LINK}`} onClick={ask.start}>
+    <button type="button" className={UNIT_ACT} onClick={() => ask.start(false)}>
       z katastru · {ask.price} Kč
     </button>
   );

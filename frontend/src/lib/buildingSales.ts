@@ -45,6 +45,13 @@ function alsoOf(deed: CadastreDeed): string | null {
 
 const MANY_UNITS = 3;
 
+/* The cadastre id of the one unit a deed sold; null for a deed over several units, a building, or none. */
+function oneUnit(deed: CadastreDeed | undefined): number | null {
+  if (!deed || deed.properties.some((p) => p.kind === 'stavba')) return null;
+  const units = deed.properties.filter((p) => p.kind === 'jednotka');
+  return units.length === 1 ? units[0].iskn_id : null;
+}
+
 /* Whether the list shows anything this account bought: a deed row, or a held sale a bought deed confirms. */
 export const showsCadastre = (rows: SaleRow[]): boolean => rows.some((r) => r.proceeding != null);
 
@@ -60,13 +67,14 @@ export function saleRows(sales: BuildingSale[], deeds: CadastreDeed[]): SaleRow[
     also: confirmed.has(s.source_record_id) ? alsoOf(confirmed.get(s.source_record_id)!) : null,
     disposition: s.disposition, area_m2: s.area_m2, price_czk: s.price_czk, currency: 'CZK',
     price_per_m2: s.price_per_m2, price_per_m2_basis: s.price_per_m2_basis, source: 'reas',
-    source_url: s.source_url, proceeding: confirmed.get(s.source_record_id)?.proceeding ?? null, area_property_id: null, unit_iskn_id: null,
+    source_url: s.source_url, proceeding: confirmed.get(s.source_record_id)?.proceeding ?? null, area_property_id: null,
+    /* A held sale that stands for a single-unit deed keeps that unit, so what was bought about it stays on screen. */
+    unit_iskn_id: oneUnit(confirmed.get(s.source_record_id)),
   }));
   const shownAsHeld = (d: CadastreDeed) =>
     d.match?.source === 'reas' && d.match.source_record_id != null && heldIds.has(d.match.source_record_id);
   const bought: SaleRow[] = deeds.filter((d) => !shownAsHeld(d)).map((d, i) => {
     const units = d.properties.filter((p) => p.kind === 'jednotka').map((p) => p.label);
-    const unitIds = d.properties.filter((p) => p.kind === 'jednotka').map((p) => p.iskn_id);
     const buildings = d.properties.filter((p) => p.kind === 'stavba').length;
     /* One price for everything the deed transfers: a deed over two buildings is not "the whole building". */
     const scope = units.length > MANY_UNITS ? `${units.length} ${plural(units.length, 'jednotka', 'jednotky', 'jednotek')} za jednu cenu`
@@ -79,7 +87,7 @@ export function saleRows(sales: BuildingSale[], deeds: CadastreDeed[]): SaleRow[
       price_czk: d.price, currency: d.currency, price_per_m2: ad?.price_per_m2 ?? null,
       price_per_m2_basis: ad?.price_per_m2_basis ?? null, source: 'katastr',
       source_url: null, proceeding: d.proceeding, area_property_id: ad?.property_id ?? null,
-      unit_iskn_id: unitIds.length === 1 && buildings === 0 ? unitIds[0] : null,
+      unit_iskn_id: oneUnit(d),
     };
   });
   return [...held, ...bought].sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '') || a.key.localeCompare(b.key));

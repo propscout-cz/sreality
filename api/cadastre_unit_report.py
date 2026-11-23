@@ -1,9 +1,10 @@
 """ČÚZK's "Informace o jednotkách" report (XML) for one unit: what it states of the unit itself.
 
-The report also names the unit's owners (name, address, birth number, under VLASTNICTVI). Nothing here reads
-them, and `redact` cuts that part out so the file we keep never holds them (operator ruling 2026-11-23). The floor
-area is recorded by the cadastre only since 2024: for most units the element is empty or absent, which is None
-here, never zero."""
+The report also names the unit's owners (name, address, birth number) and carries free text on seals and other
+legal relations. Nothing here reads them, and `redact` builds the file we keep from ONLY the elements `parse`
+reads, so whatever else the report holds, now or after ČÚZK changes its layout, is never stored (operator ruling
+2026-11-23). The floor area is recorded by the cadastre only since 2024: for most units the element is empty or
+absent, which is None here, never zero."""
 
 from __future__ import annotations
 
@@ -12,9 +13,12 @@ from decimal import Decimal, InvalidOperation
 from xml.etree import ElementTree as ET
 
 ROOT = "InformaceOJednotkach"
-_OWNERS = "VLASTNICTVI"
-# Tags that only an owner record carries (base.xsd, OpsubIdentType): none may survive a redaction.
-_PERSONAL = frozenset({"oprav_subjekt", "rc6", "rc7", "prijmeni", "jmeno", "bsm1_prijmeni", "bsm2_prijmeni", "adresa"})
+# The children of JEDNOTKA that `parse` reads: the kept file holds these and nothing else.
+_KEPT = ("ZP_VYUZITI", "CISLO_JED", "VYUZ_TYP", "BUD_PODIL", "PODLAHOVA_PLOCHA")
+# Tags only an owner record carries (base.xsd, OpsubIdentType): a second check that none survived.
+_PERSONAL = frozenset({
+    "oprav_subjekt", "rc6", "rc7", "ico", "ico_doplnek", "prijmeni", "jmeno", "titul_pred", "titul_za", "adresa",
+    "bsm1_prijmeni", "bsm1_jmeno", "bsm2_prijmeni", "bsm2_jmeno", "opravnena_po", "VLASTNICTVI", "SUBJEKT"})
 
 
 class UnitReportError(ValueError):
@@ -43,15 +47,16 @@ def _root(document: bytes) -> ET.Element:
 
 
 def redact(document: bytes) -> bytes:
-    """The report without its ownership part. Raises when a personal field would survive: such a file is not kept."""
-    root = _root(document)
-    for parent in list(root.iter()):
-        for child in [c for c in parent if c.tag == _OWNERS]:
-            parent.remove(child)
-    left = sorted({el.tag for el in root.iter()} & _PERSONAL)
+    """A document of the same shape holding only what `parse` reads of each unit. Raises when the input is not
+    the report, or when a personal field would survive: such a file is not kept."""
+    kept = ET.Element(ROOT)
+    for unit in _root(document).iter("JEDNOTKA"):
+        copy = ET.SubElement(kept, "JEDNOTKA")
+        copy.extend(child for child in unit if child.tag in _KEPT)
+    left = sorted({el.tag for el in kept.iter()} & _PERSONAL)
     if left:
-        raise UnitReportError(f"personal fields outside the ownership part: {left}")
-    return ET.tostring(root, encoding="utf-8")
+        raise UnitReportError(f"personal fields among the kept ones: {left}")
+    return ET.tostring(kept, encoding="utf-8")
 
 
 def _text(el: ET.Element | None, path: str) -> str:
@@ -70,7 +75,7 @@ def _area(text: str) -> Decimal | None:
     try:
         return Decimal(cleaned)
     except InvalidOperation:
-        raise UnitReportError(f"unreadable floor area {text!r}") from None
+        raise UnitReportError("unreadable floor area") from None
 
 
 def parse(document: bytes) -> UnitFacts:
