@@ -1141,34 +1141,25 @@ rules. Identify which one a task belongs to before you start.
   open across #1775's deploy kept choosing the static token). No session → no header; the server's
   401 names its reason (RFC 6750) and `RequireAuth` already keeps a signed-out tab off every page.
   History: `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
-- **`Mapy.cz`-powered location search.** Every location typeahead calls `GET /maps/suggest`
-  (Mapy `type=regional`: no POIs) and, on a pick, `POST /maps/resolve` `{lat, lng, type, name,
-  regional_structure}` → ONE shape `{level, id, name, context}`: the RÚIAN unit at the picked
-  level (an address binds its street), its register name, and `context` = the register obec
-  name below obec. `level` or `id` null creates NO chip; the typeahead says why. The
-  `MAPY_CZ_API_KEY` is server-side only; a 503 (key unset) renders a hint, not suggestions. Nothing Mapy
-  answers is kept: its terms forbid storing or caching an API result, so the in-process suggest cache went
-  early (ruling 2026-11-13, #2454) and every suggest asks Mapy, failing over to `MAPY2_CZ_API_KEY` on a refused
-  key (`api.maps._fetch_suggest`). The geocoder that once wrote Mapy answers into the database, its
-  `MAPY_GEOCODE_ENABLED` switch and every stored Mapy answer are gone (#2454, migration 739).
-- **The pick record** (`place_picks`, migration 737; spec #2441 Part 1, ruling Q10). Own place search may
-  replace Mapy only after a gate over questions its author did not write, so every place box's add sends
-  `pick: {text, rank}` on its resolve (the text its list ANSWERED, not what was typed on after, and the 1-based
-  row; `lib/maps.placePick` drops one outside the server's bounds, 1–200 code points and rank 1–10, so the resolve
-  never 422s on it; `tests/api/test_place_pick_bounds.py` holds the SPA, schema and CHECK copies equal). The request's
-  `pick` is optional and forbids unknown fields: a malformed one is a 422 before anything binds. The address picker sends none. After the answer, `/maps/resolve` queues ONE background
-  INSERT (`location_data/place_picks.record`, on its own connection) only for verified claims without the
-  `app_metadata.automation` marker (`deps.is_automation`; set on both smoke accounts by the operator before this
-  deploys, smoke-check.mjs fixture 3; the local-dev opt-out has no claims), never for an `address_point` resolve, and
-  only for a pick that resolved to a level: a failed resolve, no current registry, a country or an unknown type
-  writes nothing, so an outage is never taken for a lost place. Stored: the text exactly as answered, or NULL when
-  any character `isdigit` ("Praha 2", "Praha ２"; the CHECK pins `und-x-icu`, since CI's default collation is libc
-  and only ICU classes "２" a digit); the rank; the bound level and code, the typed level with code NULL when refused,
-  `momc` and its code for a městská část (`_Momc.code`; the answer still lists its části). No account, nothing from
-  Mapy. A failed write logs only its SQLSTATE (the error's DETAIL quotes the row). RLS on, no policy, browser roles
-  revoked. `place_picks.picks_between` is the one reader (the DB-lane test and the gate's eval, #2452); own search
-  never reads the picks: they are its HOLDOUT. Retention: pg_cron `place-picks-retention` deletes rows over 12 months
-  daily; once the switch-over deploys, one DELETE empties the table (#2453) and Stage B drops it (#2455).
+- **Every place box on own place search** (#2453; rulings 2026-11-22). Browse, the watchdog edit, the pipeline,
+  outreach, Datasets, the phone's sheets and the admin address picker share ONE box (`LocationTypeahead` +
+  `usePlaceSuggest` / `SuggestPanel`), which asks only `POST /places/suggest` (`lib/places.fetchPlaces`). A row is
+  already a chip, so a pick adds it at once with no second call: a městská část adds its quarters' chips with the
+  "added as its N parts" notice; an address adds its street's chip and the map flies to the door; an address with no
+  street adds nothing and says it cannot filter. Each row shows its name, context and level label
+  (`lib/places.PLACE_LEVEL_LABEL`, "Městská část" for a momc); there is no country row. Browse flies by the shared
+  zoom table (`lib/places.flyToPlace` over `lib/zoomByLevel`: town 11, street 15, door 16); a row with no point does
+  not fly. A 503 shows "Place search is unavailable right now" under the box, which stays enabled (the next
+  keystroke asks again) while the chips keep filtering; nothing is ever asked of Mapy. The address picker saves a
+  door, street or obec row as it is (`{adresni_misto, kód ADM}`, `{ulice, code}`, `{obec, code}`); any other level
+  offers no save. The Mapy proxy, its resolve binder and the pick record's writer are gone; the keys and the
+  Seznam.cz lines wait for Stage B (#2455).
+- **The pick record** (`place_picks`, migration 737; spec #2441 Part 1, ruling Q10), the HOLDOUT the gate (#2465)
+  scored own search against while the box was on Mapy: the Mapy binder stored each human pick's answered text (NULL
+  when it held a digit; the CHECK pins `und-x-icu`), its rank and the bound level and code. Nothing records a pick
+  since #2453; its deploy is followed by one DELETE that empties the table, on the operator's OK. RLS on, no policy,
+  browser roles revoked; `place_picks.picks_between` is the one reader (the DB-lane test and the gate's eval, #2452),
+  and pg_cron `place-picks-retention` stays until Stage B drops the table (#2455).
 - **Own place search** (#2449; spec #2441 Part 4, rulings Q2 c, Q6 a, Q9, Q12 a). `location_data/place_search.suggest`
   behind `POST /places/suggest` (`require_token`; body `{query 1–200, limit 1–10}`, an unknown field a 422; answers
   `{items}`). A row is already a chip, `{level, id, name, context, point}`: the `ruian_level`, the RÚIAN code, the
@@ -1250,9 +1241,8 @@ rules. Identify which one a task belongs to before you start.
   A door row is `{level: 'adresni_misto', id, name, context, point, street}`: the kód ADM, the ONE label (no number for
   a streetless door, for a č.ev. door only its č.o. if any, never the č.ev.; migration 503), its town's okres, the
   door's own point, and its street's chip `{level: 'ulice', id, name, context}` at the gazetteer's version, null for a streetless door; no `places`, count, PSČ, KÚ,
-  foreign place or country. The label is one SQL fragment in `location_data/place_search.py`, shared by the door read
-  (computed for the rows kept) and `DOOR_LABEL_SQL`, which the address picker imports until the switch-over (#2453)
-  moves it to door rows, if addresses pass the gate. Order, a builder decision no ruling covers (#2441, #2451, #2453):
+  foreign place or country. The label is one SQL fragment in `location_data/place_search.py`, computed for the rows
+  kept; the address picker shows the row's name as its preview (#2453). Order, a builder decision no ruling covers (#2441, #2451, #2453):
   door rows follow the whole text's exact rows and precede its prefix and fuzzy rows, as their street part is an exact
   namesake; among doors, the candidate's tier (an exact village before a `qualifier_stripped` one), its served
   properties, then kód ADM, so č.p. and č.o. are not ranked apart. The list is cut at the limit, so doors can fill it:
@@ -1324,8 +1314,8 @@ rules. Identify which one a task belongs to before you start.
   table would block its DROP. 738 also swapped the gazetteer's btree for `(name_norm text_pattern_ops,
   registry_version_id)`, which serves `=` and `LIKE 'p%'` under ICU (net 0 indexes). A failed read or an unreachable
   database is a 503 `place_search_unavailable`: the module logs only the SQLSTATE, the route only the error class,
-  never the typed text. No cache, flag or admin parameter; it never reads `place_picks` (its holdout). It ships with no
-  caller: the switch-over (#2453) points the place boxes at it after the gate and deletes the Mapy search path.
+  never the typed text. No cache, flag or admin parameter; it never reads `place_picks` (its holdout). Every place box
+  asks it since the switch-over (#2453).
 - **The gate's eval** (#2452; spec #2441 Part 4 (1)–(4), Q2 c; the gate is #2465). `scripts/place_search_gate_eval.py`
   scores own search on the recorded picks, read-only on production, and goes at Stage B (#2455) with its test
   (`tests/api/test_place_search_gate_eval_live.py`, a migrations-lane step). **Reads:** `place_picks` only through
@@ -3098,9 +3088,8 @@ renumber.** Navigate by area:
     makes one, `DistrictChip` refuses one (422), the SPA's URL parser drops one, and migration
     606 deleted the four stored filters that held them. No read-time name reader exists: a name
     is not a unit ("Jihlava" is an obec AND an okres), so re-reading one could only widen a chip.
-    The chip producer `/maps/resolve` PIPs the RÚIAN mirror for obec/okres/kraj; `cast_obce` and
-    `ulice` have no polygon, so the point places the obec and the NAME binds the part or street
-    inside it — a street only on one exact register name near its doors, else no chip.
+    The chip producer is own place search (#2453): every row is a register unit read by name at
+    the current version, so a chip is exactly that unit and never a point's guess.
     Deleted with the ILIKE arms: the sreality-only `locality_district_id` /
     `locality_region_id` filters (registry, comparables, watchdog spec, API schemas, SPA filter
     types) — one portal out of nine could answer them, and `districts` at the obec / okres level
@@ -5357,11 +5346,8 @@ portal has ever had, and one atomic DELETE of that size spends its `statement_ti
 
 **THE OPERATOR'S PICK (W3b, ruling Q5)** is the only operator input, and the listing inspector
 (`/location/listing/*`, `toolkit/location_quality.py`) is gone. An admin's pencil on the property page's
-address line opens Browse's place typeahead; `/maps/resolve` with `address_point: true` binds an address
-pick to its ONE door (the resolver's own `address_points_by_number` on the bound street, or a streetless
-village's obec, exactly one door within `REGISTRY_PIN_CONFLICT_M`; nothing scans the mirror), a street
-or an obec pick as the chips do. The door's label is `DOOR_LABEL_SQL` from `location_data/place_search.py`,
-shared with own place search's door rows (#2451). `POST /location/corrections {property_id, pick}` (admin) →
+address line opens Browse's place box; since #2453 its door, street and obec rows from own place search are
+the pick as they are (a door row is ONE kód ADM, its label the row's name, #2451); any other level offers no save. `POST /location/corrections {property_id, pick}` (admin) →
 `operator_corrections.submit_pick` writes the four picker types (`address_point_id`, `street_name`,
 `obec_name`, `okres_name`) on EVERY ad of the property in the register's names and tombstones the
 types the pick does not state, so a re-pick replaces the statement and `pick: null` hands the ads back
@@ -5894,9 +5880,8 @@ A street chip filters at its street; a chip without a (level, code) cannot exist
 the API and the URL parser refuse one; migration 606 deleted the last stored ones). Because RÚIAN
 draws no polygon for `cast_obce`, `momc` or a street, a POINT resolves only to obec / okres / kraj
 and the quarter or street is bound BY NAME inside the PIP'd obec. **A městská část is no level and no
-chip (ruling 2026-11-02, #2380):** `/maps/resolve` binds "Praha 6" or "Brno-střed" by name, after a část
-of that name, and answers no code plus `parts`, every část its doors stand in (`ruian_address_points`,
-joined on the unit's stable `code`, as a load re-points doors in place). The typeahead adds one
+chip (ruling 2026-11-02, #2380):** own place search answers "Praha 6" or "Brno-střed" as a shortcut row whose
+`places` are its quarters, the register's `momc_cast_obce` pairs at the index's version (#2450, #2453). The box adds one
 ordinary `cast_obce` chip per part, so URLs, presets, the Watchdog, the RPCs and the rows gain nothing,
 and a saved filter keeps the set it was saved with. A část straddling several městské části counts for
 each it touches, by ruling; an ad holding no část in that town is not matched, as with any část chip.

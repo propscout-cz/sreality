@@ -37,7 +37,7 @@ export const isLocationLevel = (level: unknown): level is LocationLevel =>
   (DISTRICT_LEVEL_ORDER as ReadonlyArray<unknown>).includes(level);
 
 /* THE chip guard, for every chip that arrives from outside — a URL, a stored
- * preset, a resolve answer: one of the five levels and a positive integer code.
+ * preset, a place search row: one of the five levels and a positive integer code.
  * Anything else names no unit to filter on and is never a chip. */
 export const isDistrictChip = (x: unknown): x is DistrictChip => {
   if (x == null || typeof x !== 'object') return false;
@@ -133,7 +133,7 @@ export const matchesDistricts = (
 
 /* Czech level names for the chip badge — a chip shows WHAT it selected, not
  * just a string, so okres "Jihlava" reads differently from obec "Jihlava". */
-const DISTRICT_LEVEL_LABEL: Record<LocationLevel, string> = {
+export const DISTRICT_LEVEL_LABEL: Record<LocationLevel, string> = {
   kraj: 'Kraj',
   okres: 'Okres',
   obec: 'Obec',
@@ -145,6 +145,6 @@ export const districtChipBadge = (chip: DistrictChip): string =>
   DISTRICT_LEVEL_LABEL[chip.level];
 
 /* Chip identity IS its (level, code) — two picks of the same unit are the same
- * chip however Mapy spelled them. Used for dedupe, remove and the React key. */
+ * chip, whichever row added them. Used for dedupe, remove and the React key. */
 export const districtChipKey = (chip: DistrictChip): string =>
   `${chip.level}:${chip.id}`;

@@ -26,7 +26,6 @@ from api import pipeline as pipeline_module
 from api import shares as shares_module
 from api import price_stats as price_stats_module
 from api import dependencies as deps
-from api import maps
 from api import sreality_price_map
 from api import tenant_pool
 from api import schemas as s
@@ -88,7 +87,7 @@ from api.routes.cuzk_login import router as cuzk_login_router
 from api.routes.push import router as push_router
 from api.routes.waitlist import admin_router as waitlist_admin_router
 from api.routes.waitlist import router as waitlist_router
-from location_data import place_picks, place_search
+from location_data import place_search
 from scraper import image_storage
 from scraper.db import sweep_stuck_scrape_runs
 from toolkit import (
@@ -389,16 +388,6 @@ def health() -> dict[str, str]:
     }
 
 
-@app.get("/maps/suggest")
-def get_maps_suggest(
-    query: str = Query(..., min_length=1, max_length=200),
-    limit: int = Query(default=10, ge=1, le=15),
-    lang: str = Query(default="cs", min_length=2, max_length=8),
-    _: None = Depends(deps.require_token),
-) -> dict[str, Any]:
-    return maps.suggest(query, limit=limit, lang=lang)
-
-
 @app.get("/maps/sreality-price-map")
 def get_maps_sreality_price_map(
     label: str = Query(..., min_length=1, max_length=300),
@@ -412,31 +401,6 @@ def get_maps_sreality_price_map(
     return sreality_price_map.resolve(label, lat, lng)
 
 
-@app.post("/maps/resolve")
-def post_maps_resolve(
-    body: s.ResolveLocationIn,
-    background_tasks: BackgroundTasks,
-    conn: Any = Depends(deps.get_db_conn),
-    claims: dict | None = Depends(deps.token_claims),
-) -> dict[str, Any]:
-    """A pick's record (ruling Q10) is written after the answer, on its own connection, for a verified caller who is
-    not automation and not the address picker; the answer never waits for it or hears of its failure."""
-    answer, place = maps.resolve(
-        conn,
-        lat=body.lat,
-        lng=body.lng,
-        type_=body.type,
-        name=body.name,
-        regional_structure=[e.model_dump() for e in body.regional_structure],
-        address_point=body.address_point,
-    )
-    if (body.pick is not None and not body.address_point and place is not None
-            and claims is not None and not deps.is_automation(claims)):
-        background_tasks.add_task(place_picks.record, deps.open_background_conn, text=body.pick.text,
-                                  rank=body.pick.rank, level=place.level, code=place.code)
-    return answer
-
-
 def _place_search_unavailable() -> HTTPException:
     return HTTPException(503, detail={"code": "place_search_unavailable",
                                       "message": "Vyhledávání míst je teď nedostupné."})
@@ -444,9 +408,9 @@ def _place_search_unavailable() -> HTTPException:
 
 @app.post("/places/suggest")
 def post_places_suggest(body: s.PlaceSuggestIn, _: None = Depends(deps.require_token)) -> dict[str, Any]:
-    """Own place search (#2449): rows that are already chips, a shortcut that adds its places (#2450), or a door with
-    its street's chip (#2451). Ships with no caller until the switch-over (#2453). The connection opens here, not as a
-    dependency, so a database it cannot reach is the same 503 as a failed read."""
+    """Own place search (#2449), every place box's (#2453): rows that are already chips, a shortcut that adds its places
+    (#2450), or a door with its street's chip (#2451). The connection opens here, not as a dependency, so a database it
+    cannot reach is the same 503 as a failed read."""
     try:
         with deps.open_background_conn() as conn:
             places = place_search.suggest(conn, body.query, limit=body.limit)

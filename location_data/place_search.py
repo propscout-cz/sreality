@@ -77,9 +77,7 @@ _ROMAN = {n: ("", "x", "xx", "xxx")[n // 10] + ("", "i", "ii", "iii", "iv", "v",
           for n in range(1, 40)}
 _NUMBER_TWIN = {**{str(n): r for n, r in _ROMAN.items()}, **{r: str(n) for n, r in _ROMAN.items()}}
 
-# The door's label: the ONE label (rule 25) over its register fields, as the row will read. Shared with the address
-# picker's preview (api/maps.py imports DOOR_LABEL_SQL until the switch-over, #2453, moves the picker to door rows, if
-# addresses pass the gate, #2465).
+# The door's label: the ONE label (rule 25) over its register fields, as the row will read.
 _DOOR_LABEL = """location_display_label(
          s.name, CASE WHEN ap.typ_so = 'č.p.' THEN ap.cislo_domovni::text END,
          ap.cislo_orientacni::text || coalesce(ap.znak_orientacniho, ''),
@@ -88,13 +86,6 @@ _DOOR_LABEL_JOINS = """
   LEFT JOIN ruian_streets s ON s.id = ap.street_id
   LEFT JOIN ruian_admin_units o ON o.id = ap.obec_unit_id
   LEFT JOIN ruian_admin_units c ON c.id = ap.cast_obce_unit_id"""
-
-# `kod_adm` is the mirror's primary key (migration 381): one row or none, so no LIMIT/ORDER.
-DOOR_LABEL_SQL = f"""
-SELECT {_DOOR_LABEL}
-  FROM ruian_address_points ap{_DOOR_LABEL_JOINS}
- WHERE ap.kod_adm = %s AND ap.valid_to IS NULL
-"""
 
 # The thresholds are pinned, not inherited. A place name is reached at 0.55, so the typo "olomuc" (0.57) reaches
 # Olomouc (#2548); a street keeps 0.6 by its own bound ("brno" reaches Brněnská at exactly 0.6), as streets far
@@ -113,9 +104,9 @@ _ROW_CONTEXT_JOINS = """
   LEFT JOIN place_facts f ON f.level = r.level AND f.code = r.code"""
 _SPELLED_PREFIXES = " OR ".join(f"s.name_norm LIKE %(street_spelled_{n})s" for n in range(1, _SPELLED_SLOTS + 1))
 
-# A unit is read AT the index's version, as api/maps.py's part lookup reads it (a load closes a re-parented unit before
-# it publishes); a street, which has no index, by the version's membership (location_data/ruian_boundaries.py). A NULL
-# prefix or fuzzy key switches its arm off. A městská část is a candidate only with pairs at that version, gated in both
+# A unit is read AT the index's version (a load closes a re-parented unit before it publishes); a street, which has no
+# index, by the version's membership (location_data/ruian_boundaries.py). A NULL prefix or fuzzy key switches its arm
+# off. A městská část is a candidate only with pairs at that version, gated in both
 # unit arms so one without never counts toward `near` and switches fuzzy off; `unit_id` carries its row to the pairs.
 # A street is exact under every spelling the resolver's abbreviation folds make equal (its own index condition), and
 # starts under each, so "nám." reaches Praha's náměstí as exactly as Třebíč's "nám." (#2548). `_SPELLED_SLOTS` prefix

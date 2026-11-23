@@ -43,7 +43,7 @@ import ListingCards, { CARD_PHOTOS_PER_CARD } from '@/components/ListingCards';
 const StatsDashboard = lazyChunk(() => import('@/components/stats/StatsDashboard'));
 const BrokerBoard = lazyChunk(() => import('@/components/brokers/BrokerBoard'));
 import type { AnchorPoint, MapFlyToCommand, MapFrameCommand } from '@/components/ListingMap';
-import type { MapySuggestion } from '@/lib/maps';
+import { flyToPlace, type PlaceRow } from '@/lib/places';
 import { fetchDatasets, fetchGrowth, fetchGrowthShapes, fetchSeries, priceStatsKeys } from '@/lib/priceStats';
 import { buildHoverData, type GrowthMetric } from '@/lib/growthChoropleth';
 import { hasRegistryLayers, useMapOverlayRegistry } from '@/lib/mapOverlays';
@@ -200,14 +200,9 @@ export default function BrowseExperience({
   /* Merge mode (page only): one statement of letters over the cards. */
   const mergeMode = useMergeMode();
   const mergeMut = useMergeProperties(mergeMode.exit);
-  const handleLocationPick = useCallback((s: MapySuggestion) => {
-    if (!s.position) return;
-    setMapFlyTo({
-      lat: s.position.lat,
-      lng: s.position.lon,
-      zoom: zoomForSuggestionType(s.type),
-      ts: Date.now(),
-    });
+  const handleLocationPick = useCallback((row: PlaceRow) => {
+    const to = flyToPlace(row);
+    if (to) setMapFlyTo({ ...to, ts: Date.now() });
   }, []);
 
   /* Hover-sync between cards / map: ephemeral state, one transition
@@ -818,16 +813,6 @@ export default function BrowseExperience({
         : null}
     </div>
   );
-}
-
-function zoomForSuggestionType(type: string): number {
-  if (type.startsWith('regional.address')) return 16;
-  if (type === 'regional.street') return 16;
-  if (type === 'regional.municipality_part') return 13;
-  if (type === 'regional.municipality') return 11;
-  if (type === 'regional.region') return 8;
-  if (type === 'regional.country') return 6;
-  return 13;
 }
 
 /* One portal's "Newest first" / "Oldest first" (MS19, queries.ts orderPortal), named in

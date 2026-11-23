@@ -307,8 +307,8 @@ async function requestBlob(path: string, opts: RequestOptions = {}): Promise<Blo
   }
 }
 
-/* Generic verbs used by lib/maps.ts (and any other future module that
- * needs raw GET/POST without going through a feature-specific wrapper). */
+/* Generic verbs for a module that needs raw GET/POST without a
+ * feature-specific wrapper (lib/places, lib/priceMap). */
 export const apiGet = <T>(
   path: string,
   params?: Record<string, QueryValue>,

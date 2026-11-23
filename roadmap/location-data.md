@@ -1397,9 +1397,8 @@ component is slimmed twice — each wave rewrites one component and slims its st
   the deploy (no cached answers); Stage B (#2455) after the switch-over's soak.
 - **The pick record — built 2026-11-08** (#2445; spec #2441 Part 1, ruling Q10; migration 737, additive; as built:
   `docs/architecture.md` § the pick record). Every place box's resolve carries `pick {text, rank}`; `/maps/resolve`
-  records one row after the answer for a verified non-automation caller; 12-month pg_cron retention. **Next:** the
-  gate's run #2465 (its eval over `picks_between`, #2452, is built); the switch-over DELETE (#2453); Stage B drop
-  (#2455).
+  records one row after the answer for a verified non-automation caller; 12-month pg_cron retention. The switch-over
+  (#2453) stopped the recording. **Next:** the one DELETE after #2453 deploys (operator's OK); Stage B drop (#2455).
 - **Own place search — built 2026-11-08** (#2449; spec #2441 Part 4, rulings Q2 c, Q12 a; migration 738, additive; as
   built: `docs/architecture.md` § own place search). `POST /places/suggest` answers chips (level, code, name, context,
   point) for kraj, okres, obec, část and street: exact, prefix, then fuzzy; within a tier served properties of any
@@ -1455,6 +1454,14 @@ component is slimmed twice — each wave rewrites one component and slims its st
   Mapy 309 ms; addresses 26 / 25 of 26 after one strike, so the switch-over takes the "addresses passed" scope; and a
   town leads its okres or kraj only with one in twenty of its served properties (#2612). **Next:** re-score part (1)
   after #2612 deploys, then the switch-over #2453 and the operator's OK.
+- **The switch-over — built 2026-11-22** (#2453; spec #2441 Part 4; gate #2465 parts (1)–(4) met on the simulation,
+  rulings 2026-11-17 and 2026-11-22; no migration; as built: `docs/architecture.md` § every place box on own place
+  search). Every place box (Browse, watchdog edit, pipeline, outreach, Datasets, phone sheets, the admin address
+  picker) asks only `POST /places/suggest`; a row is the chip, a městská část adds its quarters, an address its street
+  (no street: no chip, a notice), the map flies by the shared zoom table. Deleted: `api/maps.py` (suggest proxy, key
+  failover, resolve binder), the pick writer and `deps.is_automation`, the SPA's Mapy row type, badge map and Browse's
+  Mapy zoom table. **Next:** after deploy, the place box smoke, then the picks DELETE (operator OK 2026-11-22); Stage
+  B (#2455): keys, Seznam.cz lines, revocation, the table drop.
 - **The gate's eval — built 2026-11-09** (#2452; spec #2441 Part 4 (1)–(4), Q2 c, ruling 2026-11-08; no migration; as
   built: `docs/architecture.md` § the gate's eval). `scripts/place_search_gate_eval.py`, read-only on production:
   picks only through `picks_between`, in one READ ONLY transaction closed before any request; only `POST

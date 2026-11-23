@@ -183,7 +183,7 @@ export default function WatchdogEdit() {
                 }
               />
             ),
-            // Same Mapy.cz typeahead as Browse — keeps the operator's
+            // Same place box as Browse — keeps the operator's
             // muscle memory consistent across surfaces.
             districts: LocationTypeahead as never,
             // Phase QUAL — city-quality rule picker. The matcher in
