@@ -42,6 +42,14 @@ describe('<CuzkLoginDialog>', () => {
     expect(screen.queryByRole('button', { name: 'Remove login' })).toBeNull();
   });
 
+  it('says so when ČÚZK refused the stored login in use, instead of "accepted"', async () => {
+    load.mockResolvedValue({ ...STORED, refused: true });
+    mount();
+    expect(await screen.findByText(/ČÚZK refused the login stored for/)).toBeInTheDocument();
+    expect(screen.getByText(/further attempts cannot lock your ČÚZK account/)).toBeInTheDocument();
+    expect(screen.queryByText(/accepted by ČÚZK on/)).toBeNull();
+  });
+
   it('saves a login, then shows it as stored with the password box emptied', async () => {
     mount();
     fireEvent.change(await user(), { target: { value: ' firma01 ' } });

@@ -1736,6 +1736,7 @@
         ".dockerignore",
         ".github/workflows/runner_image.yml",
         "Dockerfile",
+        "api/wsdp_client.py",
         "data/clip_taxonomy.json",
         "data/requirements-clip-runner.txt",
         "pyproject.toml",

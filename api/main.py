@@ -83,6 +83,7 @@ from api.routes.location_corrections import router as location_corrections_route
 from api.routes.new_dedup import router as new_dedup_router
 from api.routes.new_dedup_candidates import router as new_dedup_candidates_router
 from api.routes.notifications import router as notifications_router
+from api.routes.cadastre_prices import router as cadastre_prices_router
 from api.routes.cuzk_login import router as cuzk_login_router
 from api.routes.push import router as push_router
 from api.routes.waitlist import admin_router as waitlist_admin_router
@@ -270,6 +271,10 @@ app.include_router(push_router)
 # caller's own account (never acted for) on the service role, opened in the handler; no route returns
 # the password (api/routes/cuzk_login.py).
 app.include_router(cuzk_login_router)
+# /properties/{id}/building/prices (cadastre prices on request: the caller's own purchase and deeds; POST buys
+# one paid ČÚZK output on the caller's own stored login, only with the price acknowledged) — the caller's own
+# account, never acted for; service role opened in the handler (api/routes/cadastre_prices.py).
+app.include_router(cadastre_prices_router)
 # /properties/merge|{id}/split|{id}/origins (merge MECHANICS: collapse an
 # operator-chosen set, split one property's adverts, where each came from)
 # — mutating operator actions, admin-gated (require_admin). Mounted before the
