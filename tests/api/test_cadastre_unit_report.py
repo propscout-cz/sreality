@@ -93,3 +93,17 @@ def test_anything_else_is_not_this_report(document):
 def test_what_is_not_the_report_is_not_cut_down(document):
     with pytest.raises(report.UnitReportError):
         report.redact(document)
+
+
+def test_a_layout_we_did_not_expect_is_kept_as_its_names_so_a_fixed_parser_can_be_written():
+    odd = "<InformaceOJednotkach><BYTY><BYT><ID>7</ID><VLASTNIK>Novotna</VLASTNIK></BYT></BYTY></InformaceOJednotkach>"
+    kept = report.redact(odd.encode())
+    assert b"<p>BYTY/BYT/VLASTNIK</p>" in kept and b"Novotna" not in kept and b">7<" not in kept
+    with pytest.raises(report.UnitReportError):
+        report.parse(kept)
+
+
+def test_a_namespaced_report_reads_the_same():
+    spaced = _doc(area="34.40").replace(b"<InformaceOJednotkach>", b"<InformaceOJednotkach xmlns='urn:x'>")
+    assert report.parse(spaced) == report.parse(_doc(area="34.40"))
+    assert report.parse(report.redact(spaced)) == report.parse(_doc(area="34.40"))

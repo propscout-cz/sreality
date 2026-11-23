@@ -48,6 +48,8 @@ def _root(document: bytes) -> ET.Element:
         root = ET.fromstring(document)
     except ET.ParseError:
         raise UnitReportError("not XML") from None
+    for el in root.iter():  # the published sample carries no namespace; one that did must read the same
+        el.tag = el.tag.rsplit("}", 1)[-1]
     if root.tag != ROOT:
         raise UnitReportError("not a unit report")
     return root
@@ -68,15 +70,18 @@ def _paths(el: ET.Element, prefix: str = "") -> set[str]:
     return paths
 
 
-def _shape(root: ET.Element, unit: ET.Element) -> tuple[str, ...]:
+def _shape(root: ET.Element, unit: ET.Element | None) -> tuple[str, ...]:
+    """The element paths under the unit; of the whole report when it holds no unit where we look for one, so a
+    layout we did not expect is still kept as names."""
     kept = root.find(_SHAPE)
-    paths = {(p.text or "").strip() for p in kept} if kept is not None else _paths(unit)
+    paths = ({(p.text or "").strip() for p in kept} if kept is not None
+             else _paths(unit) if unit is not None else _paths(root))
     return tuple(sorted(p for p in paths if p)[:MAX_SHAPE])
 
 
 def redact(document: bytes) -> bytes:
     """A new document holding, of each unit, only the text of the leaves `parse` reads, and the element paths of
-    the first unit. Raises when the input is not the report: such a file is not kept."""
+    the first unit (of the whole report when it holds none). Raises when the input is not the report: such a file is not kept."""
     root = _root(document)
     kept = ET.Element(ROOT)
     units = list(root.iter("JEDNOTKA"))
@@ -91,10 +96,9 @@ def redact(document: bytes) -> bytes:
                 nxt = at.find(name)
                 at = nxt if nxt is not None else ET.SubElement(at, name)
             at.text = text
-    if units:
-        shape = ET.SubElement(kept, _SHAPE)
-        for path in _shape(root, units[0]):
-            ET.SubElement(shape, "p").text = path
+    shape = ET.SubElement(kept, _SHAPE)
+    for path in _shape(root, units[0] if units else None):
+        ET.SubElement(shape, "p").text = path
     return ET.tostring(kept, encoding="utf-8")
 
 
