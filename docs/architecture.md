@@ -6195,7 +6195,9 @@ location programme's work, not this one's.
 - **Read.** `GET /properties/{id}/building` (`api/property_building.py`, `require_token`): the building of the
   location ad's door, each code with its label, or `{"building": null}`. The SPA's Budova card
   (`components/listing-detail/BuildingCard.tsx`, desktop and phone) is its one consumer; a property without a
-  building shows no card.
+  building shows no card. Nor does one holding ANY ad of `pozemek` or `ostatni` (ruling 2026-11-23): a door is the
+  address an ad states, and a plot states its neighbour's. One predicate, `api/building_scope.py`, for every read
+  that goes from a property through its door to a building (facts, sales).
 - **Three things a reader must know.** `floors` counts floors below ground, so it differs from an ad's count by
   design: the card names that basis and never flags it against the ad. `completed_on` is a 31 December placeholder (1919 … 2000) for most older buildings and is shown as a
   period MARKED as derived, with the register's own date beside it (`ruian_completion_period`; the bounds follow

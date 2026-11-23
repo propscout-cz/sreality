@@ -89,6 +89,47 @@ def test_a_building_lands_with_what_the_register_states(conn, world):
     assert (_link(conn, ADM), _link(conn, OTHER_ADM)) == (BUILDING.code, None)
 
 
+def _property(conn, door: int, *categories: str) -> int:
+    """A live property at `door` holding one ad per category; the first is the ad it stands at and shows."""
+    with conn.cursor() as cur:
+        ads = []
+        for category in categories:
+            cur.execute(
+                "insert into listings (source, source_id_native, raw_json, category_main, category_type) "
+                "values ('bazos', %s, '{}'::jsonb, %s, 'prodej') returning id", (f"scope-{door}-{len(ads)}", category))
+            ads.append(int(cur.fetchone()[0]))
+        cur.execute(
+            "insert into listing_location (listing_id, match_confidence, granularity, uncertainty_radius_m, "
+            "country_status, resolver_version, claim_set_hash, registry_version, kraj_kod, okres_kod, obec_kod, "
+            "ruian_adm_kod) values (%s, 'exact', 'address_point', 5, 'cz', 'test', '\\x00'::bytea, 'test', 99, 9991, "
+            "%s, %s)", (ads[0], OBEC, door))
+        cur.execute("insert into properties (status, location_listing_ref_id, repr_listing_ref_id) "
+                    "values ('active', %s, %s) returning id", (ads[0], ads[0]))
+        property_id = int(cur.fetchone()[0])
+        cur.execute("update listings set property_id = %s where id = any(%s)", (property_id, ads))
+    return property_id
+
+
+@pytest.mark.parametrize(("categories", "served"), [
+    (("byt",), True), (("dum",), True), (("komercni",), True), (("byt", "komercni"), True),
+    (("pozemek",), False), (("ostatni",), False),
+    (("dum", "pozemek"), False),  # one plot ad is enough, although the property shows the house
+])
+def test_the_building_reads_serve_no_property_that_holds_a_plot_or_other_ad(conn, world, categories, served):
+    from api.property_building import load_building
+    from api.property_building_sales import load_building_sales
+
+    _load(conn, world, [BUILDING, ruian_vfr.AddressLink(ADM, BUILDING.code)])
+    with conn.cursor() as cur:
+        cur.execute(
+            "insert into sold_transactions (source, source_record_id, sold_at, price_czk, category_main, "
+            "category_type, geom, raw) values ('reas', %s, '2025-01-01', 1000000, 'byt', 'prodej', "
+            "ST_SetSRID(ST_MakePoint(14.4, 50.1), 4326), '{}')", (f"1_building_{BUILDING.code}",))
+    property_id = _property(conn, ADM, *categories)
+    building = load_building(conn, property_id)
+    assert (building is not None, len(load_building_sales(conn, property_id))) == (served, int(served))
+
+
 def test_a_changed_building_gets_a_new_row_and_the_old_one_is_closed(conn, world):
     _load(conn, world, [BUILDING])
     changed = dataclasses.replace(BUILDING, plati_od=datetime.date(2026, 10, 1), floors=9)
