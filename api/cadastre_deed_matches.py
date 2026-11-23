@@ -1,7 +1,9 @@
 """What we already hold about the one unit a bought deed sold. A deed states a price and no area (ČÚZK's report
 has none), so the area is borrowed, named by its source, from a record we hold of the same sale:
 
-  reas  a registered sale of the building with the deed's unit label and the deed's price: the same sale, held twice.
+  reas  a registered sale of the building with the deed's unit label and the deed's price, dated within the deed's
+        own span (signing to entry; the held sales seen carry the entry date): the same sale, held twice. A resale
+        of the unit at the same price in another year is another sale.
   ad    an advertisement at a door of the building that asked exactly the deed's price at some point and was first
         seen before the deed was entered. Kept only when it is unambiguous: one property among the ads at that
         price, one area among them, and no other single-unit deed of the purchase at that price.
@@ -19,7 +21,9 @@ from psycopg.rows import dict_row
 
 _MATCH_SQL = """
 with deed as (
-  select d.id, d.price, coalesce(d.entered_on, d.effective_on, d.signed_on) as dated, u.label
+  select d.id, d.price, coalesce(d.entered_on, d.effective_on, d.signed_on) as dated, u.label,
+         least(d.signed_on, d.effective_on, d.entered_on) as first_on,
+         greatest(d.signed_on, d.effective_on, d.entered_on) as last_on
     from cadastre_deeds d
    cross join lateral (
           select min(e->>'label') filter (where e->>'kind' = 'jednotka') as label,
@@ -32,6 +36,7 @@ with deed as (
   select d.id, min(s.source_record_id) as source_record_id
     from deed d
     join sold_transactions s on s.building_code = %(building)s and s.unit_label = d.label and s.price_czk = d.price
+                               and s.sold_at between d.first_on and d.last_on
    group by d.id
   having count(*) = 1
 ), ad as (

@@ -424,6 +424,7 @@ def test_a_bought_deed_over_one_unit_borrows_what_we_hold_of_the_same_sale(conn,
         "same-price-b": (2500000, unit("727/9")),
         "nothing-held": (1234567, unit("727/10")),
         "plot-ad": (900000, unit("727/11")),
+        "resold-at-the-same-price": (3000000, unit("727/12")),
     }
     with conn.cursor() as cur:
         cur.execute("insert into accounts (name) values ('deed matches') returning id")
@@ -434,13 +435,17 @@ def test_a_bought_deed_over_one_unit_borrows_what_we_hold_of_the_same_sale(conn,
         purchase = cur.fetchone()[0]
         for proceeding, (price, properties) in deeds.items():
             cur.execute(
-                "insert into cadastre_deeds (purchase_id, account_id, proceeding, kind, price, currency, entered_on, "
-                "properties) values (%s, %s, %s, 'Smlouva kupní', %s, 'CZK', '2026-06-01', %s)",
+                "insert into cadastre_deeds (purchase_id, account_id, proceeding, kind, price, currency, signed_on, entered_on, "
+                "properties) values (%s, %s, %s, 'Smlouva kupní', %s, 'CZK', '2026-05-02', '2026-06-01', %s)",
                 (purchase, account, proceeding, price, Jsonb(properties)))
         cur.execute(
             "insert into sold_transactions (source, source_record_id, sold_at, price_czk, category_main, "
             "category_type, geom, raw, area_m2) values ('reas', %s, '2026-06-01', 4000000, 'byt', 'prodej', "
             "ST_SetSRID(ST_MakePoint(14.4, 50.1), 4326), '{}', 50)", (f"1_unit_{BUILDING.code}-727-1",))
+        cur.execute(  # the same unit at the same price ten years earlier: another sale
+            "insert into sold_transactions (source, source_record_id, sold_at, price_czk, category_main, "
+            "category_type, geom, raw, area_m2) values ('reas', %s, '2016-06-01', 3000000, 'byt', 'prodej', "
+            "ST_SetSRID(ST_MakePoint(14.4, 50.1), 4326), '{}', 50)", (f"2_unit_{BUILDING.code}-727-12",))
     _ad(conn, ADM, "m-held", 4000000, 50)  # the held sale wins over an ad at the same price
     asked = _ad(conn, ADM, "m-asked", 3500000, 35)
     once = _ad(conn, ADM, "m-once", 3100000, 33, once=3300000)
@@ -456,7 +461,7 @@ def test_a_bought_deed_over_one_unit_borrows_what_we_hold_of_the_same_sale(conn,
     assert {k: v and (v["source"], v["property_id"], v["area_m2"]) for k, v in shown.items()} == {
         "held": ("reas", None, None), "advertised": ("ad", asked, 35.0), "advertised-once": ("ad", once, 33.0),
         "two-properties-ask-it": None, "two-units": None, "advertised-after": None, "same-price-a": None,
-        "same-price-b": None, "nothing-held": None, "plot-ad": None}
+        "same-price-b": None, "nothing-held": None, "plot-ad": None, "resold-at-the-same-price": None}
     assert shown["held"]["source_record_id"] == f"1_unit_{BUILDING.code}-727-1"
     assert (shown["advertised"]["price_per_m2"], shown["advertised"]["price_per_m2_basis"],
             shown["advertised"]["disposition"]) == (100000.0, "sale_capital_czk_m2", "2+kk")
