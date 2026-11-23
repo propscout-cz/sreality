@@ -124,6 +124,13 @@ _AREA_RANGE = re.compile(
 # The building's own size, named as such: `budova o velikosti 10.500 m2`, `objekt disponuje
 # celkovou plochou cca 10 500 m2`. Adjacency is strict on purpose — `cihlové budovy. s užitnou
 # plochou 80 m2` (listing 464483) names the UNIT, and a looser window would eat it.
+# idnes prints the ADVERTISER's headline as the first words of the description (`<h2>` of
+# `div.b-desc`): `Prodej bytu 3+1 79 m², Pardubice Prostorný, světlý byt …`. Its figure is a
+# rounded label (79 for 78,6; 96 for a 75 m² flat with its terrace), not a statement the body
+# makes. Gated per SOURCE: on every other portal the same words open the BODY, and there the
+# figure is the advert's own (8 towns: 505 adverts of other portals would lose their only one).
+HEADLINE_SOURCES = frozenset({"idnes"})
+_HEADLINE = re.compile(r"(?:prodej|pronajem|drazba)\b[^.!?]{0,90}$")
 _BUILDING_TOTAL = re.compile(
     r"(?:budov|objekt|areal|komplex)\w*\s+(?:o\s+)?(?:celkov\w+\s+)?"
     r"(?:velikosti|rozloze|ploche|plochou|vymere|vymera)\s+(?:cca\s+)?" + _AREA_NUMBER + r"\s*m2"
@@ -939,7 +946,9 @@ def _menu_spans(folded: str, mentions: list[tuple[int, int, float]]) -> list[tup
     return spans
 
 
-def stated_areas(text: str | None, stored_area_m2: float | None = None) -> set[float]:
+def stated_areas(
+    text: str | None, stored_area_m2: float | None = None, source: str | None = None
+) -> set[float]:
     """Every floor area the BODY prints AS THIS UNIT'S, in m².
 
     Deliberately not `listings.area_m2`: that column is a per-portal parse, and one flat can
@@ -951,11 +960,15 @@ def stated_areas(text: str | None, stored_area_m2: float | None = None) -> set[f
     available (`od 55 m² do 900 m²`, `10 m², 20 m², 30 m², …`). Neither is a statement about the
     advertised unit, and comparing one side's building with the other side's unit mislabelled
     three same-unit cross-broker pairs as different (W7 benchmark, root cause AREA SCOPE)."""
-    return set(_stated_areas(text, stored_area_m2)) if text else set()
+    if not text:
+        return set()
+    return set(_stated_areas(text, stored_area_m2, source in HEADLINE_SOURCES))
 
 
 @body_cached
-def _stated_areas(text: str, stored_area_m2: float | None) -> frozenset[float]:
+def _stated_areas(
+    text: str, stored_area_m2: float | None, headline: bool = False
+) -> frozenset[float]:
     folded = fact_text(text)
     mentions: list[tuple[int, int, float]] = []
     for match in _M2_MENTION.finditer(folded):
@@ -967,6 +980,8 @@ def _stated_areas(text: str, stored_area_m2: float | None) -> frozenset[float]:
     skip = _menu_spans(folded, mentions) + [
         match.span() for match in _BUILDING_TOTAL.finditer(folded)
     ]
+    if headline and _HEADLINE.match(folded[: mentions[0][0]]):
+        skip.append(mentions[0][:2])
     low, high = STATED_AREA_MIN_M2, STATED_AREA_MAX_M2
     if stored_area_m2 is not None and stored_area_m2 > 0.0:
         low = max(low, stored_area_m2 / STATED_AREA_STORED_RATIO)

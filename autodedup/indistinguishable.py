@@ -507,8 +507,8 @@ def headline_area(listing: Listing) -> float | None:
 
 def _stated_areas_meet(a: Listing, b: Listing, tol: float) -> bool:
     """Both BODIES print a common floor area — the stored gap is then a basis difference."""
-    left = stated_areas(a.description, a.area_m2)
-    right = stated_areas(b.description, b.area_m2)
+    left = stated_areas(a.description, a.area_m2, a.source)
+    right = stated_areas(b.description, b.area_m2, b.source)
     if not left or not right:
         return False
     return any(rel_diff(x, y) <= tol for x in left for y in right)
@@ -2704,8 +2704,8 @@ def distinguishing_facts(
             and not printed_prevail):
         add("area", area_a, area_b)
 
-    areas_a = stated_areas(a.description, a.area_m2)
-    areas_b = stated_areas(b.description, b.area_m2)
+    areas_a = stated_areas(a.description, a.area_m2, a.source)
+    areas_b = stated_areas(b.description, b.area_m2, b.source)
     if areas_disjoint(areas_a, areas_b):
         add("stated_area", sorted(areas_a), sorted(areas_b))
 
@@ -3231,8 +3231,9 @@ def agreeing_attributes(
         a.location.street_key == b.location.street_key
     ):
         out.append("street")
-    areas_a, areas_b = stated_areas(a.description, a.area_m2), stated_areas(b.description,
-                                                                           b.area_m2)
+    areas_a, areas_b = stated_areas(a.description, a.area_m2, a.source), stated_areas(
+        b.description, b.area_m2, b.source
+    )
     if areas_a and areas_b and (areas_a & areas_b):
         out.append("stated_area")
     dirs_a, dirs_b = orientations(a.description), orientations(b.description)

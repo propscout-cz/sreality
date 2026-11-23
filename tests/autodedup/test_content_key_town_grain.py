@@ -49,13 +49,13 @@ def content(keys: list[tuple[str, Any]]) -> list[tuple[str, Any]]:
     return [(probe, key) for probe, key in keys if probe in CONTENT]
 
 
-def test_w34_turns_the_dial_on_and_w31_leaves_it_off() -> None:
+def test_no_shipped_settings_turn_the_dial_on() -> None:
+    # B refuted (ruling 2026-11-23: one deploy, B off): it drops ~4.7k cross-town merges.
     assert W31.content_key_town_grain is False and Settings().content_key_town_grain is False
-    assert W34.content_key_town_grain is True
+    assert W34.content_key_town_grain is False
     assert {k: v for k, v in W34.to_dict().items() if W31.to_dict()[k] != v} == {
         "area_veto_basis_floor_exempt": {"realitymix": 0.15},
-        "area_veto_gallery_exempt": {"byt": 0.2, "dum": 0.2, "pozemek": 0.2},
-        "content_key_town_grain": True}
+        "area_veto_gallery_exempt": {"byt": 0.2, "dum": 0.2, "pozemek": 0.2}}
 
 
 def test_dial_off_the_content_keys_are_the_bare_bands() -> None:

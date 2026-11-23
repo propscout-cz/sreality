@@ -91,7 +91,7 @@ def headline_area(listing: Listing, settings: Settings) -> float | None:
     if not stored or stored <= 0.0:
         return None
     printed = [
-        value for value in stated_areas(listing.description, stored)
+        value for value in stated_areas(listing.description, stored, listing.source)
         if abs(value - stored) / stored <= settings.family_guard_area_window
     ]
     if not printed:

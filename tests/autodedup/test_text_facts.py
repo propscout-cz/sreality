@@ -324,3 +324,15 @@ def test_upper_storeys_reads_the_number_the_upper_clause_carries() -> None:
 
 def test_a_maisonette_range_is_placed_whole() -> None:
     assert subject_floors("Mezonetový byt se nachází ve 2.-3. NP domu.", True) == {2, 3}
+
+
+def test_an_idnes_headline_figure_is_not_the_units_stated_area() -> None:
+    text = "Prodej bytu 3+1 79 m², Pardubice Prostorný, světlý byt o výměře 78,6 m² v klidné ulici."
+    assert stated_areas(text, 78.6, "idnes") == {78.6}
+    assert stated_areas("Prodej bytu 3+kk 96 m² Mezi Mosty, Pardubice Prostorný byt.", 75.0, "idnes") == set()
+
+
+def test_the_same_words_opening_another_portals_body_keep_their_figure() -> None:
+    text = "Prodej bytu 1+kk o ploše 28,6 m2."
+    assert stated_areas(text, 28.6, "sreality") == {28.6}
+    assert stated_areas(text, 28.6) == {28.6}
