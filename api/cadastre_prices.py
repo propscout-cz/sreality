@@ -84,6 +84,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from api import cadastre_price_report, cuzk_login, wsdp_client
+from api.building_scope import holds_no_building_ad
 
 LOG = logging.getLogger(__name__)
 
@@ -190,8 +191,9 @@ select b.code, b.iskn_building_id, p.id is not null as found
   left join listing_location ll on ll.listing_id = p.location_listing_ref_id
   left join ruian_address_points ap on ap.kod_adm = ll.ruian_adm_kod
   left join ruian_building_objects b on b.code = ap.stavebni_objekt_code and b.valid_to is null
+   and not {out_of_scope}
  where p.id = %s and p.status = 'active'
-"""
+""".format(out_of_scope=holds_no_building_ad("p"))
 
 
 def building_of(conn: psycopg.Connection, property_id: int) -> Building:
