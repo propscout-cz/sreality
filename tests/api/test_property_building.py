@@ -32,6 +32,7 @@ def _row(**over: Any) -> dict[str, Any]:
         "usage": _label(6, "bytový dům"), "construction": _label(4, "Stěnové panely"), "lift": _label(1, "S výtahem"),
         "heating": _label(2, "Centrální dálkové (kotel mimo stavbu)"), "water": _label(1, "S vodovodem"),
         "sewer": _label(1, "Přípoj na kanalizační síť"), "gas": _label(9, "Nezjištěno", True),
+        "protection": [{"code": 18, "label": "label of 18"}, {"code": 99, "label": None}],
     }
     row.update(over)
     return row
@@ -80,7 +81,7 @@ def test_the_building_is_what_the_register_states(client, conn):
     building = client.get("/properties/7/building", headers=AUTH).json()["building"]
     assert building["code"] == 22948236 and building["house_numbers"] == [564, 565]
     assert building["completed"] == {"on": "1990-12-31", "from": 1981, "to": 1990}
-    assert "protected" not in building
+    assert building["protection"] == [{"code": 18, "label": "label of 18"}, {"code": 99, "label": None}]
     assert (building["floors"], building["dwellings"], building["entrances"]) == (8, 46, 2)
     assert building["floor_area_m2"] is None
     assert building["gas"] == {"code": 9, "label": "Nezjištěno", "unknown": True}

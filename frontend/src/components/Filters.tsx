@@ -17,7 +17,7 @@ import {
   type FilterRow,
 } from '@/lib/filterLayout';
 import { FILTER_REGISTRY, type FilterDef } from '@/lib/filterRegistry.generated';
-import type { MapySuggestion } from '@/lib/maps';
+import type { PlaceRow } from '@/lib/places';
 import { CollapsibleGroup, DecimalField, SegmentedBar, Section } from '@/components/controls';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
@@ -46,7 +46,7 @@ interface SidebarProps {
    * filter via the normal onChange path; this is a side channel for
    * the map navigation. Optional so other consumers (Watchdog edit
    * form, etc.) can mount the sidebar without it. */
-  onLocationPick?: (s: MapySuggestion) => void;
+  onLocationPick?: (row: PlaceRow) => void;
   /* Operator-resizable width in px (Browse persists it). Optional so
    * other consumers keep the default 320px sidebar. */
   width?: number;
@@ -294,8 +294,8 @@ export function FilterSidebar({
   // already use. The adapter in lib/filters bridges both directions
   // (tri-state amenities pivot bool|null ↔ 'any'|'yes'|'no' inside it).
   const registryView = listingFiltersToRegistryView(filters);
-  // A location pick lands only after `/maps/resolve` answers, so it merges into
-  // the LATEST filters, never the ones the click closed over.
+  // A location pick merges into the LATEST filters, never the ones the click
+  // closed over.
   const latestFilters = useRef(filters);
   latestFilters.current = filters;
   const units = sidebarUnits(filters);

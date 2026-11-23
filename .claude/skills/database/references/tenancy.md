@@ -476,13 +476,14 @@ the transport hands in, each call in a transaction of its own under the same bou
 COSTLY tool (`valuo_valuation`) reads its run's narrowed account in a short `GET` transaction, closes it, and runs shape 3 on the
 service connection, as the Valuo routes do: no tenant transaction across a paid call.
 
-**Named exception — `tenant_pool.own_account_id_released` (`PUT /account/cuzk-login`, #2601): the caller's own
+**Named exception — `tenant_pool.own_account_id_released` (`PUT /account/cuzk-login`, #2601; `POST /properties/{id}/building/prices`, #2595): the caller's own
 account from a transaction of its own, closed before the handler waits on an outside service.** The dependency
 `require_account_id` holds the request's tenant transaction until the handler returns; this handler then waits
 on ČÚZK for up to 25 s, which would pin a pooled backend and a worker for that long. The helper gives the same
 answer and the same refusals (403 under X-Act-As, 400 with no account) and returns with nothing open. It reads
 one row and writes none, so there is no second transaction to split a route's reads and writes across. A route
-that touches tenant rows takes the dependency, never this.
+that touches tenant rows takes the dependency, never this. Both callers then write on the service connection, every
+statement naming the account; the two are pinned in `tests/api/test_cuzk_login.py`.
 
 **Named exception — `POST /estimations/{run_id}/feedback`: a short tenant transaction, then
 admin-only service-role work.** The route does not take `tenant_conn`; it opens
@@ -537,10 +538,15 @@ join, `ps.account_id = d.account_id AND ps.ended_at IS NULL`: recipients come fr
 The ČÚZK login routes (`api/routes/cuzk_login.py`, migration 759) are the same shape over `account_cuzk_logins`:
 GET and DELETE take `require_account_id` (in `_NEVER_ACTS`: the account that pays is never handed over with a board);
 PUT, which waits on ČÚZK, resolves the same account through `own_account_id_released` (the Named exception below; its
-one caller is pinned in `tests/api/test_cuzk_login.py`). Then `deps.open_background_conn`, every statement naming the
+callers are pinned in `tests/api/test_cuzk_login.py`). Then `deps.open_background_conn`, every statement naming the
 account; the password column is encrypted by the API. A save's check against ČÚZK is budgeted first
 (`cuzk_login.admit_check`, ledger `account_cuzk_login_checks`, migration 762; the three budgets and ČÚZK's lock rule
-they answer are stated at the top of `api/cuzk_login.py`): past one, a 429 and nothing is sent.
+they answer are stated at the top of `api/cuzk_login.py`): past one, a 429 and nothing is sent. A cadastre price purchase
+(`api/cadastre_prices.py`, migration 763; `GET`/`POST /properties/{id}/building/prices`, both in `_NEVER_ACTS`) spends
+money on the account's ČÚZK login, so ONE run per account uses that login at a time: the purchase lease on the login's
+own row (`cuzk_login.lease`/`renew`/`release`), renewed before every call. Its states, who may move each and on what
+guard head the module; its rows (`cadastre_price_purchases`, `cadastre_deeds`) are the buyer's alone, every statement
+naming the account. One ledger row per run, admitted before its first call.
 
 **Fourth instance — the run routes (`api/routes/agent_runs.py`, #2071).** `require_account_id` on the router (all in
 `_NEVER_ACTS`), so a start lands on the user's oldest membership, with no picker. Reads take `TenantConn` and name no account

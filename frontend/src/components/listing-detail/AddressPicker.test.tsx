@@ -1,21 +1,19 @@
-/* The address picker (location W3b): a pick is bound to ONE RÚIAN unit before anything can be
- * saved, a save writes it on every advert and re-reads the page's place, a refused or unbound
- * pick offers no save, and a save the portal's words defeated says so instead of closing. */
+/* The address picker (location W3b) on own place search (#2453): a row is ONE RÚIAN unit, so a
+ * door, street or town row is saved as it is on every advert and the page's place is re-read; any
+ * other level offers no save, and a save the portal's words defeated says so instead of closing. */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-import type { LocationResolution, MapySuggestion } from '@/lib/maps';
+import type { PlaceRow } from '@/lib/places';
 import type { PickResult } from '@/lib/locationQuality';
 
-const fetchSuggest = vi.hoisted(() => vi.fn());
-const resolveSuggestion = vi.hoisted(() => vi.fn());
+const fetchPlaces = vi.hoisted(() => vi.fn());
 const submitLocationPick = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/maps', async (importActual) => ({
-  ...(await importActual<typeof import('@/lib/maps')>()),
-  fetchSuggest,
-  resolveSuggestion,
+vi.mock('@/lib/places', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/places')>()),
+  fetchPlaces,
 }));
 vi.mock('@/lib/locationQuality', async (importActual) => ({
   ...(await importActual<typeof import('@/lib/locationQuality')>()),
@@ -30,16 +28,12 @@ import type { ListingPublic } from '@/lib/types';
 import { expectNoNestedInteractive } from '@/test/a11y';
 
 const PENCIL = 'Opravit adresu (RÚIAN)';
-const ADDRESS: MapySuggestion = {
-  name: 'Lipová 12', label: 'Adresa', type: 'regional.address', location: 'Betov',
-  position: { lon: 14.5, lat: 50.1 },
-  regionalStructure: [
-    { name: '12', type: 'regional.address' },
-    { name: 'Lipová', type: 'regional.street' },
-    { name: 'Betov', type: 'regional.municipality' },
-  ],
+const DOOR: PlaceRow = {
+  level: 'adresni_misto', id: 21000001, name: 'Lipová 12, Betov', context: 'Alfov', point: { lat: 50.1, lng: 14.5 },
+  street: { level: 'ulice', id: 9002, name: 'Lipová', context: 'Betov' },
 };
-const DOOR: LocationResolution = { level: 'adresni_misto', id: 21000001, name: 'Lipová 12, Betov', context: null };
+const STREET: PlaceRow = { level: 'ulice', id: 9002, name: 'Lipová', context: 'Betov', point: { lat: 50.1, lng: 14.5 } };
+const PART: PlaceRow = { level: 'cast_obce', id: 5, name: 'Žižkov', context: 'Praha', point: null };
 
 const saved = (over: Partial<PickResult> = {}): { data: PickResult } => ({
   data: {
@@ -60,20 +54,19 @@ function renderPicker() {
   return invalidated;
 }
 
-async function pick(answer: LocationResolution | null) {
-  resolveSuggestion.mockImplementation(() => (answer ? Promise.resolve(answer) : Promise.reject(new Error('x'))));
+async function pick(row: PlaceRow) {
+  fetchPlaces.mockResolvedValue([row]);
   fireEvent.click(screen.getByRole('button', { name: PENCIL }));
   fireEvent.change(await screen.findByRole('textbox', { name: 'Adresa, ulice nebo obec' }), {
     target: { value: 'Lipová 12' },
   });
-  fireEvent.click(await screen.findByRole('button', { name: /Lipová 12/ }));
+  fireEvent.click(await screen.findByRole('button', { name: new RegExp(`^${row.name}`) }));
 }
 
 const panel = () => screen.getByRole('group', { name: PENCIL });
 
 beforeEach(() => {
   vi.clearAllMocks();
-  fetchSuggest.mockResolvedValue([ADDRESS]);
   submitLocationPick.mockResolvedValue(saved());
 });
 
@@ -91,12 +84,11 @@ describe('<AddressPicker>', () => {
     expect(screen.getByText('Sadová, Alfov')).toContainElement(screen.getByRole('button', { name: PENCIL }));
   });
 
-  it('binds the pick as a door, previews it and saves it on every advert', async () => {
+  it('previews a door row and saves it on every advert, as {adresni_misto, door code}', async () => {
     const invalidated = renderPicker();
     await pick(DOOR);
-    expect(resolveSuggestion).toHaveBeenCalledWith(ADDRESS, { addressPoint: true });
     const status = await within(panel()).findByRole('status');
-    await waitFor(() => expect(status).toHaveTextContent('Adresní místoLipová 12, Betov'));
+    await waitFor(() => expect(status).toHaveTextContent('AdresaLipová 12, Betov · Alfov'));
 
     fireEvent.click(screen.getByRole('button', { name: 'Uložit pro všechny inzeráty (2)' }));
     await waitFor(() => expect(screen.queryByRole('group', { name: PENCIL })).toBeNull());
@@ -106,35 +98,27 @@ describe('<AddressPicker>', () => {
     }
   });
 
-  it('sends no pick: row 2 for "Brno" resolves as a door and nothing more (ruling Q10)', async () => {
-    const town = (name: string): MapySuggestion => ({ name, label: 'Obec', type: 'regional.municipality',
-      position: { lon: 16.6, lat: 49.2 } });
-    fetchSuggest.mockResolvedValue([town('Brno-město'), town('Brno')]);
-    resolveSuggestion.mockResolvedValue({ level: 'obec', id: 582786, name: 'Brno', context: null });
+  it('offers no save for a row at any other level', async () => {
     renderPicker();
-    fireEvent.click(screen.getByRole('button', { name: PENCIL }));
-    fireEvent.change(await screen.findByRole('textbox', { name: 'Adresa, ulice nebo obec' }), {
-      target: { value: 'Brno' },
-    });
-    fireEvent.click(await screen.findByRole('button', { name: /^Brno\s*Obec$/ }));
-    expect(resolveSuggestion).toHaveBeenCalledWith(town('Brno'), { addressPoint: true });
+    await pick(PART);
+    expect(await within(panel()).findByText('Vyberte adresu, ulici nebo obec')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Uložit/ })).toBeNull();
   });
 
-  it.each([
-    [{ level: 'cast_obce', id: 5, name: 'Žižkov', context: 'Praha' }, 'Vyberte adresu, ulici nebo obec'],
-    [{ ...DOOR, id: null, name: null }, 'V RÚIAN nelze jednoznačně najít'],
-    [null, 'Místo se nepodařilo ověřit — zkuste to znovu'],
-  ])('offers no save for %j', async (answer, said) => {
+  it('says own search is unavailable and keeps the box', async () => {
+    fetchPlaces.mockRejectedValue(new Error('HTTP 503'));
     renderPicker();
-    await pick(answer as LocationResolution | null);
-    expect(await within(panel()).findByText(said)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Uložit/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: PENCIL }));
+    const box = await screen.findByRole('textbox', { name: 'Adresa, ulice nebo obec' });
+    fireEvent.change(box, { target: { value: 'Lipová 12' } });
+    expect(await within(panel()).findByText('Vyhledávání míst je teď nedostupné; zkuste psát dál.')).toBeInTheDocument();
+    expect(box).toBeEnabled();
   });
 
   it('stays open and says so when the portals’ words defeated the pick', async () => {
     submitLocationPick.mockResolvedValue(saved({ held: false, location: { label: 'Sadová, Alfov', granularity: 'street' } }));
     renderPicker();
-    await pick({ level: 'ulice', id: 9002, name: 'Lipová', context: 'Betov' });
+    await pick(STREET);
     fireEvent.click(await screen.findByRole('button', { name: 'Uložit pro všechny inzeráty (2)' }));
     expect(await within(panel()).findByText(/Uloženo, ale poloha je stále „Sadová, Alfov“/)).toBeInTheDocument();
   });

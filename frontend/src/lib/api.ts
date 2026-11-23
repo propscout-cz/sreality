@@ -307,8 +307,8 @@ async function requestBlob(path: string, opts: RequestOptions = {}): Promise<Blo
   }
 }
 
-/* Generic verbs used by lib/maps.ts (and any other future module that
- * needs raw GET/POST without going through a feature-specific wrapper). */
+/* Generic verbs for a module that needs raw GET/POST without a
+ * feature-specific wrapper (lib/places, lib/priceMap). */
 export const apiGet = <T>(
   path: string,
   params?: Record<string, QueryValue>,
@@ -701,6 +701,9 @@ export interface RegisterBuilding {
   water: RegisterCode | null;
   sewer: RegisterCode | null;
   gas: RegisterCode | null;
+  /* The zones and regimes the register lists for the building (heritage, nature, water source…); empty = none
+   * stated. A null label is a code our list does not hold. Absent on an answer from an API one deploy behind. */
+  protection?: { code: number; label: string | null }[];
 }
 export const fetchPropertyBuilding = (propertyId: number): Promise<{ building: RegisterBuilding | null }> =>
   request<{ building: RegisterBuilding | null }>(`/properties/${propertyId}/building`);
@@ -722,11 +725,70 @@ export interface BuildingSale {
 }
 export const fetchPropertyBuildingSales = (propertyId: number): Promise<{ sales: BuildingSale[] }> =>
   request<{ sales: BuildingSale[] }>(`/properties/${propertyId}/building/sales`);
+/* Cadastre prices the caller's own account bought for a property's building (GET/POST
+ * /properties/{id}/building/prices). A deed has ONE price for everything it transfers. */
+export interface CadastreDeedProperty {
+  kind: 'jednotka' | 'stavba' | 'parcela' | 'pravo_stavby';
+  iskn_id: number;
+  label: string;
+}
+export interface CadastreDeed {
+  proceeding: string;
+  kind: string;
+  price: number | null;
+  currency: string | null;
+  signed_on: string | null;
+  /* When the transfer took legal effect: the date a sale is dated by. */
+  effective_on: string | null;
+  entered_on: string | null;
+  properties: CadastreDeedProperty[];
+}
+export interface BuildingPrices {
+  /* false: the property's door names no building the cadastre knows, so nothing can be asked. */
+  available: boolean;
+  login_set: boolean;
+  /* ČÚZK refused the stored login during a purchase: nothing is sent on it until it is saved again. */
+  login_refused: boolean;
+  price_czk: number;
+  /* A purchase run of this account is live right now (any building): every request meanwhile changes nothing. */
+  running: boolean;
+  /* The newest purchase that did not end uncharged. pending/ordered: in flight, continued by its id.
+   * fetch_sent: the charging fetch was sent, so it may have been charged. paid_unread: paid (or possibly paid) and
+   * its deeds not stored; continuing reads the kept file (file_kept) or fetches the report again, both free. */
+  purchase: { id: number; status: 'pending' | 'ordered' | 'done' | 'paid_unread'; cost_czk: number | null;
+              object_count: number | null; fetch_sent: boolean; file_kept: boolean;
+              /* A fetch was sent moments ago and may still be being served: nothing fetches again meanwhile. */
+              fetching: boolean;
+              /* ČÚZK said the report no longer exists: there is nothing left to try again. */
+              gone: boolean;
+              requested_at: string; finished_at: string | null } | null;
+  /* The deeds of the newest purchase that holds any. */
+  deeds: CadastreDeed[];
+  /* On a POST's answer: null when the request did what it asked; else why it did nothing (the state is as it stood). */
+  notice?: 'busy' | 'in_flight' | 'preparing' | 'fetching' | 'time' | 'login' | null;
+}
+export const fetchBuildingPrices = (propertyId: number): Promise<BuildingPrices> =>
+  request<BuildingPrices>(`/properties/${propertyId}/building/prices`);
+/* One request on the caller's own ČÚZK account; `costCzk` is the price the card showed. Plain: a new purchase.
+ * `repeat`: a new one of a building already paid for (the server refuses that otherwise). `resume`: continue that
+ * one purchase, which can never start another. */
+export const buyBuildingPrices = (
+  propertyId: number, costCzk: number, how: { repeat?: boolean; resume?: number } = {},
+): Promise<BuildingPrices> =>
+  request<BuildingPrices>(`/properties/${propertyId}/building/prices`, {
+    method: 'POST',
+    json: { cost_czk: costCzk, ...(how.resume != null ? { resume: how.resume } : how.repeat ? { repeat: true } : {}) },
+  });
+/* Give a purchase in flight up. Sends nothing to ČÚZK and costs nothing; one whose fetch had been sent then reads
+ * as possibly paid. */
+export const cancelBuildingPurchase = (propertyId: number, purchaseId: number): Promise<BuildingPrices> =>
+  request<BuildingPrices>(`/properties/${propertyId}/building/prices`, { method: 'POST', json: { cancel: purchaseId } });
 /* An account's own ČÚZK WSDP login. The password goes up once and never comes back. */
 export interface CuzkLoginState {
   set: boolean;
   username: string | null;
   checked_at: string | null;
+  refused?: boolean;
 }
 export const fetchCuzkLogin = (): Promise<CuzkLoginState> => request<CuzkLoginState>('/account/cuzk-login');
 export const saveCuzkLogin = (login: { username: string; password: string }): Promise<CuzkLoginState> =>
