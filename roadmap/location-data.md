@@ -1446,8 +1446,11 @@ component is slimmed twice — each wave rewrites one component and slims its st
   `docs/architecture.md` § own place search). 244 register-written questions scored 86.5 % top-1 and 95.1 % top-5
   (bars 90 / 97). Fixed: a street or část with its town and no number ("Masarykova, Brno", "Praha 6 Dejvice"); a street
   exact under every abbreviation spelling ("nám."/"náměstí"); "okres X"; "Praha6"; place-name typos at 0.55; and "town
-  first" narrowed to a town above its own okres and kraj (Praha's Karlín before the village). **Next:** re-run the 244
-  on production and post the tallies on #2465 (ruling: the simulation stands in for its 200 real picks).
+  first" narrowed to a town above its own okres and kraj (Praha's Karlín before the village). Re-run: 231 / 242 of 244,
+  posted on #2465. **2026-11-22:** gate parts (2)–(4) on the same simulation (rulings 2026-11-22): speed own p50 206 ms ≤
+  Mapy 309 ms; addresses 26 / 25 of 26 after one strike, so the switch-over takes the "addresses passed" scope; and a
+  town leads its okres or kraj only with one in twenty of its served properties (#2612). **Next:** re-score part (1)
+  after #2612 deploys, then the switch-over #2453 and the operator's OK.
 - **The gate's eval — built 2026-11-09** (#2452; spec #2441 Part 4 (1)–(4), Q2 c, ruling 2026-11-08; no migration; as
   built: `docs/architecture.md` § the gate's eval). `scripts/place_search_gate_eval.py`, read-only on production:
   picks only through `picks_between`, in one READ ONLY transaction closed before any request; only `POST

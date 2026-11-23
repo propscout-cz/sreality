@@ -1395,6 +1395,39 @@ def test_a_town_typed_by_its_start_answers_right_above_its_own_okres_and_kraj_th
     ]
 
 
+MORAVSKOSLEZSKY, BRUNTAL_OKRES, MS_KOCOV = 132, 3801, 551732
+
+
+def test_a_village_named_like_its_kraj_with_no_real_share_of_it_answers_after_the_kraj(mirror, client):
+    """#2612: a town leads its region only with one in twenty of its served properties. Moravskoslezský Kočov serves 1
+    of its kraj's 21 (on production 10 of 32,568), so the kraj answers first."""
+    kraj = mirror.unit("kraj", MORAVSKOSLEZSKY, "Moravskoslezský kraj")
+    mirror.unit("obec", MS_KOCOV, "Moravskoslezský Kočov", mirror.unit("okres", BRUNTAL_OKRES, "Bruntál", kraj))
+    mirror.served(region=MORAVSKOSLEZSKY, okres=BRUNTAL_OKRES, obec=MS_KOCOV)
+    for _ in range(20):
+        mirror.served(region=MORAVSKOSLEZSKY)
+    mirror.publish()
+    assert _chips(_suggest(client, "Moravskoslezský")) == [
+        ("kraj", MORAVSKOSLEZSKY, "Moravskoslezský kraj", None),
+        ("obec", MS_KOCOV, "Moravskoslezský Kočov", "Bruntál"),
+    ]
+
+
+def test_a_town_with_one_in_twenty_of_its_regions_served_properties_still_leads_it(mirror, client):
+    """#2612: one in twenty is a real share (on production every town named like its okres holds 7.58 % or more)."""
+    kraj = mirror.unit("kraj", OLOMOUCKY, "Olomoucký kraj")
+    mirror.unit("obec", OLOMOUC, "Olomouc", mirror.unit("okres", OLOMOUC_OKRES, "Olomouc", kraj))
+    mirror.served(region=OLOMOUCKY, okres=OLOMOUC_OKRES, obec=OLOMOUC)
+    for _ in range(19):
+        mirror.served(region=OLOMOUCKY)
+    mirror.publish()
+    assert _chips(_suggest(client, "olomo")) == [
+        ("obec", OLOMOUC, "Olomouc", "Olomouc"),
+        ("okres", OLOMOUC_OKRES, "Olomouc", "Olomoucký kraj"),
+        ("kraj", OLOMOUCKY, "Olomoucký kraj", None),
+    ]
+
+
 VACLAVSKE_PRAHA, VACLAVSKE_TREBIC, TREBIC_OKRES, TREBIC = 477265, 470701, 3710, 590266
 TR_SVOBODY, TRIDA_SVOBODY_NOVA = 326780, 326781
 
