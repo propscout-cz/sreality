@@ -63,7 +63,6 @@ import {
 import { usePageTitle } from '@/lib/pageTitle';
 import { portalLabel } from '@/lib/portals';
 import MergeBar from '@/components/MergeBar';
-import MergeConfirmDialog from '@/components/MergeConfirmDialog';
 import AppliedFilterPills from '@/components/AppliedFilterPills';
 import FilterPresetBar from '@/components/FilterPresetBar';
 import type { FilterPreset } from '@/lib/types';
@@ -103,6 +102,8 @@ import type { BrowseViewState, TabKey } from '@/lib/browseState';
 const ListingMap = lazyChunk(() => import('@/components/ListingMap'));
 /* Lazy: the dialog mounts only on "Create watchdog", so it stays out of the first visit. */
 const CreateWatchdogModal = lazyChunk(() => import('@/components/CreateWatchdogModal'));
+/* Opened on Merge only: its ad cards stay out of the first-visit bundle. */
+const MergeConfirmDialog = lazyChunk(() => import('@/components/MergeConfirmDialog'));
 
 export interface BrowseFeatures {
   /* The saved-set bars (filter presets; the Stats tab's dashboards) — page only. */
@@ -638,12 +639,14 @@ export default function BrowseExperience({
                   onMerge={() => setMergeConfirmOpen(true)}
                 />
                 {mergeConfirmOpen && (
-                  <MergeConfirmDialog
-                    groups={mergeMode.groups}
-                    merging={mergeMut.isPending}
-                    onConfirm={() => mergeMut.mutate(mergeMode.letters)}
-                    onClose={() => setMergeConfirmOpen(false)}
-                  />
+                  <Suspense fallback={null}>
+                    <MergeConfirmDialog
+                      groups={mergeMode.groups}
+                      merging={mergeMut.isPending}
+                      onConfirm={() => mergeMut.mutate(mergeMode.letters)}
+                      onClose={() => setMergeConfirmOpen(false)}
+                    />
+                  </Suspense>
                 )}
               </div>
             )}
