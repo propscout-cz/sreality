@@ -750,6 +750,13 @@ export interface CadastreDeed {
     disposition: string | null; price_per_m2: number | null; price_per_m2_basis: string | null;
   } | null;
 }
+export interface CadastreUnit {
+  unit_iskn_id: number;
+  purchase: { id: number; status: 'pending' | 'ordered' | 'done' | 'paid_unread'; cost_czk: number | null;
+    fetch_sent: boolean; file_kept: boolean; fetching: boolean; gone: boolean };
+  facts: { floor_area_m2: number | null; use_code: string | null; use_label: string | null;
+    share_num: number | null; share_den: number | null } | null;
+}
 export interface BuildingPrices {
   /* false: the property's door names no building the cadastre knows, so nothing can be asked. */
   available: boolean;
@@ -771,6 +778,11 @@ export interface BuildingPrices {
               requested_at: string; finished_at: string | null } | null;
   /* The deeds of the newest purchase that holds any. */
   deeds: CadastreDeed[];
+  /* One unit's "Informace o jednotkách", 10 Kč each, only for a unit named in a bought deed. Per unit asked about:
+   * its newest purchase that did not end uncharged, and what it read (null until read). floor_area_m2 null = the
+   * cadastre records no floor area for the unit (it does so only since 2024). Absent from an older API. */
+  unit_price_czk?: number;
+  units?: CadastreUnit[];
   /* On a POST's answer: null when the request did what it asked; else why it did nothing (the state is as it stood). */
   notice?: 'busy' | 'in_flight' | 'preparing' | 'fetching' | 'time' | 'login' | null;
 }
@@ -783,6 +795,14 @@ export const buyBuildingPrices = (
   propertyId: number, costCzk: number, how: { repeat?: boolean; resume?: number } = {},
 ): Promise<BuildingPrices> =>
   request<BuildingPrices>(`/properties/${propertyId}/building/prices`, {
+    method: 'POST',
+    json: { cost_czk: costCzk, ...(how.resume != null ? { resume: how.resume } : how.repeat ? { repeat: true } : {}) },
+  });
+/* The same request for ONE unit's information (its own price, its own purchases). */
+export const buyBuildingUnit = (
+  propertyId: number, unitIsknId: number, costCzk: number, how: { repeat?: boolean; resume?: number } = {},
+): Promise<BuildingPrices> =>
+  request<BuildingPrices>(`/properties/${propertyId}/building/units/${unitIsknId}`, {
     method: 'POST',
     json: { cost_czk: costCzk, ...(how.resume != null ? { resume: how.resume } : how.repeat ? { repeat: true } : {}) },
   });

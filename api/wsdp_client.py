@@ -277,6 +277,15 @@ def generate_prices(object_type: str, iskn_ids: list[int], username: str, passwo
     return _report(root)[0]
 
 
+def generate_unit_info(unit_iskn_id: int, username: str, password: str) -> Report:
+    """Order "Informace o jednotkách" for ONE unit: one paid output (price list item 5004). Never call twice for
+    one purchase: each call is a new report."""
+    root = _call("sestavy", "GenerujInfoOJednotkach",
+                 f"<typ:GenerujInfoOJednotkachRequest><typ:jednotkaId>{int(unit_iskn_id)}</typ:jednotkaId>"
+                 "<typ:format>xml</typ:format></typ:GenerujInfoOJednotkachRequest>", username, password)
+    return _report(root)[0]
+
+
 def report_state(report_id: int, username: str, password: str) -> Report:
     """Where a report stands (free)."""
     root = _call("sestavy", "SeznamSestav",

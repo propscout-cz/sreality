@@ -950,3 +950,149 @@ def test_a_report_read_as_no_deed_can_be_read_again_and_does_not_hide_earlier_de
     sent = cuzk.calls
     _buy(cuzk, me, resume=_id(conn, me))  # read again, free; still nothing in it
     assert cuzk.calls == sent and [r[0] for r in _rows(conn, me)] == ["done", "done"]
+
+
+# --- one unit's information (migration 767): the same machine, a second kind ---------------------------------
+
+OWNER = "Novotná Jarmila"
+
+
+def _unit_report(iskn_id: int, *, area: str = "", stray: str = "") -> bytes:
+    """ČÚZK's "Informace o jednotkách" for one unit, in the shape of its published sample, owner included."""
+    return (
+        "<InformaceOJednotkach><KATASTR><STAVBY><STAVBA><JEDNOTKY><JEDNOTKA><ZP_VYUZITI>1</ZP_VYUZITI>"
+        f"<CISLO_JED><jednotka><id>{iskn_id}</id><cp_ident>565</cp_ident><jed_ident>14</jed_ident></jednotka>"
+        "</CISLO_JED><VYUZ_TYP>byt byt.z.</VYUZ_TYP><BUD_PODIL><citatel>344</citatel><jmenovatel>35966</jmenovatel>"
+        f"</BUD_PODIL><PODLAHOVA_PLOCHA>{area}</PODLAHOVA_PLOCHA>{stray}<VLASTNICTVI><LV><cislo_tel>1</cislo_tel></LV>"
+        f"<SUBJEKTY><SUBJEKT><VLA_IDENT><oprav_subjekt><rc6>755101</rc6><prijmeni>{OWNER}</prijmeni></oprav_subjekt>"
+        "</VLA_IDENT></SUBJEKT></SUBJEKTY></VLASTNICTVI></JEDNOTKA></JEDNOTKY></STAVBA></STAVBY></KATASTR>"
+        "</InformaceOJednotkach>").encode()
+
+
+class _UnitCuzk(_Cuzk):
+    """The scripted service after a price purchase: the next order is one unit's information, 10 Kč."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, conn: Any, account: uuid.UUID, **kw: Any) -> None:
+        super().__init__(monkeypatch)
+        _buy(self, account)
+        self.unit = conn.execute(
+            "select (e->>'iskn_id')::bigint from cadastre_deeds d, jsonb_array_elements(d.properties) e "
+            "where d.account_id = %s and e->>'kind' = 'jednotka' order by 1 limit 1", (account,)).fetchone()[0]
+        self.asked: list[int] = []
+        self.calls, self.polls, self.price = 0, 0, kw.get("price", 10)
+        self.document = kw.get("document", _unit_report(self.unit, area=kw.get("area", "")))
+        monkeypatch.setattr(wsdp_client, "generate_unit_info", self._unit_info)
+
+    def _unit_info(self, unit_id: int, u: str, p: str) -> wsdp_client.Report:
+        self._enter("generate")
+        self.asked.append(unit_id)
+        return wsdp_client.Report(9100 + len(self.asked), "čeká", None)
+
+    def buy(self, account: uuid.UUID, unit_id: int | None = None, **kw: Any) -> None:
+        _buy(self, account, kind=prices.unit(unit_id if unit_id is not None else self.unit), **kw)
+
+
+def _unit_rows(conn, account) -> list[tuple]:
+    return conn.execute(
+        "select status, report_id, cost_czk, raw_report is not null, unit_iskn_id from cadastre_price_purchases "
+        "where account_id = %s and kind = 'unit' order by id", (account,)).fetchall()
+
+
+def test_a_units_information_is_bought_by_the_same_machine_and_leaves_the_prices_answer_alone(conn, monkeypatch):
+    me = _account(conn)
+    cuzk = _UnitCuzk(monkeypatch, conn, me, area="34,40")
+    before = prices.state(conn, me, BUILDING.code)
+    checks = len(_checks(conn, me))
+    cuzk.buy(me)
+    assert cuzk.asked == [cuzk.unit] and cuzk.fetched == [9001, 9101] and cuzk.generated == [("JED_S", [100, 101, 102])]
+    assert _unit_rows(conn, me) == [("done", 9101, 10, False, cuzk.unit)], "10 Kč recorded, the kept file cleared"
+    assert _checks(conn, me)[checks:] == ["accepted"] * 3 and _lease_free(conn, me), "the same ledger, the same lease"
+    after = prices.state(conn, me, BUILDING.code)
+    assert (after["purchase"], after["deeds"]) == (before["purchase"], before["deeds"]), "not the building's purchase"
+    assert after["unit_price_czk"] == 10 and after["units"] == [{
+        "unit_iskn_id": cuzk.unit,
+        "purchase": {"id": _id(conn, me), "status": "done", "cost_czk": 10, "fetch_sent": True, "file_kept": False,
+                     "fetching": False, "gone": False},
+        "facts": {"floor_area_m2": 34.4, "use_code": "1", "use_label": "byt byt.z.", "share_num": 344,
+                  "share_den": 35966}}]
+    with pytest.raises(prices.AlreadyBought):  # the unit's own repeat guard, and the building's is untouched
+        cuzk.buy(me)
+    with pytest.raises(prices.AlreadyBought):
+        _buy(cuzk, me)
+
+
+def test_a_unit_whose_area_the_cadastre_does_not_record_reads_as_unknown_not_zero(conn, monkeypatch):
+    me = _account(conn)
+    cuzk = _UnitCuzk(monkeypatch, conn, me)
+    cuzk.buy(me)
+    assert prices.state(conn, me, BUILDING.code)["units"][0]["facts"]["floor_area_m2"] is None
+
+
+def test_only_a_unit_named_in_a_deed_the_account_bought_can_be_asked_about(conn, monkeypatch):
+    me, other = _account(conn), _account(conn)
+    cuzk = _UnitCuzk(monkeypatch, conn, me)
+    calls = cuzk.calls
+    with pytest.raises(prices.NoUnit):
+        cuzk.buy(me, 424242)
+    with pytest.raises(prices.NoUnit):  # another account's deeds do not count
+        cuzk.buy(other)
+    assert cuzk.calls == calls and cuzk.asked == [] and _unit_rows(conn, me) == []
+
+
+def test_the_kept_file_of_a_unit_never_holds_its_owners(conn, monkeypatch):
+    me = _account(conn)
+    cuzk = _UnitCuzk(monkeypatch, conn, me)
+    cuzk.document = _unit_report(cuzk.unit + 1)  # about another unit: it cannot be read, so its file is kept
+    with pytest.raises(prices.PaidUnread):
+        cuzk.buy(me)
+    assert _unit_rows(conn, me) == [("paid_unread", 9101, 10, True, cuzk.unit)]
+    kept = cuzk_login.unseal(bytes(conn.execute(
+        "select raw_report from cadastre_price_purchases where id = %s", (_id(conn, me),)).fetchone()[0]))
+    assert b"VLASTNICTVI" not in kept and OWNER.encode() not in kept and b"755101" not in kept
+    assert b"<citatel>344</citatel>" in kept, "everything we read is still there"
+
+
+def test_a_unit_file_whose_owners_cannot_be_cut_out_is_not_kept_and_is_fetched_again_for_free(conn, monkeypatch):
+    me = _account(conn)
+    cuzk = _UnitCuzk(monkeypatch, conn, me)
+    good = cuzk.document
+    cuzk.document = _unit_report(cuzk.unit, stray=f"<oprav_subjekt><prijmeni>{OWNER}</prijmeni></oprav_subjekt>")
+    with pytest.raises(prices.PaidUnread):
+        cuzk.buy(me)
+    assert _unit_rows(conn, me) == [("paid_unread", 9101, 10, False, cuzk.unit)], "paid, and nothing of it stored"
+    assert _lease_free(conn, me)
+    _later(conn, me)
+    cuzk.document = good
+    cuzk.buy(me, resume=_id(conn, me))
+    assert cuzk.asked == [cuzk.unit] and cuzk.fetched == [9001, 9101, 9101], "the same report again, never a new order"
+    assert _unit_rows(conn, me) == [("done", 9101, 10, False, cuzk.unit)]
+
+
+def test_a_unit_report_priced_above_ten_crowns_is_not_fetched(conn, monkeypatch):
+    me = _account(conn)
+    cuzk = _UnitCuzk(monkeypatch, conn, me, price=50)
+    with pytest.raises(prices.PriceChanged):
+        cuzk.buy(me)
+    assert cuzk.fetched == [9001] and _unit_rows(conn, me) == [("failed", 9101, None, False, cuzk.unit)]
+
+
+def test_one_purchase_in_flight_per_unit_and_a_units_never_stands_in_for_the_buildings(conn, monkeypatch):
+    me = _account(conn)
+    cuzk = _UnitCuzk(monkeypatch, conn, me)
+    other_unit = conn.execute(
+        "select (e->>'iskn_id')::bigint from cadastre_deeds d, jsonb_array_elements(d.properties) e "
+        "where d.account_id = %s and e->>'kind' = 'jednotka' and (e->>'iskn_id')::bigint <> %s limit 1",
+        (me, cuzk.unit)).fetchone()[0]
+    cuzk.ready_after = 99  # ČÚZK never finishes: the purchase stays ordered
+    with pytest.raises(prices.InProgress):
+        cuzk.buy(me)
+    assert _unit_rows(conn, me) == [("ordered", 9101, None, False, cuzk.unit)]
+    with pytest.raises(prices.InProgress) as again:
+        cuzk.buy(me)
+    assert again.value.why == "in_flight" and cuzk.asked == [cuzk.unit]
+    with pytest.raises(prices.NotResumable):  # the building's route cannot continue a unit's purchase
+        _buy(cuzk, me, resume=_id(conn, me))
+    with pytest.raises(prices.InProgress):  # another unit is its own purchase
+        cuzk.buy(me, other_unit)
+    assert cuzk.asked == [cuzk.unit, other_unit]
+    assert prices.state(conn, me, BUILDING.code)["purchase"]["status"] == "done"

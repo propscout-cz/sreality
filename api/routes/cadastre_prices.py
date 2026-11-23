@@ -54,9 +54,8 @@ _NOT_RESUMABLE = ("Toto načtení už není rozpracované, není tedy co dokonč
 _NO_KEY = "Přihlášení k ČÚZK nejsou na tomto serveru nastavena."
 
 
-def _request(body: Any) -> tuple[bool, int | None]:
+def _request(body: Any, price: int) -> tuple[bool, int | None]:
     """(repeat, resume) of a body that acknowledges the price; anything else is refused before anything starts."""
-    price = cadastre_prices.PRICE_CZK
     if not isinstance(body, dict) or body.get("cost_czk") != price or isinstance(body.get("cost_czk"), bool):
         raise HTTPException(status_code=409, detail={
             "reason": "price_not_acknowledged", "price_czk": price,
@@ -88,8 +87,9 @@ def _state(account_id: uuid.UUID, property_id: int) -> dict[str, Any]:
         except cadastre_prices.NoProperty:
             raise HTTPException(status_code=404, detail=_NO_PROPERTY) from None
         except cadastre_prices.NoBuilding:
-            return {"available": False, "price_czk": cadastre_prices.PRICE_CZK, "running": False, "purchase": None,
-                    "deeds": [], **_login(conn, account_id)}
+            return {"available": False, "price_czk": cadastre_prices.PRICE_CZK,
+                    "unit_price_czk": cadastre_prices.UNIT_PRICE_CZK, "units": [], "running": False,
+                    "purchase": None, "deeds": [], **_login(conn, account_id)}
         return {"available": True, **_login(conn, account_id),
                 **cadastre_prices.state(conn, account_id, building.code)}
 
@@ -111,37 +111,65 @@ def post_building_prices(
     """Start, continue or give up the caller's purchase of the building's price report, then answer as GET does,
     plus `notice`: null when the request did what it asked, else why it did not (`InProgress.why`): the state is
     then as it stands, and the card says which."""
-    account_id = tenant_pool.own_account_id_released(claims, act_as, "POST")
+    return _post(tenant_pool.own_account_id_released(claims, act_as, "POST"), property_id, body,
+                 cadastre_prices.PRICES)
+
+
+_PAID_UNREAD_UNIT = ("ČÚZK sestavu o jednotce vydal a zaúčtoval, ale nepodařilo se ji přečíst. Zkusit to lze znovu bez "
+                     "placení; nic dalšího se neúčtuje.")
+_NO_UNIT = ("Na tuto jednotku se zde zeptat nelze: není v žádné listině, kterou jste pro tuto budovu načetli z "
+            "katastru. Nic nebylo odesláno ani zaúčtováno.")
+
+
+@router.post("/properties/{property_id}/building/units/{unit_iskn_id}")
+def post_building_unit(
+    property_id: int,
+    unit_iskn_id: int,
+    body: Any = Body(),
+    claims: dict = Depends(deps.verify_jwt),
+    act_as: uuid.UUID | None = Depends(tenant_pool.act_as_header),
+) -> dict[str, Any]:
+    """Start, continue or give up the caller's purchase of ONE unit's "Informace o jednotkách" (its floor area,
+    use and share, where the cadastre records them), then answer as GET /building/prices does. Only a unit named
+    in a deed the caller already bought for this building can be asked about."""
+    return _post(tenant_pool.own_account_id_released(claims, act_as, "POST"), property_id, body,
+                 cadastre_prices.unit(unit_iskn_id))
+
+
+def _post(account_id: uuid.UUID, property_id: int, body: Any, kind: cadastre_prices.Kind) -> dict[str, Any]:
     cancel = body.get("cancel") if isinstance(body, dict) else None
     if cancel is not None and (isinstance(cancel, bool) or not isinstance(cancel, int) or len(body) != 1):
         raise HTTPException(status_code=422, detail="Neplatný požadavek: zrušit lze jen jedno určené načtení.")
-    repeat, resume = (False, None) if cancel is not None else _request(body)
+    repeat, resume = (False, None) if cancel is not None else _request(body, kind.price_czk)
     notice: str | None = None
     try:
         if cancel is not None:
-            cadastre_prices.cancel(account_id, property_id, cancel, opener=deps.open_background_conn)
+            cadastre_prices.cancel(account_id, property_id, cancel, opener=deps.open_background_conn, kind=kind)
         else:
             cadastre_prices.buy(account_id, property_id, opener=deps.open_background_conn, repeat=repeat,
-                                resume=resume)
+                                resume=resume, kind=kind)
     except cadastre_prices.InProgress as exc:
         notice = exc.why  # nothing was done; the state as it stands, and why, so the card can say so
     except cadastre_prices.NoProperty:
         raise HTTPException(status_code=404, detail=_NO_PROPERTY) from None
     except cadastre_prices.NoBuilding:
         raise HTTPException(status_code=422, detail=_NO_BUILDING) from None
+    except cadastre_prices.NoUnit:
+        raise HTTPException(status_code=422, detail=_NO_UNIT) from None
     except cadastre_prices.AlreadyBought as exc:
+        what = "ceny této budovy" if kind.unit_iskn_id is None else "údaje o této jednotce"
         raise HTTPException(status_code=409, detail={
-            "reason": "already_bought", "price_czk": cadastre_prices.PRICE_CZK,
+            "reason": "already_bought", "price_czk": kind.price_czk,
             "bought_at": exc.finished_at.isoformat() if exc.finished_at else None,
-            "message": f"Za ceny této budovy z katastru jste už platili nebo o ně žádali. Nové načtení stojí dalších "
-                       f"{cadastre_prices.PRICE_CZK} Kč na vašem účtu u ČÚZK a je třeba ho potvrdit."}) from None
+            "message": f"Za {what} z katastru jste už platili nebo o ně žádali. Nové načtení stojí dalších "
+                       f"{kind.price_czk} Kč na vašem účtu u ČÚZK a je třeba ho potvrdit."}) from None
     except cadastre_prices.NotResumable:
         raise HTTPException(status_code=409, detail={"reason": "not_resumable", "message": _NOT_RESUMABLE}) from None
     except cadastre_prices.PriceChanged as exc:
         stated = "žádnou cenu" if exc.stated_czk is None else f"cenu {exc.stated_czk} Kč"
         raise HTTPException(status_code=409, detail={
             "reason": "price_changed", "price_czk": exc.stated_czk,
-            "message": f"ČÚZK u této sestavy uvádí {stated}, ne {cadastre_prices.PRICE_CZK} Kč, které jste "
+            "message": f"ČÚZK u této sestavy uvádí {stated}, ne {kind.price_czk} Kč, které jste "
                        "potvrdili. Sestava proto nebyla vyzvednuta a nic nebylo zaúčtováno."}) from None
     except cuzk_login.Throttled as exc:
         LOG.warning("CADASTRE price request throttled by=%s retry_after_s=%d", exc.by, exc.retry_after_s)
@@ -165,7 +193,8 @@ def post_building_prices(
         raise HTTPException(status_code=502, detail=_UNCERTAIN) from None
     except cadastre_prices.PaidUnread:
         LOG.error("CADASTRE report charged and not read: account=%s property=%s", account_id, property_id)
-        raise HTTPException(status_code=502, detail=_PAID_UNREAD) from None
+        raise HTTPException(status_code=502,
+                            detail=_PAID_UNREAD if kind.unit_iskn_id is None else _PAID_UNREAD_UNIT) from None
     except wsdp_client.WsdpError as exc:
         LOG.warning("CADASTRE price request failed reason=%s status=%s", exc.reason, exc.status)
         if exc.reason == "refused":

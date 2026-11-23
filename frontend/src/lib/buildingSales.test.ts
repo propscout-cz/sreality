@@ -58,6 +58,13 @@ describe('saleRows', () => {
     expect([row.unit, row.scope]).toEqual([null, '4 jednotky za jednu cenu']);
   });
 
+  it('names the one unit of a deed row, and none for a deed over several or a held sale', () => {
+    expect(saleRows([], [deed({})])[0].unit_iskn_id).toBe(1);
+    const two = [{ kind: 'jednotka' as const, iskn_id: 1, label: 'a' }, { kind: 'jednotka' as const, iskn_id: 2, label: 'b' }];
+    expect(saleRows([], [deed({ properties: two })])[0].unit_iskn_id).toBeNull();
+    expect(saleRows([SALE], [])[0].unit_iskn_id).toBeNull();
+  });
+
   it('gives an unmatched deed no area and no per-m² figure', () => {
     const [row] = saleRows([], [deed({})]);
     expect([row.area_m2, row.price_per_m2, row.price_per_m2_basis]).toEqual([null, null, null]);

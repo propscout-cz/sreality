@@ -109,6 +109,7 @@ ADMIN_ONLY_RELATIONS: tuple[str, ...] = (
     # Cadastre prices an account bought, and the ledger of its requests (migration 763): the buyer's alone.
     "cadastre_price_purchases",
     "cadastre_deeds",
+    "cadastre_unit_facts",
     # The scheduled-jobs lease and its run history (migration 675): holders, host names and log tails.
     "scheduled_jobs",
     "job_runs",

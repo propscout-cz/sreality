@@ -27,6 +27,8 @@ export interface SaleRow {
   proceeding: string | null;
   /* The property whose advertisement lent this deed row its area and disposition. */
   area_property_id: number | null;
+  /* The one unit a deed row sold, by its cadastre id: the unit whose information can be asked for. */
+  unit_iskn_id: number | null;
 }
 
 const plural = (n: number, one: string, few: string, many: string) => (n === 1 ? one : n < 5 ? few : many);
@@ -58,12 +60,13 @@ export function saleRows(sales: BuildingSale[], deeds: CadastreDeed[]): SaleRow[
     also: confirmed.has(s.source_record_id) ? alsoOf(confirmed.get(s.source_record_id)!) : null,
     disposition: s.disposition, area_m2: s.area_m2, price_czk: s.price_czk, currency: 'CZK',
     price_per_m2: s.price_per_m2, price_per_m2_basis: s.price_per_m2_basis, source: 'reas',
-    source_url: s.source_url, proceeding: confirmed.get(s.source_record_id)?.proceeding ?? null, area_property_id: null,
+    source_url: s.source_url, proceeding: confirmed.get(s.source_record_id)?.proceeding ?? null, area_property_id: null, unit_iskn_id: null,
   }));
   const shownAsHeld = (d: CadastreDeed) =>
     d.match?.source === 'reas' && d.match.source_record_id != null && heldIds.has(d.match.source_record_id);
   const bought: SaleRow[] = deeds.filter((d) => !shownAsHeld(d)).map((d, i) => {
     const units = d.properties.filter((p) => p.kind === 'jednotka').map((p) => p.label);
+    const unitIds = d.properties.filter((p) => p.kind === 'jednotka').map((p) => p.iskn_id);
     const buildings = d.properties.filter((p) => p.kind === 'stavba').length;
     /* One price for everything the deed transfers: a deed over two buildings is not "the whole building". */
     const scope = units.length > MANY_UNITS ? `${units.length} ${plural(units.length, 'jednotka', 'jednotky', 'jednotek')} za jednu cenu`
@@ -76,6 +79,7 @@ export function saleRows(sales: BuildingSale[], deeds: CadastreDeed[]): SaleRow[
       price_czk: d.price, currency: d.currency, price_per_m2: ad?.price_per_m2 ?? null,
       price_per_m2_basis: ad?.price_per_m2_basis ?? null, source: 'katastr',
       source_url: null, proceeding: d.proceeding, area_property_id: ad?.property_id ?? null,
+      unit_iskn_id: unitIds.length === 1 && buildings === 0 ? unitIds[0] : null,
     };
   });
   return [...held, ...bought].sort((a, b) => (b.date ?? '').localeCompare(a.date ?? '') || a.key.localeCompare(b.key));

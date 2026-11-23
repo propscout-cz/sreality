@@ -6204,6 +6204,14 @@ checked with WSDP's free status call and stored as a Fernet token (`CUZK_LOGIN_K
 Paid cadastre outputs are bought on that account and are visible only to the account that bought them (operator
 ruling 2026-11-22).
 
+**One unit's information, 10 Kč (migration 767).** A second paid output on the same machine
+(`api/cadastre_prices.py`, a purchase `Kind`): WSDP `generujInfoOJednotkach` for ONE unit, only a unit named in a
+deed the account already bought for the building (`POST /properties/{id}/building/units/{iskn_id}`). Stored in
+`cadastre_unit_facts`, the buying account's own: floor area (the cadastre records it only since 2024; NULL = not
+recorded), use, share of the common parts. The report names the unit's OWNERS (name, address, birth number):
+nothing reads them, and that part is cut out before the file is kept; if the cut fails the file is not kept at
+all (operator ruling 2026-11-23). The card shows what was read beside the row; it feeds no per-m² figure yet.
+
 **A bought deed borrows, never stores, an area (ruling 2026-11-23).** ČÚZK's price report states no area. A deed
 over exactly one unit is matched at READ time (`api/cadastre_deed_matches.py`) to what we hold of the same sale: a
 held sale of the building with its unit label and price, dated within the deed's signing-to-entry span (the card
