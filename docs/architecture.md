@@ -2864,15 +2864,14 @@ renumber.** Navigate by area:
     just the members), an operator
     negative (a pair or must-not-link with both sides inside, a group verdict with its whole set
     inside — any superset, under any key, the newest ruling per operator winning), mixed
-    categories, a listing outside the scope (inside = LOCATED in a scope block by its live
+    categories, a MEMBER outside the scope (inside = LOCATED in a scope block by its live
     `listing_location` code — `town:<obec_kod>`, `quarter:<cast_obce_kod>` or
     `district:<okres_kod>` (E961), the grammar of `autodedup_apply_scope.blocks` and of W8's
     `blocks=`; the lane's seeded `rt_scope` spells the same areas `obec:` / `cast_obce:` /
     `okres:` and never names one beside a block that holds it — never the engine's blocking key;
-    out-of-scope groups are counted per reason), a non-active property, a
-    property the engine split across two groups, or a listing no group holds (unless this
-    engine's own live merge already put it
-    there with a member and — under `rt` — the stream holds no fingerprint for it, E965).
+    out-of-scope groups are counted per reason) or a non-active property. The OTHER
+    adverts of the properties a group sits on never refuse it (E989, operator ruling
+    2026-11-23): a decided pair between two properties merges the whole properties.
     Inside each group's transaction the properties are locked `FOR UPDATE`
     and their listings `FOR SHARE`, and every one of those checks runs again over the locked
     rows before it merges; the live `rt` generation may be planned by a dry run but is never
