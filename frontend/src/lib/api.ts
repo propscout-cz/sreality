@@ -742,6 +742,13 @@ export interface CadastreDeed {
   effective_on: string | null;
   entered_on: string | null;
   properties: CadastreDeedProperty[];
+  /* What we hold of the same sale (a deed over exactly one unit only). reas: a held sale with the deed's unit and
+   * price, named by its id. ad: an advertisement in the building that asked exactly the deed's price, which lends
+   * its area. Absent from an older API. */
+  match?: {
+    source: 'reas' | 'ad'; source_record_id: string | null; property_id: number | null; area_m2: number | null;
+    disposition: string | null; price_per_m2: number | null; price_per_m2_basis: string | null;
+  } | null;
 }
 export interface BuildingPrices {
   /* false: the property's door names no building the cadastre knows, so nothing can be asked. */

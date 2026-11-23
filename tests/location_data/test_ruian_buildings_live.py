@@ -380,3 +380,120 @@ def test_the_card_read_names_each_protection_and_keeps_a_code_the_list_does_not_
         {"code": 18, "label": "nemovitá kulturní památka"},
         {"code": 999, "label": None}]
     assert load_building(conn, properties[1])["protection"] == []
+
+
+def _ad(conn, door: int, native: str, price: int, area: float, *, asked: tuple[tuple[str, int], ...] | None = None,
+        category: str = "byt", property_id: int | None = None, status: str = "active") -> int:
+    """One sale ad at `door`, now asking `price`; `asked` = its snapshots (day, price), by default the price it
+    asks now, seen in January. Its own property unless `property_id` names one."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "insert into listings (source, source_id_native, raw_json, category_main, category_type, price_czk, "
+            "area_m2, disposition, first_seen_at) values ('bazos', %s, '{}'::jsonb, %s, 'prodej', %s, %s, '2+kk', "
+            "'2026-01-10') returning id", (native, category, price, area))
+        ad = int(cur.fetchone()[0])
+        for n, (day, was) in enumerate(asked if asked is not None else (("2026-01-10", price),)):
+            cur.execute("insert into listing_snapshots (listing_id, scraped_at, price_czk, content_hash, raw_json) "
+                        "values (%s, %s, %s, %s, '{}'::jsonb)", (ad, day, was, f"h{n}"))
+        cur.execute(
+            "insert into listing_location (listing_id, match_confidence, granularity, uncertainty_radius_m, "
+            "country_status, resolver_version, claim_set_hash, registry_version, kraj_kod, okres_kod, obec_kod, "
+            "ruian_adm_kod) values (%s, 'exact', 'address_point', 5, 'cz', 'test', '\\x00'::bytea, 'test', 99, 9991, "
+            "%s, %s)", (ad, OBEC, door))
+        if property_id is None:
+            cur.execute("insert into properties (status, location_listing_ref_id, repr_listing_ref_id) "
+                        "values (%s, %s, %s) returning id", (status, ad, ad))
+            property_id = int(cur.fetchone()[0])
+        cur.execute("update listings set property_id = %s where id = %s", (property_id, ad))
+    return property_id
+
+
+def test_a_bought_deed_over_one_unit_borrows_what_we_hold_of_the_same_sale(conn, world, monkeypatch):
+    from psycopg.types.json import Jsonb
+
+    from api import cadastre_prices, cuzk_login
+
+    _load(conn, world, [BUILDING, ruian_vfr.AddressLink(ADM, BUILDING.code)])
+
+    def unit(*labels: str, also: str | None = None) -> list[dict]:
+        units = [{"kind": "jednotka", "iskn_id": n, "label": label} for n, label in enumerate(labels)]
+        return units + ([{"kind": also, "iskn_id": 99, "label": "x"}] if also else [])
+
+    deeds = {  # proceeding -> (price, properties[, currency]); every deed signed 2026-05-02, entered 2026-06-01
+        "held": (4000000, unit("727/1")),
+        "advertised": (3500000, unit("727/2")),
+        "advertised-once": (3300000, unit("727/3")),
+        "with-a-plot-share": (3700000, unit("727/20", also="parcela")),
+        "two-properties-ask-it": (5000000, unit("727/4")),
+        "one-property-two-areas": (5100000, unit("727/13")),
+        "one-property-two-categories": (5200000, unit("727/19")),
+        "two-units": (6000000, unit("727/5", "727/6")),
+        "unit-and-building": (6100000, unit("727/14", also="stavba")),
+        "in-euros": (6200000, unit("727/15"), "EUR"),
+        "asked-only-after-signing": (2000000, unit("727/7")),
+        "same-price-a": (2500000, unit("727/8")),
+        "same-price-b": (2500000, unit("727/9")),
+        "nothing-held": (1234567, unit("727/10")),
+        "plot-ad": (900000, unit("727/11")),
+        "merged-away-property": (950000, unit("727/16")),
+        "resold-at-the-same-price": (3000000, unit("727/12")),
+        "one-sale-two-deeds-a": (7000000, unit("727/17")),
+        "one-sale-two-deeds-b": (7000000, unit("727/17")),
+        "two-sales-one-deed": (7100000, unit("727/18")),
+    }
+    sales = [  # (record, sold_at, price)
+        ("1_unit_{b}-727-1", "2026-06-01", 4000000),
+        ("2_unit_{b}-727-12", "2016-06-01", 3000000),  # the same unit at the same price ten years earlier
+        ("3_unit_{b}-727-17", "2026-05-20", 7000000),
+        ("4_unit_{b}-727-18", "2026-05-20", 7100000), ("5_unit_{b}-727-18", "2026-05-21", 7100000),
+    ]
+    with conn.cursor() as cur:
+        cur.execute("insert into accounts (name) values ('deed matches') returning id")
+        account = cur.fetchone()[0]
+        cur.execute(
+            "insert into cadastre_price_purchases (account_id, building_code, iskn_building_id, object_count, status, "
+            "report_id) values (%s, %s, 1, 1, 'done', 1) returning id", (account, BUILDING.code))
+        purchase = cur.fetchone()[0]
+        for proceeding, (price, properties, *currency) in deeds.items():
+            cur.execute(
+                "insert into cadastre_deeds (purchase_id, account_id, proceeding, kind, price, currency, signed_on, "
+                "entered_on, properties) values (%s, %s, %s, 'Smlouva kupní', %s, %s, '2026-05-02', '2026-06-01', %s)",
+                (purchase, account, proceeding, price, currency[0] if currency else "CZK", Jsonb(properties)))
+        for record, sold_at, price in sales:
+            cur.execute(
+                "insert into sold_transactions (source, source_record_id, sold_at, price_czk, category_main, "
+                "category_type, geom, raw, area_m2) values ('reas', %s, %s, %s, 'byt', 'prodej', "
+                "ST_SetSRID(ST_MakePoint(14.4, 50.1), 4326), '{}', 50)", (record.format(b=BUILDING.code), sold_at, price))
+    _ad(conn, ADM, "m-held", 4000000, 50)  # the held sale wins over an ad at the same price
+    asked = _ad(conn, ADM, "m-asked", 3500000, 35)
+    once = _ad(conn, ADM, "m-once", 3100000, 33, asked=(("2026-01-10", 3300000), ("2026-03-01", 3100000)))
+    shared = _ad(conn, ADM, "m-share", 3700000, 37)
+    _ad(conn, ADM, "m-two-a", 5000000, 40)
+    _ad(conn, ADM, "m-two-b", 5000000, 40)  # the same area at another property: still two candidates
+    twice = _ad(conn, ADM, "m-areas-a", 5100000, 51)
+    _ad(conn, ADM, "m-areas-b", 5100000, 52, property_id=twice)
+    mixed = _ad(conn, ADM, "m-cat-a", 5200000, 53)
+    _ad(conn, ADM, "m-cat-b", 5200000, 53, property_id=mixed, category="komercni")
+    _ad(conn, ADM, "m-units", 6000000, 60)
+    _ad(conn, ADM, "m-building", 6100000, 61)
+    _ad(conn, ADM, "m-euros", 6200000, 62)
+    _ad(conn, ADM, "m-after", 2000000, 20, asked=(("2026-01-10", 2100000), ("2026-05-03", 2000000)))
+    _ad(conn, ADM, "m-same", 2500000, 25)
+    _ad(conn, ADM, "m-plot", 900000, 300, category="pozemek")
+    _ad(conn, ADM, "m-merged", 950000, 30, status="merged_away")
+    _ad(conn, OTHER_ADM, "m-other-door", 1234567, 12)  # a door of no building
+
+    def shown() -> dict:
+        return {d["proceeding"]: d["match"] for d in cadastre_prices.state(conn, account, BUILDING.code)["deeds"]}
+
+    got = shown()
+    matched = {k: (v["source"], v["property_id"], v["area_m2"]) for k, v in got.items() if v}
+    assert matched == {"held": ("reas", None, None), "advertised": ("ad", asked, 35.0),
+                       "advertised-once": ("ad", once, 33.0), "with-a-plot-share": ("ad", shared, 37.0)}
+    assert set(got) == set(deeds)
+    assert got["held"]["source_record_id"] == f"1_unit_{BUILDING.code}-727-1"
+    assert (got["advertised"]["price_per_m2"], got["advertised"]["price_per_m2_basis"],
+            got["advertised"]["disposition"]) == (100000.0, "sale_capital_czk_m2", "2+kk")
+
+    monkeypatch.setattr(cuzk_login, "run_live", lambda *_: True)  # the card polls while a run is live: no match then
+    assert not any(shown().values())
