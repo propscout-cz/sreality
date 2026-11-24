@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ApiError, apiGet, apiPost } from './api';
 import type { ListingStatus } from './filters';
+import { categoryMainLabelPlural, categoryTypeLabel } from './enums';
 import { fmtCount, fmtPct } from './format';
 
 // 420731404040 -> +420 731 404 040 (display only; storage stays digit-normalized).
@@ -98,14 +99,11 @@ export interface BrokerMembership {
   is_current: boolean;
 }
 
-export interface BrokerListing {
-  broker_id: number;
-  // NULL for a post-Gate-2 (non-sreality) listing. listing_id is the
-  // surrogate that's always present — use it for a stable React key.
-  sreality_id: number | null;
-  listing_id: number;
-  source: string;
-  source_url: string | null;
+/* One row of a broker's inventory: a property of their book (toolkit.brokers
+ * broker_properties), with the broker's OWN spell on it beside the property's
+ * label, type and area. */
+export interface BrokerProperty {
+  property_id: number;
   /* One server-composed label (migration 503) -- see types.ListingPublic. */
   display_label: string | null;
   category_main: string | null;
@@ -113,16 +111,18 @@ export interface BrokerListing {
   disposition: string | null;
   subtype: string | null;
   area_m2: number | null;
-  price_czk: number | null;
+  /* An ad of the broker still runs on the property. */
   is_active: boolean;
-  last_seen_at: string | null;
-  property_id: number | null;
-  /* The ad's own price history (migrations 768, 770), over the broker's earlier ads
-   * of the property on the same portal: signed percent from the first price to the
-   * last (NULL without a price, or when nothing on the ad ever changed, as on a
-   * property) and the price steps between them. PriceDelta's inputs. */
+  /* The portals the broker advertises it on, and those with an ad still running. */
+  all_sources: string[];
+  active_sources: string[];
+  /* The broker's own last price there and the change from their first (the book's
+   * pair, the one the price figures count): no change without a price step. */
+  price_czk: number | null;
   price_change_pct: number | null;
   price_change_count: number | null;
+  /* When the broker's last ad there ended; the property's last sighting while one runs. */
+  last_seen_at: string | null;
 }
 
 /* How much a broker changes prices, over the properties of their book: `priced`
@@ -388,15 +388,52 @@ export async function fetchBrokerDossier(
   }
 }
 
-/* The inventory's one page: a read this long is a cap, not the broker's whole book. */
-export const BROKER_LISTINGS_LIMIT = 500;
+/* The inventory narrowed to one type and one deal (null = every). */
+export interface BrokerInventoryFilter {
+  categoryMain: string | null;
+  categoryType: string | null;
+}
 
-export async function fetchBrokerListings(brokerId: number): Promise<BrokerListing[]> {
-  const r = await apiGet<Envelope<BrokerListing[]>>(
-    `/brokers/${brokerId}/listings`,
-    { limit: BROKER_LISTINGS_LIMIT },
+export const BROKER_PROPERTIES_PAGE = 100;
+
+/* A page of the broker's book, live spells first; `nextCursor` names the next. */
+export async function fetchBrokerProperties(
+  brokerId: number,
+  { categoryMain, categoryType }: BrokerInventoryFilter,
+  cursor: string | null,
+  signal?: AbortSignal,
+): Promise<{ rows: BrokerProperty[]; nextCursor?: string }> {
+  const r = await apiGet<Envelope<BrokerProperty[]> & { next_cursor?: string | null }>(
+    `/brokers/${brokerId}/properties`,
+    {
+      category_main: categoryMain ?? undefined,
+      category_type: categoryType ?? undefined,
+      cursor: cursor ?? undefined,
+    },
+    signal,
   );
-  return r.data ?? [];
+  if (!r?.data) throw new ApiError('malformed /brokers response', 0, r);
+  return { rows: r.data, nextCursor: r.next_cursor ?? undefined };
+}
+
+/* The dossier's category rows under the inventory's selection: the count the
+ * table pages towards, exact over the whole book. */
+export function inventoryCount(
+  categories: ReadonlyArray<BrokerCategoryShare>,
+  { categoryMain, categoryType }: BrokerInventoryFilter,
+): number {
+  return categories
+    .filter((c) => (categoryMain === null || c.category_main === categoryMain)
+      && (categoryType === null || c.category_type === categoryType))
+    .reduce((n, c) => n + c.properties, 0);
+}
+
+/* "Byty · prodej": a category row's name on both shells. */
+export function categoryShareLabel(c: BrokerCategoryShare): string {
+  return [
+    c.category_main ? categoryMainLabelPlural(c.category_main) : 'Ostatní',
+    c.category_type ? categoryTypeLabel(c.category_type).toLowerCase() : null,
+  ].filter(Boolean).join(' · ');
 }
 
 /* A broker's properties under the portal rule (MS19): the allowlist behind

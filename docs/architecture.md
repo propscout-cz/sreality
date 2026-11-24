@@ -2440,6 +2440,9 @@ renumber.** Navigate by area:
     priced up and the median change over the repriced from `MIN_N` up; all, active and inactive
     book rows) read the book and ride in the dossier (`get_broker`). The book's pair is not the
     property's figure: another broker's predecessors are left out (ruling 2, own adverts only).
+    The broker page's inventory is that book too, one row per property (#2654,
+    `toolkit.brokers.broker_properties`, `GET /brokers/{id}/properties`: `docs/design/broker-board.md`):
+    the row's price is the book's last and its change the book's pair, so the rows add up to the figures.
     In the rollup the call sits in a MATERIALIZED CTE: as a lateral in the UPDATE's FROM it
     re-ran every aggregate once per canonical advert (11 to 30 s a batch, production 2026-11-23). The rollup also writes `all_sources` / `active_sources` (sorted; the active
     one empty when none is) and one `newest_ad_at_<portal>` per `PORTAL_OPTIONS` code (the first
