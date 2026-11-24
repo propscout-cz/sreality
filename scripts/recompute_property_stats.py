@@ -225,21 +225,28 @@ _RECOMPUTE_BATCH_SQL = f"""
       FROM kids k
       GROUP BY k.property_id
     ),
-    -- The storey and the above-ground count: the value most adverts state, a tie going to the
-    -- advert first in the canonical order.
+    -- The storey and the building's count: the value most adverts state, a tie going to the
+    -- advert first in the canonical order. A count the chosen storey reaches never votes
+    -- (`scraper.floor.total_floors_from_portal`'s rule, at the property's grain), so one
+    -- advert's storey is never shown against another's contradicting count.
+    storey_votes AS (
+      SELECT k.property_id AS pid, f.fact, f.value,
+             count(*) AS ads, min(k.canonical_rank) AS first_rank
+      FROM kids k
+      CROSS JOIN LATERAL (VALUES ('floor', k.floor), ('total', k.total_floors)) f(fact, value)
+      WHERE f.value IS NOT NULL
+      GROUP BY k.property_id, f.fact, f.value
+    ),
     storey AS (
-      SELECT v.pid,
-        (array_agg(v.value ORDER BY v.ads DESC, v.first_rank) FILTER (WHERE v.fact = 'floor'))[1] AS floor,
-        (array_agg(v.value ORDER BY v.ads DESC, v.first_rank) FILTER (WHERE v.fact = 'total'))[1] AS total_floors
-      FROM (
-        SELECT k.property_id AS pid, f.fact, f.value,
-               count(*) AS ads, min(k.canonical_rank) AS first_rank
-        FROM kids k
-        CROSS JOIN LATERAL (VALUES ('floor', k.floor), ('total', k.total_floors)) f(fact, value)
-        WHERE f.value IS NOT NULL
-        GROUP BY k.property_id, f.fact, f.value
-      ) v
-      GROUP BY v.pid
+      SELECT v.pid, s.floor,
+        (array_agg(v.value ORDER BY v.ads DESC, v.first_rank)
+           FILTER (WHERE v.fact = 'total' AND (s.floor IS NULL OR v.value > s.floor)))[1] AS total_floors
+      FROM storey_votes v
+      LEFT JOIN (
+        SELECT DISTINCT ON (pid) pid, value AS floor FROM storey_votes
+        WHERE fact = 'floor' ORDER BY pid, ads DESC, first_rank
+      ) s USING (pid)
+      GROUP BY v.pid, s.floor
     ),
     -- The house type and the condition: the value most adverts state, a tie going to the advert
     -- first in the canonical order. A house type belongs to one category, so only the adverts of
