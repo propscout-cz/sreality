@@ -309,6 +309,29 @@ def test_contacts_route(admin_client, monkeypatch):
     assert res.json()["data"][0]["value"] == "a@b.cz"
 
 
+def test_properties_route_pages_by_an_opaque_cursor(client, monkeypatch):
+    """The page's last row comes back as `next_cursor`, and the next request hands the toolkit that same row."""
+    seen = []
+
+    def page(conn, bid, **kw):
+        seen.append(kw)
+        return {"data": [{"property_id": 9}],
+                "metadata": {"next_after": [True, "2026-11-24T00:00:00+00:00", 9]}}
+
+    monkeypatch.setattr(broker_routes.brokers, "broker_properties", page)
+    first = client.get("/brokers/527/properties?category_main=byt").json()
+    assert "next_after" not in first["metadata"]
+    assert client.get(f"/brokers/527/properties?cursor={first['next_cursor']}").status_code == 200
+    assert seen == [
+        {"category_main": "byt", "category_type": None, "after": None},
+        {"category_main": None, "category_type": None, "after": (True, "2026-11-24T00:00:00+00:00", 9)},
+    ]
+
+
+def test_properties_route_refuses_a_malformed_cursor(client):
+    assert client.get("/brokers/527/properties?cursor=nope").status_code == 422
+
+
 _SENTINEL = {"data": [{"broker_id": 1, "display_name": "leak@rk.cz",
                        "primary_email": "leak@rk.cz",
                        "primary_phone": "+420 111 222 333"}], "metadata": {}}
@@ -321,6 +344,7 @@ _NON_ADMIN_CALLS = [
     ("GET", "/brokers/firm-options", "/brokers/firm-options", None),
     ("GET", "/brokers/{broker_id}", "/brokers/1", None),
     ("GET", "/brokers/{broker_id}/listings", "/brokers/1/listings", None),
+    ("GET", "/brokers/{broker_id}/properties", "/brokers/1/properties", None),
     ("GET", "/brokers/{broker_id}/property-ids", "/brokers/1/property-ids", None),
 ]
 
@@ -331,7 +355,7 @@ _UNMASKED_CALLS = [
 ]
 
 _TOOLKIT_READS = ("search", "firm_options", "listing_brokers", "get_broker", "broker_listings",
-                  "broker_property_ids")
+                  "broker_properties", "broker_property_ids")
 
 
 def _stub_every_toolkit_read(monkeypatch) -> None:

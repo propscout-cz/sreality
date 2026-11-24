@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 from api import dependencies as deps
 from api import tenant_pool
 from api.broker_board import BoardArgs, board
+from api.cursor import decode_cursor, encode_cursor
 from toolkit import brokers
 from toolkit.filter_registry import PORTAL_OPTIONS
 
@@ -105,6 +106,30 @@ def get_broker_listings(
     claims: dict = Depends(deps.verify_jwt),
 ) -> dict[str, Any]:
     return _policy(brokers.broker_listings(conn, broker_id, limit=limit), claims)
+
+
+@router.get("/{broker_id}/properties")
+def get_broker_properties(
+    broker_id: int,
+    category_main: str | None = Query(default=None),
+    category_type: str | None = Query(default=None),
+    cursor: str | None = Query(default=None, description="Keyset cursor (next_cursor)"),
+    conn: Any = Depends(tenant_pool.read_conn),
+    claims: dict = Depends(deps.verify_jwt),
+) -> dict[str, Any]:
+    """The broker's inventory, one row per property (their book), a page at a time."""
+    after = None
+    if cursor is not None:
+        try:
+            (active, at), property_id = decode_cursor(cursor)
+            after = (bool(active), str(at), int(property_id))
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail="malformed cursor") from exc
+    result = brokers.broker_properties(conn, broker_id, category_main=category_main,
+                                       category_type=category_type, after=after)
+    nxt = result["metadata"].pop("next_after", None)
+    result["next_cursor"] = encode_cursor([nxt[:2], nxt[2]]) if nxt else None
+    return _policy(result, claims)
 
 
 @router.get("/{broker_id}/property-ids")
