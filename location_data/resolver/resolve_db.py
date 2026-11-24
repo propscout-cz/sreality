@@ -166,10 +166,10 @@ SELECT k.code
 _KATASTR_AT_SQL = f"""
 SELECT k.code FROM ({_katastr_covering("ST_SetSRID(ST_MakePoint(%s, %s), 4326)")}) k"""
 
-# THE DOOR RULE, KÚ -> ČÁST (v5.11, operator rulings 2026-11-24): a KÚ is in a část of a town
-# when every valid door of the KÚ inside that town stands in it. It replaces the KÚ whose
-# qualifier-free NAME spelled a část: of 60 such KÚ sampled 2026-11-24, 15 also held doors of
-# other části. The `OFFSET 0` fence keeps the GiST on the doors the driving side: unfenced, the
+# THE DOOR RULE, KÚ -> ČÁST (v5.11, operator ruling B 2026-11-24): a precise pin's KÚ is in a
+# část of a town when every valid door of the KÚ inside that town stands in it — asked of a
+# point only; a KÚ the words NAME keeps the část its name spells (`composite.part_of`). The
+# `OFFSET 0` fence keeps the GiST on the doors the driving side: unfenced, the
 # planner walked every door of the town by `obec_unit_id` (Praha: 134,757 for Stodůlky's 3,220,
 # 278 ms) where the fence reads the KÚ's own (Žižkov: 5,756 doors, 27 ms warm).
 _KATASTR_PARTS_SQL = """

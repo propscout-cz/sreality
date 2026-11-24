@@ -619,8 +619,7 @@ def test_the_protocol_is_fourteen_questions():
     run — every other `katastr_kod` answer rides a read FILL already makes (the address
     point, the street point, the chain). v5.11's two (operator ruling B, 2026-11-24):
     `katastr_at` is asked only of a precise pin on a row the words bound to its town only, and
-    `katastr_parts` (the door rule, KÚ -> část) only for such a row and for a KÚ the words name,
-    once per KÚ and town per run; it replaced the spelled-name lookup that answered the second."""
+    `katastr_parts` (the door rule, KÚ -> část) only for such a row, once per KÚ and town per run."""
     from location_data.resolver.types import RegistryView
 
     declared = {

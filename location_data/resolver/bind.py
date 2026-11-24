@@ -584,8 +584,7 @@ def bind(
     # names (1c). Both inherit how their town was chosen (a tie-break's low confidence); the
     # climbed part is published for ONE surviving town only and counts the town claim's
     # agreements, since it is one claim. A unit named by several sources is ONE candidate. A
-    # part claim matches like a town name: a KÚ binds the část its doors stand in (v5.11), a MOMC
-    # none (W5).
+    # part claim matches like a town name: a KÚ binds the část it spells, a MOMC none (W5).
     said: list[_Part] = []
     named_a_part = False   # a část or KÚ of the town the words name, bound or not (`pin_part`)
     for key in constraints.cast_obce_keys if constraining_obec_kods else ():
@@ -856,7 +855,7 @@ def climbed_part(
     town: AdminUnit, climbed: Sequence[AdminUnit], registry: RegistryView
 ) -> AdminUnit | None:
     """1a: the ONE část obce a town name climbed from (`part_of`: the part itself, or the část a
-    KÚ's doors stand in). None for two, and for the town's eponymous main part, which
+    KÚ's qualifier-free name spells). None for two, and for the town's eponymous main part, which
     adds nothing and overstates the precision (18827725: "Nové Hrady u Skutče" is Nové Hrady's
     own KÚ). A claimed part keeps no such rule: 38,095 rows are bound to their main část."""
     found = {p.unit_id: p for unit in climbed if (p := part_of(unit, town.code, registry))}

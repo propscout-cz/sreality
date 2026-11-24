@@ -5659,7 +5659,7 @@ portal's payload or its own page, and every other stamp is class E outright.
   the PSČ, else by okres/kraj and — when a PSČ exists or the pin is declared precise — within 40 km
   of the pin; a tie goes to the pin's obec, else the nearest). Since v5.7 (W4) the village a town name
   CLIMBED from is the part (`climbed_from_town_name`: "Hracholusky" is a část of Úlice; a KÚ through
-  the one část all its doors in the town stand in, the door rule of v5.11) when ONE town survives, inheriting how it was chosen (a
+  the část its qualifier-free name spells) when ONE town survives, inheriting how it was chosen (a
   tie-break's low confidence; the one claim's agreements), never the eponymous main part; a name that
   is no register name retries without its " u X" tail, kept to X where X is one of the obce the base
   climbs to, else only the PSČ may place it (`qualifier_stripped`: "Boudy u Jesenice"); a PSČ shared by
@@ -5684,8 +5684,7 @@ portal's payload or its own page, and every other stamp is class E outright.
   `statutory_city_obec` regex over eight hand-typed city names and its `address_part_cast_obce` mirror
   are deleted, the claim carries the portal's line verbatim, and both names on the answer row are the
   register's own spelling. A part claim matches like a town name; `composite.part_of` decides what a
-  match binds: a část, the one část all a KÚ's doors in the town stand in (v5.11; it was the část the
-  KÚ's name spelled), never a MOMC (W5). **A STREET IS BOUND THE SAME
+  match binds: a část, the část a KÚ's name spells, never a MOMC (W5). **A STREET IS BOUND THE SAME
   WAY** (`composite.resolve_street`, W18; v5.6): every street claim is matched EXACTLY against `ruian_streets` inside the anchoring obec,
   in two tiers — a full-name match wins outright, the type-word-tolerant fold only when nothing matched
   exactly — with **both keys** (the register keeps `náměstí`/`třída`/`nábřeží` in `name_norm` while S1

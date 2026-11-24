@@ -40,6 +40,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
+from location_data.name_index import split_qualifier
 from location_data.resolver.normalize import (
     case_fold,
     deaccent,
@@ -170,19 +171,23 @@ def _part_inside(
 
 
 def part_of(unit: AdminUnit, town: int, registry: RegistryView) -> AdminUnit | None:
-    """The část a match binds (W5, Q1/Q2): a část itself; a KÚ its `katastr_part`; a MOMC or the
-    obec nothing."""
+    """The část a match binds (W5, Q1/Q2): a část itself; a KÚ the one část of its obec its
+    qualifier-free name spells ("Podolí u Mohelnice" -> Podolí); a MOMC or the obec nothing.
+    A NAME is read as the place it spells; only a point is asked which units it lies in
+    (`katastr_part`)."""
     if unit.level == "cast_obce":
         return unit
     if unit.level != "katastralni_uzemi":
         return None
-    return katastr_part(unit.code, town, registry)
+    key = normalize_match_key(split_qualifier(unit.name)[0])
+    spelled = [u for u in _lookup(registry, key, ("cast_obce",))
+               if town_code(u, registry) == town]
+    return spelled[0] if len(spelled) == 1 else None
 
 
 def katastr_part(katastr_kod: int, town: int, registry: RegistryView) -> AdminUnit | None:
-    """The one část every door of the KÚ inside the town stands in (v5.11, the door rule; it
-    replaced the část the KÚ's name spelled), else None: a KÚ with no door there, or with doors
-    of two."""
+    """The one část every door of the KÚ inside the town stands in (v5.11, the door rule, asked
+    for a precise pin's KÚ), else None: a KÚ with no door there, or with doors of two."""
     parts = registry.katastr_parts(katastr_kod, town)
     if len(parts) != 1 or parts[0] is None:
         return None

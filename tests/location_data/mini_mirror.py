@@ -639,15 +639,6 @@ def w4_mirror() -> MiniMirror:
         obec(uid, code, name, psc)
         for level, part_uid, part_code, part_name in matched:
             part(part_uid, level, part_code, part_name, (uid, code))
-        # Each KÚ's doors in the town, as `ruian:current` holds them (read 2026-11-24): every one
-        # in the row's one část, so the door rule (v5.11) binds what the spelled name did.
-        cast = next((m for m in matched if m[0] == "cast_obce"), None)
-        for level, _, part_code, _ in matched:
-            if level == "katastralni_uzemi" and cast is not None:
-                points.append(AddressPoint(
-                    kod_adm=80_000_000 + part_code % 1_000_000, obec_unit_id=uid, obec_kod=code,
-                    psc=psc, lat=None, lon=None, cast_obce_unit_id=cast[1], cast_obce_kod=cast[2],
-                    katastr_kod=part_code))
         if namesake:
             obec(namesake[0], namesake[1], matched[0][3], "99999")
 

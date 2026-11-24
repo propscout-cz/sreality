@@ -5,9 +5,9 @@ entity kind: an address point (its own KÚ; one with no coordinates, its část'
 KÚ on its chain), an obec
 (its one KÚ child, else nothing), a street or část obce (the KÚ holding every one of its
 RÚIAN doors — operator Q7, 2026-09-25). Since v5.11 (operator ruling B, 2026-11-24) a pin the
-portal declares precise is a point too, on a row the words bound to its town only: it gives the
-KÚ covering it and that KÚ's část by the door rule (the one část all its doors in the town
-stand in). A pin declared blurred, or declared nothing, still decides nothing.
+portal declares precise is a point too, on a row bound to its town only: it gives the KÚ
+covering it and that KÚ's část by the door rule (the one část all its doors in the town stand
+in). A pin declared blurred, or declared nothing, still decides nothing.
 
 Praha is the multi-KÚ town (Vokovice + Veleslavín here), Krásný Les u Frýdlantu the one-KÚ
 one. A fixture point's `katastr_kod` stands in for the SQL point-in-KÚ.
@@ -62,7 +62,7 @@ def _mirror() -> mm.MiniMirror:
                      cast_obce_kod=490211, katastr_kod=VELESLAVIN_KU),
     ]
     # Two KÚ the words can name by a qualified name: Vokovice u Prahy holds Vokovice's doors
-    # only, Veleslavín u Prahy doors of two parts (the spelled-name rule bound Veleslavín).
+    # only, Veleslavín u Prahy doors of two parts; a name binds the part it spells either way.
     units += [
         mm._unit(45, "katastralni_uzemi", VOKOVICE_U_PRAHY_KU, "Vokovice u Prahy",
                  "vokovice u prahy", "k19.o9999.b554782", parent=13),
@@ -114,8 +114,8 @@ def test_a_portal_registry_key_binds_the_same_ku():
 
 
 def test_a_bound_ku_is_itself():
-    """BIND binds no KÚ by name (a KÚ claim binds the část its doors stand in, v5.11); FILL's
-    rule is written for the entity, so a KÚ unit answers off its own chain."""
+    """BIND binds no KÚ by name (a KÚ claim binds the část it spells, W5); FILL's rule is
+    written for the entity, so a KÚ unit answers off its own chain."""
     binding = Binding(target_kind="admin_unit", rung="R4", admin_unit_id=40, obec_kod=554782)
     filled = step_fill.fill(binding, step_bind.Constraints(), _mirror())
     assert filled.katastr_kod == VOKOVICE_KU
@@ -262,14 +262,14 @@ def test_a_part_the_words_name_is_never_replaced_by_the_pin():
 
 
 def test_a_ku_the_words_name_is_never_replaced_by_the_pin():
-    """Ruling B refines a row whose words name no část; a KÚ the words name counts, even one
-    whose doors span two parts and so binds none (fails closed)."""
+    """Ruling B refines a row whose words name no část; a KÚ the words name counts. Its name is
+    read as the place it spells (Veleslavín), whatever its doors hold; the pin decides nothing."""
     resolution = _resolve([
         mm.claim(1, "obec_name", value_text="Praha"),
         mm.claim(2, "cast_obce_name", value_text="Veleslavín u Prahy"),
-        mm.claim(3, "coordinate", lat=50.09810, lon=14.31510, declared_precision_label="gps"),
+        mm.claim(3, "coordinate", lat=50.10100, lon=14.34800, declared_precision_label="gps"),
     ])
-    assert (resolution.cast_obce_kod, resolution.katastr_kod) == (None, None)
+    assert resolution.cast_obce_kod == 490211
 
 
 def test_a_ku_with_no_door_in_the_town_gives_nothing():
@@ -305,11 +305,13 @@ def test_a_part_of_another_town_is_never_the_rows():
 
 @pytest.mark.parametrize(
     ("ku", "expected"),
-    [("Vokovice u Prahy", 490067), ("Veleslavín u Prahy", None)],
+    [("Vokovice u Prahy", 490067), ("Veleslavín u Prahy", 490211)],
     ids=["one-part", "two-parts"],
 )
-def test_a_ku_the_words_name_binds_the_part_its_doors_stand_in(ku, expected):
-    """v5.11 replaced the spelled name (Veleslavín u Prahy -> Veleslavín) with the door rule."""
+def test_a_ku_the_words_name_binds_the_part_its_name_spells(ku, expected):
+    """A name is read as the place it spells, never by the doors its KÚ holds (operator
+    ruling Q4, 2026-11-24: the door rule for words was held after the wave shadow showed it
+    flip a town and contradict the words, e.g. Zaječov -> Kvaň)."""
     resolution = _resolve([
         mm.claim(1, "obec_name", value_text="Praha"),
         mm.claim(2, "cast_obce_name", value_text=ku),
