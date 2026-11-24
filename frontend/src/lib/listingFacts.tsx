@@ -24,6 +24,9 @@ export interface Fact {
   compared?: ComparedFact;
 }
 
+/* What a surface draws beside a fact the register states too; a surface that passes none marks nothing. */
+export type RegisterMarkOf = (fact: ComparedFact) => ReactNode;
+
 export interface Amenity {
   label: string;
   present: boolean | null;
@@ -84,7 +87,7 @@ export function buildAmenities(listing: ListingPublic): Amenity[] {
 /* Presentational                                                             */
 /* -------------------------------------------------------------------------- */
 
-export function FactsList({ facts }: { facts: Fact[] }) {
+export function FactsList({ facts, mark }: { facts: Fact[]; mark?: RegisterMarkOf }) {
   if (facts.length === 0) return null;
   return (
     <dl className="flex flex-wrap items-baseline gap-x-6 gap-y-2">
@@ -100,6 +103,7 @@ export function FactsList({ facts }: { facts: Fact[] }) {
             ].join(' ')}
           >
             {f.value}
+            {f.compared ? mark?.(f.compared) : null}
           </dd>
         </div>
       ))}
@@ -107,18 +111,18 @@ export function FactsList({ facts }: { facts: Fact[] }) {
   );
 }
 
-export function AmenityChips({ amenities }: { amenities: Amenity[] }) {
+export function AmenityChips({ amenities, mark }: { amenities: Amenity[]; mark?: RegisterMarkOf }) {
   if (amenities.length === 0) return null;
   return (
     <ul className="flex flex-wrap gap-1.5">
       {amenities.map((a) => (
-        <AmenityChip key={a.label} amenity={a} />
+        <AmenityChip key={a.label} amenity={a} mark={a.compared ? mark?.(a.compared) : null} />
       ))}
     </ul>
   );
 }
 
-function AmenityChip({ amenity }: { amenity: Amenity }) {
+function AmenityChip({ amenity, mark }: { amenity: Amenity; mark?: ReactNode }) {
   const on = amenity.present === true;
   const { Glyph } = amenity;
   return (
@@ -154,6 +158,7 @@ function AmenityChip({ amenity }: { amenity: Amenity }) {
         )}
         <span className="sr-only">: {on ? 'yes' : 'no'}</span>
       </span>
+      {mark}
     </li>
   );
 }
