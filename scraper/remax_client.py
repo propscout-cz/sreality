@@ -24,9 +24,8 @@ def index_url(sale: int | None = None, stranka: int | None = None) -> str:
     """The mixed-category search index. `sale` is remax's offer-type flag (1 =
     prodej / sale, 2 = pronájem / rent); `stranka` is the 1-based page (omitted
     for page 1, which is the bare filtered URL)."""
-    # `sold=on` drops the sold/let reference cards the plain search lists after the ads
-    # on offer (1,735 of 9,759 on 2026-11-24), so the total counts the offer and the walk
-    # skips ~83 pages. Were remax to ignore it, `IndexItem.closed` still keeps them unsighted.
+    # `sold=on` drops the sold/let tail (1,735 of 9,759 cards, 2026-11-24): the total counts the offer,
+    # the walk skips ~83 pages; were remax to ignore it, `IndexItem.closed` still keeps them unsighted.
     params: list[str] = []
     if sale is not None:
         params.append(f"sale={sale}")

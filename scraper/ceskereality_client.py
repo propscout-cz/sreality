@@ -228,8 +228,7 @@ def detail_url(path_or_url: str) -> str:
 
 class CeskerealityClient(BasePortalClient):
     ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-    # A removed listing redirects off its .html page; a sold/let one says so in its OWN intro badges
-    # (the similar-listings slider below carries other ads' badges).
+    # Removed: a redirect off its .html page; sold/let: its OWN intro badges (not the slider's below).
     DETAIL_URL = re.compile(r"\.html")
     GONE_PAGE = (
         gone_phrases(*_GONE_MARKERS),

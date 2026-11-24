@@ -241,8 +241,7 @@ class RealitymixPortal(portal_runner.PortalDefaults):
                 break
             page += 1
 
-        # A sold/let card counts for the page loop (an all-closed page is no stall) but is no
-        # sighting: unseen, it is nominated and its page closes it (rule #3).
+        # A sold/let card counted for the page loop (no stall) but is no sighting (rule #3).
         offered = [n for n in native_ids if n not in closed]
         seen = set(offered)
         counts = portal_runner.reconcile_sightings(

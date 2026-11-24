@@ -59,8 +59,7 @@ def gone_phrases(*phrases: str) -> re.Pattern[str]:
 
 
 def stated_closed(slot: str) -> re.Pattern[str]:
-    """A page whose own status slot (`slot`: the regex up to where its text starts) says sold/let;
-    the anchor keeps a sold neighbour in a similar-listings block from closing a live ad."""
+    """`slot` (regex up to its text) says sold/let; the anchor ignores a sold neighbour's badge."""
     return re.compile(slot + r"\s*" + CLOSED_STATUS + r"\s*<", re.IGNORECASE)
 
 # UA + language shared by every portal; the per-portal `Accept` is set by the
@@ -136,9 +135,8 @@ class BasePortalClient:
     """
 
     ACCEPT: str = "*/*"
-    # The detail page's gone signals beyond a 404/410 (rule #3), decided before any body reaches the
-    # archive (W10): a final URL off DETAIL_URL is a redirect off the ad; a GONE_PAGE match is a removed
-    # ad's page or one whose own status slot says sold/let.
+    # Gone signals beyond a 404/410 (rule #3), decided before any body reaches the archive (W10): a final
+    # URL off DETAIL_URL, or a GONE_PAGE match (a removed ad's page, or its own slot saying sold/let).
     DETAIL_URL: re.Pattern[str] | None = None
     GONE_PAGE: tuple[re.Pattern[str], ...] = ()
     # An optional honest/identifying override of the shared browser User-Agent,
