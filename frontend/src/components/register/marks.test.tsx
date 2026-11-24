@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { RegisterBadge, RegisterMark } from './RegisterMark';
+import { RegisterBadge, RegisterMark } from './marks';
 
 const fetchPropertyBuilding = vi.fn();
 vi.mock('@/lib/api', () => ({ fetchPropertyBuilding: (id: number) => fetchPropertyBuilding(id) }));

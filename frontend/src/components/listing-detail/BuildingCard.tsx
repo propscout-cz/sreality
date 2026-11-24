@@ -1,5 +1,5 @@
 import Panel from '@/components/Panel';
-import { DiffersGlyph } from '@/components/register/RegisterMark';
+import { DiffersGlyph } from '@/components/register/marks';
 import { registerBuildingUrl, registerDate, registerFacts } from '@/lib/registerBuilding';
 import { useRegisterBuilding } from '@/lib/useRegisterBuilding';
 
