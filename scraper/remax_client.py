@@ -6,37 +6,30 @@ retry/backoff + adaptive throttle (`RateLimiter` + `penalize()` on 429/403) +
 `ListingGoneError` on a 404/410 all live in `scraper.portal_base.BasePortalClient`;
 this client adds only the HTML `Accept` header, the remax URL builders (a single
 mixed search index paged `?sale={1|2}&stranka=N`, a `/reality/detail/{id}/{slug}`
-detail), and the removed-listing markers (a redirect off the detail path, or a
-"nenalezena"/"již není" body).
+detail), and its gone declarations. A removed remax ad answers 410; a sold or let
+one keeps answering 200 with "Prodáno"/"Pronajato" in its own price header.
 """
 
 from __future__ import annotations
 
-import logging
+import re
 
-from scraper.portal_base import BasePortalClient, ListingGoneError
-
-LOG = logging.getLogger(__name__)
+from scraper.portal_base import BasePortalClient, stated_closed
 
 BASE_URL = "https://www.remax-czech.cz"
 SEARCH_PATH = "/reality/vyhledavani/"
-
-# Substrings remax serves (HTTP 200) for a listing no longer offered.
-_GONE_MARKERS: tuple[str, ...] = (
-    "nemovitost nebyla nalezena",
-    "stránka nebyla nalezena",
-    "nabídka již není aktivní",
-    "tato nemovitost již není v nabídce",
-)
 
 
 def index_url(sale: int | None = None, stranka: int | None = None) -> str:
     """The mixed-category search index. `sale` is remax's offer-type flag (1 =
     prodej / sale, 2 = pronájem / rent); `stranka` is the 1-based page (omitted
     for page 1, which is the bare filtered URL)."""
+    # `sold=on` drops the sold/let tail (1,735 of 9,759 cards, 2026-11-24): the total counts the offer,
+    # the walk skips ~83 pages; were remax to ignore it, `IndexItem.closed` still keeps them unsighted.
     params: list[str] = []
     if sale is not None:
         params.append(f"sale={sale}")
+    params.append("sold=on")
     if stranka is not None and stranka >= 2:
         params.append(f"stranka={stranka}")
     return f"{BASE_URL}{SEARCH_PATH}" + (f"?{'&'.join(params)}" if params else "")
@@ -52,6 +45,8 @@ def detail_url(path_or_url: str) -> str:
 
 class RemaxClient(BasePortalClient):
     ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    DETAIL_URL = re.compile(r"/reality/detail/")
+    GONE_PAGE = (stated_closed(r'<h2 class="pd-header__price">'),)
 
     def fetch_index(
         self, sale: int | None = None, stranka: int | None = None
@@ -60,14 +55,4 @@ class RemaxClient(BasePortalClient):
         return response.text, response.status_code
 
     def fetch_detail(self, path_or_url: str) -> tuple[str, int]:
-        url = detail_url(path_or_url)
-        response = self._request(url)
-        # A removed listing redirects off /reality/detail/{id}/; after requests
-        # follows it the status is 200 but the URL no longer carries the id.
-        final_url = getattr(response, "url", url) or url
-        if "/reality/detail/" not in final_url:
-            raise ListingGoneError(url, response.status_code)
-        text = response.text
-        if any(marker in text.lower() for marker in _GONE_MARKERS):
-            raise ListingGoneError(url, response.status_code)
-        return text, response.status_code
+        return self._fetch_detail_page(detail_url(path_or_url))

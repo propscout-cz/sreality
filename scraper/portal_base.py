@@ -6,7 +6,8 @@ HTTP 429/403 throttle), a retry loop with exponential backoff over transient
 statuses, and `ListingGoneError` on a 404/410. `BasePortalClient` owns all of
 that; a concrete client supplies only what differs between portals: the `Accept`
 header (JSON vs HTML), how it builds URLs / paginates, and how it interprets a
-response body (incl. any "this listing was removed" body markers).
+response body. An HTML portal's "this ad is no longer offered" signals are two
+declarations (`DETAIL_URL`, `GONE_PAGE`) that `_fetch_detail_page` applies.
 
 The portal-specific clients (`scraper.sreality_client`, `scraper.bazos_client`)
 subclass this and stay thin. New portals do the same — see the modularity rule
@@ -39,6 +40,27 @@ RETRYABLE_STATUS: frozenset[int] = frozenset(
 
 # Statuses that mean "this listing no longer exists" rather than transient.
 GONE_STATUSES: frozenset[int] = frozenset({404, 410})
+
+# What a portal paints into an ad's OWN status slot (price cell, badge) once the deal is done: the
+# page and card stay up as a reference, the ad is no longer offered. Reserved is still on offer.
+CLOSED_STATUS = r"(?:prodáno|pronajato)"
+
+
+def states_closed(text: str | None) -> bool:
+    """True iff a status slot's whole text says the ad was sold or let."""
+    return text is not None and re.fullmatch(CLOSED_STATUS, text.strip(), re.IGNORECASE) is not None
+
+
+def gone_phrases(*phrases: str) -> re.Pattern[str]:
+    """One case-insensitive pattern for the texts a removed ad's page carries (any one
+    whitespace character between words, an &nbsp; included)."""
+    return re.compile(
+        "|".join(r"\s".join(map(re.escape, p.split(" "))) for p in phrases), re.IGNORECASE)
+
+
+def stated_closed(slot: str) -> re.Pattern[str]:
+    """`slot` (regex up to its text) says sold/let; the anchor ignores a sold neighbour's badge."""
+    return re.compile(slot + r"\s*" + CLOSED_STATUS + r"\s*<", re.IGNORECASE)
 
 # UA + language shared by every portal; the per-portal `Accept` is set by the
 # subclass's ACCEPT class attribute (JSON for an API, HTML for a crawler).
@@ -109,10 +131,14 @@ class BasePortalClient:
 
     Subclasses set `ACCEPT` and call `_request(...)` to get a `< 400` response
     (or a raised `ListingGoneError` / `requests.HTTPError`), then interpret the
-    body their own way (parse JSON, scan HTML, check removed-listing markers).
+    body their own way; an HTML detail page goes through `_fetch_detail_page`.
     """
 
     ACCEPT: str = "*/*"
+    # Gone signals beyond a 404/410 (rule #3), decided before any body reaches the archive (W10): a final
+    # URL off DETAIL_URL, or a GONE_PAGE match (a removed ad's page, or its own slot saying sold/let).
+    DETAIL_URL: re.Pattern[str] | None = None
+    GONE_PAGE: tuple[re.Pattern[str], ...] = ()
     # An optional honest/identifying override of the shared browser User-Agent,
     # set by a subclass that crawls a site we want to identify ourselves to.
     # None = the shared browser UA. A per-portal fetcher concern, not a default.
@@ -201,6 +227,17 @@ class BasePortalClient:
         if params is None:
             return self._session.get(url, timeout=self.timeout_s)
         return self._session.get(url, params=params, timeout=self.timeout_s)
+
+    def _fetch_detail_page(self, url: str) -> tuple[str, int]:
+        """A detail page the portal still offers, as (html, status); `ListingGoneError` otherwise."""
+        response = self._request(url)
+        final_url = getattr(response, "url", url) or url
+        if self.DETAIL_URL is not None and not self.DETAIL_URL.search(final_url):
+            raise ListingGoneError(url, response.status_code)
+        text = response.text
+        if any(pattern.search(text) for pattern in self.GONE_PAGE):
+            raise ListingGoneError(url, response.status_code)
+        return text, response.status_code
 
     def close(self) -> None:
         """Release whatever the fetcher holds. A no-op for every `requests` portal; the

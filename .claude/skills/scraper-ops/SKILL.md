@@ -131,9 +131,7 @@ portals' structured pages don't: field-capture W7 runs it as the worker's `text_
 in front of it.
 The bezrealitky scrape is
 `scrape_bezrealitky.yml` ("Scraping: Bezrealitky scraper (pilot)", every 6h + dispatch). The maxima scrape is
-`scrape_maxima.yml` ("Scraping: Maxima Reality scraper (pilot)", every 6h + dispatch). These four combined
-scrapers (bezrealitky, maxima, mmreality, remax) only WALK since Actions exit W1 (#2021): each passes
-`--index-only` and the worker's drain lane drains them, as it already did nearly every row. The mmreality scrape is
+`scrape_maxima.yml` ("Scraping: Maxima Reality scraper (pilot)", every 6h + dispatch). The mmreality scrape is
 `scrape_mmreality.yml` ("Scraping: M&M Reality scraper (pilot)", cron `50 */6` + dispatch —
 every request via the residential `SCRAPER_PROXY_URL` (CF 403s datacenter IPs; `USE_PROXY` +
 `PROXY_REQUIRED=True` so the worker skips it when unset — idnes is proxied too but sets
@@ -246,7 +244,7 @@ from the slow "download each ad" write:
 walk that REACHED THE PORTAL'S END (`portal.walk_reached_end`: every unit walked, each page loop out
 on a portal terminator, no stop of ours) nominates every active row of each unit's scope it did not see (`VERIFY cm=…
 candidates=… queued=… deferred=…`), and once a CYCLE's every group did, the orphans unseen since its anchor (`VERIFY orphans …`, #2020); the drain fetches each page; a positive gone signal (404/410, redirect off the listing,
-"no longer active" text → `ListingGoneError`) is recorded (`detail_queue_completions` `gone`) and flips it (`flipped`) only when
+"no longer active" text, its OWN slot reading sold/let: `GONE_PAGE` → `ListingGoneError`; a sold/let card is no sighting, #2646) is recorded (`detail_queue_completions` `gone`) and flips it (`flipped`) only when
 an earlier verdict ≥ `GONE_DWELL` (12 h) stands unrefuted (2026-10-09, portals blink; RUN `pending=`; Health: the `delisting` check) — effectively 24 h, as a walk re-nominates no ad checked within `RECHECK_THROTTLE` (24 h); a live page refreshes it. The COUNT never vetoes — a short walk that reached the end
 nominates and logs `COVERAGE`. No absence sweep, no staleness rail; `delist_flip_cap` throttles per
 walk ONLY above its 2,000-active-row floor (`VERIFY DEFERRED`, in `delist_flip_refusals`); the page must be the row's OWN (a `detail_ref`

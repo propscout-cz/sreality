@@ -134,3 +134,25 @@ def test_fetch_detail_no_longer_in_database_is_gone():
     c = _client([FakeResponse(200, body, url=_DETAIL)])
     with pytest.raises(ListingGoneError):
         c.fetch_detail(_DETAIL)
+
+
+def _heading(text: str) -> str:
+    return ('<div class="advert-detail-heading__price">\n\t\t\t\t\t\t'
+            f'<span class="advert-detail-heading__price-value">{text}</span>\n\t\t\t\t\t</div>')
+
+
+@pytest.mark.parametrize("status", ["Prodáno", "Pronajato"])
+def test_a_page_whose_own_heading_price_says_sold_or_let_is_gone(status):
+    c = _client([FakeResponse(200, f"<html>{_heading(status)}</html>", url=_DETAIL)])
+    with pytest.raises(ListingGoneError):
+        c.fetch_detail(_DETAIL)
+
+
+def test_a_reserved_or_live_page_beside_a_sold_related_ad_is_returned():
+    related = ('<h3 class="text-lg font-extrabold"><a href="https://realitymix.cz/detail/tursko/'
+               'byt-2-kk-7870655.html">Prodáno <span class="text-xs font-normal text-slate-500"></span>'
+               '</a></h3><p>Několik apartmánů je již prodáno.</p>')
+    for price in ("Rezervováno", "4 990 000 Kč"):
+        body = f"<html>{_heading(price)}{related}</html>"
+        c = _client([FakeResponse(200, body, url=_DETAIL)])
+        assert c.fetch_detail(_DETAIL) == (body, 200)

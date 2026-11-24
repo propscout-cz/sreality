@@ -110,6 +110,7 @@ class RealitymixPortal(portal_runner.PortalDefaults):
         native_ids: list[str] = []
         price_map: dict[str, IndexPrice] = {}
         ref_map: dict[str, str] = {}
+        closed: set[str] = set()
         total: int | None = None
         pages = 0
         page = 1
@@ -176,6 +177,8 @@ class RealitymixPortal(portal_runner.PortalDefaults):
                     new_on_page += 1
                 ref_map[nid] = detail_url(item.detail_path)
                 price_map[nid] = read_price(item.price_text)
+                if item.closed:
+                    closed.add(nid)
 
             if self._max_pages and pages >= self._max_pages:
                 stop = "page_cap"
@@ -238,9 +241,11 @@ class RealitymixPortal(portal_runner.PortalDefaults):
                 break
             page += 1
 
-        seen = set(native_ids)
+        # A sold/let card counted for the page loop (no stall) but is no sighting (rule #3).
+        offered = [n for n in native_ids if n not in closed]
+        seen = set(offered)
         counts = portal_runner.reconcile_sightings(
-            conn, SOURCE, {n: (ref_map[n], price_map.get(n)) for n in native_ids},
+            conn, SOURCE, {n: (ref_map[n], price_map.get(n)) for n in offered},
             min_change_pct=self.price_change_min_pct,
         )
         # Rule #3 gate, structural since 2026-09-08. A realitymix category is a

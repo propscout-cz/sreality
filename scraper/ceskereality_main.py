@@ -421,6 +421,9 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
                     return out("empty_confirmed", page - 1)
                 return out("barren", page, outcome="degraded")
             for item in parsed.items:
+                if item.closed:
+                    # No sighting: unseen, it is nominated and its page closes it (rule #3).
+                    continue
                 rows.append((
                     item.source_id_native,
                     detail_url(item.detail_path),
@@ -731,7 +734,7 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
                 break
             rows = {
                 it.source_id_native: (detail_url(it.detail_path), index_price(it.price_text))
-                for it in parsed.items if it.source_id_native not in seen
+                for it in parsed.items if it.source_id_native not in seen and not it.closed
             }
             seen.update(rows)
             page_counts = portal_runner.reconcile_sightings(
