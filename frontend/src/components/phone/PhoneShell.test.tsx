@@ -25,6 +25,7 @@ vi.mock('@/lib/auth', async (importOriginal) => ({
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   getNotificationUnreadCount: vi.fn(),
+  fetchCuzkLogin: vi.fn(),
 }));
 vi.mock('@/lib/supabase', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/supabase')>()),
@@ -142,6 +143,17 @@ describe('phone frame', () => {
     expect(await within(sheet).findByRole('switch', { name: 'Oznámení na tomto iPhonu' })).toBeDisabled();
     expect(within(sheet).getByRole('button', { name: /Desktopová verze/ })).toBeInTheDocument();
     expect(within(sheet).getByRole('button', { name: 'Odhlásit' })).toBeInTheDocument();
+  });
+
+  it('opens the ČÚZK login from the account sheet, the sheet closing behind it', async () => {
+    setNarrow(true);
+    vi.mocked(api.fetchCuzkLogin).mockResolvedValue({ set: true, username: 'firma01', checked_at: '2026-11-22T10:00:00Z' });
+    renderAt('/feed');
+    await userEvent.click(screen.getByRole('button', { name: 'Účet' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Účet' });
+    await userEvent.click(within(sheet).getByRole('button', { name: 'Přihlášení k ČÚZK' }));
+    expect(await screen.findByRole('dialog', { name: 'ČÚZK login' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Účet' })).toBeNull();
   });
 
   /* Operator ruling 2026-10-27 (system.md § Option groups): Vzhled is the one

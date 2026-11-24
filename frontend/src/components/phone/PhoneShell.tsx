@@ -11,7 +11,7 @@
  * `calc(100dvh-3.5rem)`, and those desktop pages still render inside this
  * frame on the phone. */
 
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Suspense, createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useNavigationType } from 'react-router-dom';
 
 import CollectionMark from '@/components/CollectionMark';
@@ -21,6 +21,7 @@ import { FunnelIcon } from '@/components/icons';
 import { useAuth } from '@/lib/auth';
 import { APP_SHORT } from '@/lib/brand';
 import { czPlural } from '@/lib/format';
+import { lazyChunk } from '@/lib/lazyChunk';
 import { useTitleSegment } from '@/lib/pageTitle';
 import {
   PHONE_TABS,
@@ -46,6 +47,8 @@ import PushSwitch from './PushSwitch';
 /* A short line a page may set beside the header's title (the feed's "5 nových
  * dnes"). Cleared when the page unmounts. A no-op outside the phone frame. */
 const AsideSetterContext = createContext<(text: string | null) => void>(() => {});
+
+const CuzkLoginDialog = lazyChunk(() => import('@/components/account/CuzkLoginDialog'));
 
 export function usePhoneHeaderAside(text: string | null): void {
   const set = useContext(AsideSetterContext);
@@ -136,6 +139,7 @@ function PhoneHeader({
   const segment = useTitleSegment();
   const unread = useUnreadCount();
   const [accountOpen, setAccountOpen] = useState(false);
+  const [cuzkOpen, setCuzkOpen] = useState(false);
   const title = root && tab ? tab.label : (segment ?? APP_SHORT);
 
   const back = () => {
@@ -183,7 +187,13 @@ function PhoneHeader({
           <PersonIcon className="h-5 w-5" />
         </button>
       </div>
-      {accountOpen && <AccountSheet onClose={() => setAccountOpen(false)} />}
+      {accountOpen && <AccountSheet onClose={() => setAccountOpen(false)} onCuzkLogin={() => setCuzkOpen(true)} />}
+      {/* Mounted beside the sheet, not in it: the row closes the sheet, and the dialog must outlive it. */}
+      {cuzkOpen && (
+        <Suspense fallback={null}>
+          <CuzkLoginDialog onClose={() => setCuzkOpen(false)} />
+        </Suspense>
+      )}
     </header>
   );
 }
@@ -276,7 +286,7 @@ function TabBar({ pathname, marked, hidden }: { pathname: string; marked: PhoneT
 const THEME_LABEL: Record<ThemeMode, string> = { light: 'Světlý', dark: 'Tmavý', system: 'Systém' };
 const THEMES = THEME_MODES.map((m) => ({ ...m, label: THEME_LABEL[m.value] }));
 
-function AccountSheet({ onClose }: { onClose: () => void }) {
+function AccountSheet({ onClose, onCuzkLogin }: { onClose: () => void; onCuzkLogin: () => void }) {
   const { user, signOut, isAdmin } = useAuth();
   const [mode, setMode] = useTheme();
   const [scheme, setScheme] = useScheme();
@@ -335,6 +345,17 @@ function AccountSheet({ onClose }: { onClose: () => void }) {
             Health
           </Link>
         )}
+        {/* The account's own ČÚZK login (the desktop avatar's menu item): cadastre requests are paid on it. */}
+        <button
+          type="button"
+          onClick={() => {
+            onClose();
+            onCuzkLogin();
+          }}
+          className="flex h-12 w-full items-center border-b border-[var(--color-rule-soft)] px-4 text-left text-[15px] text-[var(--color-ink-2)] active:bg-[var(--color-paper-2)]"
+        >
+          Přihlášení k ČÚZK
+        </button>
         <button
           type="button"
           onClick={() => switchDesktopView(true)}
