@@ -128,8 +128,7 @@ adjustments. A secondary figure shown ALONGSIDE the comparables estimate — nev
   and the merge/detach recompute are gone); estimations call the measure.
 - **Serving, after 567 applies:** `browse_projection` / `properties_public` call the measure in
   their property lateral with the representative's `ll.obec_kod` + `ll.katastr_kod` (566, FILL
-  v5.4: the single KÚ of the bound entity; since v5.11 also a portal-declared precise pin's on a
-  town-only row). Until 567 applies they read the
+  v5.11: the bound entity's KÚ, or a precise pin's). Until 567 applies they read the
   stored, writer-less `properties.mf_*` / `listings.mf_*`; PR-F drops those.
 - **Rules:** flats only (else no row). VK = leading integer of the disposition clamped 1..4;
   novostavba = `condition = 'novostavba'` (NULL → older column, adjustments kept); rent =
