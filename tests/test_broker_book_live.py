@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
+from psycopg.rows import dict_row
 
 from api.broker_review import merge_brokers, unmerge_group
 from scripts.recompute_property_stats import (
@@ -20,7 +21,7 @@ from scripts.recompute_property_stats import (
     properties_changed,
 )
 from scripts.resolve_brokers import _apply_merges, _attach_singletons, _resolve_firms
-from tests._live_property import OP, REQUIRED_DB, _advert, _property
+from tests._live_property import OP, REQUIRED_DB, _advert, _property, _snapshot
 from toolkit.broker_sources import BROKER_SOURCES
 from toolkit.property_identity import detach_listings, merge_property_set
 
@@ -282,6 +283,107 @@ def test_a_quiescent_pass_writes_nothing_and_the_range_form_deletes_a_gone_row(c
     cur.execute("UPDATE listings SET broker_identity_id = NULL WHERE id = %s", (lone,))
     cur.execute(_BROKER_BOOK_BATCH_SQL, {"lo": pid, "hi": pid + 1})
     assert set(_book(cur, pid)) == {two}
+
+
+def _prices(cur: Any, pid: int) -> dict[int, tuple[int | None, int | None, int | None]]:
+    cur.execute("SELECT broker_id, first_price_czk, last_price_czk, price_changes FROM broker_book "
+                "WHERE property_id = %s", (pid,))
+    return {int(b): (first, last, changes) for b, first, last, changes in cur.fetchall()}
+
+
+def test_the_book_holds_each_brokers_own_price_history(cur: Any) -> None:
+    """Migrations 768, 770: a row's prices are the history of the broker's most-repriced ad over the broker's own
+    same-portal predecessors. A re-list at a new price is the broker's change; another broker's earlier ad on the
+    portal is not; a concurrent ad on another portal at another price is no change; an ad never priced leaves the
+    pair NULL and no step."""
+    now = _now(cur)
+    pid, one, two, three = _property(cur), _broker(cur), _broker(cur), _broker(cur)
+    first = _ad(cur, pid, _identity(cur, one), now - 60 * _D, now - 40 * _D, active=False, price=5_000_000)
+    _snapshot(cur, first, 5_000_000, 60 * 24)
+    _snapshot(cur, first, 4_800_000, 50 * 24)
+    relist = _ad(cur, pid, _identity(cur, one), now - 30 * _D, now - 20 * _D, active=False, price=4_500_000)
+    _snapshot(cur, relist, 4_500_000, 30 * 24)
+    taken = _ad(cur, pid, _identity(cur, two), now - 10 * _D, now, price=4_000_000)
+    _snapshot(cur, taken, 4_000_000, 10 * 24)
+    _snapshot(cur, taken, 4_100_000, 5 * 24)
+    other = _ad(cur, pid, _identity(cur, two, "idnes"), now - 9 * _D, now, source="idnes", price=4_300_000)
+    _snapshot(cur, other, 4_300_000, 9 * 24)
+    _ad(cur, pid, _identity(cur, three, "remax"), now - 8 * _D, now, source="remax", price=None)
+
+    properties_changed(cur.connection, [pid])
+    assert _prices(cur, pid) == {one: (5_000_000, 4_500_000, 2), two: (4_000_000, 4_100_000, 1),
+                                 three: (None, None, 0)}
+
+    cur.execute("SELECT repr_listing_ref_id, total_price_change_pct, price_change_count FROM properties WHERE id = %s",
+                (pid,))
+    assert cur.fetchone() == (taken, pytest.approx(-18.0), 4)
+
+
+def test_the_book_reads_every_ad_of_the_broker(cur: Any) -> None:
+    """Operator ruling 2026-11-24 (#2639): a price cut and restored is a change; a cut on the broker's ad on another
+    portal counts though their first ad never moved; an unpriced ad never hides a priced one of the same broker."""
+    now = _now(cur)
+    pid, back, elsewhere, unpriced = _property(cur), _broker(cur), _broker(cur), _broker(cur)
+    ad = _ad(cur, pid, _identity(cur, back), now - 30 * _D, now, price=5_000_000)
+    for price, days in ((5_000_000, 30), (4_500_000, 20), (5_000_000, 10)):
+        _snapshot(cur, ad, price, days * 24)
+    still = _ad(cur, pid, _identity(cur, elsewhere), now - 29 * _D, now, price=6_000_000)
+    _snapshot(cur, still, 6_000_000, 29 * 24)
+    moved = _ad(cur, pid, _identity(cur, elsewhere, "idnes"), now - 28 * _D, now, source="idnes", price=5_700_000)
+    _snapshot(cur, moved, 6_000_000, 28 * 24)
+    _snapshot(cur, moved, 5_700_000, 15 * 24)
+    _ad(cur, pid, _identity(cur, unpriced), now - 27 * _D, now, price=None)
+    priced = _ad(cur, pid, _identity(cur, unpriced, "remax"), now - 26 * _D, now, source="remax", price=3_000_000)
+    _snapshot(cur, priced, 3_000_000, 26 * 24)
+
+    properties_changed(cur.connection, [pid])
+    assert _prices(cur, pid) == {back: (5_000_000, 5_000_000, 2), elsewhere: (6_000_000, 5_700_000, 1),
+                                 unpriced: (3_000_000, 3_000_000, 0)}
+
+
+def test_the_dossier_and_the_inventory_read_the_brokers_price_changes(cur: Any) -> None:
+    """The dossier counts the book's priced and repriced properties, all and by the row's status, with a median over
+    the repriced ones from MIN_N up; a price cut and restored is repriced. An inventory row carries its own ad's
+    change, none for an ad nothing ever changed on."""
+    from toolkit import brokers
+
+    now, broker = _now(cur), _broker(cur)
+    identity = _identity(cur, broker)
+    ads = {}
+    for last, active in ((4_500_000, True), (4_000_000, True), (4_800_000, True), (5_250_000, True),
+                         (4_700_000, False), (5_000_000, False), (None, True)):
+        pid = _property(cur)
+        ad = _ad(cur, pid, identity, now - 30 * _D, now if active else now - 2 * _D, active=active,
+                 price=last)
+        if last is not None:
+            _snapshot(cur, ad, 5_000_000, 30 * 24)
+            if last != 5_000_000:
+                _snapshot(cur, ad, last, 10 * 24)
+        ads[ad] = last
+        properties_changed(cur.connection, [pid])
+    pid = _property(cur)
+    back = _ad(cur, pid, identity, now - 30 * _D, now - 2 * _D, active=False, price=5_000_000)
+    for price, days in ((5_000_000, 30), (4_500_000, 20), (5_000_000, 10)):
+        _snapshot(cur, back, price, days * 24)
+    properties_changed(cur.connection, [pid])
+
+    with cur.connection.cursor(row_factory=dict_row) as dcur:
+        figures = brokers.price_change(dcur, broker)
+        assert brokers.price_change(dcur, _broker(cur))["all"]["priced"] == 0
+    assert figures["all"] == {"priced": 7, "repriced": 6, "repriced_pct": pytest.approx(600 / 7),
+                              "median_pct": pytest.approx(-5.0)}
+    # Under MIN_N priced properties neither the share nor the median answers: 4 of 4 is not "100 %".
+    assert figures["active"] == {"priced": 4, "repriced": 4, "repriced_pct": None, "median_pct": None}
+    assert figures["inactive"] == {"priced": 3, "repriced": 2, "repriced_pct": None, "median_pct": None}
+    assert brokers.get_broker(cur.connection, broker)["data"]["price_change"] == figures
+
+    rows = {r["listing_id"]: r for r in brokers.broker_listings(cur.connection, broker)["data"]}
+    assert set(rows) == {*ads, back}
+    for ad, last in ads.items():
+        want = None if last in (None, 5_000_000) else pytest.approx((last - 5_000_000) / 50_000)
+        assert rows[ad]["price_change_pct"] == want
+        assert rows[ad]["price_change_count"] == (0 if last in (None, 5_000_000) else 1)
+    assert (rows[back]["price_change_pct"], rows[back]["price_change_count"]) == (0, 2)
 
 
 def test_tom_observed_follows_the_brokers_first_ad_in_the_projection_order(cur: Any) -> None:

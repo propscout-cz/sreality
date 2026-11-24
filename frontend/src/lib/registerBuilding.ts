@@ -1,7 +1,10 @@
 /* The rows of the Budova card: what the RÚIAN register states about a building, in the order the card shows them.
- * Register values only. Where the ad states something else, the row carries the ad's value as a note and neither
- * is hidden; a value the register does not know is a gap, never dropped. */
-import type { RegisterBuilding, RegisterCode } from './api';
+ * Register values only. Where the property's page states something else, the row carries the ad's value as a note and
+ * neither is hidden; a value the register does not know is a gap, never dropped. WHETHER the two differ is the
+ * API's verdict (`api/register_comparison`); this file only words it. */
+import type { ComparedFact, RegisterBuilding, RegisterCode } from './api';
+import { enumLabel } from './enums';
+import { fmtFloor } from './format';
 
 export interface RegisterFact {
   label: string;
@@ -13,13 +16,6 @@ export interface RegisterFact {
   derived?: string;
 }
 
-/* What the property's ads say, for the one fact both sides state on the same basis. */
-export interface AdFacts {
-  has_lift: boolean | null;
-}
-
-const LIFT_YES = 1;
-const LIFT_NO = 2;
 /* An ISO date as "31. 12. 1990": a register date always shows its year. */
 export const registerDate = (iso: string): string => {
   const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
@@ -43,25 +39,63 @@ export function completionFact(completed: RegisterBuilding['completed']): Regist
   };
 }
 
-export function registerFacts(b: RegisterBuilding, ad: AdFacts): RegisterFact[] {
-  const lift: RegisterFact = { label: 'Výtah', value: coded(b.lift) };
-  if (b.lift?.code === LIFT_NO && ad.has_lift === true) lift.note = 'inzerát uvádí výtah';
-  if (b.lift?.code === LIFT_YES && ad.has_lift === false) lift.note = 'inzerát uvádí bez výtahu';
+const FLOORS_LABEL = 'Podlaží včetně podzemních';
+
+/* The ad's side of a difference, for the register's row. */
+const AD_SIDE: Record<ComparedFact, (ad: unknown) => string> = {
+  lift: (ad) => (ad ? 'inzerát uvádí výtah' : 'inzerát uvádí bez výtahu'),
+  floors: (ad) => {
+    const { floor, total_floors } = ad as { floor: number | null; total_floors: number | null };
+    return `inzerát uvádí ${fmtFloor(floor, total_floors) ?? `${total_floors} podlaží`}`;
+  },
+  construction: (ad) => `inzerát uvádí: ${enumLabel('building_type', ad as string) ?? ad}`,
+};
+/* The register's side, for a mark beside the ad's value. */
+const REGISTER_SIDE: Record<ComparedFact, (b: RegisterBuilding) => string> = {
+  lift: (b) => `Výtah: ${coded(b.lift)}`,
+  floors: (b) => `${FLOORS_LABEL}: ${b.floors}`,
+  construction: (b) => `Konstrukce: ${coded(b.construction)}`,
+};
+
+/* `adId` names one ad; without it the question is about the property, by the values its page shows. */
+const differing = (b: RegisterBuilding, fact: ComparedFact, adId?: number) => {
+  const verdict = (adId == null ? b.shown : b.ads?.[adId])?.[fact];
+  return verdict?.differs ? verdict : null;
+};
+
+/* What the register states where the ad says something else; null when they do not differ (or cannot be compared). */
+export function registerDifference(b: RegisterBuilding, fact: ComparedFact, adId?: number): string | null {
+  return differing(b, fact, adId) ? `Liší se od RÚIAN. ${REGISTER_SIDE[fact](b)}` : null;
+}
+
+export function registerFacts(b: RegisterBuilding): RegisterFact[] {
+  const compared = (fact: ComparedFact, row: RegisterFact): RegisterFact => {
+    const verdict = differing(b, fact);
+    return verdict ? { ...row, note: AD_SIDE[fact](verdict.ad) } : row;
+  };
   return [
     { label: 'Využití', value: coded(b.usage) },
     completionFact(b.completed),
-    { label: 'Konstrukce', value: coded(b.construction) },
-    /* The register counts storeys below ground too, an ad does not: a different basis, so never a disagreement. */
-    { label: 'Podlaží včetně podzemních', value: b.floors == null ? null : num(b.floors) },
+    compared('construction', { label: 'Konstrukce', value: coded(b.construction) }),
+    compared('floors', { label: FLOORS_LABEL, value: b.floors == null ? null : num(b.floors) }),
     { label: 'Bytů v domě', value: b.dwellings == null ? null : num(b.dwellings) },
     { label: 'Vchody', value: num(b.entrances) },
-    lift,
+    compared('lift', { label: 'Výtah', value: coded(b.lift) }),
     { label: 'Vytápění', value: coded(b.heating) },
     { label: 'Vodovod', value: coded(b.water) },
     { label: 'Kanalizace', value: coded(b.sewer) },
     { label: 'Plyn', value: coded(b.gas) },
     { label: 'Zastavěná plocha', value: area(b.built_up_area_m2) },
     { label: 'Podlahová plocha', value: area(b.floor_area_m2) },
+    /* Not only heritage: the list holds nature and water-source zones too, so the row names no kind. An empty
+     * list is the register stating none; a missing one (an API one deploy behind) is a gap like any unknown fact.
+     * Joined by "; " because the register's own labels hold commas. */
+    {
+      label: 'Ochrana',
+      value: b.protection == null ? null
+        : b.protection.length ? b.protection.map((p) => p.label ?? `kód ${p.code}`).join('; ')
+        : 'registr žádnou neuvádí',
+    },
   ];
 }
 

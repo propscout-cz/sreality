@@ -3,8 +3,9 @@
 The worker's `autodedup` lane decides, groups AND merges in one pass under one lease
 (`rt_lease`): after the pass's transaction commits, `run` takes the groups it
 re-clustered plus a slice swept past the `rt_reconcile` cursor and hands them to THE apply
-path — `apply.plan_groups` (every refusal E903 names: operator negatives, categories, the scope,
-carry-along, spans-groups, refused-before) and `apply.apply_group`
+path — `apply.plan_groups` (every refusal E903 names: operator negatives, categories, the
+members' scope, refused-before; the adverts a merge carries refuse nothing, E989) and
+`apply.apply_group`
 (`recheck_group` over locked rows, `merge_property_set(source='autodedup')` and the ledger row
 in one transaction). Nothing here decides a refusal of its own; the reconcile is the batch
 apply's brain run by the lane.
@@ -209,7 +210,7 @@ def _unread(conn: Any, generation: str, adverts: Sequence[A.Member],
     generation has never fingerprinted is unread whatever its block's state — it may have moved
     into a block after that block's last walk — when a scope block holds it or the apply `scope`
     admits it (an apply-scope block outside `rt_scope` lets in no advert the lane never read);
-    one neither holds is the plan's refusal (`carries_out_of_scope`)."""
+    one neither holds rides along with its property (operator ruling 2026-11-23)."""
     unwalked, unfingerprinted = (A.rt_block_reads(conn, generation, blocks) if reads is None
                                  else reads)
     unread = unwalked | unfingerprinted
@@ -511,8 +512,7 @@ def run(
 
     # The scope row's run cap holds here too, at most `max_clusters_per_run` merges a pass, but
     # over the groups that may merge NOW (E960): it is applied below, after the freshness rule.
-    plan = A.plan_groups(conn, generation, cluster_rows, members_by, scope, group_of=group_of,
-                         cap=False)
+    plan = A.plan_groups(conn, generation, cluster_rows, members_by, scope, cap=False)
     counts.update(plan.counts)
 
     history = _history(conn, generation, sorted({lid for g in plan.groups

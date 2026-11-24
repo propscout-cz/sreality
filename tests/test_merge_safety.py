@@ -24,14 +24,22 @@ OP = "operator@example.com"
 
 
 def test_every_price_step_reader_reads_the_one_view_and_none_keeps_a_window():
-    """The rollup's one window orders the lineage's links (MS10), never an advert's snapshots."""
+    """The rollup reads its steps through `listing_price_history` (migration 768), whose one window orders the
+    lineage's links (MS10), never an advert's snapshots."""
     import re
 
     from api import notifications as nf
     from scripts.recompute_property_stats import _RECOMPUTE_BATCH_SQL
 
+    from tests.migration_defs import latest_definition
+
+    history = latest_definition("listing_price_history").read_text()
+    history = history.split("create or replace function public.listing_price_history", 1)[1].split("$function$;", 1)[0]
+    history = re.sub(r"--[^\n]*", "", history)  # the code, never a comment naming the view
+    assert "listing_price_history(c.id, NULL)" in _RECOMPUTE_BATCH_SQL
+    assert not re.search(r"\bover\s*\(", _RECOMPUTE_BATCH_SQL, re.I), "the rollup keeps a window of its own"
     readers = {
-        "rollup": _RECOMPUTE_BATCH_SQL,
+        "rollup": history,
         # The one canonical-ad fragment both notification producers read (notifications W2a).
         "notifications": nf._CANONICAL_PRICE_STEPS,
     }
@@ -40,8 +48,8 @@ def test_every_price_step_reader_reads_the_one_view_and_none_keeps_a_window():
     for name, source in readers.items():
         assert "listing_price_steps" in source, f"the {name} must read the one step view"
         assert "lag(" not in source, f"the {name} keeps its own price-step window"
-    windows = re.findall(r"\w+\([^()]*\)\s+over\s*\([^)]*\)", _RECOMPUTE_BATCH_SQL, re.I)
-    assert windows == ["lead(m.last_price) OVER (PARTITION BY m.pid ORDER BY m.hop)"]
+    windows = re.findall(r"\w+\([^()]*\)\s+over\s*\([^)]*\)", history, re.I)
+    assert windows == ["lead(m.last_price) over (order by m.hop)"]
 
 
 def test_the_step_view_compares_an_advert_only_with_its_own_previous_price():

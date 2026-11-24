@@ -23,10 +23,6 @@ _SELF = "tests/test_mapy_retirement_census.py"
 # Every code file that names Mapy today. A retiring PR removes its entries first (the census goes red), then the code.
 LEDGER: frozenset[str] = frozenset({
     ".railway/railway.ts",                                  # the API's keys (#2455)
-    "api/maps.py",                                          # the suggest proxy and its key failover: the switch-over (#2453)
-    "frontend/src/components/filter-controls/LocationTypeahead.tsx",  # the place box: the switch-over (#2453)
-    "tests/api/test_http_json.py",                          # pins suggest's key-free log: the switch-over (#2453)
-    "tests/api/test_maps.py",                               # the switch-over (#2453)
 })
 
 

@@ -1677,20 +1677,32 @@ def test_a_tenth_portal_is_offered_only_with_its_read_model_lines():
 
 
 def test_the_price_history_is_the_canonical_adverts_lineage():
-    """MS10: the canonical advert's same-portal predecessors' steps plus one handover per link."""
+    """MS10: the price figures are `listing_price_history` of the canonical advert (migrations 768, 770), the one
+    definition the broker book and the broker inventory read too, and the rollup spells no lineage and no percent
+    of its own: "no change below two priced snapshots" is the function's `change_pct`."""
+
     from scripts.recompute_property_stats import _RECOMPUTE_BATCH_SQL
 
     sql = " ".join(_RECOMPUTE_BATCH_SQL.split())
     assert sql.startswith("WITH batch AS (")
-    assert "lineage AS ( WITH RECURSIVE link AS (" in sql
-    assert ("WHERE l.property_id = k.pid AND l.source = k.source "
-            "AND l.last_seen_at < k.first_seen_at AND l.first_seen_at < k.first_seen_at "
-            "ORDER BY l.last_seen_at DESC, l.id DESC LIMIT 1") in sql
-    assert "FROM lineage g JOIN listing_price_steps ps ON ps.listing_id = g.id" in sql
-    assert "FROM lineage g JOIN listing_snapshots s ON s.listing_id = g.id" in sql
-    assert "FROM steps ps GROUP BY ps.pid" in sql
-    assert "LEFT JOIN lineage_span cs ON cs.pid = r.pid" in sql
-    assert "ps.property_id" not in sql
+    # One call per canonical advert, materialized: as a lateral in the UPDATE's FROM the planner re-ran
+    # every aggregate of the batch once per advert (production, 2026-11-23).
+    assert ("prices AS MATERIALIZED ( SELECT c.property_id AS pid, h.* FROM canon c "
+            "CROSS JOIN LATERAL listing_price_history(c.id, NULL) h )") in sql
+    assert "LEFT JOIN prices ph ON ph.pid = r.pid" in sql
+    assert sql.count("listing_price_history(") == 1
+    assert "total_price_change_pct = ph.change_pct," in sql
+    for own in ("RECURSIVE", "listing_price_steps", "lineage", "/ ", "measure_price_change_pct", "price_points"):
+        assert own not in sql
+    from tests.migration_defs import latest_definition
+
+    body = " ".join(latest_definition("listing_price_history").read_text().split())
+    assert ("where l.property_id = k.pid and l.source = k.source "
+            "and l.last_seen_at < k.first_seen_at and l.first_seen_at < k.first_seen_at") in body
+    assert "order by l.last_seen_at desc, l.id desc limit 1" in body
+    assert ("case when sp.price_points >= 2 "
+            "then public.measure_price_change_pct(sp.first_price_czk, sp.last_price_czk) end") in body
+    assert "::numeric /" not in body, "every percent is measure_price_change_pct"
 
 
 def test_the_canonical_handover_is_stamped_for_the_price_alerts():
@@ -1792,7 +1804,7 @@ def test_every_recompute_variant_carries_the_whole_statement():
     import scripts.recompute_property_stats as rps
 
     for sql in (rps._RECOMPUTE_BATCH_SQL, rps._RECOMPUTE_SCOPED_SQL):
-        for rule in ("property_canonical_listings", "lineage AS (", "city_proximity_computed_at",
+        for rule in ("property_canonical_listings", "listing_price_history(", "city_proximity_computed_at",
                      "newest_ad_at_", "active_sources"):
             assert rule in sql
         assert "price_per_m2_source_id" not in sql

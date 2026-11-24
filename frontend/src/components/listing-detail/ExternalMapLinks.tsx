@@ -17,7 +17,7 @@ import {
   srealityPriceMapLink,
   type ExternalMapLink,
 } from '@/lib/geoLinks';
-import { fetchSrealityPriceMap } from '@/lib/maps';
+import { fetchSrealityPriceMap } from '@/lib/priceMap';
 
 export default function ExternalMapLinks({
   lat,

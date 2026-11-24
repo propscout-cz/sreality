@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { ApiError, apiGet, apiPost } from './api';
 import type { ListingStatus } from './filters';
+import { fmtCount, fmtPct } from './format';
 
 // 420731404040 -> +420 731 404 040 (display only; storage stays digit-normalized).
 export function prettyPhone(p: string): string {
@@ -115,6 +117,48 @@ export interface BrokerListing {
   is_active: boolean;
   last_seen_at: string | null;
   property_id: number | null;
+  /* The ad's own price history (migrations 768, 770), over the broker's earlier ads
+   * of the property on the same portal: signed percent from the first price to the
+   * last (NULL without a price, or when nothing on the ad ever changed, as on a
+   * property) and the price steps between them. PriceDelta's inputs. */
+  price_change_pct: number | null;
+  price_change_count: number | null;
+}
+
+/* How much a broker changes prices, over the properties of their book: `priced`
+ * carry a price of the broker's own, `repriced` saw the broker change it at least
+ * once (a price cut and restored included, operator ruling 2026-11-24). The share
+ * of repriced among priced and the median change over the repriced ones are the
+ * server's, each NULL under its minimum count. */
+export interface BrokerPriceFigures {
+  priced: number;
+  repriced: number;
+  repriced_pct: number | null;
+  median_pct: number | null;
+}
+
+/* The slices the dossier carries, by the status the Nemovitosti figure counts:
+ * a property is active while an ad of the broker runs on it. */
+export type BrokerPriceScope = 'all' | 'active' | 'inactive';
+export const BROKER_PRICE_SCOPES: ReadonlyArray<{ value: BrokerPriceScope; label: string }> = [
+  { value: 'all', label: 'Vše' },
+  { value: 'active', label: 'Aktivní' },
+  { value: 'inactive', label: 'Neaktivní' },
+];
+
+/* Both shells' price figures, one slice at a time, starting on Vše (operator
+ * ruling 2026-11-23): the share of priced properties that were repriced, the
+ * median change among them, and the counts behind the share. */
+export function useBrokerPriceSlice(figures: Record<BrokerPriceScope, BrokerPriceFigures>) {
+  const [scope, setScope] = useState<BrokerPriceScope>('all');
+  const f = figures[scope];
+  return {
+    scope,
+    setScope,
+    share: f.repriced_pct == null ? '—' : fmtPct(f.repriced_pct, { digits: 0 }),
+    median: f.median_pct == null ? null : `medián ${fmtPct(f.median_pct, { signed: true })}`,
+    hint: f.priced === 0 ? 'žádná cena k porovnání' : `přeceněno ${fmtCount(f.repriced)} z ${fmtCount(f.priced)}`,
+  };
 }
 
 export interface BrokerRegionShare extends BrokerCounts {
@@ -144,6 +188,7 @@ export interface BrokerDossier {
   memberships: BrokerMembership[];
   region_shares: BrokerRegionShare[];
   categories: BrokerCategoryShare[];
+  price_change: Record<BrokerPriceScope, BrokerPriceFigures>;
   contacts?: BrokerContact[];
   pii_masked: boolean;
 }

@@ -413,7 +413,7 @@ describe('the one credential (authHeader)', () => {
     } as unknown as Awaited<ReturnType<typeof supabase.auth.getSession>>);
     const { headers } = captureFetch();
     const { apiGet } = await loadApi();
-    await apiGet('/maps/suggest', { query: 'Brno' });
+    await apiGet('/estimations', { limit: 1 });
     expect(headers[0].Authorization).toBeUndefined();
   });
 
@@ -425,7 +425,7 @@ describe('the one credential (authHeader)', () => {
     } as unknown as Awaited<ReturnType<typeof supabase.auth.getSession>>);
     const { urls } = captureFetch();
     const { apiGet, isTransientApiError } = await loadApi();
-    const err = await apiGet('/maps/suggest', { query: 'Brno' }).catch((e: unknown) => e);
+    const err = await apiGet('/estimations', { limit: 1 }).catch((e: unknown) => e);
     expect(isTransientApiError(err)).toBe(true);
     expect(urls).toHaveLength(0);
   });
@@ -441,7 +441,7 @@ describe('the one credential (authHeader)', () => {
     } as unknown as Awaited<ReturnType<typeof supabase.auth.getSession>>);
     const { urls } = captureFetch();
     const { ApiError, apiGet, isTransientApiError } = await loadApi();
-    const err = await apiGet('/maps/suggest', { query: 'Brno' }).catch((e: unknown) => e);
+    const err = await apiGet('/estimations', { limit: 1 }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect((err as InstanceType<typeof ApiError>).status).toBe(401);
     expect(isTransientApiError(err)).toBe(false);

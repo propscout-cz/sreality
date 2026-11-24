@@ -15,6 +15,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
 import Panel from '@/components/Panel';
+import { SegmentedBar } from '@/components/controls';
 import SaveContactButton from '@/components/SaveContactButton';
 import BrokerAvatar from '@/components/phone/BrokerAvatar';
 import { ContactAddIcon } from '@/components/phone/phoneIcons';
@@ -24,12 +25,16 @@ import { RollEmpty, RollSkeleton } from '@/components/phone/RollParts';
 import { brokerContact } from '@/lib/brokerContact';
 import { browseKeys } from '@/lib/browseKeys';
 import {
+  BROKER_PRICE_SCOPES,
   contactState,
   fetchBrokerDossier,
+  useBrokerPriceSlice,
   prettyPhone,
   telHref,
   type BrokerCategoryShare,
   type BrokerMembership,
+  type BrokerPriceFigures,
+  type BrokerPriceScope,
   type BrokerPublic,
   type BrokerRegionShare,
   type ContactState,
@@ -112,6 +117,9 @@ export default function PhoneBrokerDetail() {
       <Facts b={b} />
       {/* Section cards like the phone property page's (operator ruling 2026-10-28). */}
       <div className="space-y-4 border-t border-[var(--color-rule)] p-4">
+        <Panel title="Změna ceny">
+          <PriceChange figures={dossier.price_change} />
+        </Panel>
         <Panel title="Působnost">
           <Footprint shares={dossier.region_shares} />
           <Types rows={dossier.categories} />
@@ -296,6 +304,22 @@ function NumberRows({ rows }: { rows: Array<{ key: string | number; label: strin
         </li>
       ))}
     </ul>
+  );
+}
+
+/* The desktop tile's figures (lib/brokers useBrokerPriceSlice), one slice at a time. */
+function PriceChange({ figures }: { figures: Record<BrokerPriceScope, BrokerPriceFigures> }) {
+  const { scope, setScope, share, median, hint } = useBrokerPriceSlice(figures);
+  return (
+    <div>
+      <SegmentedBar fill tone="phone" label="Změna ceny podle stavu" options={BROKER_PRICE_SCOPES} value={scope}
+        onChange={setScope} />
+      <p className="mt-3 font-mono text-[20px] leading-none tabular-nums text-[var(--color-ink)]">
+        {share}
+        {median && <span className="text-[13px] text-[var(--color-ink-3)]"> · {median}</span>}
+      </p>
+      <p className="mt-1.5 text-[12px] text-[var(--color-ink-3)]">{hint}</p>
+    </div>
   );
 }
 

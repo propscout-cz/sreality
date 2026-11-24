@@ -319,3 +319,88 @@ def test_rotating_a_closed_fetcher_is_refused_like_a_fetch() -> None:
     fetcher.close()
     with pytest.raises(BrowserTransportError):
         fetcher.rotate("403")
+
+
+def test_closing_a_launched_browser_reaps_its_orphans_and_says_what_is_held(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """#2565: the reap runs on every close and rotation of a browser that was launched."""
+    from scraper import browser_fetch
+
+    class _Playwright:
+        stopped = 0
+
+        def stop(self) -> None:
+            self.stopped += 1
+
+    reaps: list[int] = []
+    monkeypatch.setattr(browser_fetch, "reap_browser_orphans",
+                        lambda: (reaps.append(threading.get_ident()) or (2, 1)))
+    monkeypatch.setattr(browser_fetch.cgroup, "pids", lambda: (310, 1000))
+    fetcher = BrowserFetcher(page=_FakePage(200, [REAL_HTML]), proxy_url=None)
+    held = fetcher._playwright = _Playwright()
+    with caplog.at_level("INFO", logger="scraper.browser_fetch"):
+        fetcher.close()
+    assert held.stopped == 1 and len(reaps) == 1
+    assert "BROWSER closed (reaped=2 orphans; 1 child processes" in caplog.text
+    assert "container pids 310 of 1000" in caplog.text
+
+
+def test_the_container_pid_count_reads_none_where_it_is_not_published(tmp_path) -> None:
+    from scraper import cgroup
+
+    assert cgroup.pids(str(tmp_path)) == (None, None)
+    (tmp_path / "pids.current").write_text("412\n")
+    (tmp_path / "pids.max").write_text("max\n")
+    assert cgroup.pids(str(tmp_path)) == (412, None)
+    (tmp_path / "pids.max").write_text("1000\n")
+    assert cgroup.pids(str(tmp_path)) == (412, 1000)
+
+
+def _subreaper(on: bool) -> None:
+    import ctypes
+    ctypes.CDLL("libc.so.6", use_errno=True).prctl(36, int(on), 0, 0, 0)
+
+
+def _zombie_children() -> set[int]:
+    import os
+    out = set()
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat") as fh:
+                rest = fh.read().rsplit(")", 1)[1].split()
+        except OSError:
+            continue
+        if rest[0] == "Z" and int(rest[1]) == os.getpid():
+            out.add(int(name))
+    return out
+
+
+@pytest.mark.skipif(not __import__("os").path.isdir("/proc/self"), reason="needs Linux /proc")
+def test_an_orphaned_chromium_helper_is_reaped_and_no_other_child_is(tmp_path) -> None:
+    """#2565: as PID 1 the worker inherits chromium's orphans; each one held a PID for good."""
+    import shutil
+    import subprocess
+
+    from scraper.browser_fetch import reap_browser_orphans
+
+    fake = tmp_path / "chrome-headless"
+    shutil.copy(shutil.which("true"), fake)
+    _subreaper(True)
+    try:
+        before = _zombie_children()
+        # The parent exits without waiting, so its child is handed to us, as to PID 1.
+        subprocess.run(["sh", "-c", f"{fake} & exec true"], check=True)
+        other = subprocess.Popen(["true"])
+        deadline = time.monotonic() + 5
+        while len(_zombie_children() - before) < 2 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert len(_zombie_children() - before) == 2
+        reaped, _held = reap_browser_orphans()
+        assert reaped == 1
+        assert _zombie_children() - before == {other.pid}
+        assert other.wait() == 0
+    finally:
+        _subreaper(False)

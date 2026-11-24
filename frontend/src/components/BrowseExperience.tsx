@@ -43,7 +43,7 @@ import ListingCards, { CARD_PHOTOS_PER_CARD } from '@/components/ListingCards';
 const StatsDashboard = lazyChunk(() => import('@/components/stats/StatsDashboard'));
 const BrokerBoard = lazyChunk(() => import('@/components/brokers/BrokerBoard'));
 import type { AnchorPoint, MapFlyToCommand, MapFrameCommand } from '@/components/ListingMap';
-import type { MapySuggestion } from '@/lib/maps';
+import { flyToPlace, type PlaceRow } from '@/lib/places';
 import { fetchDatasets, fetchGrowth, fetchGrowthShapes, fetchSeries, priceStatsKeys } from '@/lib/priceStats';
 import { buildHoverData, type GrowthMetric } from '@/lib/growthChoropleth';
 import { hasRegistryLayers, useMapOverlayRegistry } from '@/lib/mapOverlays';
@@ -102,6 +102,8 @@ import type { BrowseViewState, TabKey } from '@/lib/browseState';
 const ListingMap = lazyChunk(() => import('@/components/ListingMap'));
 /* Lazy: the dialog mounts only on "Create watchdog", so it stays out of the first visit. */
 const CreateWatchdogModal = lazyChunk(() => import('@/components/CreateWatchdogModal'));
+/* Opened on Merge only: its ad cards stay out of the first-visit bundle. */
+const MergeConfirmDialog = lazyChunk(() => import('@/components/MergeConfirmDialog'));
 
 export interface BrowseFeatures {
   /* The saved-set bars (filter presets; the Stats tab's dashboards) — page only. */
@@ -199,15 +201,18 @@ export default function BrowseExperience({
 
   /* Merge mode (page only): one statement of letters over the cards. */
   const mergeMode = useMergeMode();
-  const mergeMut = useMergeProperties(mergeMode.exit);
-  const handleLocationPick = useCallback((s: MapySuggestion) => {
-    if (!s.position) return;
-    setMapFlyTo({
-      lat: s.position.lat,
-      lng: s.position.lon,
-      zoom: zoomForSuggestionType(s.type),
-      ts: Date.now(),
-    });
+  /* The merge waits for one look at everything it would join (MergeConfirmDialog). */
+  const [mergeConfirmOpen, setMergeConfirmOpen] = useState(false);
+  const exitMergeMode = mergeMode.exit;
+  const mergeMut = useMergeProperties(
+    useCallback(() => {
+      setMergeConfirmOpen(false);
+      exitMergeMode();
+    }, [exitMergeMode]),
+  );
+  const handleLocationPick = useCallback((row: PlaceRow) => {
+    const to = flyToPlace(row);
+    if (to) setMapFlyTo({ ...to, ts: Date.now() });
   }, []);
 
   /* Hover-sync between cards / map: ephemeral state, one transition
@@ -631,8 +636,18 @@ export default function BrowseExperience({
                 <MergeBar
                   merge={mergeMode}
                   merging={mergeMut.isPending}
-                  onMerge={() => mergeMut.mutate(mergeMode.letters)}
+                  onMerge={() => setMergeConfirmOpen(true)}
                 />
+                {mergeConfirmOpen && (
+                  <Suspense fallback={null}>
+                    <MergeConfirmDialog
+                      groups={mergeMode.groups}
+                      merging={mergeMut.isPending}
+                      onConfirm={() => mergeMut.mutate(mergeMode.letters)}
+                      onClose={() => setMergeConfirmOpen(false)}
+                    />
+                  </Suspense>
+                )}
               </div>
             )}
           </div>
@@ -820,16 +835,6 @@ export default function BrowseExperience({
   );
 }
 
-function zoomForSuggestionType(type: string): number {
-  if (type.startsWith('regional.address')) return 16;
-  if (type === 'regional.street') return 16;
-  if (type === 'regional.municipality_part') return 13;
-  if (type === 'regional.municipality') return 11;
-  if (type === 'regional.region') return 8;
-  if (type === 'regional.country') return 6;
-  return 13;
-}
-
 /* One portal's "Newest first" / "Oldest first" (MS19, queries.ts orderPortal), named in
  * the header: the rows are placed by their newest ad on that portal, not by their own
  * first seen, and nothing else on the row says so. */
@@ -976,7 +981,7 @@ function MapViewToggle({
       hug
       label="Properties layout"
       options={[
-        { value: false, label: 'Split', title: 'Show the map beside the cards', glyph: <SplitGlyph /> },
+        { value: false, label: 'Map', title: 'Show the map beside the cards', glyph: <MapGlyph /> },
         { value: true, label: 'Cards', title: 'Hide the map — full-width cards', glyph: <CardsGlyph /> },
       ]}
       value={collapsed}
@@ -985,8 +990,8 @@ function MapViewToggle({
   );
 }
 
-/* Two panes (wide cards | narrow map). */
-function SplitGlyph() {
+/* A folded map. */
+function MapGlyph() {
   return (
     <svg
       width="13"
@@ -998,8 +1003,9 @@ function SplitGlyph() {
       strokeLinejoin="round"
       aria-hidden
     >
-      <rect x="2" y="3" width="12" height="10" rx="1.5" />
-      <line x1="9.5" y1="3" x2="9.5" y2="13" />
+      <path d="M2 4.5 6 3l4 1.5L14 3v8.5L10 13l-4-1.5L2 13Z" />
+      <line x1="6" y1="3" x2="6" y2="11.5" />
+      <line x1="10" y1="4.5" x2="10" y2="13" />
     </svg>
   );
 }

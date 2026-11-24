@@ -141,7 +141,7 @@ export const useMapCollapsed = (): PersistedFlag =>
 
 /* Whether Browse card photos (and therefore the cards themselves — see
  * ListingCards' --card-min) render at the large size. One flag read by
- * both the Split and Cards (map-collapsed) layouts, since both render the
+ * both the Map and Cards (map-collapsed) layouts, since both render the
  * same <ListingCards> grid — so "small"/"large" can never mean something
  * different in one view than the other. Default false (today's size). */
 export const useCardImageLarge = (): PersistedFlag =>

@@ -70,7 +70,7 @@ index), **B, section cards** is ruled. **Picture with each value tagged: `docs/d
   list (Browse, map and kanban cards), the Stats tab's own settings panel and chart cards, dialogs and popovers.
 - **Build (SPA)**: `components/Panel.tsx` becomes the one section card (title L2 in the bar, a `count` prop,
   `accessory` at the bar's right end, `lede` the body's first line). Wrap each detail section in it; Health, Costs,
-  LocationQuality, LocationPinAudit and NewDedupDashboard get the same card through that change. The
+  LocationQuality and NewDedupDashboard get the same card through that change. The
   `SectionLabel` + `Hairline` pair between sections goes; `SectionLabel` stays only as the L4 field label. No new token.
 - **Chrome extension** (X1; plain CSS, the app's palette `frontend/src/styles/tokens.css` on every shadow root and on
   the side panel's page, the host or `<html>` wearing the user's scheme and theme): the listing panel is **Chrome's
@@ -132,7 +132,7 @@ with `tabular-nums` on EVERY number.
   component draws every page tab strip: Browse and its Explore windows, the property page (`PropertyTabs` keeps its
   tab list, address and panels), a collection's members, NEW DEDUP Labeling's statuses.
   - The 1px `--color-rule` rule belongs to the strip and runs its container's whole content column. A trailing slot
-    (Browse's Split | Cards and Small | Large) sits at the strip's right end above the rule; on a row too narrow for
+    (Browse's Map | Cards and Small | Large) sits at the strip's right end above the rule; on a row too narrow for
     both it wraps to a line ABOVE the tabs, never below them, so the tabs never leave the rule.
   - The first label sits on the title's edge: tab buttons have no horizontal padding, tabs are `gap-6` apart.
   - Open = `ink` plus a 2px copper line exactly as wide as the label and its count, laid ON the rule (covering it);
@@ -213,7 +213,7 @@ above for status and adds no token.
   `#3c6e63`) sat in the woods' hue. The estimation `ComparablesMap` and `DetailMap` keep copper: there green
   is "comparable" against the orange subject.
 - **Shared admin primitives**: `Panel` (the section card, § Section cards) is the card of Health, Costs,
-  LocationQuality, LocationPinAudit and NewDedupDashboard; `Stat` (label, mono value, ink-3 hint, an optional
+  LocationQuality and NewDedupDashboard; `Stat` (label, mono value, ink-3 hint, an optional
   dot; never a coloured number) the tile of Health, Costs, LocationQuality and AutodedupProgress; `StatusDot`;
   `Skeleton`, the loading block (static: no pulse); `ErrorBanner`, the one failure banner (`flush` under a
   settings heading). A tile's trouble count is never a brick number (Costs' by-feature errors column, a table cell, awaits its own ruling): the page passes `status='fail'` only

@@ -3,7 +3,8 @@
 One read over the current registry version, by name: tiers exact, prefix, then fuzzy (word similarity, only while the
 first two fall short of the limit); within a tier, served properties of any deal type (`place_served_counts`), then the
 town's latest population, then code (Q12 a: one ranking for every place box), except that a town ranks right above
-its own okres and kraj on its tier, and above its own část on equal served properties (#2497 ruling 1 as #2548 ruling 2
+its own okres and kraj on its tier when it holds one in twenty of that region's served properties (#2612: so not the
+village Moravskoslezský Kočov), and above its own část on equal served properties (#2497 ruling 1 as #2548 ruling 2
 narrows it: Praha's Karlín, served, goes before the village Karlín). Counts rank rows and are never returned.
 A row is a chip: level, RÚIAN code, register name, context (the parent's name) and a fly-to point from `place_facts`,
 or none. It answers kraj, okres, obec, část obce and street, never a cadastral area, cohesion region or the country
@@ -60,6 +61,9 @@ _DIGIT_AFTER_LETTER = re.compile(r"(?<=[a-z])(?=[0-9])")
 # it names no place in a town, as no street and town together run longer (#2548).
 _WORD_GAP = re.compile(r"[\s\-–]+")
 _PAIR_MAX_WORDS = 6
+# A town leads its own okres or kraj only with one in twenty of the region's served properties (#2612): on production
+# a town named like its okres holds 7.58 % or more, a village named like its region 1.47 % or less.
+_REAL_SHARE = 20
 _LETTER = re.compile(r"[a-z]")
 # "<street> <number> <town>": the town is what follows the LAST number that whitespace and a letter follow, so an
 # ordinal ("28. října") and a č.o. ("12/3") never split, and "Praha 6" keeps its digit.
@@ -73,9 +77,7 @@ _ROMAN = {n: ("", "x", "xx", "xxx")[n // 10] + ("", "i", "ii", "iii", "iv", "v",
           for n in range(1, 40)}
 _NUMBER_TWIN = {**{str(n): r for n, r in _ROMAN.items()}, **{r: str(n) for n, r in _ROMAN.items()}}
 
-# The door's label: the ONE label (rule 25) over its register fields, as the row will read. Shared with the address
-# picker's preview (api/maps.py imports DOOR_LABEL_SQL until the switch-over, #2453, moves the picker to door rows, if
-# addresses pass the gate, #2465).
+# The door's label: the ONE label (rule 25) over its register fields, as the row will read.
 _DOOR_LABEL = """location_display_label(
          s.name, CASE WHEN ap.typ_so = 'č.p.' THEN ap.cislo_domovni::text END,
          ap.cislo_orientacni::text || coalesce(ap.znak_orientacniho, ''),
@@ -84,13 +86,6 @@ _DOOR_LABEL_JOINS = """
   LEFT JOIN ruian_streets s ON s.id = ap.street_id
   LEFT JOIN ruian_admin_units o ON o.id = ap.obec_unit_id
   LEFT JOIN ruian_admin_units c ON c.id = ap.cast_obce_unit_id"""
-
-# `kod_adm` is the mirror's primary key (migration 381): one row or none, so no LIMIT/ORDER.
-DOOR_LABEL_SQL = f"""
-SELECT {_DOOR_LABEL}
-  FROM ruian_address_points ap{_DOOR_LABEL_JOINS}
- WHERE ap.kod_adm = %s AND ap.valid_to IS NULL
-"""
 
 # The thresholds are pinned, not inherited. A place name is reached at 0.55, so the typo "olomuc" (0.57) reaches
 # Olomouc (#2548); a street keeps 0.6 by its own bound ("brno" reaches Brněnská at exactly 0.6), as streets far
@@ -109,9 +104,9 @@ _ROW_CONTEXT_JOINS = """
   LEFT JOIN place_facts f ON f.level = r.level AND f.code = r.code"""
 _SPELLED_PREFIXES = " OR ".join(f"s.name_norm LIKE %(street_spelled_{n})s" for n in range(1, _SPELLED_SLOTS + 1))
 
-# A unit is read AT the index's version, as api/maps.py's part lookup reads it (a load closes a re-parented unit before
-# it publishes); a street, which has no index, by the version's membership (location_data/ruian_boundaries.py). A NULL
-# prefix or fuzzy key switches its arm off. A městská část is a candidate only with pairs at that version, gated in both
+# A unit is read AT the index's version (a load closes a re-parented unit before it publishes); a street, which has no
+# index, by the version's membership (location_data/ruian_boundaries.py). A NULL prefix or fuzzy key switches its arm
+# off. A městská část is a candidate only with pairs at that version, gated in both
 # unit arms so one without never counts toward `near` and switches fuzzy off; `unit_id` carries its row to the pairs.
 # A street is exact under every spelling the resolver's abbreviation folds make equal (its own index condition), and
 # starts under each, so "nám." reaches Praha's náměstí as exactly as Třebíč's "nám." (#2548). `_SPELLED_SLOTS` prefix
@@ -204,7 +199,7 @@ ranked AS (
     FROM scored s
     LEFT JOIN LATERAL (SELECT o.served, o.population, o.code FROM scored o
                         WHERE s.level IN ('kraj', 'okres') AND o.level = 'obec' AND o.tier = s.tier
-                          AND o.path <@ s.path
+                          AND o.path <@ s.path AND o.served * {_REAL_SHARE} >= s.served
                         ORDER BY o.served DESC, o.population DESC NULLS LAST, o.code LIMIT 1) t ON true
    ORDER BY s.tier, k_served DESC, k_in_town, k_population DESC NULLS LAST, k_code, k_after,
             nlevel(s.path) DESC NULLS LAST, s.level

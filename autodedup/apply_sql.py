@@ -56,9 +56,9 @@ select p.id, p.status, p.category_type, p.category_main, p.first_seen_at
 """
 
 # EVERY listing on the involved properties, not only the group's members: a merge moves all
-# of a property's children, so the negatives, the size, category and scope checks (location
-# included, as MEMBERS_SQL reads it) and the carry-along check read the whole set — at plan time
-# and again inside each group's transaction. Columns in `apply.Member` order.
+# of a property's children, so the negatives and the category checks read the whole set — at
+# plan time and again inside each group's transaction (the scope reads the members, E989).
+# Columns in `apply.Member` order.
 PROPERTY_LISTINGS_SQL = """
 select l.id, l.property_id, l.category_type, l.category_main, ll.obec_kod, ll.cast_obce_kod,
        ll.okres_kod
@@ -143,18 +143,8 @@ select a.member_ids
    and a.member_ids && %(listing_ids)s::bigint[]
 """
 
-# E965: the carried adverts the real-time generation FINGERPRINTS. One it read and grouped
-# with no one is its present word — alone — so no earlier merge vouches it onto a member.
-RT_FINGERPRINTED_SQL = """
-select f.listing_id
-  from autodedup.rt_fp f
- where f.generation = %(generation)s::text
-   and f.listing_id = any(%(listing_ids)s::bigint[])
-"""
-
-# Every LIVE engine merge whose group named one of these listings: the only thing that lets a
-# merge carry a listing its own group does not hold (E903 `carries_ungrouped_listings`), and
-# what names the engine merge behind a group the operator ruled different after it merged.
+# Every LIVE engine merge whose group named one of these listings: what names the engine
+# merge behind a group the operator ruled different after it merged.
 ENGINE_MERGES_SQL = """
 select distinct on (a.merge_group_id)
        a.generation, a.cluster_key, a.merge_group_id::text, a.survivor_property_id,
@@ -299,8 +289,7 @@ select m.cluster_key, m.listing_id, l.property_id, l.category_type, l.category_m
  order by m.cluster_key, m.listing_id
 """
 
-# Which group of the generation holds each carried advert (E37 at property grain): the
-# reconcile plans a few groups, the refusal reads the whole generation's membership.
+# Which group of the generation holds each advert handed on (E960).
 RC_GROUP_OF_SQL = """
 select m.listing_id, m.cluster_key
   from autodedup.cluster_members m

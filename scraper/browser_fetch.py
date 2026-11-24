@@ -51,7 +51,7 @@ from urllib.parse import urlsplit
 
 import requests
 
-from scraper import stop
+from scraper import cgroup, stop
 
 LOG = logging.getLogger(__name__)
 
@@ -77,6 +77,40 @@ _DOCUMENT_TYPES = frozenset({"document"})
 _CHALLENGE_PATH_PREFIX = "/.within.website/"
 # `proxy_url=` default: None means "no proxy", this means "read SCRAPER_PROXY_URL".
 FROM_ENV = "<from-env>"
+# Chromium forks helpers that outlive the browser process; the kernel hands them to PID 1,
+# and in the worker's container PID 1 is this process, which never waited for them. Two
+# zombies per launch held a PID each until the container had none left (#2565: `can't start
+# new thread` 24-25 h after every boot). Only chromium's own names are reaped: any other
+# child's exit status belongs to whoever spawned it.
+_CHROMIUM_COMM = ("chrome", "headless_shell")
+
+
+def reap_browser_orphans() -> tuple[int, int]:
+    """Wait for every exited chromium child of this process: (reaped, children still held)."""
+    me, reaped, held = os.getpid(), 0, 0
+    try:
+        pids = [int(name) for name in os.listdir("/proc") if name.isdigit()]
+    except OSError:
+        return 0, 0
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as fh:
+                stat = fh.read()
+        except OSError:
+            continue
+        comm = stat[stat.index("(") + 1:stat.rindex(")")]
+        state, ppid = stat[stat.rindex(")") + 2:].split()[:2]
+        if int(ppid) != me:
+            continue
+        if state == "Z" and comm.startswith(_CHROMIUM_COMM):
+            try:
+                if os.waitpid(pid, os.WNOHANG)[0]:
+                    reaped += 1
+                    continue
+            except ChildProcessError:
+                pass
+        held += 1
+    return reaped, held
 
 
 class BrowserTransportError(requests.RequestException):
@@ -391,6 +425,11 @@ class BrowserFetcher:
                 held_pw.stop()
             except Exception as exc:  # noqa: BLE001 - teardown is best-effort
                 LOG.warning("BROWSER playwright.stop() failed (ignored): %r", exc)
+            reaped, held = reap_browser_orphans()
+            used, limit = cgroup.pids()
+            LOG.info("BROWSER closed (reaped=%d orphans; %d child processes, %d threads live; "
+                     "container pids %s of %s)",
+                     reaped, held, threading.active_count(), used, limit)
         self._page = None
 
 

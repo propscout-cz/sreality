@@ -85,8 +85,8 @@ class Scope:
 
     def group_outside(self, members: Sequence["Member"]) -> str | None:
         """Why a group is outside the scope (the first of OUT_OF_SCOPE_REASONS any member
-        gives), None when every member is inside; the advert its merge would carry along is
-        `_set_reasons`' (SKIP_CARRIES_OUT_OF_SCOPE)."""
+        gives), None when every member is inside. The adverts its merge would carry along are
+        not asked: a decided pair merges the whole properties (operator ruling 2026-11-23)."""
         found = {self.outside(m) for m in members}
         return next((why for why in OUT_OF_SCOPE_REASONS if why in found), None)
 

@@ -28,6 +28,7 @@ from autodedup import apply as A
 from autodedup import apply_sql as S
 from autodedup import lane
 from autodedup.incremental_sql import RT_LEASE_READ_SQL
+from autodedup.legacy_retire import LEGACY_PLACED_SQL
 from scraper.job_lease import _ACQUIRE_LANE_SQL, _BOUND_SQL, _END_LANE_SQL, _UPSERT_LANE_SQL
 from toolkit import property_carriers, property_identity
 from tests._property_ledger import _Ledger
@@ -105,13 +106,15 @@ class FakeDb:
         self.settings: dict[str, Any] = {}
         self.ledger: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
+        self.legacy_placed: set[int] = set()
         self.statements: list[str] = []
         self.closed = False
         self.now = T0
         self.depth = 0
         # `rt_lease`: the one-writer rail a live apply or unapply takes (A9).
         self.lease: dict[str, dict[str, Any]] = {}
-        # `autodedup.rt_fp`: the listings the real-time generation fingerprints (E965).
+        # `autodedup.rt_fp`: the listings the real-time generation fingerprints (the lane's
+        # fake reads it).
         self.read: set[int] = set()
 
     # --- plumbing
@@ -251,6 +254,8 @@ class FakeDb:
             return [(list(r["member_ids"] or ()),) for r in self.ledger
                     if not r["dry_run"] and r["outcome"] == "refused"
                     and r["generation"] == p["generation"] and ids & set(r["member_ids"] or ())]
+        if sql == LEGACY_PLACED_SQL:
+            return [(lid,) for lid in sorted(set(p["listing_ids"]) & self.legacy_placed)]
         if sql == S.ENGINE_MERGES_SQL:
             ids, seen, out = set(p["listing_ids"]), set(), []
             for r in self.ledger:
@@ -261,8 +266,6 @@ class FakeDb:
                 out.append((r["generation"], r["cluster_key"], r["merge_group_id"],
                             r["survivor_property_id"], list(r["member_ids"])))
             return out
-        if sql == S.RT_FINGERPRINTED_SQL:
-            return [(lid,) for lid in sorted(set(p["listing_ids"]) & self.read)]
         if sql == S.LATER_LIVE_MERGES_SQL:
             return [(r["generation"], r["cluster_key"], r["merge_group_id"],
                      r["survivor_property_id"], r["retired_property_id"], r["applied_at"],
@@ -646,55 +649,96 @@ def test_a_group_verdict_counts_across_both_properties_full_listing_sets() -> No
     assert group.listing_ids == [10, 11, 12]
 
 
-def test_a_negative_against_a_listing_the_merge_would_carry_along_refuses() -> None:
-    # 200 holds 11 (clustered) and 12 (not): the merge moves 12 too, so 10 x 12 counts.
+def test_an_operator_negative_against_a_listing_the_merge_would_carry_along_still_refuses(
+) -> None:
+    # 200 holds 11 (grouped) and 12 (not), 400 holds 21 and 22: each merge moves the carried
+    # advert too, so 10 x 12 and 20 x 22 count. A carried advert refuses nothing by itself
+    # (E989); a negative over the set the merge would build still does.
     db = FakeDb()
     _pair_group(db, 10, [10, 11], [100, 200])
     db.listing(12, 200)
     db.mnl.append((10, 12, "guard"))
-    group = _only(_plan(db))
-    assert group.reasons == [A.SKIP_MUST_NOT_LINK, A.SKIP_CARRIES_UNGROUPED]
-    assert group.detail["must_not_link"] == [[10, 12, "guard"]]
+    _pair_group(db, 20, [20, 21], [300, 400])
+    db.listing(22, 400)
+    _split_rulings(db, [20], [22])                       # `different` + the operator's veto
+    groups = {g.cluster_key: g for g in _plan(db).groups}
+    assert groups[10].reasons == [A.SKIP_MUST_NOT_LINK]
+    assert groups[10].detail["must_not_link"] == [[10, 12, "guard"]]
+    assert groups[20].reasons == RULED_APART
+    assert groups[20].detail["negative_pairs"] == [[20, 22]]
 
 
-def test_a_listing_this_engine_merged_with_a_member_may_ride_along() -> None:
-    # g11 merged 12 onto 200 together with 11; g12 groups 10 with 11 and leaves 12 out. 12
-    # shares 200 with a grouped member by THIS engine's live merge, so it may move with it —
-    # and every check reads the property the merge would build: scope, categories.
+def test_a_property_holding_an_advert_the_engine_grouped_with_no_one_still_merges() -> None:
+    # 200 is an older multi-listing property (11 plus 97-99); g12 grouped 10 with 11 only. The
+    # decided pair merges the WHOLE properties (E989): 97-99 ride along to the survivor.
     db = FakeDb()
-    _engine_merged(db, 11, [11, 12], [200, 250])
-    _pair_group(db, 10, [10, 11], [100, 200])
-    group = _only(_plan(db))
-    assert group.reasons == [] and group.listing_ids == [10, 11, 12]
-    assert group.survivor_id == 100 and group.retired_ids == [200]
-    narrow = _only(_plan(db, listing_ids=frozenset({10, 11})))
-    assert narrow.reasons == [A.SKIP_CARRIES_OUT_OF_SCOPE]
-    assert narrow.detail["out_of_scope_listings"] == [12]
-    db.listings[12]["category_type"] = "pronajem"
-    assert _only(_plan(db)).reasons == [A.SKIP_CATEGORY_TYPE]
-
-
-def test_an_undone_engine_merge_vouches_for_nothing() -> None:
-    db = FakeDb()
-    _engine_merged(db, 11, [11, 12], [200, 250])
-    A.unapply(db, "g11", dry_run=False, detach=db.detach([]))
-    db.listing(12, 200)  # back on 200 by some other merge: not the engine's word any more
-    _pair_group(db, 10, [10, 11], [100, 200])
-    group = _only(_plan(db))
-    assert group.reasons == [A.SKIP_CARRIES_UNGROUPED]
-    assert group.detail["ungrouped_listings"] == [12]
-
-
-def test_a_property_carrying_listings_no_group_holds_is_refused() -> None:
-    # 100 is an older multi-listing property (10 plus 97-99); g12 grouped 10 with 11 only.
-    # Merging would put 11 on one property with three adverts the engine never matched.
-    db = FakeDb()
+    db.live_scope()
     _pair_group(db, 10, [10, 11], [100, 200])
     for lid in (97, 98, 99):
-        db.listing(lid, 100)
-    group = _only(_plan(db))
-    assert group.reasons == [A.SKIP_CARRIES_UNGROUPED]
-    assert group.detail["ungrouped_listings"] == [97, 98, 99]
+        db.listing(lid, 200)
+    scope = A.effective_scope(db.settings[A.SCOPE_SETTING], {}, live=True)
+    plan = A.plan_apply(db, GEN, scope)
+    group = _only(plan)
+    assert group.reasons == [] and group.listing_ids == [10, 11, 97, 98, 99]
+    assert group.survivor_id == 100 and group.retired_ids == [200]
+    result = A.apply_plan(db, plan, dry_run=False, merge=db.merge([]))
+    assert result["counts"]["applied"] == 1
+    assert {db.listings[lid]["property_id"] for lid in (10, 11, 97, 98, 99)} == {100}
+
+
+def test_a_deal_type_clash_only_a_carried_advert_brings_still_refuses() -> None:
+    # Both properties and both members are sales; 200 also holds a rental no group holds. The
+    # merge would put a sale and a rental on one property: the chokepoint's refusal, read first.
+    db = FakeDb()
+    db.live_scope()
+    _pair_group(db, 10, [10, 11], [100, 200])
+    db.listing(12, 200, ct="pronajem")
+    scope = A.effective_scope(db.settings[A.SCOPE_SETTING], {}, live=True)
+    group = _only(A.plan_apply(db, GEN, scope))
+    assert group.reasons == [A.SKIP_CATEGORY_TYPE]
+    assert group.detail["category_types"] == ["prodej", "pronajem"]
+
+
+def test_a_carried_advert_the_removed_engine_placed_holds_the_group_back() -> None:
+    # 12 rides on 200 only because the removed engine put it there: nobody decided 12 with 10.
+    db = FakeDb()
+    db.live_scope()
+    _pair_group(db, 10, [10, 11], [100, 200])
+    db.listing(12, 200)
+    db.legacy_placed = {12}
+    scope = A.effective_scope(db.settings[A.SCOPE_SETTING], {}, live=True)
+    asked = _asked(db, LEGACY_PLACED_SQL)
+    group = _only(A.plan_apply(db, GEN, scope))
+    assert group.reasons == [A.SKIP_CARRIES_LEGACY]
+    assert group.detail["legacy_merged_listings"] == [12]
+    assert asked[LEGACY_PLACED_SQL] == [[11, 12]]
+
+
+def test_a_property_the_removed_engine_built_is_not_carried_through_its_placed_member() -> None:
+    # The removed engine put 11 beside 12 on 200. The engine decided 10 with 11; only the old
+    # merge ties 12 to them, and its row names 11 (the moved advert), not 12.
+    db = FakeDb()
+    db.live_scope()
+    _pair_group(db, 10, [10, 11], [100, 200])
+    db.listing(12, 200)
+    db.legacy_placed = {11}
+    scope = A.effective_scope(db.settings[A.SCOPE_SETTING], {}, live=True)
+    asked = _asked(db, LEGACY_PLACED_SQL)
+    group = _only(A.plan_apply(db, GEN, scope))
+    assert group.reasons == [A.SKIP_CARRIES_LEGACY]
+    assert group.detail["legacy_merged_listings"] == [11]
+    assert asked[LEGACY_PLACED_SQL] == [[11, 12]]
+
+
+def test_an_old_property_the_engine_decided_advert_by_advert_merges_and_reads_nothing() -> None:
+    # Every advert of 200 is a member: the engine decided each pair itself, nothing is carried.
+    db = FakeDb()
+    db.live_scope()
+    _pair_group(db, 10, [10, 11], [100, 200])
+    db.legacy_placed = {11}
+    scope = A.effective_scope(db.settings[A.SCOPE_SETTING], {}, live=True)
+    assert _only(A.plan_apply(db, GEN, scope)).reasons == []
+    assert not any("property_merge_events" in s for s in db.statements)
 
 
 def test_category_guards_mirror_the_chokepoint() -> None:
@@ -777,13 +821,29 @@ def test_merged_away_and_unattached_are_refused_and_size_is_the_engines_cap_alon
     assert reasons[30] == []
 
 
-def test_a_property_the_engine_split_across_two_groups_bridges_nothing() -> None:
-    # 200 carries 11 (group 10) and 21 (group 20): applying either would fuse both.
+def test_a_property_holding_adverts_of_two_groups_still_merges_and_both_plan_in_one_pass(
+) -> None:
+    # 200 carries 11 (group 10) and 21 (group 20): a decided pair merges the whole properties
+    # (E989), so the two groups end as one property. Both plan in one pass; the first merge moves
+    # 200's adverts, so the second stops at its locked re-check and the next plan merges it.
     db = FakeDb()
+    db.live_scope()
     _pair_group(db, 10, [10, 11], [100, 200])
     _pair_group(db, 20, [20, 21], [300, 200])
-    reasons = {g.cluster_key: g.reasons for g in _plan(db).groups}
-    assert reasons == {10: [A.SKIP_SPANS_GROUPS], 20: [A.SKIP_SPANS_GROUPS]}
+    scope = A.effective_scope(db.settings[A.SCOPE_SETTING], {}, live=True)
+    plan = A.plan_apply(db, GEN, scope)
+    assert [(g.cluster_key, g.reasons, g.listing_ids, g.survivor_id, g.retired_ids)
+            for g in plan.groups] == [(10, [], [10, 11, 21], 100, [200]),
+                                      (20, [], [11, 20, 21], 200, [300])]
+    first = A.apply_plan(db, plan, dry_run=False, merge=db.merge([]))
+    assert first["counts"]["applied"] == 1 and first["skipped_at_apply"] == [
+        {"cluster_key": 20, "survivor_id": 200, "retired_ids": [300],
+         "reasons": [A.SKIP_CHANGED_SINCE_PLAN]}]
+    again = A.plan_apply(db, GEN, scope)
+    assert [(g.cluster_key, g.reasons, g.survivor_id, g.retired_ids)
+            for g in again.groups] == [(20, [], 100, [300])]
+    assert A.apply_plan(db, again, dry_run=False, merge=db.merge([]))["counts"]["applied"] == 1
+    assert {db.listings[lid]["property_id"] for lid in (10, 11, 20, 21)} == {100}
 
 
 TRIAL_SCOPE = {"category_types": ["prodej"],
@@ -860,26 +920,23 @@ def test_the_trial_admits_the_jablonec_groups_the_cluster_block_kept_out() -> No
     assert len(calls) == sum(len(places) - 1 for places in shapes.values())
 
 
-def test_a_carried_advert_located_outside_refuses_the_group_at_plan_and_at_apply() -> None:
-    # The members are inside; an advert the merge would carry along is not (at plan time), or
-    # stops being (a re-geocode between the plan and the group's transaction).
+def test_a_property_holding_an_advert_outside_the_apply_scope_still_merges() -> None:
+    # The members are inside; adverts the merge carries along are not — one located outside the
+    # blocks, one with no location row, one the listing-id scope does not name. The scope admits
+    # GROUPS by their members; what else sits on the properties rides along (E989).
     db = FakeDb()
     db.live_scope()
-    _engine_merged(db, 11, [11, 12], [200, 250])        # 12 rides along with 11 on 200
     _pair_group(db, 10, [10, 11], [100, 200])
-    _pair_group(db, 20, [20, 21], [300, 400])
-    db.location[12] = (999999, None)
+    db.listing(12, 200, where=(999999, None))
+    db.listing(13, 200, where=None)
     scope = A.effective_scope(db.settings[A.SCOPE_SETTING], {}, live=True)
     plan = A.plan_apply(db, GEN, scope)
-    assert {g.cluster_key: g.reasons for g in plan.groups} == {
-        10: [A.SKIP_CARRIES_OUT_OF_SCOPE], 20: []}
-    assert plan.groups[0].detail["out_of_scope_listings"] == [12]
-    del db.location[21]                                  # its location row is gone
-    calls: list[dict[str, Any]] = []
-    result = A.apply_plan(db, plan, dry_run=False, merge=db.merge(calls))
-    assert calls == [] and result["skipped_at_apply"] == [
-        {"cluster_key": 20, "survivor_id": 300, "retired_ids": [400],
-         "reasons": [A.SKIP_CARRIES_OUT_OF_SCOPE]}]
+    group = _only(plan)
+    assert group.reasons == [] and group.listing_ids == [10, 11, 12, 13]
+    assert _only(_plan(db, listing_ids=frozenset({10, 11}))).reasons == []
+    result = A.apply_plan(db, plan, dry_run=False, merge=db.merge([]))
+    assert result["counts"]["applied"] == 1
+    assert {db.listings[lid]["property_id"] for lid in (10, 11, 12, 13)} == {100}
 
 
 def test_the_summary_counts_out_of_scope_by_reason(tmp_path: Path, monkeypatch: Any) -> None:
@@ -1132,33 +1189,53 @@ def test_a_property_that_changed_since_the_plan_is_not_merged() -> None:
     assert json.loads(row["plan_json"])["detail"]["arrived_since_plan"] == [12]
 
 
-def test_the_apply_time_recheck_locks_and_re_reads_categories_and_scope() -> None:
+def test_the_apply_time_recheck_locks_and_re_reads_categories() -> None:
     # The listing ids are unchanged, but after the plan a re-parse flips 11 to a rental (200's
-    # rollup not recomputed yet), both of group 20's listings and properties become rentals
-    # (no mix, but outside the prodej scope).
+    # rollup not recomputed yet), and 22, carried along on 400, to a rental too.
     db = FakeDb()
     db.live_scope()
     _pair_group(db, 10, [10, 11], [100, 200])
     _pair_group(db, 20, [20, 21], [300, 400])
+    db.listing(22, 400)
     scope = A.effective_scope(db.settings[A.SCOPE_SETTING], {}, live=True)
     plan = A.plan_apply(db, GEN, scope)
     assert [g.reasons for g in plan.groups] == [[], []]
     db.listings[11]["category_type"] = "pronajem"
-    for lid, pid in ((20, 300), (21, 400)):
-        db.listings[lid]["category_type"] = "pronajem"
-        db.properties[pid]["category_type"] = "pronajem"
+    db.listings[22]["category_type"] = "pronajem"
     calls: list[dict[str, Any]] = []
     result = A.apply_plan(db, plan, dry_run=False, merge=db.merge(calls))
     assert calls == [] and result["counts"]["skipped_at_apply"] == 2
     assert {row["cluster_key"]: row["reasons"] for row in result["skipped_at_apply"]} == {
-        10: [A.SKIP_CATEGORY_TYPE, A.SKIP_CARRIES_OUT_OF_SCOPE],
-        20: [A.SKIP_CARRIES_OUT_OF_SCOPE]}
+        10: [A.SKIP_CATEGORY_TYPE, A.SKIP_MEMBER_OUT_OF_SCOPE], 20: [A.SKIP_CATEGORY_TYPE]}
     # The properties are locked FOR UPDATE, then their listings FOR SHARE, before any check; the
     # notification-events lock comes before both (toolkit.property_carriers: never after a row lock).
     assert "for update" in S.LOCK_PROPERTIES_SQL and "for share" in S.LOCK_PROPERTY_LISTINGS_SQL
     first_lock = db.statements.index(S.LOCK_PROPERTIES_SQL)
     assert first_lock < db.statements.index(S.LOCK_PROPERTY_LISTINGS_SQL)
     assert db.statements[first_lock - 1] == property_carriers.NOTIFICATION_EVENTS_LOCK_SQL
+
+
+def test_the_apply_time_recheck_re_reads_the_scope_over_the_members() -> None:
+    # E39: both of group 20's members and properties become rentals after the plan (no mix,
+    # but outside the prodej scope), and 31 loses its location row. The scope admits a group by
+    # its MEMBERS (E989 kept that); the re-check over the locked rows must read it again.
+    db = FakeDb()
+    db.live_scope()
+    _pair_group(db, 20, [20, 21], [300, 400])
+    _pair_group(db, 30, [30, 31], [500, 600])
+    scope = A.effective_scope(db.settings[A.SCOPE_SETTING], {}, live=True)
+    plan = A.plan_apply(db, GEN, scope)
+    assert [g.reasons for g in plan.groups] == [[], []]
+    for lid, pid in ((20, 300), (21, 400)):
+        db.listings[lid]["category_type"] = "pronajem"
+        db.properties[pid]["category_type"] = "pronajem"
+    del db.location[31]
+    calls: list[dict[str, Any]] = []
+    result = A.apply_plan(db, plan, dry_run=False, merge=db.merge(calls))
+    assert calls == [] and result["counts"]["skipped_at_apply"] == 2, (
+        "E39: a member the scope no longer admits merged — recheck_group reads no scope")
+    assert {row["cluster_key"]: row["reasons"] for row in result["skipped_at_apply"]} == {
+        20: [A.SKIP_MEMBER_OUT_OF_SCOPE], 30: [A.SKIP_MEMBER_OUT_OF_SCOPE]}
 
 
 @pytest.mark.parametrize("ruled", [False, True])
@@ -1246,13 +1323,14 @@ def _consulting_world(db: FakeDb) -> A.Scope:
 
 def test_the_plan_reads_engine_merges_only_for_the_listings_a_group_consults() -> None:
     """#2508: a settled group no negative covers consults no engine merge, so none is read for
-    it; a candidate's whole carried set is, a group ruled after it merged its members, and the
-    refusal history only the candidates' members."""
+    it, nor for a candidate (E989: what it carries rides along whoever merged it); a group
+    ruled after it merged reads its members', and the refusal history only the candidates'
+    members."""
     db = FakeDb()
     scope = _consulting_world(db)
     asked = _asked(db, S.ENGINE_MERGES_SQL, S.LEDGER_HISTORY_SQL)
     plan = A.plan_apply(db, GEN, scope)
-    assert asked == {S.ENGINE_MERGES_SQL: [[10, 11, 12]], S.LEDGER_HISTORY_SQL: [[10, 11]]}
+    assert asked == {S.ENGINE_MERGES_SQL: [], S.LEDGER_HISTORY_SQL: [[10, 11]]}
     assert [(g.cluster_key, g.reasons, g.listing_ids) for g in plan.groups] == [
         (10, [], [10, 11, 12])]
     assert plan.counts["already_one_property"] == 2
@@ -1261,7 +1339,7 @@ def test_the_plan_reads_engine_merges_only_for_the_listings_a_group_consults() -
                         "generation": GEN, "member_ids": [50, 51]})
     asked[S.ENGINE_MERGES_SQL].clear()
     ruled = {g.cluster_key: g for g in A.plan_apply(db, GEN, scope).groups}
-    assert asked[S.ENGINE_MERGES_SQL] == [[10, 11, 12, 50, 51]]
+    assert asked[S.ENGINE_MERGES_SQL] == [[50, 51]]
     assert ruled[50].reasons == [A.RULED_AFTER_MERGE]
     assert list(ruled[50].detail) == ["group_verdicts", "negatives", "engine_merges"]
     assert [m["unapply"] for m in ruled[50].detail["engine_merges"]] == [
@@ -1278,7 +1356,7 @@ def test_engine_merges_read_in_chunks_plan_what_one_read_plans(monkeypatch: Any)
     monkeypatch.setattr(A, "MERGES_CHUNK", 1)
     asked = _asked(db, S.ENGINE_MERGES_SQL)
     chunked = A.plan_apply(db, GEN, scope)
-    assert asked[S.ENGINE_MERGES_SQL] == [[10], [11], [12], [50], [51]]
+    assert asked[S.ENGINE_MERGES_SQL] == [[50], [51]]
     assert [g.to_json() for g in chunked.groups] == [g.to_json() for g in whole.groups]
     assert chunked.counts == whole.counts
     # g11's merge names 11 and 12: read through both chunks, it is one merge

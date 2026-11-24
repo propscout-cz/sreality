@@ -385,6 +385,18 @@ def test_the_api_image_is_proven_free_of_clip() -> None:
     assert "docker image inspect -f '{{.Size}}'" in runs and "pip freeze" in runs
 
 
+def test_the_api_image_is_proven_to_verify_cuzks_certificate() -> None:
+    """#2595: the ČÚZK client verifies against certifi's bundle over stdlib HTTPS. CI asserts it inside the built
+    API image with no network, and builds that image whenever the client changes."""
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "runner_image.yml").read_text(encoding="utf-8"))
+    steps = [s.get("run", "") for job in workflow["jobs"].values() for s in job["steps"]]
+    check, = [r for r in steps if "tls_context()" in r]
+    assert "docker run --rm --network none api-head" in check
+    assert all(part in check for part in ("ssl.CERT_REQUIRED", "check_hostname", "certifi.where()", "get_ca_certs()"))
+    assert check.count("assert ") == 3 and "||" not in check, "verdicts, and nothing swallows their exit status"
+    assert "api/wsdp_client.py" in workflow[True]["pull_request"]["paths"]
+
+
 def test_the_runner_image_workflow_builds_on_every_image_input() -> None:
     """Decision 17: the torch image is built in CI before Railway builds it. The window requires the check by its
     name when a PR changes an image input, so the wizard's list and the workflow's paths are one list."""

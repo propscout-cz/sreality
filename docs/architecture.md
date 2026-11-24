@@ -765,9 +765,8 @@ rules. Identify which one a task belongs to before you start.
   `browse_list` (an UNLOGGED table rebuilt blue-green; the list, its counts, the map pins and
   the tile counts all read it since migration 630, and 631 dropped the map's `properties_map_mv`)
   — a plain SELECT grant to `authenticated`, no RLS, read directly when "show dismissed" is on and
-  otherwise through its `browse_list_visible` INVOKER twin (migration 537); the location-audit
-  matview `location_pin_audit_mv` (no RLS) and its successor, the admin-gated view `location_position_audit_public` over the
-  service-role matview `location_position_mv` (migration 733); two RLS-scoped tables in `lib/auth.tsx` (`entitlements`, own row only;
+  otherwise through its `browse_list_visible` INVOKER twin (migration 537); the location position audit, the admin-gated
+  view `location_position_audit_public` over the service-role matview `location_position_mv` (migration 733); two RLS-scoped tables in `lib/auth.tsx` (`entitlements`, own row only;
   `plans`); and page-specific RPCs (e.g.
   `browse_stats_properties`, `browse_map_cells`, `sold_comparables`). Most RPCs are
   `SECURITY INVOKER`: they read as the caller and cannot see past its grants and RLS. The
@@ -1141,34 +1140,25 @@ rules. Identify which one a task belongs to before you start.
   open across #1775's deploy kept choosing the static token). No session → no header; the server's
   401 names its reason (RFC 6750) and `RequireAuth` already keeps a signed-out tab off every page.
   History: `docs/design/api-token-rotation-and-spa-jwt-migration.md`.
-- **`Mapy.cz`-powered location search.** Every location typeahead calls `GET /maps/suggest`
-  (Mapy `type=regional`: no POIs) and, on a pick, `POST /maps/resolve` `{lat, lng, type, name,
-  regional_structure}` → ONE shape `{level, id, name, context}`: the RÚIAN unit at the picked
-  level (an address binds its street), its register name, and `context` = the register obec
-  name below obec. `level` or `id` null creates NO chip; the typeahead says why. The
-  `MAPY_CZ_API_KEY` is server-side only; a 503 (key unset) renders a hint, not suggestions. Nothing Mapy
-  answers is kept: its terms forbid storing or caching an API result, so the in-process suggest cache went
-  early (ruling 2026-11-13, #2454) and every suggest asks Mapy, failing over to `MAPY2_CZ_API_KEY` on a refused
-  key (`api.maps._fetch_suggest`). The geocoder that once wrote Mapy answers into the database, its
-  `MAPY_GEOCODE_ENABLED` switch and every stored Mapy answer are gone (#2454, migration 739).
-- **The pick record** (`place_picks`, migration 737; spec #2441 Part 1, ruling Q10). Own place search may
-  replace Mapy only after a gate over questions its author did not write, so every place box's add sends
-  `pick: {text, rank}` on its resolve (the text its list ANSWERED, not what was typed on after, and the 1-based
-  row; `lib/maps.placePick` drops one outside the server's bounds, 1–200 code points and rank 1–10, so the resolve
-  never 422s on it; `tests/api/test_place_pick_bounds.py` holds the SPA, schema and CHECK copies equal). The request's
-  `pick` is optional and forbids unknown fields: a malformed one is a 422 before anything binds. The address picker sends none. After the answer, `/maps/resolve` queues ONE background
-  INSERT (`location_data/place_picks.record`, on its own connection) only for verified claims without the
-  `app_metadata.automation` marker (`deps.is_automation`; set on both smoke accounts by the operator before this
-  deploys, smoke-check.mjs fixture 3; the local-dev opt-out has no claims), never for an `address_point` resolve, and
-  only for a pick that resolved to a level: a failed resolve, no current registry, a country or an unknown type
-  writes nothing, so an outage is never taken for a lost place. Stored: the text exactly as answered, or NULL when
-  any character `isdigit` ("Praha 2", "Praha ２"; the CHECK pins `und-x-icu`, since CI's default collation is libc
-  and only ICU classes "２" a digit); the rank; the bound level and code, the typed level with code NULL when refused,
-  `momc` and its code for a městská část (`_Momc.code`; the answer still lists its části). No account, nothing from
-  Mapy. A failed write logs only its SQLSTATE (the error's DETAIL quotes the row). RLS on, no policy, browser roles
-  revoked. `place_picks.picks_between` is the one reader (the DB-lane test and the gate's eval, #2452); own search
-  never reads the picks: they are its HOLDOUT. Retention: pg_cron `place-picks-retention` deletes rows over 12 months
-  daily; once the switch-over deploys, one DELETE empties the table (#2453) and Stage B drops it (#2455).
+- **Every place box on own place search** (#2453; rulings 2026-11-22). Browse, the watchdog edit, the pipeline,
+  outreach, Datasets, the phone's sheets and the admin address picker share ONE box (`LocationTypeahead` +
+  `usePlaceSuggest` / `SuggestPanel`), which asks only `POST /places/suggest` (`lib/places.fetchPlaces`). A row is
+  already a chip, so a pick adds it at once with no second call: a městská část adds its quarters' chips with the
+  "added as its N parts" notice; an address adds its street's chip and the map flies to the door; an address with no
+  street adds nothing and says it cannot filter. Each row shows its name, context and level label
+  (`lib/places.PLACE_LEVEL_LABEL`, "Městská část" for a momc); there is no country row. Browse flies by the shared
+  zoom table (`lib/places.flyToPlace` over `lib/zoomByLevel`: town 11, street 15, door 16); a row with no point does
+  not fly. A 503 shows "Place search is unavailable right now" under the box, which stays enabled (the next
+  keystroke asks again) while the chips keep filtering; nothing is ever asked of Mapy. The address picker saves a
+  door, street or obec row as it is (`{adresni_misto, kód ADM}`, `{ulice, code}`, `{obec, code}`); any other level
+  offers no save. The Mapy proxy, its resolve binder and the pick record's writer are gone; the keys and the
+  Seznam.cz lines wait for Stage B (#2455).
+- **The pick record** (`place_picks`, migration 737; spec #2441 Part 1, ruling Q10), the HOLDOUT the gate (#2465)
+  scored own search against while the box was on Mapy: the Mapy binder stored each human pick's answered text (NULL
+  when it held a digit; the CHECK pins `und-x-icu`), its rank and the bound level and code. Nothing records a pick
+  since #2453; its deploy is followed by one DELETE that empties the table, on the operator's OK. RLS on, no policy,
+  browser roles revoked; `place_picks.picks_between` is the one reader (the DB-lane test and the gate's eval, #2452),
+  and pg_cron `place-picks-retention` stays until Stage B drops the table (#2455).
 - **Own place search** (#2449; spec #2441 Part 4, rulings Q2 c, Q6 a, Q9, Q12 a). `location_data/place_search.suggest`
   behind `POST /places/suggest` (`require_token`; body `{query 1–200, limit 1–10}`, an unknown field a 422; answers
   `{items}`). A row is already a chip, `{level, id, name, context, point}`: the `ruian_level`, the RÚIAN code, the
@@ -1185,8 +1175,10 @@ rules. Identify which one a task belongs to before you start.
   served properties of any deal type, then the town's latest population, then code. ONE ranking for every place box;
   counts rank rows and are never returned. **Town first** (#2497, ruling 2026-11-13, narrowed by #2548's ruling
   2026-11-17): a town ranks right above its own okres and kraj, on every tier (68 of 77 okresy share a town's name, and
-  an okres's served count takes in its town's): a kraj or okres row whose tier holds an obec under it (`path <@`) takes
-  that obec's sort keys and follows it, the nearer region first. Every other row keeps the order above, so Praha's
+  an okres's served count takes in its town's): a kraj or okres row whose tier holds an obec under it (`path <@`) with
+  one in twenty of the region's served properties takes that obec's sort keys and follows it, the nearer region first
+  (#2612, ruling 2026-11-22 "only a real share": on production a town named like its okres holds 7.58 % or more, a
+  village named like its region 1.47 % or less, so "Moravskoslezský" answers the kraj before Moravskoslezský Kočov). Every other row keeps the order above, so Praha's
   Karlín, served, answers before the village Karlín; on equal served properties a row lying under an obec of its tier
   (its own část or městská část, `path <@`) follows that town. Both ORDER BYs carry it, the one that feeds the LIMIT and the final
   one; each row carries its level. "Praha 6" keeps its městská část first, as the town Praha is no exact match for it.
@@ -1248,9 +1240,8 @@ rules. Identify which one a task belongs to before you start.
   A door row is `{level: 'adresni_misto', id, name, context, point, street}`: the kód ADM, the ONE label (no number for
   a streetless door, for a č.ev. door only its č.o. if any, never the č.ev.; migration 503), its town's okres, the
   door's own point, and its street's chip `{level: 'ulice', id, name, context}` at the gazetteer's version, null for a streetless door; no `places`, count, PSČ, KÚ,
-  foreign place or country. The label is one SQL fragment in `location_data/place_search.py`, shared by the door read
-  (computed for the rows kept) and `DOOR_LABEL_SQL`, which the address picker imports until the switch-over (#2453)
-  moves it to door rows, if addresses pass the gate. Order, a builder decision no ruling covers (#2441, #2451, #2453):
+  foreign place or country. The label is one SQL fragment in `location_data/place_search.py`, computed for the rows
+  kept; the address picker shows the row's name as its preview (#2453). Order, a builder decision no ruling covers (#2441, #2451, #2453):
   door rows follow the whole text's exact rows and precede its prefix and fuzzy rows, as their street part is an exact
   namesake; among doors, the candidate's tier (an exact village before a `qualifier_stripped` one), its served
   properties, then kód ADM, so č.p. and č.o. are not ranked apart. The list is cut at the limit, so doors can fill it:
@@ -1322,8 +1313,8 @@ rules. Identify which one a task belongs to before you start.
   table would block its DROP. 738 also swapped the gazetteer's btree for `(name_norm text_pattern_ops,
   registry_version_id)`, which serves `=` and `LIKE 'p%'` under ICU (net 0 indexes). A failed read or an unreachable
   database is a 503 `place_search_unavailable`: the module logs only the SQLSTATE, the route only the error class,
-  never the typed text. No cache, flag or admin parameter; it never reads `place_picks` (its holdout). It ships with no
-  caller: the switch-over (#2453) points the place boxes at it after the gate and deletes the Mapy search path.
+  never the typed text. No cache, flag or admin parameter; it never reads `place_picks` (its holdout). Every place box
+  asks it since the switch-over (#2453).
 - **The gate's eval** (#2452; spec #2441 Part 4 (1)–(4), Q2 c; the gate is #2465). `scripts/place_search_gate_eval.py`
   scores own search on the recorded picks, read-only on production, and goes at Stage B (#2455) with its test
   (`tests/api/test_place_search_gate_eval_live.py`, a migrations-lane step). **Reads:** `place_picks` only through
@@ -2427,7 +2418,7 @@ renumber.** Navigate by area:
     (`claims_common.COHORT_LOCATION_FROM`, spatial-first: the place, then the live property it
     locates, then that property's canonical advert as the comparable), and the extension's label
     beside the property's MF. A surface about ONE advert (`listings_public`,
-    `location_pin_audit_mv`, autodedup, the location census) keeps that advert's own row. Only
+    autodedup, the location census) keeps that advert's own row. Only
     the place moves: price, area, photos, link and every fact stay the canonical advert's, and
     past estimation runs stay as they ran (rule 12). The six amenities (balcony, lift, parking,
     terrace, garage, cellar) are a union over every advert, active or not, and the energy rating
@@ -2438,7 +2429,19 @@ renumber.** Navigate by area:
     `listing_price_steps` (a predecessor is the advert on that portal last seen latest, strictly
     before the later one was first seen, so concurrent adverts never form a step), plus one
     handover step per link; the total compounds to the oldest priced link's first price against
-    the shown price. The rollup also writes `all_sources` / `active_sources` (sorted; the active
+    the shown price. That rule is ONE function, `listing_price_history(head, broker)` (migrations
+    768, 770), with its percent `change_pct` (`measure_price_change_pct(first, last)` from two
+    priced snapshots up, NULL below: nothing on the advert ever changed): the rollup asks it for the
+    canonical advert, the broker inventory for each advert, and `broker_book_projection` for every
+    advert of the broker on the property, bounded to the broker's own adverts, storing on the book
+    the history of their most-repriced one (`first_price_czk`, `last_price_czk`, `price_changes`).
+    A broker's price figures (`toolkit.brokers.price_change`: priced, repriced = at least one price
+    step, a price cut and restored included (operator ruling 2026-11-24); the share from `MIN_N`
+    priced up and the median change over the repriced from `MIN_N` up; all, active and inactive
+    book rows) read the book and ride in the dossier (`get_broker`). The book's pair is not the
+    property's figure: another broker's predecessors are left out (ruling 2, own adverts only).
+    In the rollup the call sits in a MATERIALIZED CTE: as a lateral in the UPDATE's FROM it
+    re-ran every aggregate once per canonical advert (11 to 30 s a batch, production 2026-11-23). The rollup also writes `all_sources` / `active_sources` (sorted; the active
     one empty when none is) and one `newest_ad_at_<portal>` per `PORTAL_OPTIONS` code (the first
     sighting of the property's newest advert there, NULL with none; MS19), which W5 projects.
     The city figures follow the LOCATION advert (since 636): `near_*` its point, `home_obec_pop`
@@ -2695,7 +2698,9 @@ renumber.** Navigate by area:
     statement of letters over the cards (`lib/useMergeMode`: a letter key marks the focused
     card — the pointer focuses the card it is over, Tab moves card to card — a click writes the
     active letter; every card keeps its pipeline, collection, dismissal and note marks,
-    read-only, and the bar lists each letter's properties with their marks, MS16) posts
+    read-only, and the bar lists each letter's properties with their marks, MS16; the bar's
+    Merge opens `MergeConfirmDialog`, every ad of every named property with its photos under
+    the letter it will become, and only that dialog's button, ruling 2026-11-23) posts
     `{letters: {property_id: "A"}}` to `POST /properties/merge`, the split's statement shape and
     codec (`letter_tokens`); `property_identity.merge_letters` merges each letter held by two or
     more properties through `merge_property_set` under its own group, all in ONE transaction
@@ -2873,15 +2878,14 @@ renumber.** Navigate by area:
     just the members), an operator
     negative (a pair or must-not-link with both sides inside, a group verdict with its whole set
     inside — any superset, under any key, the newest ruling per operator winning), mixed
-    categories, a listing outside the scope (inside = LOCATED in a scope block by its live
+    categories, a MEMBER outside the scope (inside = LOCATED in a scope block by its live
     `listing_location` code — `town:<obec_kod>`, `quarter:<cast_obce_kod>` or
     `district:<okres_kod>` (E961), the grammar of `autodedup_apply_scope.blocks` and of W8's
     `blocks=`; the lane's seeded `rt_scope` spells the same areas `obec:` / `cast_obce:` /
     `okres:` and never names one beside a block that holds it — never the engine's blocking key;
-    out-of-scope groups are counted per reason), a non-active property, a
-    property the engine split across two groups, or a listing no group holds (unless this
-    engine's own live merge already put it
-    there with a member and — under `rt` — the stream holds no fingerprint for it, E965).
+    out-of-scope groups are counted per reason) or a non-active property. The OTHER
+    adverts of the properties a group sits on never refuse it (E989, operator ruling
+    2026-11-23): a decided pair between two properties merges the whole properties.
     Inside each group's transaction the properties are locked `FOR UPDATE`
     and their listings `FOR SHARE`, and every one of those checks runs again over the locked
     rows before it merges; the live `rt` generation may be planned by a dry run but is never
@@ -3096,9 +3100,8 @@ renumber.** Navigate by area:
     makes one, `DistrictChip` refuses one (422), the SPA's URL parser drops one, and migration
     606 deleted the four stored filters that held them. No read-time name reader exists: a name
     is not a unit ("Jihlava" is an obec AND an okres), so re-reading one could only widen a chip.
-    The chip producer `/maps/resolve` PIPs the RÚIAN mirror for obec/okres/kraj; `cast_obce` and
-    `ulice` have no polygon, so the point places the obec and the NAME binds the part or street
-    inside it — a street only on one exact register name near its doors, else no chip.
+    The chip producer is own place search (#2453): every row is a register unit read by name at
+    the current version, so a chip is exactly that unit and never a point's guess.
     Deleted with the ILIKE arms: the sreality-only `locality_district_id` /
     `locality_region_id` filters (registry, comparables, watchdog spec, API schemas, SPA filter
     types) — one portal out of nine could answer them, and `districts` at the obec / okres level
@@ -5355,11 +5358,8 @@ portal has ever had, and one atomic DELETE of that size spends its `statement_ti
 
 **THE OPERATOR'S PICK (W3b, ruling Q5)** is the only operator input, and the listing inspector
 (`/location/listing/*`, `toolkit/location_quality.py`) is gone. An admin's pencil on the property page's
-address line opens Browse's place typeahead; `/maps/resolve` with `address_point: true` binds an address
-pick to its ONE door (the resolver's own `address_points_by_number` on the bound street, or a streetless
-village's obec, exactly one door within `REGISTRY_PIN_CONFLICT_M`; nothing scans the mirror), a street
-or an obec pick as the chips do. The door's label is `DOOR_LABEL_SQL` from `location_data/place_search.py`,
-shared with own place search's door rows (#2451). `POST /location/corrections {property_id, pick}` (admin) →
+address line opens Browse's place box; since #2453 its door, street and obec rows from own place search are
+the pick as they are (a door row is ONE kód ADM, its label the row's name, #2451); any other level offers no save. `POST /location/corrections {property_id, pick}` (admin) →
 `operator_corrections.submit_pick` writes the four picker types (`address_point_id`, `street_name`,
 `obec_name`, `okres_name`) on EVERY ad of the property in the register's names and tombstones the
 types the pick does not state, so a re-pick replaces the statement and `pick: null` hands the ads back
@@ -5871,8 +5871,8 @@ reads "Přibližná poloha") and the "By kind" strip; every number opens the "Ad
 verbatim), kind rule and live grain to live listings, so a cell's list differs from its number only by churn since the
 reading, whose time the list shows beside its own exact count. A separate entry, "No location answer · every status",
 carries its list's exact count and opens the matview's `none` rows in every status and portal (`snapshot_kind`; town
-evidence, a sibling with a point, a queued re-resolve), the rows the old audit page lists. That page and
-`location_pin_audit_mv` stay until the operator has compared the two (W6-c2 deletes them).
+evidence, a sibling with a point, a queued re-resolve), the rows the old audit page listed. W6-c2 (operator ruling
+2026-11-22, migration 765) deleted that page, `location_pin_audit_mv`, its cron and its registry row.
 
 **ONE LABEL, ONE CODE PREDICATE.** Every surface renders `location_display_label(...)` (migration
 503, one IMMUTABLE SQL function over seven columns): foreign country code, else street + čp/čo +
@@ -5892,9 +5892,8 @@ A street chip filters at its street; a chip without a (level, code) cannot exist
 the API and the URL parser refuse one; migration 606 deleted the last stored ones). Because RÚIAN
 draws no polygon for `cast_obce`, `momc` or a street, a POINT resolves only to obec / okres / kraj
 and the quarter or street is bound BY NAME inside the PIP'd obec. **A městská část is no level and no
-chip (ruling 2026-11-02, #2380):** `/maps/resolve` binds "Praha 6" or "Brno-střed" by name, after a část
-of that name, and answers no code plus `parts`, every část its doors stand in (`ruian_address_points`,
-joined on the unit's stable `code`, as a load re-points doors in place). The typeahead adds one
+chip (ruling 2026-11-02, #2380):** own place search answers "Praha 6" or "Brno-střed" as a shortcut row whose
+`places` are its quarters, the register's `momc_cast_obce` pairs at the index's version (#2450, #2453). The box adds one
 ordinary `cast_obce` chip per part, so URLs, presets, the Watchdog, the RPCs and the rows gain nothing,
 and a saved filter keeps the set it was saved with. A část straddling several městské části counts for
 each it touches, by ruling; an ad holding no část in that town is not matched, as with any část chip.
@@ -5941,19 +5940,12 @@ that view appends since 636) and path C candidate generation
 (`toolkit/dedup_candidates_sql`); `toolkit/comparables._shared_filter_where` needs no clause because
 its `ll.geom IS NOT NULL` is the same rule minus the foreign arm. **DETAIL STAYS REACHABLE**:
 `listings_public`, `properties_public` and `pipeline_board_public` are read by id, so a direct link,
-the extension, the audit page's own links and an operator's pipeline card (rule 22 operator state)
+the extension and an operator's pipeline card (rule 22 operator state)
 all keep working on an unresolved listing. Measured at the ruling: 44,702 of 711,600 Browse rows,
 2,953 of them still-live ads. The `location_town_coverage` gauge reports the count per portal as the
-`hidden` fact of its `{portal}/town` cell — a workload number that never moves a status. The operator watches the same
-set on `/new-dedup/pin-audit`, whose relation `location_pin_audit_mv` (migration 524) IS that
-definition — every listing that fails `SERVED_LOCATION_PREDICATE` and nothing else, refreshed hourly
-by pg_cron, leading the nav with its count — so the page and the rule can never describe different
-sets. W15 widened that cohort from ~44 k to ~80 k by retiring the served set: a delisted listing with
-no decided location is a finding like any other, and live-vs-delisted is one of the page's `quality`
-filters rather than a reason to hide the row. It carries no map: the whole subject is rows with no point to draw. Migration 510's
-property-and-legacy-pin version of that relation stays on disk as history (append-only, rule 1); it
-was retired by 513 because it read five `properties` place columns 508 drops, and 514 re-creates the
-name on inputs that cannot expire the same way.
+`hidden` fact of its `{portal}/town` cell — a workload number that never moves a status. The rows themselves are the
+position audit's "No location answer" entry on Location quality; the old `/new-dedup/pin-audit` page and its
+`location_pin_audit_mv` went in W6-c2 (migration 765; record below).
 
 **THE REBUILD BUDGET SCALES WITH THE CORPUS** (W13, migration 522, after the 2026-09-14 freeze).
 `browse_list` is a whole-relation rebuild of `browse_projection` on pg_cron (`*/15`, hourly at :45 since
@@ -6101,7 +6093,8 @@ per-listing statement gets, and cancelling it threw the whole batch away.
 * **A column drop under a live pg_cron schedule does not raise** — it breaks the job silently on a
   later tick, so the schedule is unscheduled IN the migration, ahead of its tables.
 
-**Pin-loss audit page — RETIRED 2026-09-13 (migration 513), kept here for the record.** The ruling
+**Pin-loss audit page — RETIRED 2026-09-13 (migration 513), re-created by 514, RETIRED again 2026-11-22 (W6-c2,
+migration 765: page, matview, cron and registry row), kept here for the record.** The ruling
 it was built for landed (503 now allows zero new pin loss, exempting the audited residue), and its
 matview depended on the five `properties` place columns W4-c drops, so 508 could not run while it
 existed. 513 drops the matview, both functions and the hourly cron job; the page is unrouted. The
@@ -6147,22 +6140,22 @@ booleans are rendered from `location_data/location_steps.py`, which also declare
 their order and each key's shape; `has_town` carries dedup's obec RANK floor and `located_no_town` is
 the plain complement. Wording lives in `frontend/src/lib/locationSteps.ts`, one file holding Czech and
 English for every key, so a better sentence costs no migration and a step cannot be renamed on one
-page only; the hidden set's two states carry ONE Czech name (`STATE_LABEL` in `LocationPinAudit.tsx`).
+page only.
 A candidate run stamps those keys into `candidate_generations.stats.waterfall` with the losses and
 shares already computed by the lane. The rail is `tests/test_location_steps_vocabulary.py`.
-`quality` buckets the set on active/delisted × `has_claims` — and since W15 `listings.is_active` is
-the page's ONLY live/delisted notion; the SPA page `/new-dedup/pin-audit` filters on those four axes
+`quality` bucketed the set on active/delisted × `has_claims` — and since W15 `listings.is_active` was
+the page's ONLY live/delisted notion; the SPA page `/new-dedup/pin-audit` filtered on those four axes
 plus the sibling flag; W1 deleted its overview matrix, state totals and split (read from
-`location_pin_audit_summary()`), so the one number on it is the exact count of the filtered list. The cohort is ONE arm — `listings` LEFT JOINed
+`location_pin_audit_summary()`), so the one number on it was the exact count of the filtered list. The cohort was ONE arm — `listings` LEFT JOINed
 to `listing_location`, `WHERE NOT <the consumer rule>` — instead of 514's union of two candidate
-sets, and the cohort CTE is MATERIALIZED so the evidence and snapshot laterals run once per cohort
-row (~80 k) and not once per listing. Refreshed hourly by pg_cron through `refresh_matview` (since
-719; `refresh-location-pin-audit`, guarded so the replay container skips it) with the budget armed **in
+sets, and the cohort CTE was MATERIALIZED so the evidence and snapshot laterals ran once per cohort
+row (~80 k) and not once per listing. It was refreshed hourly by pg_cron through `refresh_matview` (from
+719 until 765; `refresh-location-pin-audit`, guarded so the replay container skips it) with the budget armed **in
 the cron command** — migration 371's rule, or the refresh would silently die at the 120 s database
 default. Rule 25's deletion parity did not apply: it was an operator-requested review surface with
 a stated end. While it was live it led the TOP-LEVEL nav as `!AUDIT POLOH` (admin-only, first entry,
 badged with the unfiltered row count), not buried in the NEW DEDUP dropdown, because it was a
-decision waiting on the operator. Since 2026-10-27 (redesign ruling P33) it is the first item of the
+decision waiting on the operator. From 2026-10-27 (redesign ruling P33) it was the first item of the
 Admin menu; its count left the Admin trigger with W1.
 **The map's container carries an inline `position/inset/size` style and that is NOT redundant with
 Tailwind's `absolute inset-0`**: `globals.css` imports `maplibre-gl.css` AFTER `tailwindcss`, so the
@@ -6209,14 +6202,26 @@ location programme's work, not this one's.
   with nothing pending is one read; a building the new version did not change is not written. It is a module of its own and edits none of `ruian_load` (operator ruling
   2026-11-22); it needs no geo library (the building's point is not loaded: nothing reads it).
 - **Read.** `GET /properties/{id}/building` (`api/property_building.py`, `require_token`): the building of the
-  location ad's door, each code with its label, or `{"building": null}`. The SPA's Budova card
-  (`components/listing-detail/BuildingCard.tsx`, desktop and phone) is its one consumer; a property without a
-  building shows no card.
+  location ad's door, each code with its label, or `{"building": null}`. The SPA reads it once per page (`lib/useRegisterBuilding.ts`) for the Budova card
+  (`components/listing-detail/BuildingCard.tsx`, desktop and phone), the header's RÚIAN badge and every mark; a property without a
+  building shows none of them. Nor does one holding ANY ad of `pozemek` or `ostatni` (ruling 2026-11-23): a door is the
+  address an ad states, and a plot states its neighbour's. One predicate, `api/building_scope.py`, for every read
+  that goes from a property through its door to a building (facts, sales, the price purchase).
+- **Ad against register (operator ruling 2026-11-24).** ONE comparison, `api/register_comparison.py`, answers whether
+  an ad side DIFFERS from the record on a fact both state on the same basis; the read serves the verdicts and the
+  SPA only draws them (`components/register/RegisterMark.tsx`: one glyph beside the ad side's value on the property
+  page; the Budova card's row carries that value). Two grains, never mixed: `shown` judges the PROPERTY by the values
+  its page shows (`properties_public`, rolled up over its ads: a lift if any ad states one), `ads` each ad by its own
+  (the ad rows). It never says which side is right and corrects neither. Three facts: lift; construction, only
+  between classes both vocabularies name (masonry, panel, wood); floors in ONE direction only, an ad counting more
+  storeys than the register or a flat above its count (an ad counting fewer may be leaving out basements; no
+  tolerance is invented). The rule lives only in that module; a new compared fact also needs its wording
+  (`lib/registerBuilding.ts`) and its tag on the fact it sits beside.
 - **Three things a reader must know.** `floors` counts floors below ground, so it differs from an ad's count by
-  design: the card names that basis and never flags it against the ad. `completed_on` is a 31 December placeholder (1919 … 2000) for most older buildings and is shown as a
+  design: the card names that basis. `completed_on` is a 31 December placeholder (1919 … 2000) for most older buildings and is shown as a
   period MARKED as derived, with the register's own date beside it (`ruian_completion_period`; the bounds follow
-  the census age bands, an inference to check against the loaded data). Protection codes are stored but not
-  served: their code list is not seeded. The register calls these attributes non-reference data: a wrong record is possible,
+  the census age bands, an inference to check against the loaded data). Protection is served as `[{code, label}]` (list seeded by migration 766,
+  ČÚZK's "způsob ochrany nemovitosti": not only heritage); an empty list is the register stating none. The register calls these attributes non-reference data: a wrong record is possible,
   which is why the ad's differing value is shown beside it, not replaced.
 
 **An account's own ČÚZK login (#2597).** `account_cuzk_logins` (migration 759), entered in the avatar menu's dialog,
@@ -6224,6 +6229,26 @@ checked with WSDP's free status call and stored as a Fernet token (`CUZK_LOGIN_K
 `.claude/skills/database/references/tenancy.md`, `.claude/skills/toolkit-api/references/secrets-inventory.md`.
 Paid cadastre outputs are bought on that account and are visible only to the account that bought them (operator
 ruling 2026-11-22).
+
+**One unit's information, 10 Kč (migration 767).** A second paid output on the same machine
+(`api/cadastre_prices.py`, a purchase `Kind`): WSDP `generujInfoOJednotkach` for ONE unit, only a unit named in a
+deed the account already bought for the building (`POST /properties/{id}/building/units/{iskn_id}`). Stored in
+`cadastre_unit_facts`, the buying account's own: floor area (the cadastre records it only since 2024; NULL = not
+recorded), use, share of the common parts. The report names the unit's OWNERS (name, address, birth number):
+nothing reads them, and the kept file is a new document holding only the text of the leaves we read plus the
+report's element names; a CHECK refuses any other file on a unit's row, so code older than 767 cannot store one
+(operator ruling 2026-11-23). ROLLBACK RULE: before older code serves again, end every `kind = 'unit'` row in
+`pending`/`ordered`/`paid_unread`. `area_state` keeps "the cadastre records none" (`empty`) apart from "we found
+no such element" (`unknown`). The card shows what was read beside the row; it feeds no per-m² figure yet.
+
+**A bought deed borrows, never stores, an area (ruling 2026-11-23).** ČÚZK's price report states no area. A deed
+over exactly one unit is matched at READ time (`api/cadastre_deed_matches.py`) to what we hold of the same sale: a
+held sale of the building with its unit label and price, dated within the deed's signing-to-entry span (the card
+then shows that one row, the proceeding beside it), else an ad at a door of the building that was asking exactly
+the deed's price in a snapshot no later than the deed's signing, kept only when unambiguous (one property, one
+area, no other deed at that price). The ad's area is shown with a link to its property; a deed over several units
+is one price for all of them and never gets a per-m² figure. The match scans `listing_location` by door (no index
+on `ruian_adm_kod`, ~160 ms on prod), so it is skipped while a run of the account is live and the card polls.
 
 ## Cross-reference map
 
