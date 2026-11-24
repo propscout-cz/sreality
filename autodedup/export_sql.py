@@ -32,6 +32,7 @@ PROMOTED_COLUMNS: tuple[str, ...] = (
     "price_czk",
     "source_url",
     "description",
+    "ad_reference",
 )
 
 # LISTING_COLUMNS (scraper/db.py) minus PROMOTED_COLUMNS: the `attrs` bag, value-or-absent.
@@ -60,13 +61,10 @@ ATTR_COLUMNS: tuple[str, ...] = (
 # LISTING_COLUMNS the artifact deliberately does NOT carry, with the reason. `attrs` is
 # hashed into `decision_digest` (autodedup/incremental.py), so a column that joins it moves
 # every stored decision's digest and re-opens the rt generation's pairs; a column enters
-# here, not `attrs`, until the engine is ruled to read it.
-UNEXPORTED_COLUMNS: tuple[str, ...] = (
-    # The advertiser's own offer number (migration 667, 2026-10-23). The engine still mines
-    # codes from the description (`autodedup.text_facts.reference_codes`); reading the
-    # structured column instead is a ruling for the autodedup track, not an export change.
-    "ad_reference",
-)
+# here, not `attrs`, until the engine is ruled to read it. `ad_reference` (migration 667) left
+# on the 2026-11-23 ruling as its own key, which `decision_digest` hashes only where K-R reads
+# it (`Settings.ref_code_structured_categories`).
+UNEXPORTED_COLUMNS: tuple[str, ...] = ()
 
 # Selected, never exported: the two hash inputs behind `broker_key` (E28).
 BROKER_HASH_INPUT_COLUMNS: tuple[str, ...] = ("broker_phone", "broker_email")
@@ -154,6 +152,7 @@ SELECT
     l.ownership           AS ownership,
     l.published_at        AS published_at,
     l.description         AS description,
+    l.ad_reference        AS ad_reference,
     l.first_seen_at       AS first_seen_at,
     l.last_seen_at        AS last_seen_at,
     l.inactive_at         AS inactive_at,

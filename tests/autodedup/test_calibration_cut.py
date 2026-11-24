@@ -35,7 +35,8 @@ from tests.autodedup.lane_world import GENERATION, seed_lane, true_population
 from tests.autodedup.lane_world import world as lane_world
 
 STATISTICS = ("price_cuts", "exploded", "block_docs", "block_token_df", "corpus_docs",
-              "corpus_token_df", "block_attr_df", "pin_pop", "certifying_codes")
+              "corpus_token_df", "block_attr_df", "pin_pop", "certifying_codes",
+              "certifying_structured_codes")
 WORDS = ("prodej", "bytu", "cihlovy", "dum", "balkon", "sklep", "park", "metro", "rekonstrukce",
          "jih", "klidna", "lokalita", "garaz", "terasa", "vytah", "novostavba", "zahrada")
 TOWNS = ((554782, 500054), (554782, 490067), (563510, None), (582786, 411582), (500011, None))
@@ -74,6 +75,11 @@ def _record(listing_id: int, rnd: random.Random) -> dict[str, Any]:
                      "house_number": rnd.choice((None, "cp:12", "cp:14")),
                      "house_number_cp": "12", "psc": "11000", "country_status": "cz"},
         "price_history": [["2026-09-01T00:00:00+00:00", 5_100_000]] if rnd.random() < 0.3 else [],
+        # Drawn off the id, not `rnd`, so every other field of a seeded world stays as it was:
+        # one code in five carries idnes's prefix, one advert in seven prints the body's code.
+        "ad_reference": (None if listing_id % 4 == 0 else
+                         f"N{11000 + listing_id % 13}" if listing_id % 7 == 0 else
+                         f"{'IDNES-' if listing_id % 5 == 0 else ''}{4400 + listing_id % 29}"),
     }
 
 
@@ -134,6 +140,8 @@ def test_the_streamed_cut_is_the_whole_cut_at_every_chunk_size(name: str, seed: 
     exploded = [probe for probe, keys in whole.exploded.items() if keys]
     assert exploded and len(exploded) < len(whole.exploded), "some probes explode, some not"
     assert whole.certifying_codes and whole.price_cuts and whole.block_attr_df
+    assert bool(whole.certifying_structured_codes) == bool(
+        settings.ref_code_structured_categories), "the column is cut only where it is read"
     for chunk in (1, 2, 7, 33, 90):
         _same(whole, _streamed(fps, listings, settings, chunk))
 

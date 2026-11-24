@@ -127,7 +127,7 @@ def _rows_are_the_facts(db: FakePg, ds: Dataset, settings: Settings) -> None:
         listing, images = facts[listing_id]
         assert row["fp_digest"] == fp_digest(build_fingerprint(listing, images, settings),
                                              images), listing_id
-        assert row["dd"] == decision_digest(listing, images), listing_id
+        assert row["dd"] == decision_digest(listing, images, settings), listing_id
 
 
 def _lockstep(full: _Engine, narrow: _Engine, ds: Dataset, settings: Settings,
@@ -808,11 +808,11 @@ def test_a_change_no_feed_claims_is_seen_when_its_advert_is_claimed(
     assert not {pair for pair in seen if target in pair} - {
         pair for pair in seen if trigger in pair}, "only the claim's pairs are decided"
     assert narrow.db.rt_fp[(GEN, target)]["dd"] != decision_digest(
-        ds.listings[target], ds.images(target)), "its row is as the lane last read it"
+        ds.listings[target], ds.images(target), settings), "its row is as the lane last read it"
     seen.clear()
     ds.listings[trigger].price = (ds.listings[trigger].price or 0) + 10_000
     narrow.run(ds, settings, calibration, monkeypatch, [trigger, target])
     redecided = {pair for pair in seen if target in pair and trigger not in pair}
     assert redecided & ledgered, "claimed, its rejects are re-decided"
     assert narrow.db.rt_fp[(GEN, target)]["dd"] == decision_digest(
-        ds.listings[target], ds.images(target))
+        ds.listings[target], ds.images(target), settings)

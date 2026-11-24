@@ -55,7 +55,8 @@ def test_no_shipped_settings_turn_the_dial_on() -> None:
     assert W34.content_key_town_grain is False
     assert {k: v for k, v in W34.to_dict().items() if W31.to_dict()[k] != v} == {
         "area_veto_basis_floor_exempt": {"realitymix": 0.15},
-        "area_veto_gallery_exempt": {"byt": 0.2, "dum": 0.2, "pozemek": 0.2}}
+        "area_veto_gallery_exempt": {"byt": 0.2, "dum": 0.2, "pozemek": 0.2},
+        "ref_code_structured_categories": ("byt", "dum", "pozemek")}
 
 
 def test_dial_off_the_content_keys_are_the_bare_bands() -> None:

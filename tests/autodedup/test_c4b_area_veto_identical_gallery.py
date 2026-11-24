@@ -85,14 +85,16 @@ def vetoed(a: Fingerprint, b: Fingerprint, settings: Settings = W34) -> str | No
     return decision.veto
 
 
-def test_w34_is_w31_plus_its_two_dials() -> None:
+def test_w34_is_w31_plus_its_three_dials() -> None:
     w31 = json.loads((SETTINGS / "w31.json").read_text(encoding="utf-8"))
     row = json.loads((SETTINGS / "w34.json").read_text(encoding="utf-8"))
     assert row.pop("area_veto_gallery_exempt") == {"byt": 0.2, "dum": 0.2, "pozemek": 0.2}
     assert row.pop("area_veto_basis_floor_exempt") == {"realitymix": 0.15}
+    assert row.pop("ref_code_structured_categories") == ["byt", "dum", "pozemek"]
     assert "content_key_town_grain" not in row
     assert row == w31
     assert W31.area_veto_gallery_exempt == {}
+    assert W31.ref_code_structured_categories == ()
     assert W34.area_reject_pct == W31.area_reject_pct == 0.08
     assert W34.phash_tight == 6
 

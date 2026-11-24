@@ -30,6 +30,12 @@ if TYPE_CHECKING:  # pragma: no cover
 # number rather than an order key: it collides across objects and cannot certify anything.
 MIN_CODE_LEN: int = 5
 MAX_CODE_POPULATION: int = 8
+# The advertiser's own offer number as the portal states it (`listings.ad_reference`, migration
+# 667), spelled as the review queue spells it (`ui_sql._order_code`, built from these prefixes):
+# idnes and realitymix print sreality's `1166` as `IDNES-1166`. Shorter than this — a 1-3 digit
+# number among them — is a per-broker sequence, not a code (operator ruling 2026-11-23).
+STRUCTURED_CODE_PREFIXES: tuple[str, ...] = ("IDNES", "REALITYMIX")
+MIN_STRUCTURED_CODE_LEN: int = 4
 
 # The cluster invariant asks the same advert's facts once per PAIR, so a 256-member group would
 # re-scan one body 255 times. Keyed on the body text, which is what the readers actually parse.
@@ -170,6 +176,21 @@ def reference_codes(text: str | None) -> set[str]:
             if len(code) >= MIN_CODE_LEN:
                 out.add(code)
     return out
+
+
+_STRUCTURED_PREFIX = re.compile(r"^(?:" + "|".join(STRUCTURED_CODE_PREFIXES) + r")-",
+                                re.IGNORECASE)
+_STRUCTURED_ID = re.compile(r"^ID\s+", re.IGNORECASE)
+
+
+def structured_code(value: str | None) -> str | None:
+    """`listings.ad_reference` as one comparable code — portal prefix, `ID ` and whitespace
+    dropped, upper-cased as `reference_codes` spells a body's — or None when it is no code."""
+    if not value:
+        return None
+    code = _STRUCTURED_ID.sub("", _STRUCTURED_PREFIX.sub("", value.strip()))
+    code = re.sub(r"\s", "", code).upper()
+    return code if len(code) >= MIN_STRUCTURED_CODE_LEN else None
 
 
 def mask_codes(text: str | None) -> str | None:

@@ -199,6 +199,9 @@ class Listing:
     broker_firm_id: int | None = None
     location: Location = field(default_factory=Location)
     price_history: list[tuple[str, float | None]] = field(default_factory=list)
+    # `listings.ad_reference`, the advertiser's own offer number as stored (migration 667); a
+    # cohort file exported before the engine read it carries no such key.
+    ad_reference: str | None = None
 
     @property
     def area_basis(self) -> str | None:
@@ -236,6 +239,7 @@ class Listing:
             broker_firm_id=_int(raw.get("broker_firm_id")),
             location=Location.from_json(raw.get("location")),
             price_history=history,
+            ad_reference=_str(raw.get("ad_reference")),
         )
 
 

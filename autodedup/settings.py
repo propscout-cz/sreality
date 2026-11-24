@@ -21,7 +21,8 @@ from autodedup.features import DEFAULT_VOCABULARY_ATTR_KEYS
 # lower.
 CONTEXT_RULE_MIN_IMAGES_FLOOR: float = 4.0
 
-# C4b: the category_main vocabulary `area_veto_gallery_exempt` is keyed by: the census's own
+# C4b: the category_main vocabulary `area_veto_gallery_exempt` is keyed by (and
+# `ref_code_structured_categories` names): the census's own
 # `CATEGORY_MAIN`, restated because importing the census would widen the decision closure.
 CATEGORY_MAIN: tuple[str, ...] = ("byt", "dum", "pozemek", "komercni", "ostatni")
 # The portals `area_veto_basis_floor_exempt` is keyed by: the census's `SOURCES`, restated for
@@ -106,6 +107,12 @@ class Settings:
     # ON by default — 0 operator and 0 gold false merges on g5, and it is the only certificate
     # resting on a fact the broker states rather than on a resemblance.
     certificate_kr_enabled: bool = True
+    # K-R reads the advertiser's own offer number too (`listings.ad_reference`; operator ruling
+    # 2026-11-23, measured on operator truth the engine did not merge: byt 297 same / 1
+    # different, dum 131 / 0, pozemek 79 / 0, komerční 38 / 13 — one building's offices share
+    # one code). It certifies a pair only when BOTH sides are of these category_main values and
+    # one deal type; a body-printed code keeps certifying as before. Empty = w31.
+    ref_code_structured_categories: tuple[str, ...] = ()
     # E65 (W9): K-B may not certify a pair whose photographs the engine never compared. The
     # floor is read on both SIDES (`n_images_min`, E9-subtracted, so an all-catalogue gallery
     # counts as zero) and on the MATCHED set (`phash_loose_matches`); an absent match count
@@ -1115,6 +1122,8 @@ class Settings:
                              for key, value in dict(self.merge_policy).items()}
         self.d43_rental_colive_cross_portal_limbs = tuple(
             str(name) for name in self.d43_rental_colive_cross_portal_limbs)
+        self.ref_code_structured_categories = tuple(
+            str(name) for name in self.ref_code_structured_categories)
         self.validate()
 
     def validate(self) -> None:
@@ -1134,6 +1143,11 @@ class Settings:
             if not self.area_reject_pct < value < 1.0:
                 raise ValueError(
                     f"area_veto_gallery_exempt[{key}] must be in (area_reject_pct, 1): {value}")
+        unknown_categories = sorted(set(self.ref_code_structured_categories) - set(CATEGORY_MAIN))
+        if unknown_categories:
+            raise ValueError(
+                f"ref_code_structured_categories must be category_main values "
+                f"({', '.join(CATEGORY_MAIN)}): {unknown_categories}")
         for key, value in self.area_veto_basis_floor_exempt.items():
             if key not in SOURCES:
                 raise ValueError(

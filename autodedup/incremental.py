@@ -77,7 +77,7 @@ from autodedup.model import LogisticModel
 from autodedup.indistinguishable import FEATURE_SLOTS
 from autodedup.settings import Settings
 from autodedup.store_score import storable
-from autodedup.text_facts import reference_codes, states_from_price
+from autodedup.text_facts import reference_codes, states_from_price, structured_code
 
 GENERATION: str = "rt"
 
@@ -368,6 +368,10 @@ class Calibration:
     block_attr_df: dict[str, dict[str, int]] = field(default_factory=dict)
     pin_pop: dict[str, int] = field(default_factory=dict)
     certifying_codes: list[str] = field(default_factory=list)
+    # The codes the union of body and `ad_reference` carriers certifies (`FeatureContext.
+    # union_codes`). Cut only under settings that read the column, and serialised only when
+    # there are any, so a calibration cut without them keeps its bytes and its digest.
+    certifying_structured_codes: list[str] = field(default_factory=list)
     # E944: `digest()` hashed once. A pass hashes it three to seven times and the lane keeps one
     # calibration across passes; nothing writes into one after it is built (`replace` makes a
     # new one, with no digest yet).
@@ -392,6 +396,9 @@ class Calibration:
         certifying: set[str] = set()
         for codes in ctx.codes.values():
             certifying |= set(codes)
+        structured: set[str] = set()
+        for codes in ctx.union_codes.values():
+            structured |= set(codes)
         return cls(
             generation=generation,
             feature_version=FEATURE_VERSION,
@@ -410,6 +417,7 @@ class Calibration:
             },
             pin_pop=dict(ctx.pin_pop),
             certifying_codes=sorted(certifying),
+            certifying_structured_codes=sorted(structured),
         )
 
     def digest(self) -> str:
@@ -428,7 +436,7 @@ class Calibration:
         return self._digest
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "generation": self.generation,
             "feature_version": self.feature_version,
             "built_at": self.built_at,
@@ -443,6 +451,9 @@ class Calibration:
             "pin_pop": self.pin_pop,
             "certifying_codes": self.certifying_codes,
         }
+        if self.certifying_structured_codes:
+            out["certifying_structured_codes"] = self.certifying_structured_codes
+        return out
 
     @classmethod
     def from_json(cls, raw: Mapping[str, Any]) -> "Calibration":
@@ -461,6 +472,7 @@ class Calibration:
             block_attr_df={k: dict(v) for k, v in (raw.get("block_attr_df") or {}).items()},
             pin_pop=dict(raw.get("pin_pop") or {}),
             certifying_codes=list(raw.get("certifying_codes") or []),
+            certifying_structured_codes=list(raw.get("certifying_structured_codes") or []),
         )
 
 
@@ -541,6 +553,10 @@ def context_for(
         for block, bucket in calibration.block_attr_df.items()
     }
     certifying = set(calibration.certifying_codes)
+    # A calibration cut before the column was read carries no structured verdicts, so the
+    # column certifies nothing until the generation is re-cut under settings that read it.
+    structured = (set(calibration.certifying_structured_codes)
+                  if settings.ref_code_structured_categories else set())
     for listing_id, fp in fps.items():
         block = _block_of(fp)
         df = ctx.block_token_df.setdefault(block, {})
@@ -559,10 +575,16 @@ def context_for(
         )
         listing = listings.get(listing_id)
         if listing is not None:
-            kept = frozenset(code for code in reference_codes(listing.description)
-                             if code in certifying)
+            found = reference_codes(listing.description)
+            kept = frozenset(code for code in found if code in certifying)
             if kept:
                 ctx.codes[listing_id] = kept
+            if structured:
+                column = structured_code(listing.ad_reference)
+                both = frozenset(code for code in (found | {column} if column else found)
+                                 if code in structured)
+                if both:
+                    ctx.union_codes[listing_id] = both
     return ctx
 
 
@@ -1003,7 +1025,7 @@ def fp_digest(fp: Fingerprint, images: Sequence[Image]) -> str:
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def decision_digest(listing: Listing, images: Sequence[Image]) -> str:
+def decision_digest(listing: Listing, images: Sequence[Image], settings: Settings) -> str:
     """What a below-floor decision depends on of ONE side (E943): the whole listing and its
     gallery as the engine reads them, CLIP tags included. Not the CLIP vectors, which an
     unscored endpoint is read without: `clip_tagged_at` stands for them, the stamp the CLIP job
@@ -1011,9 +1033,18 @@ def decision_digest(listing: Listing, images: Sequence[Image]) -> str:
     (`invalidate_derived_signals`).
 
     Not `fp_digest`: that hashes the body as its SimHash and token count, which a one-token edit
-    keeps, and it misses broker identity, granularity, attrs, subtype, the URL and the CLIP job."""
+    keeps, and it misses broker identity, granularity, attrs, subtype, the URL and the CLIP job.
+
+    `ad_reference` enters as the code K-R reads, and only where it reads one (a category in
+    `ref_code_structured_categories`): every other advert hashes the bytes it hashed before."""
+    facts = asdict(listing)
+    column = facts.pop("ad_reference")
+    if listing.category_main in settings.ref_code_structured_categories:
+        code = structured_code(column)
+        if code is not None:
+            facts["ad_reference"] = code
     payload = json.dumps(
-        [asdict(listing),
+        [facts,
          sorted((img.image_id, img.seq, img.phash, img.pop, img.tags, img.clip_tagged_at)
                 for img in images)],
         sort_keys=True, default=str,
@@ -1395,7 +1426,7 @@ def run_pass(
         # share a pHash band, and the posting list is a set — a pass that read that difference
         # as a change would re-score the whole corpus on every drain.
         new_keys = sorted(set(keyer.index_keys(fp)))
-        dd = decision_digest(listing, working.images.get(listing_id, ()))
+        dd = decision_digest(listing, working.images.get(listing_id, ()), settings)
         # E960: a claimed advert whose decision digest moved under an unmoved fingerprint (a
         # body edit the SimHash keeps, a broker identity, tags) is refreshed too, so its stored
         # pairs are re-decided, not only its ledgered rejects; a row with no digest yet (written
@@ -1558,7 +1589,7 @@ def run_pass(
         for listing_id in blank:
             if listing_id in working.listings:
                 stamps[listing_id] = dds[listing_id] = decision_digest(
-                    working.listings[listing_id], working.images.get(listing_id, ()))
+                    working.listings[listing_id], working.images.get(listing_id, ()), settings)
     skipped = store.rejected([(lo, hi, dds[lo], dds[hi]) for lo, hi in asked
                               if dds[lo] and dds[hi]])
     decide -= skipped
@@ -1591,7 +1622,7 @@ def run_pass(
     for listing_id in {i for pair in decide for i in pair}:
         if not dds[listing_id] and listing_id in working.listings:
             stamps[listing_id] = dds[listing_id] = decision_digest(
-                working.listings[listing_id], working.images.get(listing_id, ()))
+                working.listings[listing_id], working.images.get(listing_id, ()), settings)
     if stamps:
         store.put_decision_digests(stamps)
     ctx = context_for(calibration, settings, working.fps, working.listings)
@@ -1647,7 +1678,7 @@ def run_pass(
         result.pairs_scored += 1
         evidence = dict(decision.evidence)
         if decision.certificate == "K-R":
-            evidence["ref_codes"] = ",".join(ctx.shared_codes(lo, hi))
+            evidence["ref_codes"] = ",".join(ctx.shared_codes(la, lb))
         # E93: a MERGE that does not rest on a photograph-free certificate waits while either
         # side's gallery exists and carries no hash at all. The zone written is the BAND — the
         # engine's own "look again" verdict — and what the pass decided is kept beside it so a

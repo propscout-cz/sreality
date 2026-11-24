@@ -206,6 +206,11 @@
     "max_cluster_size": 256,
     "min_evidence_families": 1,
     "operator_must_not_link": true,
+    "ref_code_structured_categories": [
+        "byt",
+        "dum",
+        "pozemek"
+    ],
     "repartition": true,
     "repartition_keep_factless": true,
     "repartition_max_rounds": 4,
