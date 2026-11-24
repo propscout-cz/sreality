@@ -11,6 +11,7 @@
  * with NULL disposition/area/amenities yields short-but-valid output, never a
  * broken box. */
 import type { ReactElement, ReactNode } from 'react';
+import type { ComparedFact } from '@/lib/api';
 import { enumLabel } from '@/lib/enums';
 import { fmtArea, fmtParkingLots } from '@/lib/format';
 import type { ListingPublic } from '@/lib/types';
@@ -19,6 +20,8 @@ export interface Fact {
   label: string;
   value: string | null;
   mono?: boolean;
+  /* The register states this fact too, so a surface may mark a difference (`RegisterMark`). */
+  compared?: ComparedFact;
 }
 
 export interface Amenity {
@@ -26,6 +29,7 @@ export interface Amenity {
   present: boolean | null;
   Glyph: () => ReactElement;
   note?: string | null;
+  compared?: ComparedFact;
 }
 
 /* The building/lot facts that live in the dense strip (the kind, area, floor
@@ -35,7 +39,7 @@ export function buildFacts(listing: ListingPublic): Fact[] {
   return pruneNulls([
     { label: 'Lot', value: fmtAreaOrNull(listing.estate_area), mono: true },
     { label: 'Garden', value: fmtAreaOrNull(listing.garden_area), mono: true },
-    { label: 'Building', value: enumLabel('building_type', listing.building_type) },
+    { label: 'Building', value: enumLabel('building_type', listing.building_type), compared: 'construction' },
     { label: 'Condition', value: enumLabel('condition', listing.condition) },
     { label: 'Energy', value: listing.energy_rating, mono: true },
     { label: 'Ownership', value: enumLabel('ownership', listing.ownership) },
@@ -57,10 +61,10 @@ export function buildFacts(listing: ListingPublic): Fact[] {
  * a separate, operator-approved UI refactor — it would change the listing-detail
  * header too, so it must not ride in unrelated work. */
 export function buildAmenities(listing: ListingPublic): Amenity[] {
-  return [
+  const all: Amenity[] = [
     { label: 'Balcony', present: listing.has_balcony, Glyph: BalconyGlyph },
     { label: 'Terrace', present: listing.terrace, Glyph: TerraceGlyph },
-    { label: 'Lift', present: listing.has_lift, Glyph: LiftGlyph },
+    { label: 'Lift', present: listing.has_lift, Glyph: LiftGlyph, compared: 'lift' },
     { label: 'Cellar', present: listing.cellar, Glyph: CellarGlyph },
     { label: 'Garage', present: listing.garage, Glyph: GarageGlyph },
     {
@@ -72,7 +76,8 @@ export function buildAmenities(listing: ListingPublic): Amenity[] {
           ? fmtParkingLots(listing.parking_lots)
           : null,
     },
-  ].filter((a) => a.present != null);
+  ];
+  return all.filter((a) => a.present != null);
 }
 
 /* -------------------------------------------------------------------------- */
