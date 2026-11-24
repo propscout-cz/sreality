@@ -28,6 +28,7 @@ from autodedup import apply as A
 from autodedup import apply_sql as S
 from autodedup import lane
 from autodedup.incremental_sql import RT_LEASE_READ_SQL
+from autodedup.legacy_retire import LEGACY_PLACED_SQL
 from scraper.job_lease import _ACQUIRE_LANE_SQL, _BOUND_SQL, _END_LANE_SQL, _UPSERT_LANE_SQL
 from toolkit import property_carriers, property_identity
 from tests._property_ledger import _Ledger
@@ -105,6 +106,7 @@ class FakeDb:
         self.settings: dict[str, Any] = {}
         self.ledger: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
+        self.legacy_placed: set[int] = set()
         self.statements: list[str] = []
         self.closed = False
         self.now = T0
@@ -252,6 +254,8 @@ class FakeDb:
             return [(list(r["member_ids"] or ()),) for r in self.ledger
                     if not r["dry_run"] and r["outcome"] == "refused"
                     and r["generation"] == p["generation"] and ids & set(r["member_ids"] or ())]
+        if sql == LEGACY_PLACED_SQL:
+            return [(lid,) for lid in sorted(set(p["listing_ids"]) & self.legacy_placed)]
         if sql == S.ENGINE_MERGES_SQL:
             ids, seen, out = set(p["listing_ids"]), set(), []
             for r in self.ledger:
@@ -693,6 +697,32 @@ def test_a_deal_type_clash_only_a_carried_advert_brings_still_refuses() -> None:
     group = _only(A.plan_apply(db, GEN, scope))
     assert group.reasons == [A.SKIP_CATEGORY_TYPE]
     assert group.detail["category_types"] == ["prodej", "pronajem"]
+
+
+def test_a_carried_advert_the_removed_engine_placed_holds_the_group_back() -> None:
+    # 12 rides on 200 only because the removed engine put it there: nobody decided 12 with 10.
+    db = FakeDb()
+    db.live_scope()
+    _pair_group(db, 10, [10, 11], [100, 200])
+    db.listing(12, 200)
+    db.legacy_placed = {12}
+    scope = A.effective_scope(db.settings[A.SCOPE_SETTING], {}, live=True)
+    asked = _asked(db, LEGACY_PLACED_SQL)
+    group = _only(A.plan_apply(db, GEN, scope))
+    assert group.reasons == [A.SKIP_CARRIES_LEGACY]
+    assert group.detail["legacy_merged_listings"] == [12]
+    assert asked[LEGACY_PLACED_SQL] == [[12]]
+
+
+def test_a_member_the_removed_engine_placed_does_not_hold_its_own_group_back() -> None:
+    # The engine decided 11 itself, so where the removed engine once put it is not asked.
+    db = FakeDb()
+    db.live_scope()
+    _pair_group(db, 10, [10, 11], [100, 200])
+    db.legacy_placed = {11}
+    scope = A.effective_scope(db.settings[A.SCOPE_SETTING], {}, live=True)
+    assert _only(A.plan_apply(db, GEN, scope)).reasons == []
+    assert not any("property_merge_events" in s for s in db.statements)
 
 
 def test_category_guards_mirror_the_chokepoint() -> None:

@@ -124,6 +124,7 @@ SKIP_MUST_NOT_LINK = "must_not_link"
 SKIP_CATEGORY_TYPE = "category_type_mix"
 SKIP_CATEGORY_MAIN = "category_main_incompatible"
 SKIP_MEMBER_OUT_OF_SCOPE = "member_out_of_scope"
+SKIP_CARRIES_LEGACY = "carries_legacy_merged_listing"
 SKIP_REFUSED_BEFORE = "refused_at_chokepoint_before"
 # Re-checked inside the group's own transaction, just before the merge (E903).
 SKIP_CHANGED_SINCE_PLAN = "changed_since_plan"
@@ -568,6 +569,16 @@ def plan_groups(
                         key=lambda mg: (mg.generation, mg.cluster_key))
         group.detail["engine_merges"] = [mg.to_json() for mg in behind]
 
+    # An advert the removed engine placed is carried by no merge of this one (operator
+    # 2026-11-24): nobody decided that pair. `retire_legacy` undoes the placement; until then
+    # the group waits. Asked only for carried adverts, so a group that carries none reads nothing.
+    carried = set().union(*(
+        extended_of[int(c["cluster_key"])] - {m.listing_id for m in ms}
+        for c, ms in candidates)) if candidates else set()
+    legacy: set[int] = set()
+    for chunk in _chunks(carried):
+        legacy |= legacy_retire.legacy_placed(conn, chunk)
+
     for cluster, members in candidates:
         key = int(cluster["cluster_key"])
         member_set = {m.listing_id for m in members}
@@ -592,6 +603,11 @@ def plan_groups(
             extended, listing_of, [props[pid] for pid in property_ids if pid in props])
         reasons += set_reasons
         detail.update(set_detail)
+
+        carried_legacy = sorted((extended - member_set) & legacy)
+        if carried_legacy:
+            reasons.append(SKIP_CARRIES_LEGACY)
+            detail["legacy_merged_listings"] = carried_legacy[:20]
 
         # The engine's own ledger (never property_merge_events, D7) refuses only a member set
         # the chokepoint refused before (E41). An undo of an engine merge, by anyone, bans
