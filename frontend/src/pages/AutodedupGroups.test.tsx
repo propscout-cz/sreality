@@ -117,6 +117,7 @@ function group(over: Partial<AutodedupGroup> & { cluster_key: number }): Autoded
     edges: { n_edges: 1, min_score: 0.61, mean_score: 0.61, n_certificates: 0 },
     verdict: null,
     stale_verdict: null,
+    hold: null,
     member_verdicts: [],
     ...over,
   };
@@ -822,6 +823,50 @@ describe('<AutodedupGroups>', () => {
     expect(api.getAutodedupGroups).toHaveBeenLastCalledWith(
       expect.objectContaining({ block: 563510, block_grain: null }),
     );
+  });
+
+  it('filters to the groups the engine left unmerged, and says why on the card', async () => {
+    vi.mocked(api.getAutodedupGroups).mockResolvedValue(
+      page([
+        group({
+          cluster_key: 7,
+          hold: {
+            outcome: 'skipped',
+            reason: 'carries_legacy_merged_listing',
+            held_at: '2026-11-24T08:20:00+00:00',
+            property_ids: [100219, 124595],
+            detail: { legacy_merged_listings: [379401] },
+          },
+        }),
+      ]),
+    );
+    const user = userEvent.setup();
+    renderPage();
+    const notice = await screen.findByTestId('apply-hold-notice');
+    expect(notice).toHaveTextContent('starý engine');
+    expect(notice).toHaveTextContent('#379401');
+    expect(screen.getByRole('link', { name: '#124595' })).toHaveAttribute(
+      'href',
+      '/property/124595',
+    );
+    await user.selectOptions(
+      screen.getByLabelText('Nesloučeno'),
+      'carries_legacy_merged_listing',
+    );
+    await waitFor(() =>
+      expect(api.getAutodedupGroups).toHaveBeenLastCalledWith(
+        expect.objectContaining({ hold: 'carries_legacy_merged_listing' }),
+      ),
+    );
+  });
+
+  it('drops a hold the server does not know instead of showing a banner', async () => {
+    renderPage('/autodedup/groups?hold=whatever');
+    await screen.findByText('#7');
+    expect(api.getAutodedupGroups).toHaveBeenLastCalledWith(
+      expect.objectContaining({ hold: null }),
+    );
+    expect(screen.queryByTestId('apply-hold-notice')).toBeNull();
   });
 
   it('shows the queue rather than a banner when the url carries a stale verdict', async () => {

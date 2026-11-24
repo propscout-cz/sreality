@@ -39,6 +39,7 @@ _LABELS: dict[str, str] = {
     usql.GROUPS_RANDOM_SQL: "groups_random",
     usql.GROUP_ONE_SQL: "group_one",
     usql.GROUP_MEMBERS_SQL: "members",
+    usql.GROUP_HOLDS_SQL: "holds",
     usql.MEMBER_TEXT_SQL: "member_text",
     usql.EDGE_SUMMARY_SQL: "edges",
     usql.LISTING_IMAGES_SQL: "images",
@@ -802,6 +803,54 @@ def test_group_filters_reach_the_statement_as_parameters(client, conn):
     assert params["limit"] == 11
 
 
+def test_the_hold_filter_reads_the_newest_ledger_row_of_the_group(client, conn):
+    """A group apply left unmerged is one whose NEWEST live ledger row is not a merge: a
+    group skipped once and merged later is not held, so the arm may not read any row."""
+    conn.canned = {"groups": [_cluster()], "groups_count": [(94,)]}
+    reason = "carries_legacy_merged_listing"
+    client.get("/autodedup/groups", params={"hold": reason})
+    assert _last_call(conn, usql.GROUPS_WEAKEST_SQL)["hold"] == reason
+    assert _last_call(conn, usql.GROUPS_COUNT_SQL)["hold"] == reason
+    arm = usql._CLUSTER_WHERE.split("HELD BY APPLY", 1)[1]
+    assert "ORDER BY a.applied_at DESC, a.id DESC" in arm and "LIMIT 1" in arm
+    assert "NOT a.dry_run" in arm and "h.outcome <> 'applied'" in arm
+
+
+def test_a_hold_outside_the_vocabulary_is_refused(client, conn):
+    assert client.get("/autodedup/groups", params={"hold": "anything"}).status_code == 400
+    for value in routes.HOLD_FILTER_VALUES:
+        assert client.get("/autodedup/groups", params={"hold": value}).status_code == 200
+
+
+def test_the_hold_vocabulary_is_applys_own_skip_reasons():
+    from autodedup import apply
+
+    skips = {value for name, value in vars(apply).items() if name.startswith("SKIP_")}
+    assert set(routes.HOLD_SKIP_REASONS) == skips
+    assert not skips & set(routes.HOLD_RETIRED_REASONS)
+
+
+def test_a_held_group_says_why_apply_left_it_unmerged(client, conn):
+    conn.canned = {
+        "groups": [_cluster()],
+        "holds": [(
+            _cluster()[0], "skipped", "carries_legacy_merged_listing",
+            datetime(2026, 11, 24, 8, 20, tzinfo=timezone.utc),
+            [100219, 124595], {"legacy_merged_listings": [379401]},
+        )],
+    }
+    item = client.get("/autodedup/groups").json()["data"]["items"][0]
+    assert item["hold"] == {
+        "outcome": "skipped",
+        "reason": "carries_legacy_merged_listing",
+        "held_at": "2026-11-24T08:20:00+00:00",
+        "property_ids": [100219, 124595],
+        "detail": {"legacy_merged_listings": [379401]},
+    }
+    conn.canned = {"groups": [_cluster()]}
+    assert client.get("/autodedup/groups").json()["data"]["items"][0]["hold"] is None
+
+
 def test_the_block_grain_travels_with_the_block_code(client, conn):
     """A block is a (code, grain) pair. `c490245` is a quarter and `o490245` a town, and
     migration 529 added `block_grain` because the code alone silently conflated the two —
@@ -839,7 +888,7 @@ def test_an_unset_group_filter_is_a_null_parameter_not_a_predicate(client, conn)
     params = _last_call(conn, usql.GROUPS_WEAKEST_SQL)
     for key in ("block", "block_grain", "source", "category_main", "category_type",
                 "min_size", "max_size",
-                "min_score", "max_score", "verdict", "shared_photo",
+                "min_score", "max_score", "verdict", "shared_photo", "hold",
                 "after_score", "after_key", "after_ts", "after_size"):
         assert params[key] is None, key
 
