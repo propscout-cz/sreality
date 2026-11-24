@@ -192,13 +192,20 @@ WHERE c.generation = %(generation)s::text
            AND """
     + _VERDICT_MATCHES
     + """ AND v.applies))
-  -- HELD BY APPLY: the group's NEWEST live ledger row is not a merge. The newest row and
-  -- never any row, because a group that was skipped and then merged is not held.
-  AND (%(hold)s::text IS NULL OR EXISTS (
-       SELECT 1
-         FROM (SELECT a.outcome, a.error
+  -- HELD BY APPLY: the group's NEWEST ledger row that is not a dry run is not a merge. The
+  -- newest row and never any row, because a group skipped and then merged is not held; a
+  -- merge later undone is not a hold either. Driven from the ledger's few non-merge rows:
+  -- asking every group for its newest row took 3.3 s on 110k groups, this form 0.4 s.
+  AND (%(hold)s::text IS NULL OR c.cluster_key IN (
+       SELECT k.cluster_key
+         FROM (SELECT DISTINCT a0.cluster_key
+                 FROM autodedup.applied_merges a0
+                WHERE a0.generation = %(generation)s::text AND NOT a0.dry_run
+                  AND a0.outcome <> 'applied') k
+        CROSS JOIN LATERAL (
+               SELECT a.outcome, a.error
                  FROM autodedup.applied_merges a
-                WHERE a.generation = c.generation AND a.cluster_key = c.cluster_key
+                WHERE a.generation = %(generation)s::text AND a.cluster_key = k.cluster_key
                   AND NOT a.dry_run
                 ORDER BY a.applied_at DESC, a.id DESC
                 LIMIT 1) h
@@ -208,7 +215,7 @@ WHERE c.generation = %(generation)s::text
 """
 )
 
-# WHY apply did not merge each group of one page: its newest live ledger row when that row
+# WHY apply did not merge each group of one page: its newest non-dry-run ledger row when it
 # is not a merge. `plan_json` is apply's own plan, so the properties and the reason's detail
 # are the ones it judged, never a second reading of the group.
 HOLD_COLUMNS: tuple[str, ...] = (
