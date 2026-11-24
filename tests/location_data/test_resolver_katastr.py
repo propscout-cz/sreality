@@ -310,8 +310,8 @@ def test_a_part_of_another_town_is_never_the_rows():
 )
 def test_a_ku_the_words_name_binds_the_part_its_name_spells(ku, expected):
     """A name is read as the place it spells, never by the doors its KÚ holds (operator
-    ruling Q4, 2026-11-24: the door rule for words was held after the wave shadow showed it
-    flip a town and contradict the words, e.g. Zaječov -> Kvaň)."""
+    2026-11-24: the door rule for words, Q2, is dropped; its wave shadow flipped a town and
+    contradicted the words, e.g. Zaječov -> Kvaň)."""
     resolution = _resolve([
         mm.claim(1, "obec_name", value_text="Praha"),
         mm.claim(2, "cast_obce_name", value_text=ku),

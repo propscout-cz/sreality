@@ -1388,7 +1388,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
 - **A point gives every unit it lies in — resolver v5.11 — built 2026-11-24** (#2642; operator rulings B and Q4
   2026-11-24; no migration, no contract change). A town-only row placed by a pin the portal declares precise takes the
   KÚ covering the pin and that KÚ's část by the door rule (≈ 7.4k active ads, 119 in Praha: property 311821 gets
-  Řeporyje). The door rule for a KÚ the WORDS name (Q2) was held after its wave shadow (a town flipped, 26 parts
+  Řeporyje). The door rule for a KÚ the WORDS name (Q2) was dropped by the operator (11-24) after its wave shadow (a town flipped, 26 parts
   against the words, 108 in-scope losses). **Next:** the engine gate on B's movers, the merge and the corpus
   re-resolve; W5b takes v5.12.
 - **W5c — three precision levels — ruled 2026-11-07/08, not built** (#2474; the precision grill's rulings in
