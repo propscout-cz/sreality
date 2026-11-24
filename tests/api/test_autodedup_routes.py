@@ -807,7 +807,7 @@ def test_the_hold_filter_reads_the_newest_ledger_row_of_the_group(client, conn):
     """A group apply left unmerged is one whose NEWEST live ledger row is not a merge: a
     group skipped once and merged later is not held, so the arm may not read any row."""
     conn.canned = {"groups": [_cluster()], "groups_count": [(94,)]}
-    reason = routes.apply_reasons.SKIP_CARRIES_LEGACY
+    reason = "carries_legacy_merged_listing"
     client.get("/autodedup/groups", params={"hold": reason})
     assert _last_call(conn, usql.GROUPS_WEAKEST_SQL)["hold"] == reason
     assert _last_call(conn, usql.GROUPS_COUNT_SQL)["hold"] == reason
@@ -820,6 +820,14 @@ def test_a_hold_outside_the_vocabulary_is_refused(client, conn):
     assert client.get("/autodedup/groups", params={"hold": "anything"}).status_code == 400
     for value in routes.HOLD_FILTER_VALUES:
         assert client.get("/autodedup/groups", params={"hold": value}).status_code == 200
+
+
+def test_the_hold_vocabulary_is_applys_own_skip_reasons():
+    from autodedup import apply
+
+    skips = {value for name, value in vars(apply).items() if name.startswith("SKIP_")}
+    assert set(routes.HOLD_SKIP_REASONS) == skips
+    assert not skips & set(routes.HOLD_RETIRED_REASONS)
 
 
 def test_a_held_group_says_why_apply_left_it_unmerged(client, conn):

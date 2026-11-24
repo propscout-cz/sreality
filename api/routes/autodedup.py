@@ -37,7 +37,6 @@ from pydantic import BaseModel, Field
 
 from api import dependencies as deps
 from api.category_clash_text import SAME_ENDING, clash_sentence
-from autodedup import apply as apply_reasons
 from autodedup import candidates as candidate_groups
 from autodedup import category_splits as categories
 from autodedup import progress_sql as psql
@@ -292,20 +291,20 @@ VERDICT_FILTER_VALUES: tuple[str, ...] = ("unreviewed", *VERDICT_VALUES)
 # matching nothing.
 GROUP_VERDICT_FILTER_VALUES: tuple[str, ...] = ("changed", *VERDICT_FILTER_VALUES)
 # WHY apply left a group unmerged (`autodedup.applied_merges`, the newest live row): `any`,
-# an outcome, or a skip reason. The reasons are apply's own constants; the three retired by
-# E989 stay because their rows stand in the ledger until apply reads the group again.
+# an outcome, or a skip reason. The reasons are apply's `SKIP_*` constants, spelled here
+# because nothing but the lane may import the apply path (a test pins the two together); the
+# three retired by E989 stay because their rows stand until apply reads the group again.
 HOLD_RETIRED_REASONS: tuple[str, ...] = (
     "property_spans_groups", "carries_ungrouped_listings", "carries_out_of_scope_listings",
 )
+HOLD_SKIP_REASONS: tuple[str, ...] = (
+    "carries_legacy_merged_listing", "category_type_mix", "category_main_incompatible",
+    "member_out_of_scope", "unattached_member", "property_not_active",
+    "operator_group_verdict", "operator_pair_verdict", "must_not_link",
+    "refused_at_chokepoint_before", "changed_since_plan",
+)
 HOLD_FILTER_VALUES: tuple[str, ...] = (
-    "any", "refused", "failed",
-    apply_reasons.SKIP_CARRIES_LEGACY, apply_reasons.SKIP_CATEGORY_TYPE,
-    apply_reasons.SKIP_CATEGORY_MAIN, apply_reasons.SKIP_MEMBER_OUT_OF_SCOPE,
-    apply_reasons.SKIP_UNATTACHED, apply_reasons.SKIP_INACTIVE_PROPERTY,
-    apply_reasons.SKIP_CLUSTER_VERDICT, apply_reasons.SKIP_PAIR_VERDICT,
-    apply_reasons.SKIP_MUST_NOT_LINK, apply_reasons.SKIP_REFUSED_BEFORE,
-    apply_reasons.SKIP_CHANGED_SINCE_PLAN,
-    *HOLD_RETIRED_REASONS,
+    "any", "refused", "failed", *HOLD_SKIP_REASONS, *HOLD_RETIRED_REASONS,
 )
 ZONE_VALUES: tuple[str, ...] = ("merge", "band", "reject")
 VERDICT_KINDS: tuple[str, ...] = ("pair", "cluster")
