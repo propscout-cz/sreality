@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 
 from api import dependencies as deps
 from api.category_clash_text import SAME_ENDING, clash_sentence
+from autodedup import apply as apply_reasons
 from autodedup import candidates as candidate_groups
 from autodedup import category_splits as categories
 from autodedup import progress_sql as psql
@@ -290,6 +291,22 @@ VERDICT_FILTER_VALUES: tuple[str, ...] = ("unreviewed", *VERDICT_VALUES)
 # never go stale that way, so `changed` is offered here and refused there rather than silently
 # matching nothing.
 GROUP_VERDICT_FILTER_VALUES: tuple[str, ...] = ("changed", *VERDICT_FILTER_VALUES)
+# WHY apply left a group unmerged (`autodedup.applied_merges`, the newest live row): `any`,
+# an outcome, or a skip reason. The reasons are apply's own constants; the three retired by
+# E989 stay because their rows stand in the ledger until apply reads the group again.
+HOLD_RETIRED_REASONS: tuple[str, ...] = (
+    "property_spans_groups", "carries_ungrouped_listings", "carries_out_of_scope_listings",
+)
+HOLD_FILTER_VALUES: tuple[str, ...] = (
+    "any", "refused", "failed",
+    apply_reasons.SKIP_CARRIES_LEGACY, apply_reasons.SKIP_CATEGORY_TYPE,
+    apply_reasons.SKIP_CATEGORY_MAIN, apply_reasons.SKIP_MEMBER_OUT_OF_SCOPE,
+    apply_reasons.SKIP_UNATTACHED, apply_reasons.SKIP_INACTIVE_PROPERTY,
+    apply_reasons.SKIP_CLUSTER_VERDICT, apply_reasons.SKIP_PAIR_VERDICT,
+    apply_reasons.SKIP_MUST_NOT_LINK, apply_reasons.SKIP_REFUSED_BEFORE,
+    apply_reasons.SKIP_CHANGED_SINCE_PLAN,
+    *HOLD_RETIRED_REASONS,
+)
 ZONE_VALUES: tuple[str, ...] = ("merge", "band", "reject")
 VERDICT_KINDS: tuple[str, ...] = ("pair", "cluster")
 
@@ -314,7 +331,7 @@ GROUP_FILTER_KEYS: frozenset[str] = frozenset(
     {
         "generation", "after", "limit", "block", "block_grain", "source", "category_main",
         "category_type", "min_size", "max_size", "min_score", "max_score", "verdict",
-        "shared_photo", "sort", "seed",
+        "shared_photo", "sort", "seed", "hold",
     }
 )
 RESIDUAL_FILTER_KEYS: frozenset[str] = frozenset(
@@ -1085,6 +1102,7 @@ def groups(
     max_score: float | None = Query(None),
     verdict: str | None = Query(None),
     shared_photo: int | None = Query(None),
+    hold: str | None = Query(None),
     sort: str = Query("weakest"),
     seed: str | None = Query(None),
     conn: Any = Depends(deps.get_db_conn),
@@ -1101,12 +1119,14 @@ def groups(
     _one_of("sort", sort, tuple(GROUP_SORTS))
     sample_seed = _seed(seed)
     _one_of("verdict", verdict, GROUP_VERDICT_FILTER_VALUES)
+    _one_of("hold", hold, HOLD_FILTER_VALUES)
     _one_of("block_grain", block_grain, usql.BLOCK_GRAIN_VALUES)
     if not store_ready(conn):
         return _not_ready()
 
     params: dict[str, Any] = {
         "generation": generation,
+        "hold": hold,
         "block": block,
         # The grain travels WITH the code, never instead of it: a cast-obce code and an obec
         # code share one number space (migration 529), so `block` alone can name two blocks.
@@ -1157,6 +1177,7 @@ def groups(
         members: dict[int, list[dict[str, Any]]] = {key: [] for key in keys}
         edges: dict[int, dict[str, Any]] = {}
         member_verdicts: dict[int, list[dict[str, Any]]] = {key: [] for key in keys}
+        holds: dict[int, dict[str, Any]] = {}
         if keys:
             for row in _rows(
                 usql.MEMBER_COLUMNS,
@@ -1182,6 +1203,11 @@ def groups(
                 row["family_names"] = _families(row.pop("families"))
                 edges[row.pop("cluster_key")] = row
             member_verdicts = _member_verdicts(conn, members)
+            for row in _rows(
+                usql.HOLD_COLUMNS,
+                _fetch(conn, usql.GROUP_HOLDS_SQL, {"keys": keys, "generation": generation}),
+            ):
+                holds[row.pop("cluster_key")] = row
     except _STORE_BEHIND:
         return _not_ready()
 
@@ -1202,6 +1228,9 @@ def groups(
                 # The operator's own rulings on the members' PAIRS, so a card can show the
                 # split that is stored rather than a blank set of letters over it (E50).
                 "member_verdicts": member_verdicts.get(cluster["cluster_key"], []),
+                # Why apply left the group unmerged: its newest live ledger row when that
+                # row is not a merge. Null on a merged group and on one apply has not read.
+                "hold": holds.get(cluster["cluster_key"]),
             }
         )
 

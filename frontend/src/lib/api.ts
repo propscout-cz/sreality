@@ -4322,6 +4322,16 @@ export interface AutodedupClusterRow {
   last_changed_at?: string | null;
 }
 
+/* Why apply left a proposed group unmerged: its newest live ledger row
+ * (`autodedup.applied_merges`) when that row is not a merge. */
+export interface AutodedupApplyHold {
+  outcome: string;
+  reason: string | null;
+  held_at: string | null;
+  property_ids: number[];
+  detail: { legacy_merged_listings?: number[] } | null;
+}
+
 /* The cluster as the page renders it: the row, flattened together with its
  * members, its edge rollup and the operator's latest verdict. The server sends
  * those as four sibling objects (`{cluster, members, edges, verdict}`); the
@@ -4338,6 +4348,7 @@ export interface AutodedupGroup extends AutodedupClusterRow {
   member_verdicts: AutodedupVerdictRow[];
   /* The ruling that no longer applies, and what moved under it (E58). */
   stale_verdict: AutodedupStaleVerdict | null;
+  hold: AutodedupApplyHold | null;
   /* Decoded once — from the server's names when it sends them, from the bitmask
    * otherwise. The chips read this and never the raw smallint. */
   family_names: string[];
@@ -4367,6 +4378,7 @@ interface WireGroupItem {
   verdict?: AutodedupVerdictRow | null;
   stale_verdict?: AutodedupStaleVerdict | null;
   member_verdicts?: AutodedupVerdictRow[] | null;
+  hold?: (Omit<AutodedupApplyHold, 'property_ids'> & { property_ids?: number[] | null }) | null;
 }
 
 /* Decode an evidence-family value that may arrive as the stored bitmask or as
@@ -4398,6 +4410,7 @@ export function normalizeGroup(item: WireGroupItem & Partial<AutodedupClusterRow
     verdict: item.verdict ?? null,
     stale_verdict: item.stale_verdict ?? null,
     member_verdicts: item.member_verdicts ?? [],
+    hold: item.hold ? { ...item.hold, property_ids: item.hold.property_ids ?? [] } : null,
     family_names: decodeFamilies(
       cluster.evidence_family_names ?? edges?.family_names ?? edges?.families ??
         cluster.evidence_families,
@@ -4661,6 +4674,8 @@ export interface AutodedupGroupFilters {
   min_score?: number | null;
   max_score?: number | null;
   verdict?: string | null;
+  /* Why apply left the group unmerged: `any`, an outcome or a skip reason. */
+  hold?: string | null;
   shared_photo?: 0 | 1 | null;
   /* `random` is the SEEDED sample order (D6) — stable across pages and reloads
    * for one seed, and uncorrelated with anything the engine did, which is what

@@ -56,6 +56,7 @@ import EvidenceChips, {
 } from '@/components/autodedup/EvidenceChips';
 import { parseBlockValue } from '@/components/autodedup/BlockSelect';
 import StaleVerdictNotice from '@/components/autodedup/StaleVerdictNotice';
+import ApplyHoldNotice, { HOLD_OPTIONS } from '@/components/autodedup/ApplyHoldNotice';
 import {
   GenerationNotice,
   useAutodedupGenerations,
@@ -123,6 +124,7 @@ export function toQuery(f: GroupFilterState, after: string | null): AutodedupGro
     min_score: num(f.min_score),
     max_score: num(f.max_score),
     verdict: f.verdict || null,
+    hold: f.hold || null,
     shared_photo: flag(f.shared_photo),
     sort: f.sort,
     /* Sent only with the order it names: a seed on a weakest-edge query is a
@@ -291,6 +293,13 @@ export default function AutodedupGroups() {
             { value: '1', label: 'jen varované' },
             { value: '0', label: 'bez varování' },
           ]}
+        />
+        {/* The groups the engine decided and apply did NOT merge, by its reason. */}
+        <FilterSelect
+          label="Nesloučeno"
+          value={filters.hold}
+          onChange={(hold) => setFilters({ ...filters, hold })}
+          options={HOLD_OPTIONS}
         />
         {/* The one order that is not a working order: a seeded shuffle, so the
           * error rate measured on it is about the engine rather than about the
@@ -492,6 +501,7 @@ function GroupCard({
         * the group is big, which is the honest shape for a surface that asks
         * "are these the same flat?". */}
       <StaleVerdictNotice stale={stale} />
+      <ApplyHoldNotice hold={group.hold} />
 
       <MemberGrid
         members={group.members}

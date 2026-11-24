@@ -192,8 +192,41 @@ WHERE c.generation = %(generation)s::text
            AND """
     + _VERDICT_MATCHES
     + """ AND v.applies))
+  -- HELD BY APPLY: the group's NEWEST live ledger row is not a merge. The newest row and
+  -- never any row, because a group that was skipped and then merged is not held.
+  AND (%(hold)s::text IS NULL OR EXISTS (
+       SELECT 1
+         FROM (SELECT a.outcome, a.error
+                 FROM autodedup.applied_merges a
+                WHERE a.generation = c.generation AND a.cluster_key = c.cluster_key
+                  AND NOT a.dry_run
+                ORDER BY a.applied_at DESC, a.id DESC
+                LIMIT 1) h
+        WHERE h.outcome <> 'applied'
+          AND (%(hold)s::text = 'any' OR h.outcome = %(hold)s::text
+               OR (h.outcome = 'skipped' AND h.error = %(hold)s::text))))
 """
 )
+
+# WHY apply did not merge each group of one page: its newest live ledger row when that row
+# is not a merge. `plan_json` is apply's own plan, so the properties and the reason's detail
+# are the ones it judged, never a second reading of the group.
+HOLD_COLUMNS: tuple[str, ...] = (
+    "cluster_key", "outcome", "reason", "held_at", "property_ids", "detail",
+)
+GROUP_HOLDS_SQL = """
+SELECT k.cluster_key, h.outcome, h.error, h.applied_at,
+       h.plan_json -> 'property_ids', h.plan_json -> 'detail'
+  FROM unnest(%(keys)s::bigint[]) AS k(cluster_key)
+ CROSS JOIN LATERAL (
+       SELECT a.outcome, a.error, a.applied_at, a.plan_json
+         FROM autodedup.applied_merges a
+        WHERE a.generation = %(generation)s::text AND a.cluster_key = k.cluster_key
+          AND NOT a.dry_run
+        ORDER BY a.applied_at DESC, a.id DESC
+        LIMIT 1) h
+ WHERE h.outcome <> 'applied'
+"""
 
 # Default sort: the WEAKEST accepted edge first, because that is where the errors live (§8).
 # `min_edge_score` is nullable (a singleton cluster has no edge), so the sort key coalesces to
