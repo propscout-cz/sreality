@@ -323,7 +323,7 @@ select coalesce(max(f.listing_id), %(after_id)s::bigint) as slice_max,
 # kept the block keys of its first claim (3,105 rows on 2026-10-25). The same slice returns the
 # in-scope rows whose stored `block_key` is not today's (`fingerprint.block_key_of` over
 # `listing_location`), for a re-claim. The KEY is compared, never `resolved_at`: a re-resolution
-# that lands on the same block moves nothing, and a row written before migration 677 (no key)
+# that lands on the same block moves nothing, and a row written before migration 769 (no key)
 # is never returned. Under `all` the scope arm of the join holds every location, which leaves
 # `departed` empty as before.
 RT_SCOPE_DRIFT_SQL = """

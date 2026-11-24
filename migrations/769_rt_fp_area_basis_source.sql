@@ -1,4 +1,4 @@
--- 677: each advert's PORTAL, AREA BASIS and BLOCK KEY on the real-time lane's fingerprint row.
+-- 769: each advert's PORTAL, AREA BASIS and BLOCK KEY on the real-time lane's fingerprint row.
 --
 -- WHY. The pair veto's area clause gains a dial, `area_veto_basis_floor_exempt` (portal -> max
 -- gap): realitymix prints "celková podlahová plocha" (`listings.area_basis = 'floor'`), which

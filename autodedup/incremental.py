@@ -163,7 +163,7 @@ class GuardRow:
     area_m2: float | None
     disposition: str | None
     floor: int | None
-    # NULL on a row written before migration 677: the basis exemption does not fire for it.
+    # NULL on a row written before migration 769: the basis exemption does not fire for it.
     source: str | None = None
     area_basis: str | None = None
 
@@ -279,7 +279,7 @@ class FpRow:
     # key for a side the pass does not read. Empty on a row written before migration 604.
     dd: str = ""
     # The `block_key` its postings were keyed under: the lane's drift sweep re-claims the row
-    # when today's location gives another (A). None on a row written before migration 677.
+    # when today's location gives another (A). None on a row written before migration 769.
     block_key: str | None = None
 
     @property

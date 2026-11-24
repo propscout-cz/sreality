@@ -6,7 +6,7 @@ than 8 % off their partner, against 1 of 69 where realitymix states the užitná
 (research experiments/portal_columns.md section 3.2). Capped at 15 %, the exemption releases
 13 operator-SAME pairs (9 properties) and no DIFFERENT pair (V2). The area stays a scoring
 feature; only the veto yields. The lane vetoes a neighbour on its stored `rt_fp` columns
-(`GuardRow`), so the two facts travel there too (migration 677).
+(`GuardRow`), so the two facts travel there too (migration 769).
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from autodedup.settings import Settings
 
 ROOT = Path(__file__).resolve().parents[2]
 SETTINGS = ROOT / "autodedup/settings"
-MIGRATION = ROOT / "migrations/677_rt_fp_area_basis_source.sql"
+MIGRATION = ROOT / "migrations/769_rt_fp_area_basis_source.sql"
 W31 = Settings.from_json(SETTINGS / "w31.json")
 W34 = Settings.from_json(SETTINGS / "w34.json")
 EXEMPT = Settings.from_dict({**W31.to_dict(), "area_veto_basis_floor_exempt": {"realitymix": 0.15}})
@@ -121,7 +121,7 @@ def test_the_rt_lane_s_served_rows_read_the_same_rule() -> None:
     partner = GuardRow(2, "komercni", "prodej", 100.0, None, None, "sreality", "usable")
     assert pair_veto(mix, partner, W31) == "area"
     assert pair_veto(mix, partner, EXEMPT) is None
-    # A row written before migration 677 carries neither column: the veto stands.
+    # A row written before migration 769 carries neither column: the veto stands.
     legacy = GuardRow(3, "komercni", "prodej", 88.0, None, None)
     assert pair_veto(legacy, partner, EXEMPT) == "area"
 

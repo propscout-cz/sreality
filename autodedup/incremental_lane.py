@@ -3539,7 +3539,7 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         present = _rows(conn, RT_STORE_PRESENT_SQL)
         if not present or not present[0][0]:
             raise SystemExit("autodedup realtime store absent — migration 539, 596, 604, 616 or "
-                             "677 not applied")
+                             "769 not applied")
         if not _rows(conn, RT_CALIBRATION_PRESENT_SQL, {"generation": generation}):
             return {"skipped": "unseeded",
                     "reason": (f"generation {generation!r} has no calibration — seed it with "
@@ -4198,7 +4198,7 @@ def run_rt_seed(
         present = _rows(conn, RT_STORE_PRESENT_SQL)
         if not present or not present[0][0]:
             raise SystemExit("autodedup realtime store absent — migration 539, 596, 604, 616 or "
-                             "677 not applied")
+                             "769 not applied")
         existing = _rows(conn, RT_CALIBRATION_PRESENT_SQL, {"generation": generation})
         control = lane_settings(conn, [scope_setting_key(generation),
                                        seed_version_key(generation)])

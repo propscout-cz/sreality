@@ -78,7 +78,7 @@ def test_a_re_resolution_onto_the_same_block_is_not_reclaimed() -> None:
     db.rt_fp[(GEN, 61)] = _row(f"c{VYSOCANY}")
     db.rt_fp[(GEN, 62)] = _row(None)
     _place(db, 61, PRAHA, VYSOCANY, resolved_at=later)   # re-resolved, same quarter
-    _place(db, 62, LIBEREC, resolved_at=later)           # moved, but a row from before 677
+    _place(db, 62, LIBEREC, resolved_at=later)           # moved, but a row from before 769
     work = _sweep(db)
     assert _relocated(work.claim(50)) == []
     assert work.windows["relocated"] == 0
