@@ -255,8 +255,8 @@ def broker_listings(conn: Any, broker_id: int, *, limit: int = 500) -> dict[str,
 
 # The broker's inventory, one row per property of the book that Browse serves (the footprint's join): the property's
 # label, type and area, and the broker's own spell there: whether an ad of theirs still runs, their portals, their
-# last price and the change from their first (the pair the price figures count, so the rows add up to the tile; no
-# change without a price step). Live spells first, newest first; `last_seen_at` = when the spell ended, the
+# last price and the change from their first (the pair the price figures count, which also count the book's rows
+# Browse does not serve yet; no change without a price step). Live spells first, newest first; `last_seen_at` = when the spell ended, the
 # property's last sighting while it runs.
 _BROKER_PROPERTIES_SQL = """
     SELECT b.property_id, l.listing_id, l.display_label, l.category_main, l.category_type, l.disposition, l.subtype,

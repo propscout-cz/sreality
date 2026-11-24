@@ -278,6 +278,19 @@ describe('<BrokerDetail> inventory filters', () => {
     fireEvent.click(within(card).getByRole('button', { name: 'Prodej' }));
     expect(count()).toBe('0 z 42');
   });
+
+  it('recedes the previous selection while the new one loads', async () => {
+    vi.mocked(brokers.fetchBrokerDossier).mockResolvedValue({ ...dossier({}), categories: CATEGORIES });
+    vi.mocked(brokers.fetchBrokerProperties)
+      .mockResolvedValueOnce(page([property({})]))
+      .mockReturnValueOnce(new Promise(() => {}));
+    renderPage();
+    const box = (await screen.findByRole('table')).parentElement!;
+    expect(box).toHaveAttribute('aria-busy', 'false');
+    fireEvent.click(screen.getByRole('button', { name: 'Domy' }));
+    await waitFor(() => expect(box).toHaveAttribute('aria-busy', 'true'));
+    expect(box).toHaveClass('opacity-50');
+  });
 });
 
 /* Section cards (operator ruling 2026-10-28, system.md § Section cards): the

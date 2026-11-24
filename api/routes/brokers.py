@@ -17,6 +17,7 @@ envelope.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -122,8 +123,10 @@ def get_broker_properties(
     if cursor is not None:
         try:
             (active, at), property_id = decode_cursor(cursor)
-            after = (bool(active), str(at), int(property_id))
-        except (ValueError, TypeError) as exc:
+            if not isinstance(active, bool) or not isinstance(property_id, int):
+                raise ValueError("malformed cursor")
+            after = (active, datetime.fromisoformat(at).isoformat(), property_id)
+        except (ValueError, TypeError, OverflowError) as exc:
             raise HTTPException(status_code=422, detail="malformed cursor") from exc
     result = brokers.broker_properties(conn, broker_id, category_main=category_main,
                                        category_type=category_type, after=after)
