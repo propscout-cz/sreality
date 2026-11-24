@@ -98,16 +98,6 @@ def get_broker(
     return _policy(result, claims)
 
 
-@router.get("/{broker_id}/listings")
-def get_broker_listings(
-    broker_id: int,
-    limit: int = Query(default=500, ge=1, le=2000),
-    conn: Any = Depends(deps.get_db_conn),
-    claims: dict = Depends(deps.verify_jwt),
-) -> dict[str, Any]:
-    return _policy(brokers.broker_listings(conn, broker_id, limit=limit), claims)
-
-
 @router.get("/{broker_id}/properties")
 def get_broker_properties(
     broker_id: int,

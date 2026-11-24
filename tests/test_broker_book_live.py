@@ -341,15 +341,13 @@ def test_the_book_reads_every_ad_of_the_broker(cur: Any) -> None:
                                  unpriced: (3_000_000, 3_000_000, 0)}
 
 
-def test_the_dossier_and_the_inventory_read_the_brokers_price_changes(cur: Any) -> None:
+def test_the_dossier_reads_the_brokers_price_changes(cur: Any) -> None:
     """The dossier counts the book's priced and repriced properties, all and by the row's status, with a median over
-    the repriced ones from MIN_N up; a price cut and restored is repriced. An inventory row carries its own ad's
-    change, none for an ad nothing ever changed on."""
+    the repriced ones from MIN_N up; a price cut and restored is repriced."""
     from toolkit import brokers
 
     now, broker = _now(cur), _broker(cur)
     identity = _identity(cur, broker)
-    ads = {}
     for last, active in ((4_500_000, True), (4_000_000, True), (4_800_000, True), (5_250_000, True),
                          (4_700_000, False), (5_000_000, False), (None, True)):
         pid = _property(cur)
@@ -359,7 +357,6 @@ def test_the_dossier_and_the_inventory_read_the_brokers_price_changes(cur: Any) 
             _snapshot(cur, ad, 5_000_000, 30 * 24)
             if last != 5_000_000:
                 _snapshot(cur, ad, last, 10 * 24)
-        ads[ad] = last
         properties_changed(cur.connection, [pid])
     pid = _property(cur)
     back = _ad(cur, pid, identity, now - 30 * _D, now - 2 * _D, active=False, price=5_000_000)
@@ -376,14 +373,6 @@ def test_the_dossier_and_the_inventory_read_the_brokers_price_changes(cur: Any) 
     assert figures["active"] == {"priced": 4, "repriced": 4, "repriced_pct": None, "median_pct": None}
     assert figures["inactive"] == {"priced": 3, "repriced": 2, "repriced_pct": None, "median_pct": None}
     assert brokers.get_broker(cur.connection, broker)["data"]["price_change"] == figures
-
-    rows = {r["listing_id"]: r for r in brokers.broker_listings(cur.connection, broker)["data"]}
-    assert set(rows) == {*ads, back}
-    for ad, last in ads.items():
-        want = None if last in (None, 5_000_000) else pytest.approx((last - 5_000_000) / 50_000)
-        assert rows[ad]["price_change_pct"] == want
-        assert rows[ad]["price_change_count"] == (0 if last in (None, 5_000_000) else 1)
-    assert (rows[back]["price_change_pct"], rows[back]["price_change_count"]) == (0, 2)
 
 
 def test_tom_observed_follows_the_brokers_first_ad_in_the_projection_order(cur: Any) -> None:

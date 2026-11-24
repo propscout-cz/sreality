@@ -104,8 +104,8 @@ waves and W0's measurements: `docs/design/broker-board.md`.
 
 - **The inventory by property** (#2654, 2026-11-24): the broker page's table reads the book,
   one row per property with the broker's own price and price change, exact counts and paging
-  (`docs/design/broker-board.md` § The inventory by property). Owed: the follow-up PR that
-  deletes `GET /brokers/{id}/listings` and drops `broker_listings_public`.
+  (`docs/design/broker-board.md` § The inventory by property); the per-ad route and its view
+  `broker_listings_public` are deleted (migration 772).
 
 ## Next
 

@@ -2432,7 +2432,7 @@ renumber.** Navigate by area:
     the shown price. That rule is ONE function, `listing_price_history(head, broker)` (migrations
     768, 770), with its percent `change_pct` (`measure_price_change_pct(first, last)` from two
     priced snapshots up, NULL below: nothing on the advert ever changed): the rollup asks it for the
-    canonical advert, the broker inventory for each advert, and `broker_book_projection` for every
+    canonical advert and `broker_book_projection` for every
     advert of the broker on the property, bounded to the broker's own adverts, storing on the book
     the history of their most-repriced one (`first_price_czk`, `last_price_czk`, `price_changes`).
     A broker's price figures (`toolkit.brokers.price_change`: priced, repriced = at least one price
@@ -5880,7 +5880,7 @@ evidence, a sibling with a point, a queued re-resolve), the rows the old audit p
 **ONE LABEL, ONE CODE PREDICATE.** Every surface renders `location_display_label(...)` (migration
 503, one IMMUTABLE SQL function over seven columns): foreign country code, else street + čp/čo +
 obec, else část obce + obec, else obec, else NULL. It is published by `browse_projection`,
-`listings_public`, `broker_listings_public` and `properties_public`
+`listings_public` and `properties_public`
 (`pipeline_board_public` reads it back off `properties_public`, because it is `security_invoker`
 while `listing_location` is revoked from `authenticated`), and the API's raw-SQL surfaces call the
 same function with the same columns — where eleven sites used to compose a place string out of five
