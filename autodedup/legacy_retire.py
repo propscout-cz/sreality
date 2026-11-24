@@ -87,8 +87,8 @@ RETIRE_BY: str = "autodedup-legacy-retire"
 LEGACY_SOURCE: str = "auto"
 
 # The adverts an old-engine merge moved that still sit where it put them. Read by the apply's
-# plan for the adverts a merge would CARRY (E989): a whole-property merge must not carry an
-# old-engine placement into an engine property, because no one decided that pair. A write
+# plan over every advert of a property a merge would carry adverts from (E989 vi): a row names
+# only the MOVED advert, and no one decided what the old merge tied together. A write
 # guard, never a label; it goes with this module when the last legacy group is undone.
 LEGACY_PLACED_SQL = """
 select distinct e.listing_ref_id

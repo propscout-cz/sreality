@@ -711,11 +711,27 @@ def test_a_carried_advert_the_removed_engine_placed_holds_the_group_back() -> No
     group = _only(A.plan_apply(db, GEN, scope))
     assert group.reasons == [A.SKIP_CARRIES_LEGACY]
     assert group.detail["legacy_merged_listings"] == [12]
-    assert asked[LEGACY_PLACED_SQL] == [[12]]
+    assert asked[LEGACY_PLACED_SQL] == [[11, 12]]
 
 
-def test_a_member_the_removed_engine_placed_does_not_hold_its_own_group_back() -> None:
-    # The engine decided 11 itself, so where the removed engine once put it is not asked.
+def test_a_property_the_removed_engine_built_is_not_carried_through_its_placed_member() -> None:
+    # The removed engine put 11 beside 12 on 200. The engine decided 10 with 11; only the old
+    # merge ties 12 to them, and its row names 11 (the moved advert), not 12.
+    db = FakeDb()
+    db.live_scope()
+    _pair_group(db, 10, [10, 11], [100, 200])
+    db.listing(12, 200)
+    db.legacy_placed = {11}
+    scope = A.effective_scope(db.settings[A.SCOPE_SETTING], {}, live=True)
+    asked = _asked(db, LEGACY_PLACED_SQL)
+    group = _only(A.plan_apply(db, GEN, scope))
+    assert group.reasons == [A.SKIP_CARRIES_LEGACY]
+    assert group.detail["legacy_merged_listings"] == [11]
+    assert asked[LEGACY_PLACED_SQL] == [[11, 12]]
+
+
+def test_an_old_property_the_engine_decided_advert_by_advert_merges_and_reads_nothing() -> None:
+    # Every advert of 200 is a member: the engine decided each pair itself, nothing is carried.
     db = FakeDb()
     db.live_scope()
     _pair_group(db, 10, [10, 11], [100, 200])

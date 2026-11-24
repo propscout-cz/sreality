@@ -569,14 +569,21 @@ def plan_groups(
                         key=lambda mg: (mg.generation, mg.cluster_key))
         group.detail["engine_merges"] = [mg.to_json() for mg in behind]
 
-    # An advert the removed engine placed is carried by no merge of this one (operator
-    # 2026-11-24): nobody decided that pair. `retire_legacy` undoes the placement; until then
-    # the group waits. Asked only for carried adverts, so a group that carries none reads nothing.
-    carried = set().union(*(
-        extended_of[int(c["cluster_key"])] - {m.listing_id for m in ms}
-        for c, ms in candidates)) if candidates else set()
+    # A property the removed engine built is carried into no merge of this one (operator
+    # 2026-11-24): nobody decided what ties its adverts together. property_merge_events names
+    # only the MOVED advert, so the old survivor's own adverts have no row: asked is every
+    # advert of each property that contributes a carried one, member or not. `retire_legacy`
+    # undoes the placement; until then the group waits. A group that carries nothing, or whose
+    # old property the engine decided advert by advert (all members), reads nothing.
+    carrying_of: dict[int, list[int]] = {}
+    for cluster, members in candidates:
+        member_ids = {m.listing_id for m in members}
+        carrying_of[int(cluster["cluster_key"])] = sorted(
+            pid for pid in {m.property_id for m in members if m.property_id is not None}
+            if children.get(pid, set()) - member_ids)
     legacy: set[int] = set()
-    for chunk in _chunks(carried):
+    for chunk in _chunks(set().union(*(
+            children.get(pid, set()) for pids in carrying_of.values() for pid in pids))):
         legacy |= legacy_retire.legacy_placed(conn, chunk)
 
     for cluster, members in candidates:
@@ -604,10 +611,11 @@ def plan_groups(
         reasons += set_reasons
         detail.update(set_detail)
 
-        carried_legacy = sorted((extended - member_set) & legacy)
-        if carried_legacy:
+        legacy_here = sorted(legacy & set().union(
+            *(children.get(pid, set()) for pid in carrying_of[key])))
+        if legacy_here:
             reasons.append(SKIP_CARRIES_LEGACY)
-            detail["legacy_merged_listings"] = carried_legacy[:20]
+            detail["legacy_merged_listings"] = legacy_here[:20]
 
         # The engine's own ledger (never property_merge_events, D7) refuses only a member set
         # the chokepoint refused before (E41). An undo of an engine merge, by anyone, bans
