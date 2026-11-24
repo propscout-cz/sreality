@@ -184,7 +184,7 @@ export interface BrokerDossier {
   memberships: BrokerMembership[];
   region_shares: BrokerRegionShare[];
   categories: BrokerCategoryShare[];
-  /* Absent until the API serves it (#2633): the shells then draw no price tile. */
+  /* Absent from an API older than the SPA (deploy skew): the shells then draw no price tile. */
   price_change?: Record<BrokerPriceScope, BrokerPriceFigures>;
   contacts?: BrokerContact[];
   pii_masked: boolean;

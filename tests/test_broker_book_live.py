@@ -349,8 +349,7 @@ def test_the_dossier_and_the_inventory_read_the_brokers_price_changes(cur: Any) 
                                  "repriced_pct": None, "median_pct": None}
     assert figures["inactive"] == {"priced": 2, "repriced": 1, "cut": 1, "raised": 0,
                                    "repriced_pct": None, "median_pct": None}
-    # The dossier does not carry the figures until the book is filled by one full sweep (#2633).
-    assert "price_change" not in brokers.get_broker(cur.connection, broker)["data"]
+    assert brokers.get_broker(cur.connection, broker)["data"]["price_change"] == figures
 
     rows = {r["listing_id"]: r for r in brokers.broker_listings(cur.connection, broker)["data"]}
     assert set(rows) == set(ads)

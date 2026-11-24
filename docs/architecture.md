@@ -2436,7 +2436,7 @@ renumber.** Navigate by area:
     `last_price_czk` on the book, and the broker inventory for each advert. A broker's price
     figures (`toolkit.brokers.price_change`: priced, repriced, cut, raised, the share repriced from
     `MIN_N` priced up and the median over the repriced from `MIN_N` up; all, active and inactive
-    book rows) read the book; the dossier serves them once one full sweep has filled it (#2633).
+    book rows) read the book and ride in the dossier (`get_broker`, since #2633).
     The book's pair is NOT the property's figure even when the canonical advert is the broker's
     (768's header says otherwise and is wrong): it leaves out predecessors another broker
     advertised. The lead advert is chosen price-blind, so an unpriced lead beside a priced advert
