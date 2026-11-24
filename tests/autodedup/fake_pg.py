@@ -404,6 +404,11 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         db.settings[str(p["key"])] = {"digest": p["digest"], "since": since}
         db.settings_by[str(p["key"])] = str(p.get("updated_by") or "")
         return [(since,)]
+    if sql == S.RT_RESCORE_WRITE_SQL:
+        since = db.now.isoformat()
+        db.settings[str(p["key"])] = {**_jsonb(p["value"]), "since": since}
+        db.settings_by[str(p["key"])] = str(p.get("updated_by") or "")
+        return [(since,)]
     if sql == S.RT_FRESH_SETTINGS_SQL:
         gone = [key for key in p["keys"] if key in db.settings]
         for key in gone:
@@ -1238,6 +1243,14 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
     if sql == S.RT_SCOPE_OKRES_OBCE_SQL:
         return [(int(code), int(obec)) for code in p["codes"]
                 for obec in db.admin_districts.get(int(code), ())]
+    if sql == S.RT_RESCORE_SQL:
+        since = datetime.fromisoformat(str(p["since"]))
+        slice_ids = sorted(i for g, i in db.rt_fp
+                           if g == gen and bool(db.rt_fp[(g, i)]["is_active"]) is p["active"]
+                           and i > int(p["after_id"]))[:int(p["limit"])]
+        owed = [i for i in slice_ids if db.rt_fp[(gen, i)]["updated_at"] < since
+                and _in_scope(db, i, p)]
+        return [(max(slice_ids) if slice_ids else int(p["after_id"]), len(slice_ids), owed)]
     if sql == S.RT_REVIVED_SQL:
         slice_ids = sorted(i for g, i in db.rt_fp
                            if g == gen and not db.rt_fp[(g, i)]["is_active"]

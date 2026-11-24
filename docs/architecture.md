@@ -2826,7 +2826,9 @@ renumber.** Navigate by area:
     calibration is re-cut over the whole scope in the job — its reads each in a short
     transaction of their own, its writes in the one transaction that also writes the walk —
     the forward cursors are kept and the build opens for the new adverts only; `recut=true`
-    re-cuts the same scope; a narrower scope or another scorer is a rebuild, `fresh=true`. The brake is the interval (0), then `mode=unapply` — a live apply or unapply refuses
+    re-cuts the same scope, and `recut=true,rescore=true` re-cuts it under new settings (the model
+    kept), which the passes then score by, while a sweep re-reads every in-scope advert once, live
+    ones first (E991); a narrower scope or another scorer is a rebuild, `fresh=true`. The brake is the interval (0), then `mode=unapply` — a live apply or unapply refuses
     while the interval is above 0. Its calibration is cut from the database (`rt_seed`, and a
     re-cut, in the tick after a pass found the pHash population drifted, instead of a pass, never
     in a build or while the scope holds more than 50k adverts; E944) and read once a digest; a

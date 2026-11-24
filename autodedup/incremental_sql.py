@@ -283,6 +283,32 @@ select coalesce(max(f.listing_id), %(after_id)s::bigint) as slice_max,
              or ll.okres_kod = any(%(okres)s::bigint[]))
 """
 
+# E991: the rescore sweep, the revive sweep's shape. After a seed switched the generation's
+# settings in place (`rt_seed recut=true rescore=true`), each in-scope row no pass refreshed since
+# the switch is owed one re-read: `rt_fp.updated_at` moves only on a refresh (`RT_FP_DD_SQL`
+# leaves it), and `since` is the seed's own transaction stamp, the database's clock. The sweep
+# reads the live rows first (`active`), then the rest, as a build does (E976).
+RT_RESCORE_SQL = """
+select coalesce(max(f.listing_id), %(after_id)s::bigint) as slice_max,
+       count(*)                                          as slice_size,
+       coalesce(array_agg(f.listing_id order by f.listing_id)
+                filter (where f.updated_at < %(since)s::timestamptz
+                          and (%(all_scope)s::boolean or ll.listing_id is not null)),
+                '{}'::bigint[])                          as owed
+  from (select listing_id, updated_at
+          from autodedup.rt_fp
+         where generation = %(generation)s::text
+           and is_active = %(active)s::boolean
+           and listing_id > %(after_id)s::bigint
+         order by listing_id
+         limit %(limit)s) f
+  left join public.listing_location ll
+         on ll.listing_id = f.listing_id
+        and (ll.obec_kod = any(%(obec)s::bigint[])
+             or ll.cast_obce_kod = any(%(cast_obce)s::bigint[])
+             or ll.okres_kod = any(%(okres)s::bigint[]))
+"""
+
 # The FIFTH feed, and the one the scope owes (E79): a listing the operator's geocoder MOVES —
 # an obec correction, a resolved část — leaves the scope without touching any cursor the other
 # four page over. The sweep is the revive sweep's twin: a bounded round-robin slice of THIS
@@ -794,6 +820,19 @@ update autodedup.settings
 RT_ENGINE_WRITE_SQL = """
 insert into autodedup.settings (key, value, updated_at, updated_by)
 values (%(key)s::text, jsonb_build_object('digest', %(digest)s::text, 'since', now()), now(),
+        %(updated_by)s::text)
+on conflict (key) do update set
+    value      = excluded.value,
+    updated_at = now(),
+    updated_by = excluded.updated_by
+returning value ->> 'since'
+"""
+
+# E991: the in-place rescore's record, stamped by the DATABASE's clock inside the seed's
+# transaction: the instant `RT_RESCORE_SQL` reads every refresh against.
+RT_RESCORE_WRITE_SQL = """
+insert into autodedup.settings (key, value, updated_at, updated_by)
+values (%(key)s::text, %(value)s::jsonb || jsonb_build_object('since', now()), now(),
         %(updated_by)s::text)
 on conflict (key) do update set
     value      = excluded.value,

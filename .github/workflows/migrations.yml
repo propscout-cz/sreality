@@ -878,6 +878,15 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_rt_changed_feed_live.py -q
 
+      # E991, EXECUTED: the in-place rescore's record is stamped by the database's clock and its
+      # sweep owes the rows refreshed before it, live rows and the rest apart, inside the scope.
+      - name: The rescore sweep owes what was refreshed before the switch (E991)
+        timeout-minutes: 5
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_rt_rescore_live.py -q
+
       # The Judge page (migration 576), EXECUTED: which pairs its population holds (every judged
       # pair, oss excluded, and every sealed sample pair), each pair's headline, what each of the
       # four reasons picks and where the cap of 100 cuts, and that the cursor pages the one
