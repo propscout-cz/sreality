@@ -27,7 +27,7 @@
 -- re-issued as they were: EXECUTE to service_role only; the view to service_role only.
 -- DEPLOYED CODE: the rollup reads the function as `h.*` into a CTE whose readers all name their columns, and the
 -- book write names its columns, so the deployed pass keeps working; it leaves price_changes NULL.
--- APPLY BEFORE THE CODE MERGES (the pass and the dossier read price_changes); 771 fills the book after the rollout.
+-- APPLY BEFORE THE CODE MERGES (the pass and the dossier read price_changes), then 771 (before the merge too).
 -- Re-runnable. ROLLBACK: forward only (rule 1).
 -- Verify:
 --   select change_pct from listing_price_history(null, null);                                  -- NULL, one row

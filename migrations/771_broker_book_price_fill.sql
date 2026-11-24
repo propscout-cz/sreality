@@ -1,14 +1,16 @@
--- 771_broker_book_price_fill.sql -- fill broker_book's price columns from 770's projection, once.
+-- 771_broker_book_price_fill.sql -- fill broker_book's price columns from 770's projection.
 --
 -- WHY: 770 adds broker_book.price_changes and changes which advert a book row's price pair is read from. The
 -- property maintenance pass writes both when it recomputes a property, which for most properties is the next
--- daily sweep; until then the dossier's price figures would mix the two definitions and count every unread row
--- as not repriced. This writes what the pass would write, for every row, in property_id batches of 1,000.
+-- daily sweep; read before that, every row would count as priced and none as repriced ("0 %" on every broker's
+-- tile). This writes what the pass would write, for every row, in property_id batches of 1,000.
 --
--- APPLY AFTER the code of #2639 has rolled out (the deployed pass then keeps the columns current), through
--- apply_migration.yml (psql, autocommit): each batch commits on its own, so a lock wait is one batch, never the
--- whole book. Re-runnable: a row already equal to the projection is not written, so a re-run after a lock
--- timeout (5 s) only redoes what is left. An empty book does nothing (the CI replay).
+-- APPLY right after 770 and BEFORE the code of #2639 merges, then ONCE MORE after its rollout: the deployed
+-- pass names its columns, so it never clears the fill, but the rows it writes in between keep the step count of
+-- the fill (or none, for a row it inserts); the second run writes just those. Through apply_migration.yml (psql,
+-- autocommit): each batch commits on its own, so a lock wait is one batch, never the whole book. Re-runnable: a
+-- row already equal to the projection is not written, so a re-run after a lock timeout (5 s) only redoes what is
+-- left. An empty book does nothing (the CI replay).
 -- Verify:
 --   select count(*) from broker_book_projection v join broker_book b using (property_id, broker_id)
 --   where property_id between 600000 and 602000

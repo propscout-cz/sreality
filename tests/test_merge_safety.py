@@ -35,6 +35,7 @@ def test_every_price_step_reader_reads_the_one_view_and_none_keeps_a_window():
 
     history = latest_definition("listing_price_history").read_text()
     history = history.split("create or replace function public.listing_price_history", 1)[1].split("$function$;", 1)[0]
+    history = re.sub(r"--[^\n]*", "", history)  # the code, never a comment naming the view
     assert "listing_price_history(c.id, NULL)" in _RECOMPUTE_BATCH_SQL
     assert not re.search(r"\bover\s*\(", _RECOMPUTE_BATCH_SQL, re.I), "the rollup keeps a window of its own"
     readers = {
