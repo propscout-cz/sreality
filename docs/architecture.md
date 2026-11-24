@@ -2429,7 +2429,22 @@ renumber.** Navigate by area:
     `listing_price_steps` (a predecessor is the advert on that portal last seen latest, strictly
     before the later one was first seen, so concurrent adverts never form a step), plus one
     handover step per link; the total compounds to the oldest priced link's first price against
-    the shown price. The rollup also writes `all_sources` / `active_sources` (sorted; the active
+    the shown price. That rule is ONE function, `listing_price_history(head, broker)` (migration
+    768), and the percent `measure_price_change_pct(first, last)`: the rollup asks it for the
+    canonical advert, `broker_book_projection` for the broker's lead advert (their first in the
+    canonical order) bounded to the broker's own adverts, storing `first_price_czk` /
+    `last_price_czk` on the book, and the broker inventory for each advert. A broker's price
+    figures (`toolkit.brokers.price_change`: priced, repriced, cut, raised, the share repriced from
+    `MIN_N` priced up and the median over the repriced from `MIN_N` up; all, active and inactive
+    book rows) read the book; the dossier serves them once one full sweep has filled it (#2633).
+    The book's pair is NOT the property's figure even when the canonical advert is the broker's
+    (768's header says otherwise and is wrong): it leaves out predecessors another broker
+    advertised. The lead advert is chosen price-blind, so an unpriced lead beside a priced advert
+    of the same broker on another portal reads NULL (5 of 2,617 rows, 2026-11-23). The view now
+    calls `property_canonical_listings`, so 635's "one caller" note is stale and
+    `migrations/reverts/635` (which drops that function) fails until the view is restated first.
+    In the rollup the call sits in a MATERIALIZED CTE: as a lateral in the UPDATE's FROM it
+    re-ran every aggregate once per canonical advert (11 to 30 s a batch, production 2026-11-23). The rollup also writes `all_sources` / `active_sources` (sorted; the active
     one empty when none is) and one `newest_ad_at_<portal>` per `PORTAL_OPTIONS` code (the first
     sighting of the property's newest advert there, NULL with none; MS19), which W5 projects.
     The city figures follow the LOCATION advert (since 636): `near_*` its point, `home_obec_pop`

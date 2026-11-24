@@ -37,6 +37,10 @@ waves and W0's measurements: `docs/design/broker-board.md`.
   spells; the refresh, the leaderboard tests and the A6 entries go with it. Destructive: W3a is live on Railway
   (2026-10-30), so it waits only on the operator's OK and the backup (`docs/design/broker-board.md`, W3b as prepared),
   then merge.
+- **Price change on the dossier** (#2626, 2026-11-23): migration 768 moves the rollup's price lineage into
+  `listing_price_history`, the book stores the broker's own first and last price, the dossier shows the share
+  repriced and the median change (all / active / inactive), each inventory row its ad's change. Owed: the gate on
+  the book's fill after the first full sweep.
 
 ## Done
 
