@@ -24,7 +24,8 @@
  * use open the ONE split dialog (`SplitPanel`, MS18) over every advert the page
  * shows, so a newcomer the lane merged in meanwhile refuses it (`stale`). */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { RegisterMark } from '@/components/register/RegisterMark';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
@@ -406,18 +407,22 @@ function MergedAdvertRow({
           />
           <div className="min-w-0 space-y-2">
             <dl className="grid max-w-[24rem] grid-cols-2 gap-x-3 gap-y-0.5 text-[0.75rem]">
-              {[
+              {([
                 ['Cena', priceLabel(source.price_czk, detail?.category_type)],
                 [
                   'Plocha',
                   detail ? fmtArea(detail.area_m2, areaKindOf(detail.category_main)) : '—',
                 ],
                 ['Dispozice', detail?.disposition ?? '—'],
-                ['Podlaží', fmtFloor(detail?.floor, detail?.total_floors) ?? '—'],
-              ].map(([label, value]) => (
+                [
+                  'Podlaží',
+                  fmtFloor(detail?.floor, detail?.total_floors) ?? '—',
+                  <RegisterMark key="mark" propertyId={source.property_id} adId={source.id} fact="floors" />,
+                ],
+              ] as [string, string, ReactNode?][]).map(([label, value, mark]) => (
                 <div key={label} className="flex items-baseline justify-between gap-2">
                   <dt className="text-[var(--color-ink-4)]">{label}</dt>
-                  <dd className="font-mono tabular-nums text-[var(--color-ink-2)]">{value}</dd>
+                  <dd className="font-mono tabular-nums text-[var(--color-ink-2)]">{value}{mark}</dd>
                 </div>
               ))}
             </dl>

@@ -14,6 +14,7 @@
  * header map (Poloha's own map stands in), Explore area, the comparables map (RunPanel skips it under the
  * phone shell) and the new-estimation / re-run buttons. */
 
+import { RegisterBadge } from '@/components/register/RegisterMark';
 import BuildingCard from '@/components/listing-detail/BuildingCard';
 import { Suspense, useMemo, useState } from 'react';
 
@@ -174,6 +175,7 @@ export default function PhoneProperty({
               {delta}
             </span>
           )}
+          <RegisterBadge propertyId={propertyId} />
         </div>
         {(ppm2 || mf) && (
           <div className="flex items-center gap-2">
@@ -214,7 +216,7 @@ export default function PhoneProperty({
           <PropertyPhotos property_id={propertyId} lang="cs" camera />
         </Suspense>
         <FactsSection property={property} />
-        <BuildingCard propertyId={propertyId} ad={property} />
+        <BuildingCard propertyId={propertyId} adId={property.id} />
         <DescriptionSection text={property.description} />
         <AdsSection
           sources={sources}

@@ -73,8 +73,13 @@ export function PropertyIdentity({
   showStatus = true,
   statusHref,
   addressAction,
+  floorMark,
+  badge,
 }: {
   listing: ListingPublic;
+  /* Slots the property page fills from the register: a mark after the storey, a badge after the status. */
+  floorMark?: React.ReactNode;
+  badge?: React.ReactNode;
   /* Rendered under the headline price, or in its place when the listing states
    * none. Estimation Detail leaves it empty. */
   priceNote?: PriceNote;
@@ -121,12 +126,14 @@ export function PropertyIdentity({
             <>
               <span className="mx-2 text-[var(--color-ink-4)]">·</span>
               <span className="text-[var(--color-ink)]">{floor}</span>
+              {floorMark}
             </>
           )}
         </p>
         {showStatus && (
           <StatusPill isActive={listing.is_active} lastSeenAt={listing.last_seen_at} href={statusHref} />
         )}
+        {badge}
       </div>
       <h1
         className={[

@@ -1,22 +1,18 @@
-import { useQuery } from '@tanstack/react-query';
 import Panel from '@/components/Panel';
-import { fetchPropertyBuilding } from '@/lib/api';
-import { registerBuildingUrl, registerDate, registerFacts, type AdFacts } from '@/lib/registerBuilding';
+import { DiffersGlyph } from '@/components/register/RegisterMark';
+import { registerBuildingUrl, registerDate, registerFacts } from '@/lib/registerBuilding';
+import { useRegisterBuilding } from '@/lib/useRegisterBuilding';
 
 /* Budova: what the RÚIAN register states about the building at the property's door. Its own card, apart from the
- * facts the ads state, with the source and the date of the data on it (the licence asks for both). A property
- * whose door names no building shows no card at all, and so does a failed read: the page stands without it. */
-export default function BuildingCard({ propertyId, ad }: { propertyId: number; ad: AdFacts }) {
-  const { data } = useQuery({
-    queryKey: ['property-building', propertyId],
-    queryFn: () => fetchPropertyBuilding(propertyId),
-    staleTime: 60 * 60_000,
-  });
-  const building = data?.building;
+ * facts the ads state, with the source and the date of the data on it (the licence asks for both). A row where
+ * the shown ad (`adId`) says something else carries the ad's value. A property whose door names no building
+ * shows no card at all, and so does a failed read: the page stands without it. */
+export default function BuildingCard({ propertyId, adId }: { propertyId: number; adId: number }) {
+  const building = useRegisterBuilding(propertyId);
   if (!building) return null;
-  const facts = registerFacts(building, ad);
+  const facts = registerFacts(building, adId);
   return (
-    <Panel title="Budova" note="podle registru RÚIAN" className="min-w-0">
+    <Panel title="Budova" note="podle registru RÚIAN" id="budova" className="min-w-0">
       <dl>
         {facts.map((f, i) => (
           <div
@@ -32,8 +28,7 @@ export default function BuildingCard({ propertyId, ad }: { propertyId: number; a
               {f.derived ? <span className="block text-[12px] text-[var(--color-ink-3)]">{f.derived}</span> : null}
               {f.note ? (
                 <span className="block text-[12px] text-[var(--color-ink-2)]">
-                  <span aria-hidden className="mr-1.5 inline-block size-[7px] rounded-full bg-[var(--color-ochre)]" />
-                  {f.note}
+                  <DiffersGlyph /> {f.note}
                 </span>
               ) : null}
             </dd>

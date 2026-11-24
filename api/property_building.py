@@ -1,6 +1,7 @@
 """What the RÚIAN register states about a property's building: the building of the address point its location ad
 stands at (`listing_location.ruian_adm_kod` -> `ruian_address_points.stavebni_objekt_code`). Register values only,
 as stated, each code with its label and whether it means "not known"; nothing here is merged with what an ad says.
+Beside them, `ads` holds what each ad of the property says against the record (`api/register_comparison`).
 The completion period is DERIVED from the register's date (`ruian_completion_period`), so the date rides with it.
 Protection is the register's own list of zones and regimes the building stands in (heritage, nature, water
 source and others), each code with its label; an empty list means the register states none.
@@ -14,6 +15,7 @@ from typing import Any
 from psycopg.rows import dict_row
 
 from api.building_scope import holds_no_building_ad
+from api.register_comparison import compare
 
 _CODED = ("usage", "construction", "lift", "heating", "water", "sewer", "gas")
 
@@ -40,7 +42,10 @@ select b.code,
        (select coalesce(jsonb_agg(jsonb_build_object('code', c.code, 'label', l.label) order by c.code), '[]'::jsonb)
           from unnest(b.protection_codes) as c(code)
           left join ruian_code_labels l on l.code_list = 'protection' and l.code = c.code) as protection,
-       {coded}
+       {coded},
+       (select coalesce(jsonb_agg(jsonb_build_object('id', l.id, 'has_lift', l.has_lift, 'floor', l.floor,
+                 'total_floors', l.total_floors, 'building_type', l.building_type)), '[]'::jsonb)
+          from listings l where l.property_id = p.id) as ads
   from properties p
   left join listing_location ll on ll.listing_id = p.location_listing_ref_id
   left join ruian_address_points ap on ap.kod_adm = ll.ruian_adm_kod
@@ -90,4 +95,5 @@ def load_building(conn: Any, property_id: int) -> dict[str, Any] | None:
     }
     out["protection"] = row["protection"]
     out.update({name: row[name] for name in _CODED})
+    out["ads"] = {str(ad["id"]): compare(ad, out) for ad in row["ads"]}
     return out

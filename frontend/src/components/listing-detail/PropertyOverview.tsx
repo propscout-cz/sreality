@@ -109,7 +109,7 @@ export default function PropertyOverview({
           onRetryAdverts={onRetrySources}
           about={contactAbout(property)}
         />
-        <BuildingCard propertyId={property.property_id} ad={property} />
+        <BuildingCard propertyId={property.property_id} adId={property.id} />
         <MarketCard property={property} onOpen={() => onOpen('hodnota')} />
         <CityQualityCard obecId={property.obec_id} />
       </div>

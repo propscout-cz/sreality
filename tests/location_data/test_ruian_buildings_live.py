@@ -136,6 +136,24 @@ def test_the_building_reads_serve_no_property_that_holds_a_plot_or_other_ad(conn
             cadastre_prices.building_of(conn, property_id)
 
 
+def test_every_ad_of_the_property_is_compared_with_the_record(conn, world):
+    from api.property_building import load_building
+
+    _load(conn, world, [BUILDING, ruian_vfr.AddressLink(ADM, BUILDING.code)])  # 8 floors, with a lift
+    property_id = _property(conn, ADM, "byt", "byt")
+    with conn.cursor() as cur:
+        cur.execute("select id from listings where property_id = %s order by id", (property_id,))
+        shown, other = (int(r[0]) for r in cur.fetchall())
+        cur.execute("update listings set has_lift = false, floor = 8, total_floors = 8 where id = %s", (shown,))
+        cur.execute("update listings set has_lift = true, total_floors = 7 where id = %s", (other,))
+    assert load_building(conn, property_id)["ads"] == {
+        str(shown): {"lift": {"differs": True, "ad": False},
+                     "floors": {"differs": True, "ad": {"total_floors": 8, "floor": 8}}, "construction": None},
+        str(other): {"lift": {"differs": False, "ad": True},
+                     "floors": {"differs": False, "ad": {"total_floors": 7, "floor": None}}, "construction": None},
+    }
+
+
 def test_a_changed_building_gets_a_new_row_and_the_old_one_is_closed(conn, world):
     _load(conn, world, [BUILDING])
     changed = dataclasses.replace(BUILDING, plati_od=datetime.date(2026, 10, 1), floors=9)

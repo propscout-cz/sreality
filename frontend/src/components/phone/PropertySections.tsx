@@ -7,6 +7,8 @@
  * sections the phone reuses whole (price history, estimates, freshness, tags +
  * notes) are mounted by PhoneProperty. */
 
+import { RegisterMark } from '@/components/register/RegisterMark';
+import type { ComparedFact } from '@/lib/api';
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -109,20 +111,29 @@ const FACT_CS: Record<string, string> = {
   Parking: 'Parkování',
 };
 
-export function phoneFacts(p: ListingPublic): Array<{ label: string; value: string }> {
+export interface PhoneFact {
+  label: string;
+  value: string;
+  compared?: ComparedFact;
+}
+
+export function phoneFacts(p: ListingPublic): PhoneFact[] {
   const kind = listingKindParts(p);
   const floor = fmtFloor(p.floor, p.total_floors);
-  const head = [
+  const head: (PhoneFact | null)[] = [
     kind.length > 0 ? { label: 'Dispozice', value: kind.join(' · ') } : null,
     p.area_m2 != null ? { label: 'Plocha', value: fmtArea(p.area_m2, areaKindOf(p.category_main)) } : null,
-    floor != null ? { label: 'Podlaží', value: floor } : null,
-  ].filter((f): f is { label: string; value: string } => f != null);
-  const facts = buildFacts(p).map((f) => ({ label: FACT_CS[f.label] ?? f.label, value: f.value ?? '' }));
+    floor != null ? { label: 'Podlaží', value: floor, compared: 'floors' } : null,
+  ];
+  const facts = buildFacts(p).map((f) => ({
+    label: FACT_CS[f.label] ?? f.label, value: f.value ?? '', compared: f.compared,
+  }));
   const amenities = buildAmenities(p).map((a) => ({
     label: FACT_CS[a.label] ?? a.label,
     value: a.present ? (a.note ? `ano · ${a.note}` : 'ano') : 'ne',
+    compared: a.compared,
   }));
-  return [...head, ...facts, ...amenities];
+  return [...head.filter((f) => f != null), ...facts, ...amenities];
 }
 
 export function FactsSection({ property }: { property: ListingPublic }) {
@@ -142,6 +153,7 @@ export function FactsSection({ property }: { property: ListingPublic }) {
             <dt className="shrink-0 text-[12px] text-[var(--color-ink-3)]">{f.label}</dt>
             <dd className="min-w-0 text-right font-mono text-[12px] tabular-nums text-[var(--color-ink)]">
               {f.value}
+              {f.compared ? <RegisterMark propertyId={property.property_id} adId={property.id} fact={f.compared} /> : null}
             </dd>
           </div>
         ))}
