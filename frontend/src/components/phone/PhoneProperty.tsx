@@ -216,7 +216,7 @@ export default function PhoneProperty({
           <PropertyPhotos property_id={propertyId} lang="cs" camera />
         </Suspense>
         <FactsSection property={property} />
-        <BuildingCard propertyId={propertyId} adId={property.id} />
+        <BuildingCard propertyId={propertyId} />
         <DescriptionSection text={property.description} />
         <AdsSection
           sources={sources}

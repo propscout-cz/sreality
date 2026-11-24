@@ -10,6 +10,8 @@ vi.mock('@/lib/api', () => ({ fetchPropertyBuilding: (id: number) => fetchProper
 const building = {
   code: 22948236, floors: 6, lift: { code: 2, label: 'Bez výtahu', unknown: false },
   construction: { code: 4, label: 'Stěnové panely', unknown: false },
+  shown: { lift: { differs: false, ad: false }, floors: { differs: true, ad: { floor: 6, total_floors: 5 } },
+    construction: null },
   ads: {
     31: { lift: { differs: true, ad: true }, floors: { differs: false, ad: { floor: 2, total_floors: 5 } },
       construction: null },
@@ -27,7 +29,21 @@ describe('<RegisterMark>', () => {
     expect(await screen.findByRole('img')).toHaveAccessibleName('Liší se od RÚIAN. Výtah: Bez výtahu');
   });
 
-  it('draws nothing where the ad agrees, has no verdict, is not compared, or the property has no building', async () => {
+  it('marks the property by what its page shows, not by one of its ads', async () => {
+    fetchPropertyBuilding.mockResolvedValue({ building });
+    show(<><RegisterMark propertyId={7} fact="floors" /><RegisterMark propertyId={7} fact="lift" /></>);
+    expect(await screen.findByRole('img')).toHaveAccessibleName('Liší se od RÚIAN. Podlaží včetně podzemních: 6');
+    expect(screen.getAllByRole('img')).toHaveLength(1);
+  });
+
+  it('draws nothing for a property with no register building', async () => {
+    fetchPropertyBuilding.mockResolvedValue({ building: null });
+    const { container } = show(<RegisterMark propertyId={7} adId={31} fact="lift" />);
+    await vi.waitFor(() => expect(fetchPropertyBuilding).toHaveBeenCalled());
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('draws nothing where the ad agrees, has no verdict or is not compared', async () => {
     fetchPropertyBuilding.mockResolvedValue({ building });
     const { container } = show(
       <>
@@ -56,11 +72,11 @@ describe('<RegisterMark>', () => {
 });
 
 describe('<RegisterBadge>', () => {
-  it('names the building and jumps to its card', async () => {
+  it('names the building and opens it in the register', async () => {
     fetchPropertyBuilding.mockResolvedValue({ building });
     show(<RegisterBadge propertyId={7} />);
     const badge = await screen.findByRole('link', { name: /RÚIAN/ });
-    expect(badge).toHaveAttribute('href', '#budova');
+    expect(badge).toHaveAttribute('href', 'https://vdp.cuzk.gov.cz/vdp/ruian/stavebniobjekty/22948236');
     expect(badge).toHaveAttribute('title', 'Propojeno s registrem RÚIAN: stavební objekt 22948236');
   });
 

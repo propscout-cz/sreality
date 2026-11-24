@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { RegisterBuilding } from './api';
+import type { RegisterBuilding, RegisterVerdicts } from './api';
 import { completionFact, registerDifference, registerFacts } from './registerBuilding';
 
 const code = (c: number, label: string | null, unknown = false) => ({ code: c, label, unknown });
@@ -12,10 +12,10 @@ const BUILDING: RegisterBuilding = {
   sewer: code(1, 'Přípoj'), gas: code(9, 'Nezjištěno', true), protection: [],
 };
 const AD = 31;
-const verdicts = (over: Partial<NonNullable<RegisterBuilding['ads']>[string]>) => ({
-  ads: { [AD]: { lift: null, floors: null, construction: null, ...over } },
-});
-const row = (label: string, b: RegisterBuilding = BUILDING) => registerFacts(b, AD).find((f) => f.label === label)!;
+const NONE = { lift: null, floors: null, construction: null };
+/* The property's own verdicts: what its page shows against the record. */
+const verdicts = (over: Partial<RegisterVerdicts>) => ({ shown: { ...NONE, ...over } });
+const row = (label: string, b: RegisterBuilding = BUILDING) => registerFacts(b).find((f) => f.label === label)!;
 
 describe('registerFacts', () => {
   it('marks a period as derived and names the register date it comes from', () => {
@@ -59,11 +59,11 @@ describe('registerFacts', () => {
     expect(row('Podlaží včetně podzemních', b).note).toBe('inzerát uvádí 9 podlaží');
   });
 
-  it('says nothing where the ad agrees, has no verdict, is another ad, or the answer holds no verdicts', () => {
+  it('says nothing where the property agrees, has no verdict, only one of its ads differs, or the answer holds no verdicts', () => {
     const agreeing = { ...BUILDING, ...verdicts({ lift: { differs: false, ad: true } }) };
     expect(row('Výtah', agreeing)).toEqual({ label: 'Výtah', value: 'S výtahem' });
     expect(row('Konstrukce', agreeing).note).toBeUndefined();
-    const other = { ...BUILDING, ads: { 99: { lift: { differs: true, ad: false }, floors: null, construction: null } } };
+    const other = { ...BUILDING, ads: { [AD]: { ...NONE, lift: { differs: true, ad: false } } } };
     expect(row('Výtah', other).note).toBeUndefined();
     expect(row('Výtah').note).toBeUndefined();
   });
@@ -71,9 +71,17 @@ describe('registerFacts', () => {
   it('names the register side for a mark beside the ad value', () => {
     const b = { ...BUILDING, ...verdicts({ floors: { differs: true, ad: { floor: 8, total_floors: null } },
       lift: { differs: false, ad: true } }) };
-    expect(registerDifference(b, AD, 'floors')).toBe('Liší se od RÚIAN. Podlaží včetně podzemních: 8');
-    expect(registerDifference(b, AD, 'lift')).toBeNull();
-    expect(registerDifference(b, AD, 'construction')).toBeNull();
+    expect(registerDifference(b, 'floors')).toBe('Liší se od RÚIAN. Podlaží včetně podzemních: 8');
+    expect(registerDifference(b, 'lift')).toBeNull();
+    expect(registerDifference(b, 'construction')).toBeNull();
+  });
+
+  it('answers for one ad by that ad, whatever the property shows', () => {
+    const b = { ...BUILDING, ...verdicts({ lift: { differs: false, ad: true } }),
+      ads: { [AD]: { ...NONE, lift: { differs: true, ad: false } } } };
+    expect(registerDifference(b, 'lift', AD)).toBe('Liší se od RÚIAN. Výtah: S výtahem');
+    expect(registerDifference(b, 'lift')).toBeNull();
+    expect(registerDifference(b, 'lift', 99)).toBeNull();
   });
 
   it('names every protection the register lists, under a row that names no kind', () => {

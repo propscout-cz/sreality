@@ -351,7 +351,7 @@ export default function PropertyDetail() {
         <div className="min-w-0 space-y-5">
           <PropertyIdentity
             listing={property}
-            floorMark={<RegisterMark propertyId={propertyId} adId={property.id} fact="floors" />}
+            floorMark={<RegisterMark propertyId={propertyId} fact="floors" />}
             badge={<RegisterBadge propertyId={propertyId} />}
             priceNote={priceNote}
             statusHref={statusHref}

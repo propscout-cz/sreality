@@ -1,5 +1,5 @@
 /* The rows of the Budova card: what the RÚIAN register states about a building, in the order the card shows them.
- * Register values only. Where the shown ad states something else, the row carries the ad's value as a note and
+ * Register values only. Where the property's page states something else, the row carries the ad's value as a note and
  * neither is hidden; a value the register does not know is a gap, never dropped. WHETHER the two differ is the
  * API's verdict (`api/register_comparison`); this file only words it. */
 import type { ComparedFact, RegisterBuilding, RegisterCode } from './api';
@@ -57,19 +57,20 @@ const REGISTER_SIDE: Record<ComparedFact, (b: RegisterBuilding) => string> = {
   construction: (b) => `Konstrukce: ${coded(b.construction)}`,
 };
 
-const differing = (b: RegisterBuilding, adId: number, fact: ComparedFact) => {
-  const verdict = b.ads?.[adId]?.[fact];
+/* `adId` names one ad; without it the question is about the property, by the values its page shows. */
+const differing = (b: RegisterBuilding, fact: ComparedFact, adId?: number) => {
+  const verdict = (adId == null ? b.shown : b.ads?.[adId])?.[fact];
   return verdict?.differs ? verdict : null;
 };
 
 /* What the register states where the ad says something else; null when they do not differ (or cannot be compared). */
-export function registerDifference(b: RegisterBuilding, adId: number, fact: ComparedFact): string | null {
-  return differing(b, adId, fact) ? `Liší se od RÚIAN. ${REGISTER_SIDE[fact](b)}` : null;
+export function registerDifference(b: RegisterBuilding, fact: ComparedFact, adId?: number): string | null {
+  return differing(b, fact, adId) ? `Liší se od RÚIAN. ${REGISTER_SIDE[fact](b)}` : null;
 }
 
-export function registerFacts(b: RegisterBuilding, adId: number): RegisterFact[] {
+export function registerFacts(b: RegisterBuilding): RegisterFact[] {
   const compared = (fact: ComparedFact, row: RegisterFact): RegisterFact => {
-    const verdict = differing(b, adId, fact);
+    const verdict = differing(b, fact);
     return verdict ? { ...row, note: AD_SIDE[fact](verdict.ad) } : row;
   };
   return [

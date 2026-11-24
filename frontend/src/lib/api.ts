@@ -704,11 +704,14 @@ export interface RegisterBuilding {
   /* The zones and regimes the register lists for the building (heritage, nature, water source…); empty = none
    * stated. A null label is a code our list does not hold. Absent on an answer from an API one deploy behind. */
   protection?: { code: number; label: string | null }[];
-  /* What each ad of the property says against this record, keyed by the ad's listing id
-   * (`api/register_comparison`): null = the fact has no common basis or one side is silent. `ad` is the ad's own
-   * value. Absent on an answer from an API one deploy behind. */
-  ads?: Record<string, Record<ComparedFact, { differs: boolean; ad: unknown } | null>>;
+  /* What the property says against this record (`shown`: the values its page shows, rolled up over its ads) and
+   * what each of its ads says, keyed by listing id (`api/register_comparison`). Both absent on an answer from an
+   * API one deploy behind. */
+  shown?: RegisterVerdicts;
+  ads?: Record<string, RegisterVerdicts>;
 }
+/* null = the fact has no common basis or one side is silent. `ad` is the ad side's own value. */
+export type RegisterVerdicts = Record<ComparedFact, { differs: boolean; ad: unknown } | null>;
 export type ComparedFact = 'lift' | 'floors' | 'construction';
 export const fetchPropertyBuilding = (propertyId: number): Promise<{ building: RegisterBuilding | null }> =>
   request<{ building: RegisterBuilding | null }>(`/properties/${propertyId}/building`);

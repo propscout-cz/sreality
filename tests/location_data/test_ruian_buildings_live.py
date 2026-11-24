@@ -146,7 +146,9 @@ def test_every_ad_of_the_property_is_compared_with_the_record(conn, world):
         shown, other = (int(r[0]) for r in cur.fetchall())
         cur.execute("update listings set has_lift = false, floor = 8, total_floors = 8 where id = %s", (shown,))
         cur.execute("update listings set has_lift = true, total_floors = 7 where id = %s", (other,))
-    assert load_building(conn, property_id)["ads"] == {
+    building = load_building(conn, property_id)
+    assert set(building["shown"]) == {"lift", "floors", "construction"}
+    assert building["ads"] == {
         str(shown): {"lift": {"differs": True, "ad": False},
                      "floors": {"differs": True, "ad": {"total_floors": 8, "floor": 8}}, "construction": None},
         str(other): {"lift": {"differs": False, "ad": True},

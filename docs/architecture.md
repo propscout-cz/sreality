@@ -6207,15 +6207,16 @@ location programme's work, not this one's.
   building shows none of them. Nor does one holding ANY ad of `pozemek` or `ostatni` (ruling 2026-11-23): a door is the
   address an ad states, and a plot states its neighbour's. One predicate, `api/building_scope.py`, for every read
   that goes from a property through its door to a building (facts, sales, the price purchase).
-- **Ad against register (operator ruling 2026-11-24).** ONE comparison, `api/register_comparison.py`, answers per ad
-  of the property whether it DIFFERS from the record on a fact both state on the same basis; the read serves the
-  verdicts (`ads`, keyed by listing id) and every surface only draws them (`components/register/RegisterMark.tsx`:
-  one glyph beside the ad's value, the ad's value on the register's row). It never says which side is right and
-  corrects neither. Three facts: lift; construction, only between classes both vocabularies name (masonry, panel,
-  wood); floors in ONE direction only, an ad counting more storeys than the register or a flat above its count
-  (an ad counting fewer may be leaving out basements; no tolerance is invented). Measured on 8,298 Prague flats:
-  16 % differ on floors, 16 % on lift (mostly old buildings where the register knows no lift), 5 % on construction.
-  A new compared fact is one entry there and one wording line in `lib/registerBuilding.ts`, never a surface's own test.
+- **Ad against register (operator ruling 2026-11-24).** ONE comparison, `api/register_comparison.py`, answers whether
+  an ad side DIFFERS from the record on a fact both state on the same basis; the read serves the verdicts and the
+  SPA only draws them (`components/register/RegisterMark.tsx`: one glyph beside the ad side's value on the property
+  page; the Budova card's row carries that value). Two grains, never mixed: `shown` judges the PROPERTY by the values
+  its page shows (`properties_public`, rolled up over its ads: a lift if any ad states one), `ads` each ad by its own
+  (the ad rows). It never says which side is right and corrects neither. Three facts: lift; construction, only
+  between classes both vocabularies name (masonry, panel, wood); floors in ONE direction only, an ad counting more
+  storeys than the register or a flat above its count (an ad counting fewer may be leaving out basements; no
+  tolerance is invented). The rule lives only in that module; a new compared fact also needs its wording
+  (`lib/registerBuilding.ts`) and its tag on the fact it sits beside.
 - **Three things a reader must know.** `floors` counts floors below ground, so it differs from an ad's count by
   design: the card names that basis. `completed_on` is a 31 December placeholder (1919 … 2000) for most older buildings and is shown as a
   period MARKED as derived, with the register's own date beside it (`ruian_completion_period`; the bounds follow

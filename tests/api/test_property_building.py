@@ -35,6 +35,7 @@ def _row(**over: Any) -> dict[str, Any]:
         "protection": [{"code": 18, "label": "label of 18"}, {"code": 99, "label": None}],
         "ads": [{"id": 31, "has_lift": False, "floor": 8, "total_floors": 8, "building_type": "panel"},
                 {"id": 32, "has_lift": None, "floor": None, "total_floors": None, "building_type": "skelet"}],
+        "shown": {"has_lift": True, "floor": 7, "total_floors": 8, "building_type": "panel"},
     }
     row.update(over)
     return row
@@ -98,7 +99,21 @@ def test_each_ad_of_the_property_is_compared_with_the_record(client, conn):
                "construction": {"differs": False, "ad": "panel"}},
         "32": {"lift": None, "floors": None, "construction": None},
     }
-    assert "from listings l where l.property_id = p.id" in conn.statements[0][0]
+
+
+def test_the_property_is_compared_by_the_values_its_page_shows_not_by_one_ad(client, conn):
+    # Ad 31 says no lift, the property (rolled up over its ads) says a lift, and so does the register.
+    building = client.get("/properties/7/building", headers=AUTH).json()["building"]
+    assert building["shown"] == {"lift": {"differs": False, "ad": True},
+                                 "floors": {"differs": False, "ad": {"total_floors": 8, "floor": 7}},
+                                 "construction": {"differs": False, "ad": "panel"}}
+    assert building["ads"]["31"]["lift"]["differs"] is True
+
+
+def test_a_property_with_no_served_row_is_compared_on_nothing(client, conn):
+    conn.row = _row(shown=None)
+    assert client.get("/properties/7/building", headers=AUTH).json()["building"]["shown"] == {
+        "lift": None, "floors": None, "construction": None}
 
 
 def test_the_read_goes_through_the_location_ads_door(client, conn):

@@ -417,7 +417,7 @@ function MergedAdvertRow({
                 [
                   'Podlaží',
                   fmtFloor(detail?.floor, detail?.total_floors) ?? '—',
-                  <RegisterMark key="mark" propertyId={source.property_id} adId={source.id} fact="floors" />,
+                  detail ? <RegisterMark key="mark" propertyId={source.property_id} adId={source.id} fact="floors" /> : null,
                 ],
               ] as [string, string, ReactNode?][]).map(([label, value, mark]) => (
                 <div key={label} className="flex items-baseline justify-between gap-2">

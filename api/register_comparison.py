@@ -37,7 +37,8 @@ def _verdict(differs: bool, ad: Any) -> dict[str, Any]:
 
 
 def compare(ad: dict[str, Any], building: dict[str, Any]) -> dict[str, dict[str, Any] | None]:
-    """The verdicts of one ad against its building's register record (`api/property_building.load_building`)."""
+    """The verdicts of one ad, or of the property's own shown values, against the building's register record
+    (`api/property_building.load_building`)."""
     out: dict[str, dict[str, Any] | None] = dict.fromkeys(FACTS)
 
     register_lift = _LIFT.get(_code(building["lift"]))

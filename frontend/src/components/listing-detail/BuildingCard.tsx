@@ -5,14 +5,14 @@ import { useRegisterBuilding } from '@/lib/useRegisterBuilding';
 
 /* Budova: what the RÚIAN register states about the building at the property's door. Its own card, apart from the
  * facts the ads state, with the source and the date of the data on it (the licence asks for both). A row where
- * the shown ad (`adId`) says something else carries the ad's value. A property whose door names no building
+ * the property's page says something else carries that value. A property whose door names no building
  * shows no card at all, and so does a failed read: the page stands without it. */
-export default function BuildingCard({ propertyId, adId }: { propertyId: number; adId: number }) {
+export default function BuildingCard({ propertyId }: { propertyId: number }) {
   const building = useRegisterBuilding(propertyId);
   if (!building) return null;
-  const facts = registerFacts(building, adId);
+  const facts = registerFacts(building);
   return (
-    <Panel title="Budova" note="podle registru RÚIAN" id="budova" className="min-w-0">
+    <Panel title="Budova" note="podle registru RÚIAN" className="min-w-0">
       <dl>
         {facts.map((f, i) => (
           <div

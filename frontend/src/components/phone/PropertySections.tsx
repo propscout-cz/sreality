@@ -153,7 +153,7 @@ export function FactsSection({ property }: { property: ListingPublic }) {
             <dt className="shrink-0 text-[12px] text-[var(--color-ink-3)]">{f.label}</dt>
             <dd className="min-w-0 text-right font-mono text-[12px] tabular-nums text-[var(--color-ink)]">
               {f.value}
-              {f.compared ? <RegisterMark propertyId={property.property_id} adId={property.id} fact={f.compared} /> : null}
+              {f.compared ? <RegisterMark propertyId={property.property_id} fact={f.compared} /> : null}
             </dd>
           </div>
         ))}
