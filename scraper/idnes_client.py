@@ -10,12 +10,10 @@ the HTML `Accept` header, the idnes URL builders, and the removed-listing signal
 
 from __future__ import annotations
 
-import logging
+import re
 import urllib.parse
 
-from scraper.portal_base import BasePortalClient, ListingGoneError
-
-LOG = logging.getLogger(__name__)
+from scraper.portal_base import BasePortalClient, gone_phrases
 
 BASE_URL = "https://reality.idnes.cz"
 
@@ -101,6 +99,9 @@ def detail_url(path_or_url: str) -> str:
 
 class IdnesClient(BasePortalClient):
     ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    # idnes 302-redirects a removed listing to the search results page.
+    DETAIL_URL = re.compile(r"/detail/")
+    GONE_PAGE = (gone_phrases(*_GONE_MARKERS),)
     # Route every request through the residential proxy in SCRAPER_PROXY_URL.
     #
     # idnes does not block our datacenter (GitHub Actions) IP the way mmreality
@@ -143,14 +144,4 @@ class IdnesClient(BasePortalClient):
         return response.text, response.status_code
 
     def fetch_detail(self, path_or_url: str) -> tuple[str, int]:
-        url = detail_url(path_or_url)
-        response = self._request(url)
-        # idnes 302-redirects a removed listing to the search results page; after
-        # requests follows it the status is 200 but the URL is off /detail/.
-        final_url = getattr(response, "url", url) or url
-        if "/detail/" not in final_url:
-            raise ListingGoneError(url, response.status_code)
-        text = response.text
-        if any(marker in text.lower() for marker in _GONE_MARKERS):
-            raise ListingGoneError(url, response.status_code)
-        return text, response.status_code
+        return self._fetch_detail_page(detail_url(path_or_url))

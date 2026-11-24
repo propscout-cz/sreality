@@ -39,6 +39,7 @@ from scraper.area import PortalAreas, derive_headline_area, parse_area_text
 from scraper.attribute_contract import floor_convention, source_value, source_values
 from scraper.ceskereality_client import detail_url
 from scraper.floor import floor_from_portal, floor_from_text, names_a_storey
+from scraper.portal_base import states_closed
 from scraper.portal_identity import native_id
 from scraper.price_text import is_per_area_price
 from scraper.published import czech_date
@@ -99,6 +100,7 @@ class IndexItem:
     title: str | None = None
     price_text: str | None = None
     locality_text: str | None = None
+    closed: bool = False  # the card says sold/let: collected, never a sighting (rule #3)
 
 
 @dataclass(frozen=True)
@@ -420,6 +422,8 @@ def parse_index(html: str) -> IndexPage:
                 or _text(card.css_first(".i-estate__header-title")),
                 price_text=_text(card.css_first(".i-estate__footer-price-value")),
                 locality_text=_text(card.css_first(".i-estate__header-locality")),
+                closed=any(states_closed(_text(badge))
+                           for badge in card.css(".i-estate__image-badges .badge__title")),
             )
         )
 

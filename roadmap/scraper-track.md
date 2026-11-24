@@ -5,6 +5,19 @@
 Scraper-specific evolution beyond Phase 1's nightly index walk.
 Independent of the analytical, UI, and map tracks.
 
+### A sold or let ad is not on offer — the walk and the page both read it (2026-11-24, #2646)
+- **Found:** remax, realitymix and ceskereality keep a sold/let ad's page up (HTTP 200, "Prodáno" /
+  "Pronajato" in the ad's own price header or badge) and its card in the index. Every walk sighted it and the
+  page read live, so ~1,900 sold ads were served active (remax 1,735 = 18% of its actives; the Slaný house's
+  four siblings closed 14 Aug, its remax ad was still active on 24 Nov).
+- **Done:** a sold/let card is no sighting (remax `?sold=on`; realitymix/ceskereality `IndexItem.closed`); a
+  page whose OWN slot says sold/let is a gone verdict (`portal_base.stated_closed`). The six HTML clients' copied
+  gone check is one `BasePortalClient._fetch_detail_page` over two declarations; remax's four dead not-found
+  phrases are gone (it answers 410). Reserved stays active.
+- **Owed:** gate #2647 (actives match the portals' on-offer totals); the one-off `last_seen_at` correction for
+  the closed ads (after the flips; rule pending the operator); sreality's status-less sold ads #2648; side
+  findings #2649 (idnes title leak), #2650 (ceskereality coverage gap).
+
 ### ceskereality behind a JS proof-of-work wall — headless-browser fetch (2026-11-16, #2529 / #2479)
 - **Found:** on 2026-10-31 the portal put an Anubis v1.28.2 interstitial (`fast`, difficulty 2) in
   front of every page. It answers **200 with challenge HTML**, so the `requests` fetch collected the

@@ -390,12 +390,13 @@ title verb). `supports_complete_walk=true` (`scraper/portal.py`) at AGENDA grain
 per-AGENDA total and the per-category slice is title-derived — not a portal-reported per-(cm,ct)
 total — so the per-AGENDA walk nominates the whole agenda's unseen rows for a page check once,
 scoped by category_type (rule #3). Because that per-category `declared_total` is `len(seen)` by
-construction, the runner's `COVERAGE` warning is blind here and `remax_main.presence_candidates`
+construction, the runner's `COVERAGE` warning is blind here and `RemaxPortal._walk_agenda`
 logs its own agenda-grain `COVERAGE agenda …` line instead; for the same reason it declares
 `total_is_count` (Health wave 4), so the health checks read its missing and residual arms as Not
-measured, never as a 0% gap by construction; a gone detail (404/410 or a
-redirect off the detail path) is a gone verdict for that one listing (rule #3's hysteresis
-flips it). Registered as a
+measured, never as a 0% gap by construction; a gone detail (410 for a removed ad, a redirect
+off the detail path, or "Prodáno"/"Pronajato" in its own `pd-header__price`: remax keeps a sold/let
+ad's page up, and lists its card after the ads on offer unless the walk asks `?sold=on`, as it
+does) is a gone verdict for that one listing (rule #3's hysteresis flips it). Registered as a
 scraper portal by CONVERTING the existing on-demand-parser row (migration 135). The
 on-demand LLM URL parser itself was deleted on 2026-10-20 (`docs/design/new-property-from-link.md`
 ruling 3): a pasted link of any portal becomes an ad through `POST /listings/ingest` and the drain.
@@ -1792,8 +1793,8 @@ renumber.** Navigate by area:
    complete category walk (`portal_runner.run_index_walk` → `_queue_presence_checks`) queues
    every active row it did not see into `listing_detail_queue` at `QUEUE_PRIORITY_VERIFY`
    (served after new and changed listings); the drain fetches the page and only a POSITIVE gone
-   signal — 404/410, a redirect off the listing, the portal's own "no longer active" text,
-   raised as `ListingGoneError` — can close it, and since 2026-10-09 not alone: the verdict is
+   signal — 404/410, a redirect off the listing, the portal's own "no longer active" text, the
+   ad's OWN status slot reading sold/let (below), raised as `ListingGoneError` — can close it, and since 2026-10-09 not alone: the verdict is
    recorded (`detail_queue_completions`, outcome `gone`) and the listing flips (outcome `flipped`,
    `db.mark_listing_inactive`) only when the ledger already holds an earlier unrefuted verdict at
    least `delist_policy.GONE_DWELL` (12 h) old — **Hysteresis** below; a live page refreshes it,
@@ -1813,6 +1814,20 @@ renumber.** Navigate by area:
    agenda's union is its whole walk: `ostatni` catches every card no other descriptor claims).
    The count a unit is reconciled against is the same scope's (`db.active_count(conn, source,
    scope)`): one predicate, `db.scope_sql`.
+   **Since 2026-11-24 a sold or let ad is not on offer** (#2646). remax, realitymix and ceskereality
+   keep a sold/let ad's page up as a reference (HTTP 200, "Prodáno"/"Pronajato" in the ad's OWN price
+   header or badge) and its card in the index, so every walk sighted it and ~1,900 sold ads were served
+   active for months (remax alone: 1,735 of 9,759 cards, listed after its ads on offer). Both halves are
+   needed, because a sighting revives a closed ad. (1) A sold/let card is collected but never a sighting:
+   remax walks its own on-offer filter `?sold=on`; realitymix (the card's price slot) and ceskereality (its
+   image badges) flag the card `IndexItem.closed`, and the walk leaves it out of `seen` and the sightings,
+   never out of the page loop (an all-closed page is no stall). (2) The page check reads the ad's OWN
+   status slot (`portal_base.stated_closed` over the one `CLOSED_STATUS` vocabulary), anchored because 8.6%
+   of live remax and 2.5% of live realitymix pages show a sold neighbour in a similar-listings block and
+   descriptions say "již prodáno". Every HTML client declares its signals (`DETAIL_URL`, `GONE_PAGE`) for
+   the one `BasePortalClient._fetch_detail_page`. Reserved ("Rezervováno") is still on offer and stays
+   active. sreality lists sold ads too, but its index items carry no status and its search no filter, so
+   they stay active until sreality drops them (#2648).
    **Since 2026-10-22 nomination is TOTAL** (Health green wave 2, issue #1853): a sighting is
    label-blind but a unit's nomination is not, so an active ad whose label lies in no walked
    scope (ceskereality's `/drazby/` auctions, realitymix's chaty with a truncated breadcrumb:
@@ -4158,7 +4173,8 @@ renumber.** Navigate by area:
     `_end_cycle`), the walk cycle's plan and resume (`_cycle`, `_plan`), category-drift recording, the probe driver,
     the whole drain (queue claim/complete/fail, the fetch pool, batch flush, the gone flip through
     `db.mark_listing_inactive`, the gone-rate breaker from `delist_policy`) and the `scrape_runs` lifecycle (`run_phase`). **Per-portal:** the client (a
-    `BasePortalClient` subclass — URL building, body markers, egress such as `USE_PROXY`; the
+    `BasePortalClient` subclass — URL building, its gone declarations `DETAIL_URL` + `GONE_PAGE`
+    (applied by the shared `_fetch_detail_page`), egress such as `USE_PROXY`; the
     shared `_request` does GET, or POST for bezrealitky's GraphQL), the parser, the adapter's
     `walk_category` (paging, end detection, stop classification; it hands its sightings to
     `reconcile_sightings` and never reads or writes `listings` itself) and the config row. Pacing is
@@ -5439,7 +5455,8 @@ body and its R2 object stay. A stored body is proven gone only when the archived
 `portal_raw_pages` hashes to that payload row's own `body_sha256` (both are written in one
 transaction by `upsert_portal_raw_page`, so their timestamps agree too) AND both of #1451's signals
 fire on it; on 14 000 sampled bazos pages those two signals never disagreed. Going FORWARD nothing
-new is stamped, because every HTML portal decides "gone" inside its client's `fetch_detail` and
+new is stamped, because every HTML portal decides "gone" inside its client's `fetch_detail`
+(`BasePortalClient._fetch_detail_page`, over that client's `DETAIL_URL` + `GONE_PAGE`) and
 raises `ListingGoneError` before the body reaches the caller that stages it — the guard is structural,
 there is no body for the writer to refuse. TWO SQL traps are worth carrying, because both cost a
 900 s statement timeout on prod before 521 landed. (1) 519 tested the title with

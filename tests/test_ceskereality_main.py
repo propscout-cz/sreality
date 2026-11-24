@@ -152,6 +152,31 @@ def test_full_walk_visits_all_fourteen_kraje_and_no_foreign_tree(monkeypatch):
         assert "severo." not in u and "vychodo." not in u and "moravskereality" not in u
 
 
+class _SoldCardClient(_PartitionClient):
+    """The same partition, with one card carrying its own "Prodáno" image badge."""
+
+    def __init__(self, counts: dict[str, int], sold: str) -> None:
+        super().__init__(counts)
+        self._sold = sold
+
+    def fetch_search(self, url):  # noqa: ANN001
+        html, status = super().fetch_search(url)
+        link = f'href="/prodej/byty/x/y-{self._sold}.html"></a>'
+        badge = ('<div class="i-estate__image-badges"><div class="badge --dark-blue"> <span class="badge__title">'
+                 'Developerský projekt</span> </div><div class="badge --gray"> <span class="badge__title">'
+                 'Prodáno</span> </div></div>')
+        return html.replace(link, link + badge), status
+
+
+def test_a_sold_card_is_no_sighting_and_the_walk_still_reaches_the_end(monkeypatch):
+    counts = {k: 40 for k in KRAJ_SLUGS}
+    fake = _SoldCardClient(counts, sold="1000000")
+    portal = m.CeskerealityPortal(default_config("ceskereality"))
+    seen, _counts, _total, _pages, complete = _walk(portal, fake, monkeypatch)
+    assert "1000000" not in seen and len(seen) == 14 * 40 - 1
+    assert complete is True
+
+
 def test_a_slice_pages_far_past_twelve(monkeypatch):
     # /prodej/byty/praha/?strana=93 returns the declared tail: the 12-page cap
     # was never a law about filtered URLs, and the old code stopped at 12.

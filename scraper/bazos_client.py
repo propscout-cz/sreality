@@ -11,14 +11,11 @@ removed-listing signals (a redirect onto the category index, that index's own
 
 from __future__ import annotations
 
-import logging
 import re
 
 import requests
 
-from scraper.portal_base import BasePortalClient, ListingGoneError
-
-LOG = logging.getLogger(__name__)
+from scraper.portal_base import BasePortalClient, gone_phrases
 
 BASE_URL = "https://reality.bazos.cz"
 
@@ -38,7 +35,6 @@ _GONE_MARKERS: tuple[str, ...] = (
 # "<slug> inzerce - Reality | Bazoš.cz" (a live ad's title is the ad headline).
 # Both are read on the detail path only — an INDEX fetch legitimately returns
 # exactly this page, so neither may live in the shared `_get_html`.
-_DETAIL_PATH = "/inzerat/"
 _CATEGORY_TITLE_RE = re.compile(
     r"<title>[^<]*\binzerce\s*-\s*Reality\s*\|\s*Bazo[sš]\.cz", re.IGNORECASE
 )
@@ -73,6 +69,8 @@ def detail_url(path_or_url: str) -> str:
 
 class BazosClient(BasePortalClient):
     ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    DETAIL_URL = re.compile(r"/inzerat/")
+    GONE_PAGE = (_CATEGORY_TITLE_RE, gone_phrases(*_GONE_MARKERS))
 
     def fetch_index(
         self,
@@ -89,20 +87,7 @@ class BazosClient(BasePortalClient):
         return self._get_html(url)
 
     def fetch_detail(self, path_or_url: str) -> tuple[str, int]:
-        url = detail_url(path_or_url)
-        response = self._request(url)
-        # A removed ad redirects off /inzerat/<id>/ onto the category index; after
-        # requests follows it the status is 200 but the URL is no longer the ad's.
-        final_url = getattr(response, "url", url) or url
-        if _DETAIL_PATH not in final_url:
-            raise ListingGoneError(url, response.status_code)
-        text = response.text
-        # Same page served without a visible redirect: its title is the category's.
-        if _CATEGORY_TITLE_RE.search(text):
-            raise ListingGoneError(url, response.status_code)
-        if any(marker in text.lower() for marker in _GONE_MARKERS):
-            raise ListingGoneError(url, response.status_code)
-        return text, response.status_code
+        return self._fetch_detail_page(detail_url(path_or_url))
 
     def _get_html(self, url: str) -> tuple[str, int]:
         # The INDEX path. _request paces (shared limiter or request_delay_s
