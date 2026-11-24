@@ -714,6 +714,28 @@ def test_a_carried_advert_the_removed_engine_placed_holds_the_group_back() -> No
     assert asked[LEGACY_PLACED_SQL] == [[11, 12]]
 
 
+def test_the_operators_same_on_exactly_the_groups_adverts_releases_the_legacy_hold() -> None:
+    db = FakeDb()
+    db.live_scope()
+    _pair_group(db, 10, [10, 11], [100, 200])
+    db.listing(12, 200)
+    db.legacy_placed = {12}
+    scope = A.effective_scope(db.settings[A.SCOPE_SETTING], {}, live=True)
+    # A ruling on another set of adverts releases nothing.
+    db.verdicts.append({"kind": "cluster", "cluster_key": 10, "verdict": "same",
+                        "member_ids": [10, 11, 12]})
+    assert _only(A.plan_apply(db, GEN, scope)).reasons == [A.SKIP_CARRIES_LEGACY]
+    db.verdicts.append({"kind": "cluster", "cluster_key": 10, "verdict": "same",
+                        "member_ids": [10, 11]})
+    group = _only(A.plan_apply(db, GEN, scope))
+    assert group.reasons == []
+    assert group.detail["legacy_released_by_ruling"] == [12]
+    # The newest word on the set stands: withdrawn, the hold is back.
+    db.verdicts.append({"kind": "cluster", "cluster_key": 10, "verdict": "unsure",
+                        "member_ids": [10, 11]})
+    assert _only(A.plan_apply(db, GEN, scope)).reasons == [A.SKIP_CARRIES_LEGACY]
+
+
 def test_a_property_the_removed_engine_built_is_not_carried_through_its_placed_member() -> None:
     # The removed engine put 11 beside 12 on 200. The engine decided 10 with 11; only the old
     # merge ties 12 to them, and its row names 11 (the moved advert), not 12.

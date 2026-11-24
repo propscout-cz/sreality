@@ -269,6 +269,17 @@ select c.cluster_key
  limit %(limit)s
 """
 
+# E992: the groups the operator ruled `same` lately, so a group the ruling releases is planned
+# in the next pass, not when the sweep's cycle (about 9 h) reaches it.
+RC_RULED_SAME_SQL = """
+select distinct v.cluster_key
+  from autodedup.verdicts v
+  join autodedup.clusters c
+    on c.generation = %(generation)s::text and c.cluster_key = v.cluster_key
+ where v.kind = 'cluster' and v.verdict = 'same'
+   and v.decided_at > now() - make_interval(hours => %(hours)s::int)
+"""
+
 RC_CLUSTERS_SQL = """
 select c.cluster_key, c.size, c.status, c.min_edge_score, c.model_version, c.feature_version
   from autodedup.clusters c

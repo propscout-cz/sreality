@@ -310,6 +310,9 @@ class Negatives:
     pairs: dict[int, list[int]] = field(default_factory=dict)
     sets: dict[int, list[frozenset[int]]] = field(default_factory=dict)
     setless_keys: set[int] = field(default_factory=set)
+    # The member sets whose NEWEST group ruling is `same` (E992): the operator saw exactly these
+    # adverts and called them one property.
+    same_sets: set[frozenset[int]] = field(default_factory=set)
 
     @classmethod
     def read(cls, conn: Any, listing_ids: Iterable[int], cluster_keys: Iterable[int]
@@ -351,6 +354,8 @@ class Negatives:
             bucket = out.sets.setdefault(min(ruled), [])
             if verdict in NEGATIVE_VERDICTS and ruled not in bucket:
                 bucket.append(ruled)
+            if verdict == "same":
+                out.same_sets.add(ruled)
         return out
 
     def hits(self, listings: set[int], cluster_key: int) -> tuple[list[str], dict[str, Any]]:
@@ -573,7 +578,8 @@ def plan_groups(
     # 2026-11-24): nobody decided what ties its adverts together. property_merge_events names
     # only the MOVED advert, so the old survivor's own adverts have no row: asked is every
     # advert of each property that contributes a carried one, member or not. `retire_legacy`
-    # undoes the placement; until then the group waits. A group that carries nothing, or whose
+    # undoes the placement; until then the group waits for the operator's `same` on exactly its
+    # adverts (E992). A group that carries nothing, or whose
     # old property the engine decided advert by advert (all members), reads nothing.
     carrying_of: dict[int, list[int]] = {}
     for cluster, members in candidates:
@@ -613,7 +619,11 @@ def plan_groups(
 
         legacy_here = sorted(legacy & set().union(
             *(children.get(pid, set()) for pid in carrying_of[key])))
-        if legacy_here:
+        # E992: the operator's own `same` on exactly this group's adverts is the decision the
+        # refusal waits for, so it lifts it; a ruling on another set of adverts lifts nothing.
+        if legacy_here and frozenset(member_set) in negatives.same_sets:
+            detail["legacy_released_by_ruling"] = legacy_here[:20]
+        elif legacy_here:
             reasons.append(SKIP_CARRIES_LEGACY)
             detail["legacy_merged_listings"] = legacy_here[:20]
 
