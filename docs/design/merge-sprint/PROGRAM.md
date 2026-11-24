@@ -136,7 +136,8 @@ Items marked *(default)* were not asked; they are engineering defaults the opera
 
 | Field | Rule |
 |---|---|
-| Price, price per m², area, layout, floor, category (a share sale with a sale reads as a sale once #1655 lands: operator ruling 2026-10-01), description, photos, link, furnished, our two condition grades (MS4), map point, address, the city figures read from that point | the canonical ad (MS5) |
+| Price, price per m², area, layout, floor, category (a share sale with a sale reads as a sale once #1655 lands: operator ruling 2026-10-01), description, photos, link, furnished, our two condition grades (MS4) | the canonical ad (MS5) |
+| Map point, address, the city figures read from that point | the location ad: the ad placed most precisely (ONE PIN, `docs/design/one-pin/PROGRAM.md`, migrations 635/636, live 2026-10-20; it replaced the canonical ad for these). One ad's finest rung decides, never a consensus, and one ad's street is never joined with another ad's number |
 | Building type, ownership, usable / plot / garden area, parking spaces | the first ad in the canonical order that states it (today's rule, kept) *(default)* |
 | House type (subtype) | the value most ads of the property's category state, active or not; a tie goes to the canonical order (#2574, ruling 2026-11-21: 4,658 properties had a canonical ad with none while another ad stated one) |
 | Condition text | the value most ACTIVE ads state, or most of all ads when no active one states it; a tie goes to the canonical order (#2574, ruling 2026-11-21) |
@@ -572,7 +573,7 @@ that session; the two never-used indexes come from migrations 198 and 275.
   comparables, which admit only the canonical ad. W2a's report counts it.
 - **City figures need a map point.** The hourly job computes them from the canonical ad's point
   only, so a property whose canonical ad has none keeps the figures of an earlier point, or none,
-  until it gains one (2026-10-06: 101 of 7,363 live properties in ids 300000–309999; it predates W2a).
+  until it gains one (2026-10-06: 101 of 7,363 live properties in ids 300000–309999; it predates W2a). Since ONE PIN (2026-10-20) the point is the location ad's, so this reads as the location ad having none.
 - **W2b merges before W2a** (§4 Order). The other way round, until W2b the property page's price
   figures count W2a's lineage while the moves listed under its chart are the canonical ad's own
   (2026-10-06: 281 of 8,270 live properties in ids 100000–109999 have a same-portal predecessor).
