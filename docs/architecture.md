@@ -5315,7 +5315,8 @@ around a town-centroid pin is exactly the false-merge class the grade axes exist
 `geometry(Point,4326)`); nine names (`country_code`, kraj, okres, obec, část obce, street, čp, čo,
 psč); seven RÚIAN codes (kraj, okres, obec, část obce, ulice, `ruian_adm_kod`, and `katastr_kod` —
 the single KÚ of the BOUND entity: migration 566, resolver v5.4; since v5.11 also the KÚ covering a
-pin the portal declares precise on a row the words bound to its town only); three grade columns,
+pin the portal declares precise on a row bound to its town only, by words naming no část or by
+the pin itself); three grade columns,
 all NOT NULL (`match_confidence`, `granularity`, `uncertainty_radius_m`); two status columns
 (`country_status` NOT NULL, `disputed`); and four housekeeping (`resolver_version`, `resolved_at`,
 `claim_set_hash`, `registry_version`). `location_data/resolver/projection.py`'s column tuple IS that
@@ -5708,9 +5709,9 @@ portal's payload or its own page, and every other stamp is class E outright.
   that state included the hallucination class the rule exists to stop; so is a house number (v5.5):
   only a bound `č.p.` point publishes one, and only psč still falls back to a claim, preserve-if-null.
   A street bound in a town the advert's town field names takes the část obce all its doors lie in
-  (Q3), else the claimed část where it has doors (Q2, W5), else none. A row the words bound to its
-  town only, placed by a pin the portal declares precise, takes the KÚ covering the pin and that KÚ's
-  door-rule část (`bind.pin_part`, v5.11, operator ruling B 2026-11-24: a point gives every unit it
+  (Q3), else the claimed část where it has doors (Q2, W5), else none. A row bound to its town only
+  (words naming no část, or the pin itself), placed by a pin the portal declares precise, takes the
+  KÚ covering the pin and that KÚ's door-rule část (`bind.pin_part`, v5.11, operator ruling B 2026-11-24: a point gives every unit it
   lies in). Only an operator correction outranks the registry. It also fills
   **the position: the portal pin where `bind.place` lets it place the row (v5.10) — else the finest
   bound unit's point on surface** — the boundary's stored

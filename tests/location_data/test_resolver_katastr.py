@@ -261,6 +261,48 @@ def test_a_part_the_words_name_is_never_replaced_by_the_pin():
     assert (resolution.cast_obce_kod, resolution.katastr_kod) == (490067, VOKOVICE_KU)
 
 
+def test_a_ku_the_words_name_is_never_replaced_by_the_pin():
+    """Ruling B refines a row whose words name no část; a KÚ the words name counts, even one
+    whose doors span two parts and so binds none (fails closed)."""
+    resolution = _resolve([
+        mm.claim(1, "obec_name", value_text="Praha"),
+        mm.claim(2, "cast_obce_name", value_text="Veleslavín u Prahy"),
+        mm.claim(3, "coordinate", lat=50.09810, lon=14.31510, declared_precision_label="gps"),
+    ])
+    assert (resolution.cast_obce_kod, resolution.katastr_kod) == (None, None)
+
+
+def test_a_ku_with_no_door_in_the_town_gives_nothing():
+    """A pin on the town's border can lie in the neighbour's KÚ: no door of it in the town, so
+    neither its KÚ nor a část is the row's."""
+    mirror = _mirror()
+    mirror.katastr_polygons[999001] = (50.05000, 14.50000, 400.0)
+    resolution = _resolve([
+        mm.claim(1, "obec_name", value_text="Praha"),
+        mm.claim(2, "coordinate", lat=50.05000, lon=14.50000, declared_precision_label="gps"),
+    ], mirror)
+    assert resolution.obec_kod == 554782
+    assert (resolution.katastr_kod, resolution.cast_obce_kod) == (None, None)
+
+
+def test_a_part_of_another_town_is_never_the_rows():
+    """The door rule names a část by code; one the register hangs under another town (a
+    re-parent) is refused, so the words' town is never replaced through the část's chain."""
+    mirror = _mirror()
+    mirror.katastr_polygons[999002] = (50.05000, 14.50000, 400.0)
+    mirror.points.append(AddressPoint(kod_adm=21690601, obec_unit_id=13, obec_kod=554782,
+                                      psc="10000", lat=None, lon=None, cast_obce_unit_id=99,
+                                      cast_obce_kod=599999, katastr_kod=999002))
+    mirror.units.append(mm._unit(99, "cast_obce", 599999, "Jinde", "jinde",
+                                 "k80.o3804.b599212.c599999", parent=10))
+    resolution = _resolve([
+        mm.claim(1, "obec_name", value_text="Praha"),
+        mm.claim(2, "coordinate", lat=50.05000, lon=14.50000, declared_precision_label="gps"),
+    ], mirror)
+    assert (resolution.obec_kod, resolution.cast_obce_kod) == (554782, None)
+    assert resolution.katastr_kod == 999002
+
+
 @pytest.mark.parametrize(
     ("ku", "expected"),
     [("Vokovice u Prahy", 490067), ("Veleslavín u Prahy", None)],

@@ -587,10 +587,14 @@ def bind(
     # part claim matches like a town name: a KÚ binds the část its doors stand in (v5.11), a MOMC
     # none (W5).
     said: list[_Part] = []
+    named_a_part = False   # a část or KÚ of the town the words name, bound or not (`pin_part`)
     for key in constraints.cast_obce_keys if constraining_obec_kods else ():
         for unit in registry.admin_units_by_name(key, levels=PART_NAME_LEVELS):
             town = town_code(unit, registry)
-            if town in constraining_obec_kods and (claimed := part_of(unit, town, registry)):
+            if town not in constraining_obec_kods:
+                continue
+            named_a_part = named_a_part or unit.level != "momc"
+            if claimed := part_of(unit, town, registry):
                 said.append(_Part(claimed, _ids(constraints, "cast_obce_name"),
                                   ("obec_constrained",)))
     if towns.composite.part is not None:
@@ -824,6 +828,7 @@ def bind(
             cast_obce_unit_id=part_unit_id,
             street_extent_m=None if street_point is None else street_point.extent_m,
             katastr_kod=None if street_point is None else street_point.katastr_kod,
+            words_name_a_part=bool(named_a_part or said or found or any(towns.climbed.values())),
             agreed=top.agreed,
             relaxations=top.relaxations,
             ambiguous=ambiguous,
@@ -1099,12 +1104,13 @@ def place(
 def pin_part(
     binding: Binding, position: Position, *, pin_is_precise: bool, registry: RegistryView
 ) -> Binding:
-    """v5.11 (operator ruling B, 2026-11-24): a point gives every unit it lies in. Where the words
-    bound the row to its town only and a pin the portal declares precise placed it, the row takes
-    the KÚ covering the pin and that KÚ's část (`katastr_part`: the one část all its doors in the
-    town stand in). The words still decide the town; a finer word (a street, a part, a door)
-    leaves the row as it is."""
-    if (position.origin != "portal_pin" or not pin_is_precise
+    """v5.11 (operator ruling B, 2026-11-24): a point gives every unit it lies in. Where the row
+    is bound to its town only (by words that name no část, or by the pin itself, R7/R8) and a pin
+    the portal declares precise placed it, the row takes the KÚ covering the pin and that KÚ's
+    část (`katastr_part`: the one část all its doors in the town stand in). The town stays as
+    bound; a street, a door or a část the words name, bound or failed closed, leaves the row as
+    it is, and so does a KÚ with no door in the town (a pin on the town's border)."""
+    if (position.origin != "portal_pin" or not pin_is_precise or binding.words_name_a_part
             or binding.target_kind != "admin_unit" or binding.admin_unit_id is None
             or binding.obec_kod is None or binding.cast_obce_unit_id is not None
             or position.lat is None or position.lon is None):
@@ -1114,7 +1120,7 @@ def pin_part(
     if not bound or bound[0].level != "obec":
         return binding
     katastr = registry.katastr_at(position.lat, position.lon)
-    if katastr is None:
+    if katastr is None or not registry.katastr_parts(katastr, binding.obec_kod):
         return binding
     part = katastr_part(katastr, binding.obec_kod, registry)
     return replace(binding, katastr_kod=katastr,

@@ -37,7 +37,7 @@ registry entity, else NULL** — a KÚ on the bound unit's chain; the one KÚ of
 which every entity inside it lies in; an address point's own KÚ (one with no coordinates has
 none: its část's, W5); a street or část obce whose every RÚIAN door lies in one KÚ (the Q7 door
 rule); and since v5.11 (operator ruling B, 2026-11-24) the KÚ covering a pin the portal
-declares precise on a row the words bound to its town only (`bind.pin_part`: a point gives
+declares precise on a row bound to its town only (`bind.pin_part`: a point gives
 every unit it lies in; measured 2026-11-24, such sreality pins lie in their own door's KÚ on
 99.6 % of rows that state a door). A pin no portal declares precise never decides it. Nothing
 else is NULL-masked specially: a foreign row loses it with every other code in `core`, and a

@@ -342,6 +342,10 @@ class Binding:
     # door, PR-B), or the KÚ covering a precise pin on a row the words bound to its town only
     # (v5.11, `bind.pin_part`).
     katastr_kod: int | None = None
+    # The words named a část (a part claim, a part a locality or street line named, a town name
+    # that climbed from a part or a KÚ), whether or not it bound: `bind.pin_part` refines only
+    # a row whose words name no část (operator ruling B, 2026-11-24).
+    words_name_a_part: bool = False
     agreed: tuple[str, ...] = ()
     relaxations: tuple[str, ...] = ()
     ambiguous: bool = False

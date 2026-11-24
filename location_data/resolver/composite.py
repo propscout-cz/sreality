@@ -187,7 +187,7 @@ def katastr_part(katastr_kod: int, town: int, registry: RegistryView) -> AdminUn
     if len(parts) != 1 or parts[0] is None:
         return None
     chain = registry.admin_chain_by_code("cast_obce", parts[0])
-    return chain[0] if chain else None
+    return chain[0] if chain and town_code(chain[0], registry) == town else None
 
 
 def town_code(unit: AdminUnit, registry: RegistryView) -> int | None:
