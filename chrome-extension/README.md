@@ -24,7 +24,8 @@ maxima, remax, mmreality, ceskereality).
   (`src/edge_tab.ts`, a closed shadow root on the right edge: the PS mark, the
   deal's stage badge, this ad's price drop and the MF yield) or a search
   card's yield badge opens it; the edge tab hides while the panel is open in
-  that window (and reads its price history only while it shows). After an
+  that window (and reads its price history only while it shows), and drags up
+  and down the edge, staying where it was left on every portal. After an
   extension update the open pages' scripts are cut off: the edge tab then
   says so and its click reloads the page. The top bar: the wordmark,
   **V aplikaci ↗** (the ad's page in the app, `/listing/{source}/{native_id}`),
@@ -244,7 +245,8 @@ tokens with reuse detection):
   error: invalid, reused, revoked) signs out, and the panel shows the sign-in
   card.
 
-**Permissions:** `storage` (the session and two panel preferences),
+**Permissions:** `storage` (the session and two preferences: the search pages'
+"Skrýt skryté" switch and where the edge tab was left),
 `identity` (the Google sign-in) and `sidePanel`; no host permissions. The
 content script runs on the portal hosts that serve pages (below). The
 sign-in card says what the extension sends once signed in and links
@@ -376,8 +378,8 @@ background answering its messages, mock content scripts answering its
 checks that the panel follows its window's active tab, the signed-out and
 no-ad states, what a tab switch keeps (a note draft, a debounced scenario edit,
 a run in flight), the menus' focus and the in-place yield editor; on the page,
-the edge tab's marks, opening the panel, hiding while it is open (bfcache
-included), the reload offer of an orphaned script and a search card's badge;
+the edge tab's marks, opening the panel, dragging it, hiding while it is open
+(bfcache included), the reload offer of an orphaned script and a search card's badge;
 and that no page threw.
 
 ```sh
@@ -403,8 +405,8 @@ them somewhere and set `LD_LIBRARY_PATH=<that>/usr/lib/x86_64-linux-gnu`;
 3. Click **Load unpacked**.
 4. Pick the `dist/` folder you downloaded (Option A) or built
    (Option B).
-5. Confirm the extension card shows "PropScout.cz — výnos & pipeline" with
-   the copper "%" icon. Pin it (the puzzle-piece menu → the pin) so its
+5. Confirm the extension card shows "PropScout.cz" with the dark PS icon
+   (drawn by `frontend/scripts/make-icons.py`). Pin it (the puzzle-piece menu → the pin) so its
    toolbar icon, which opens and closes the side panel, stays in reach.
    Chrome 116 or newer.
 
