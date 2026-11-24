@@ -219,12 +219,13 @@ def get_broker(conn: Any, broker_id: int) -> dict[str, Any] | None:
         memberships = cur.fetchall()
         region_shares, categories = footprint(cur, broker_id)
         contacts = _contacts(cur, broker_id)
+        prices = price_change(cur, broker_id)
     for coll in (broker, *memberships):
         for k in ("first_seen_at", "last_seen_at"):
             if k in coll:
                 coll[k] = _iso(coll[k])
     data = {"broker": broker, "memberships": memberships, "region_shares": region_shares,
-            "categories": categories, "contacts": contacts}
+            "categories": categories, "contacts": contacts, "price_change": prices}
     return _envelope("broker_detail", data, {"broker_id": broker_id}, 1, broker.get("last_seen_at"))
 
 
@@ -289,8 +290,6 @@ _FOOTPRINT_SQL = f"""
 # against their last. `priced` = the properties with a price to compare, `repriced` = those whose last price differs
 # from the first (`cut` below it, `raised` above); the median is over the repriced ones only, since most properties
 # never move and a median over all of them is 0 for nine brokers in ten (production, 2026-11-23).
-# NOT in the dossier yet (#2633): the book's price pair is written by the maintenance pass, so until one full sweep
-# has run on this code the filled rows are the recently changed properties only, and their share is not the book's.
 _PRICE_CHANGE_SQL = f"""
     SELECT grouping(b.is_active) = 1 AS every, b.is_active,
            count(*) FILTER (WHERE x.pct IS NOT NULL) AS priced,
