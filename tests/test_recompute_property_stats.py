@@ -1677,8 +1677,9 @@ def test_a_tenth_portal_is_offered_only_with_its_read_model_lines():
 
 
 def test_the_price_history_is_the_canonical_adverts_lineage():
-    """MS10: the price figures are `listing_price_history` of the canonical advert (migration 768), the one
-    definition the broker book reads too, and the rollup spells no lineage of its own."""
+    """MS10: the price figures are `listing_price_history` of the canonical advert (migrations 768, 770), the one
+    definition the broker book and the broker inventory read too, and the rollup spells no lineage and no percent
+    of its own: "no change below two priced snapshots" is the function's `change_pct`."""
 
     from scripts.recompute_property_stats import _RECOMPUTE_BATCH_SQL
 
@@ -1690,8 +1691,8 @@ def test_the_price_history_is_the_canonical_adverts_lineage():
             "CROSS JOIN LATERAL listing_price_history(c.id, NULL) h )") in sql
     assert "LEFT JOIN prices ph ON ph.pid = r.pid" in sql
     assert sql.count("listing_price_history(") == 1
-    assert "measure_price_change_pct(ph.first_price_czk, ph.last_price_czk)" in sql
-    for own in ("RECURSIVE", "listing_price_steps", "lineage", "/ "):
+    assert "total_price_change_pct = ph.change_pct," in sql
+    for own in ("RECURSIVE", "listing_price_steps", "lineage", "/ ", "measure_price_change_pct", "price_points"):
         assert own not in sql
     from tests.migration_defs import latest_definition
 
@@ -1699,7 +1700,9 @@ def test_the_price_history_is_the_canonical_adverts_lineage():
     assert ("where l.property_id = k.pid and l.source = k.source "
             "and l.last_seen_at < k.first_seen_at and l.first_seen_at < k.first_seen_at") in body
     assert "order by l.last_seen_at desc, l.id desc limit 1" in body
-    assert "join public.listing_price_steps ps on ps.listing_id = g.id" in body
+    assert ("case when sp.price_points >= 2 "
+            "then public.measure_price_change_pct(sp.first_price_czk, sp.last_price_czk) end") in body
+    assert "::numeric /" not in body, "every percent is measure_price_change_pct"
 
 
 def test_the_canonical_handover_is_stamped_for_the_price_alerts():

@@ -67,9 +67,9 @@ const dossier = (broker: Partial<brokers.BrokerPublic>): brokers.BrokerDossier =
   region_shares: [],
   categories: [],
   price_change: {
-    all: { priced: 50, repriced: 10, cut: 8, raised: 2, repriced_pct: 20, median_pct: -7.3 },
-    active: { priced: 35, repriced: 4, cut: 4, raised: 0, repriced_pct: 11.43, median_pct: null },
-    inactive: { priced: 0, repriced: 0, cut: 0, raised: 0, repriced_pct: null, median_pct: null },
+    all: { priced: 50, repriced: 10, repriced_pct: 20, median_pct: -7.3 },
+    active: { priced: 35, repriced: 4, repriced_pct: 11.43, median_pct: null },
+    inactive: { priced: 0, repriced: 0, repriced_pct: null, median_pct: null },
   },
   pii_masked: true,
 });
@@ -315,7 +315,7 @@ describe('<BrokerDetail> section cards', () => {
   });
 });
 
-/* Migration 768: how much the broker changes prices. The tile reads the book's
+/* Migrations 768, 770: how much the broker changes prices. The tile reads the book's
  * figures under one status at a time; an inventory row carries its own ad's change. */
 describe('<BrokerDetail> price changes', () => {
   it('shows the share repriced and the median, and switches the status slice', async () => {
@@ -325,21 +325,14 @@ describe('<BrokerDetail> price changes', () => {
     expect(within(group).getByRole('button', { name: 'Vše' })).toHaveAttribute('aria-pressed', 'true');
     expect(tile).toHaveTextContent(/20\s%/);
     expect(tile).toHaveTextContent(/medián -7,3\s%/);
-    expect(tile).toHaveTextContent('přeceněno 10 z 50 · 8 zlevněno, 2 zdraženo');
+    expect(tile).toHaveTextContent('přeceněno 10 z 50');
 
     fireEvent.click(within(group).getByRole('button', { name: 'Aktivní' }));
-    expect(tile).toHaveTextContent('přeceněno 4 z 35 · 4 zlevněno, 0 zdraženo');
+    expect(tile).toHaveTextContent('přeceněno 4 z 35');
     expect(tile).not.toHaveTextContent('medián');
 
     fireEvent.click(within(group).getByRole('button', { name: 'Neaktivní' }));
     expect(tile).toHaveTextContent('žádná cena k porovnání');
-  });
-
-  it('draws no price tile while the dossier carries no figures', async () => {
-    vi.mocked(brokers.fetchBrokerDossier).mockResolvedValue({ ...dossier({}), price_change: undefined });
-    renderPage();
-    expect(await screen.findByText('Regiony')).toBeInTheDocument();
-    expect(screen.queryByRole('group', { name: 'Změna ceny' })).not.toBeInTheDocument();
   });
 
   it('marks each ad with its own price change, and leaves an unpriced one blank', async () => {

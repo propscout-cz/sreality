@@ -8,7 +8,7 @@ import {
   BROKER_PRICE_SCOPES,
   fetchBrokerDossier,
   fetchBrokerListings,
-  priceChangeSummary,
+  useBrokerPriceSlice,
   type BrokerListing,
   type BrokerPriceFigures,
   type BrokerPriceScope,
@@ -156,7 +156,7 @@ function BrokerDetailDesktop() {
           </header>
 
           {/* Stats strip */}
-          <div className={`mt-6 grid ${dossier.price_change ? 'grid-cols-[1fr_1fr_1fr_minmax(0,1.7fr)]' : 'grid-cols-3'} border border-[var(--color-rule)] rounded-[var(--radius-md)] divide-x divide-[var(--color-rule-soft)] bg-[var(--color-paper-2)]`}>
+          <div className="mt-6 grid grid-cols-[1fr_1fr_1fr_minmax(0,1.7fr)] border border-[var(--color-rule)] rounded-[var(--radius-md)] divide-x divide-[var(--color-rule-soft)] bg-[var(--color-paper-2)]">
             <Stat
               label="Nemovitosti"
               value={b.active_properties}
@@ -165,7 +165,7 @@ function BrokerDetailDesktop() {
             />
             <Stat label="Kanceláře" value={dossier.memberships.length} hint="historicky" />
             <Stat label="Regiony" value={dossier.region_shares.length} hint="kde inzeruje" />
-            {dossier.price_change && <PriceChangeStat figures={dossier.price_change} />}
+            <PriceChangeStat figures={dossier.price_change} />
           </div>
 
           {/* Section cards, 16 px apart (system.md § Section cards). */}
@@ -256,14 +256,13 @@ function Stat({
   );
 }
 
-/* How much the broker changes prices (migration 768): the share of their priced
- * properties that end on another price than the broker first asked, and the
- * median change among those. Over the whole book like its neighbours, not the
+/* How much the broker changes prices (migration 770): the share of their priced
+ * properties whose price they changed at least once, and the median change among
+ * those. Over the whole book like its neighbours, not the
  * inventory's Typ / Nabídka selection; the switch is the status Nemovitosti counts. */
 function PriceChangeStat({ figures }: { figures: Record<BrokerPriceScope, BrokerPriceFigures> }) {
   const labelId = useId();
-  const [scope, setScope] = useState<BrokerPriceScope>('all');
-  const { share, median, hint } = priceChangeSummary(figures[scope]);
+  const { scope, setScope, share, median, hint } = useBrokerPriceSlice(figures);
   return (
     <div className="px-4 py-3">
       <div className="flex items-center justify-between gap-2">
@@ -275,9 +274,9 @@ function PriceChangeStat({ figures }: { figures: Record<BrokerPriceScope, Broker
       </div>
       <p className="mt-1 font-[family-name:var(--font-mono)] tabular-nums text-[1.35rem] leading-none text-[var(--color-ink)]">
         {share}
-        {median && <span className="text-[var(--color-ink-4)] text-sm"> · {median}</span>}
+        {median && <span className="text-[var(--color-ink-3)] text-sm"> · {median}</span>}
       </p>
-      <p className="mt-1 text-[0.62rem] text-[var(--color-ink-4)]">{hint}</p>
+      <p className="mt-1 text-[0.62rem] text-[var(--color-ink-3)]">{hint}</p>
     </div>
   );
 }
