@@ -138,8 +138,9 @@ desktop page shows the dossier's `categories` as a `Typy` card, as the phone doe
 dropped once this read is live.
 
 **The SPA.** The desktop table pages on a click (`LoadMore`); Typ / Nabídka narrow the read and the title count is
-the dossier's `categories` under the same selection (`lib/brokers.inventoryCount`), exact over the whole book, so
-the 500-row cap and its `500+` are gone. The phone's offer stays Browse's cards under the `brokerId` scope.
+the dossier's `categories` under the same selection (`lib/brokers.inventoryCount`), exact over the book's properties
+Browse serves (the rows this read returns; the Nemovitosti and Změna ceny tiles count the unserved 0.8 % too), so the
+500-row cap and its `500+` are gone. While a new selection loads, the previous rows recede (`isPlaceholderData`). The phone's offer stays Browse's cards under the `brokerId` scope.
 
 **Known edge.** The book's pair is the history of the broker's most-repriced ad on the property, so with two ads
 of theirs at different prices the row shows that ad's last price.

@@ -360,8 +360,8 @@ function Firms({ rows }: { rows: BrokerMembership[] }) {
 
 /* The broker's book, one row per property, a page at a time. Typ / Nabídka narrow
  * the read itself; the count in the title bar is the dossier's, exact over the
- * whole book ("z" the book's when a filter narrows it), so it does not wait for
- * the pages. */
+ * book's properties Browse serves, the ones this table lists ("z" all of them
+ * when a filter narrows it), so it does not wait for the pages. */
 function Inventory({
   brokerId,
   categories,
@@ -421,8 +421,9 @@ function Inventory({
         <PanelEmpty>{isFiltered ? 'Žádné nemovitosti pro zvolený filtr.' : 'Žádné nemovitosti.'}</PanelEmpty>
       ) : (
         <>
-          {/* A table that scrolls keeps its own box (C9). */}
-          <div className="overflow-x-auto border border-[var(--color-rule)] rounded-[var(--radius-md)]">
+          {/* A table that scrolls keeps its own box (C9); the previous selection's rows recede while the new read loads. */}
+          <div aria-busy={list.isPlaceholderData}
+            className={`overflow-x-auto border border-[var(--color-rule)] rounded-[var(--radius-md)] transition-opacity ${list.isPlaceholderData ? 'opacity-50' : ''}`}>
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="border-b border-[var(--color-rule)] bg-[var(--color-paper-2)] text-left">

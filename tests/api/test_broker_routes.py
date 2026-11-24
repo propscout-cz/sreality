@@ -17,6 +17,7 @@ TestClient = pytest.importorskip("fastapi.testclient").TestClient
 from api import dependencies as deps
 from api import main as api_main
 from api import tenant_pool
+from api.cursor import encode_cursor
 from api.routes import brokers as broker_routes
 
 _SEARCH_ROW = {"broker_id": 1, "display_name": "RK Alfa",
@@ -328,8 +329,12 @@ def test_properties_route_pages_by_an_opaque_cursor(client, monkeypatch):
     ]
 
 
-def test_properties_route_refuses_a_malformed_cursor(client):
-    assert client.get("/brokers/527/properties?cursor=nope").status_code == 422
+@pytest.mark.parametrize("values", [None, [[True, "x"], 9], [["ab"], 9], [[1, "2026-11-24T00:00:00+00:00"], 9],
+                                    [[True, 5], 9], [[True, "2026-11-24T00:00:00+00:00"], "9"]])
+def test_properties_route_refuses_a_malformed_cursor(client, values):
+    """A cursor is the caller's text: a shape or a value the read cannot bind is a 422, never the database's error."""
+    cursor = "nope" if values is None else encode_cursor(values)
+    assert client.get(f"/brokers/527/properties?cursor={cursor}").status_code == 422
 
 
 _SENTINEL = {"data": [{"broker_id": 1, "display_name": "leak@rk.cz",
