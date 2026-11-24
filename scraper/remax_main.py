@@ -63,8 +63,10 @@ class _AgendaWalk:
         self, native_ids: list[str], ref_map: dict[str, str],
         price_map: dict[str, IndexPrice], cat_map: dict[str, str | None],
         total: int | None, pages: int, stop_reason: StopReason, reached_end: bool,
+        closed: frozenset[str] = frozenset(),
     ) -> None:
         self.native_ids = native_ids
+        self.closed = closed  # sold/let cards: collected, never sighted (rule #3)
         self.ref_map = ref_map
         self.price_map = price_map
         self.cat_map = cat_map  # id -> category_main (from the card title)
@@ -146,6 +148,7 @@ class RemaxPortal(portal_runner.PortalDefaults):
         ref_map: dict[str, str] = {}
         price_map: dict[str, IndexPrice] = {}
         cat_map: dict[str, str | None] = {}
+        closed: set[str] = set()
         total: int | None = None
         pages = 0
         page = 1
@@ -198,6 +201,8 @@ class RemaxPortal(portal_runner.PortalDefaults):
                 # applies the write boundary's clamps before it compares.
                 price_map[nid] = read_price(item.price_text)
                 cat_map[nid] = category_of(None, item.title)
+                if item.closed:
+                    closed.add(nid)
             if self._max_pages and pages >= self._max_pages:
                 stop_reason = "page_cap"
                 break
@@ -256,7 +261,8 @@ class RemaxPortal(portal_runner.PortalDefaults):
                 sale, len(native_ids), total, coverage, reason,
             )
         walk = _AgendaWalk(
-            native_ids, ref_map, price_map, cat_map, total, pages, reason, reached_end)
+            native_ids, ref_map, price_map, cat_map, total, pages, reason, reached_end,
+            frozenset(closed))
         self._agenda_cache[sale] = walk
         return walk, pages
 
@@ -318,7 +324,8 @@ class RemaxPortal(portal_runner.PortalDefaults):
         sale = int(category.get("sale") or 1)
         walk, pages = self._walk_agenda(sale, conn, limiter, deadline)
 
-        native_ids = [n for n in walk.native_ids if self._belongs(walk.cat_map.get(n), cm)]
+        native_ids = [n for n in walk.native_ids
+                      if n not in walk.closed and self._belongs(walk.cat_map.get(n), cm)]
         seen = set(native_ids)
         counts = portal_runner.reconcile_sightings(
             conn, SOURCE, {n: (walk.ref_map[n], walk.price_map.get(n)) for n in native_ids},

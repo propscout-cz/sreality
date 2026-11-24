@@ -552,3 +552,13 @@ def test_a_land_page_takes_its_headline_from_the_parcel():
     assert (listing.area_m2, listing.area_basis) == (2480.0, "plot")
     assert listing.estate_area == 2480.0
 
+
+
+def test_a_card_whose_data_price_says_sold_or_let_is_closed():
+    # The live card markup (2026-11-24): the sold tail's data-price is the status.
+    def card(nid: str, price: str) -> str:
+        return (f'<div class="pl-items__item pl-items__item--sold" data-price="{price}" '
+                f'data-title="Prodej bytu 3+kk" data-url="/reality/detail/{nid}/prodej-bytu"></div>')
+    page = parse_index(card("1", "Prodáno") + card("2", "Pronajato")
+                       + card("3", "3 700 000 Kč\n\t(za nemovitost)"))
+    assert [(i.source_id_native, i.closed) for i in page.items] == [("1", True), ("2", True), ("3", False)]

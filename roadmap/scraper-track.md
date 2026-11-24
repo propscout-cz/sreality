@@ -10,7 +10,7 @@ Independent of the analytical, UI, and map tracks.
   "Pronajato" in the ad's own price header or badge) and its card in the index. Every walk sighted it and the
   page read live, so ~1,900 sold ads were served active (remax 1,735 = 18% of its actives; the Slaný house's
   four siblings closed 14 Aug, its remax ad was still active on 24 Nov).
-- **Done:** a sold/let card is no sighting (remax `?sold=on`; realitymix/ceskereality `IndexItem.closed`); a
+- **Done:** a sold/let card is no sighting (`IndexItem.closed` on all three; remax also walks `?sold=on`); a
   page whose OWN slot says sold/let is a gone verdict (`portal_base.stated_closed`). The six HTML clients' copied
   gone check is one `BasePortalClient._fetch_detail_page` over two declarations; remax's four dead not-found
   phrases are gone (it answers 410). Reserved stays active.

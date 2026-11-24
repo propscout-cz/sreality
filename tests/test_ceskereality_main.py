@@ -1106,6 +1106,27 @@ def test_probe_category_reads_nejnovejsi_on_www(monkeypatch):
     assert complete is False        # a probe can never justify a delisting sweep
 
 
+def test_probe_category_never_sights_a_sold_card(monkeypatch):
+    # The worker probes every few minutes: a sighting there would refute the dwell forever.
+    fake = _NewestClient({1: [("7000001", "3 200 000 Kč"), ("7000002", "4 100 000 Kč")]})
+    plain = fake.fetch_search
+
+    def fetch_search(url):  # noqa: ANN001, ANN202
+        html, status = plain(url)
+        link = 'href="/prodej/byty/x/y-7000002.html"></a>'
+        badge = '<div class="i-estate__image-badges"><span class="badge__title">Prodáno</span></div>'
+        return html.replace(link, link + badge), status
+
+    fake.fetch_search = fetch_search
+    monkeypatch.setattr(m, "CeskerealityClient", lambda **kw: fake)
+    portal = m.CeskerealityPortal(default_config("ceskereality"))
+    seen, counts, _total, _pages, _complete = portal.probe_category(
+        {"sale_type": "prodej", "category": "byty"},
+        conn=None, dry_run=True, limiter=None, probe_pages=1,
+    )
+    assert seen == {"7000001"} and counts["found_new"] == 1
+
+
 def test_probe_category_early_stops_on_all_known_page(monkeypatch):
     fake = _NewestClient({
         1: [("7000001", "3 200 000 Kč"), ("7000002", "4 100 000 Kč")],

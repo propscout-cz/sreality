@@ -1819,9 +1819,10 @@ renumber.** Navigate by area:
    header or badge) and its card in the index, so every walk sighted it and ~1,900 sold ads were served
    active for months (remax alone: 1,735 of 9,759 cards, listed after its ads on offer). Both halves are
    needed, because a sighting revives a closed ad. (1) A sold/let card is collected but never a sighting:
-   remax walks its own on-offer filter `?sold=on`; realitymix (the card's price slot) and ceskereality (its
-   image badges) flag the card `IndexItem.closed`, and the walk leaves it out of `seen` and the sightings,
-   never out of the page loop (an all-closed page is no stall). (2) The page check reads the ad's OWN
+   the parser flags it `IndexItem.closed` (remax: its `data-price`; realitymix: its price slot;
+   ceskereality: its image badges) and the walk leaves it out of `seen` and the sightings, never out of the
+   page loop (an all-closed page is no stall). remax also walks its own on-offer filter `?sold=on`, which
+   drops the tail outright (exact totals, ~83 fewer pages a walk); the card rule holds if remax ignores it. (2) The page check reads the ad's OWN
    status slot (`portal_base.stated_closed` over the one `CLOSED_STATUS` vocabulary), anchored because 8.6%
    of live remax and 2.5% of live realitymix pages show a sold neighbour in a similar-listings block and
    descriptions say "již prodáno". Every HTML client declares its signals (`DETAIL_URL`, `GONE_PAGE`) for
