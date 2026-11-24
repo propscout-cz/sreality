@@ -4,8 +4,9 @@
  * stage badge, this ad's price drop and the MF yield, read through the page's
  * store; hidden while the side panel is open in this window (the drop's price
  * history is read only while the tab shows). Under an extension update it offers
- * the page reload that reconnects it. Depth is its border, bar the one shadow that
- * lifts it off the portal page, as the sheet's folded tab had. */
+ * the page reload that reconnects it. It drags up and down the edge (edge_drag.ts).
+ * Depth is its border, bar the one shadow that lifts it off the portal page, as the
+ * sheet's folded tab had. */
 
 import tokens from '../../frontend/src/styles/tokens.css?inline';
 import { APP_NAME, APP_SHORT } from '../../frontend/src/lib/brand';
@@ -15,9 +16,11 @@ import type { PipelineStage } from '../../frontend/src/lib/types';
 import { themeHost } from './appearance';
 import { EXTENSION_RELOADED_DETAIL } from './config';
 import { h, keepFocus } from './dom';
+import { TOP_KEY, dragTab, readTop, storedTop, writeTop } from './edge_drag';
 import { codeBadge, moveBadge, stageLook } from './glyphs';
-import { tabMarkList } from './panel_logic';
+import { clampTabTop, tabMarkList } from './panel_logic';
 import { adMove, priceSeries } from './panel_price';
+import { onStoredChange } from './session';
 import type { Store } from './store';
 import type { PortalListing, PriceHistory } from './types';
 
@@ -27,8 +30,9 @@ const CSS = `
   ${tokens}
   :host { all: initial; }
   .tab {
-    position: fixed; z-index: 2147483000; top: 96px; right: 0; min-width: 56px; margin: 0; padding: 10px 4px 12px;
+    position: fixed; z-index: 2147483000; right: 0; min-width: 56px; margin: 0; padding: 10px 4px 12px;
     display: flex; flex-direction: column; align-items: center; gap: 8px; cursor: pointer;
+    touch-action: none; user-select: none;
     font: 13px/18px ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     color: var(--color-ink); -webkit-font-smoothing: antialiased; text-align: center;
     background: var(--color-paper-2); border: 1px solid var(--color-rule); border-right: 0;
@@ -36,6 +40,7 @@ const CSS = `
     box-shadow: 0 1px 2px rgba(20, 22, 26, 0.06), 0 8px 24px rgba(20, 22, 26, 0.12);
   }
   .tab:hover { background: var(--color-paper-3); }
+  .dragging, .dragging .tab { cursor: grabbing; }
   .tab:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
   .tab-mark {
     width: 32px; height: 32px; border-radius: var(--radius-sm);
@@ -88,6 +93,8 @@ export function createEdgeTab(store: Store, onOpen: () => void) {
   let listing: PortalListing | null = null;
   let move: number | null = null;
   let panelOpen = false;
+  /* Where the user left the tab; null until read, so it never shows at the default and jumps. */
+  let top: number | null = null;
   /* The extension was updated or reloaded under this page: this script can reach nothing. */
   let orphaned = false;
   /* Every ad shown is a new epoch: an answer for the last one never paints. */
@@ -107,13 +114,29 @@ export function createEdgeTab(store: Store, onOpen: () => void) {
     const style = h('style', '');
     style.textContent = CSS;
     const box = h('div', '');
+    dragTab(box, moveTo, () => { if (top != null) writeTop(top); });
     shadow.append(style, box);
     mount = { host, shadow, box };
     return mount;
   }
 
+  const tabEl = (): HTMLElement | null => (mount?.box.firstElementChild as HTMLElement | null | undefined) ?? null;
+
+  /* Shown clear of the window's ends; `top` itself stays, so a window grown back returns it. */
+  function place(): void {
+    const tab = tabEl();
+    if (tab != null && top != null) tab.style.top = `${clampTabTop(top, tab.offsetHeight, window.innerHeight)}px`;
+  }
+
+  function moveTo(next: number): void {
+    const tab = tabEl();
+    if (tab == null) return;
+    top = clampTabTop(next, tab.offsetHeight, window.innerHeight);
+    place();
+  }
+
   function paint(): void {
-    if (ref == null) return;
+    if (ref == null || top == null) return;
     const { shadow, box } = mounted();
     const pid = listing?.found ? listing.property_id : null;
     const curation = pid != null ? store.curation(pid) : null;
@@ -133,13 +156,14 @@ export function createEdgeTab(store: Store, onOpen: () => void) {
         tab.append(h('span', 'sr', `${APP_NAME} — ${EXTENSION_RELOADED_DETAIL}`), mark, h('span', 'l4', 'Obnovit'));
         tab.onclick = () => location.reload();
       } else {
-        tab.title = 'Otevřít panel';
+        tab.title = 'Otevřít panel (přetažením posunete výš nebo níž)';
         const shown = marks(view, move, store.list('stages').data);
         tab.append(h('span', 'sr', `${APP_NAME} — otevřít panel`), mark, ...shown);
         tab.onclick = () => onOpen();
       }
       box.replaceChildren(tab);
     });
+    place();
   }
 
   /* This ad's last price move, read once per ad and only while the tab shows. */
@@ -169,6 +193,17 @@ export function createEdgeTab(store: Store, onOpen: () => void) {
     paint();
     await loadMove();
   }
+
+  void readTop().then((stored) => {
+    top = stored;
+    paint();
+  });
+  // Left somewhere else in another tab: this one follows.
+  onStoredChange(TOP_KEY, (c) => {
+    top = storedTop(c.newValue);
+    place();
+  });
+  window.addEventListener('resize', place);
 
   store.subscribe((changed) => {
     const pid = listing?.found ? listing.property_id : null;
