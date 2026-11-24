@@ -22,8 +22,8 @@
    takes a property's place from it. The six amenities are a union over every advert and the
    energy rating the best class any advert states (MS6); every other physical fact is the first
    non-empty value in the canonical order. The price
-   figures are the canonical advert's lineage (MS10): its own and its same-portal predecessors'
-   `listing_price_steps` plus one handover step per link, the total compounded. Lifecycle: any advert active, min/max seen, newest snapshot;
+   figures are the canonical advert's lineage (MS10): `listing_price_history` (migration 768), its own and its
+   same-portal predecessors' `listing_price_steps` plus one handover step per link, the total compounded. Lifecycle: any advert active, min/max seen, newest snapshot;
    the portal lists and one newest-advert date per offered portal (MS19). `repr_since` is
    stamped when the canonical advert changes, or when a property the full sweep reset to no ads
    gains one (the price alerts start there). `city_proximity_computed_at` is cleared when the
@@ -167,8 +167,8 @@ _ROLLUP = {
     "price_change_count_30d": "coalesce(ph.changes_30d, 0)",
     "price_change_count_90d": "coalesce(ph.changes_90d, 0)",
     "price_change_count_365d": "coalesce(ph.changes_365d, 0)",
-    "total_price_change_pct": "CASE WHEN cs.price_points >= 2 AND cs.first_price > 0 "
-                              "THEN (cs.last_price - cs.first_price)::numeric / cs.first_price * 100 END",
+    "total_price_change_pct": "CASE WHEN ph.price_points >= 2 "
+                              "THEN measure_price_change_pct(ph.first_price_czk, ph.last_price_czk) END",
     "last_change_at": "coalesce(ch.last_change_at, r.first_seen_at)",
     **{f"newest_ad_at_{o.value}": f"r.newest_ad_at_{o.value}" for o in PORTAL_OPTIONS},
 }
@@ -225,21 +225,28 @@ _RECOMPUTE_BATCH_SQL = f"""
       FROM kids k
       GROUP BY k.property_id
     ),
-    -- The storey and the above-ground count: the value most adverts state, a tie going to the
-    -- advert first in the canonical order.
+    -- The storey and the building's count: the value most adverts state, a tie going to the
+    -- advert first in the canonical order. A count the chosen storey reaches never votes
+    -- (`scraper.floor.total_floors_from_portal`'s rule, at the property's grain), so one
+    -- advert's storey is never shown against another's contradicting count.
+    storey_votes AS (
+      SELECT k.property_id AS pid, f.fact, f.value,
+             count(*) AS ads, min(k.canonical_rank) AS first_rank
+      FROM kids k
+      CROSS JOIN LATERAL (VALUES ('floor', k.floor), ('total', k.total_floors)) f(fact, value)
+      WHERE f.value IS NOT NULL
+      GROUP BY k.property_id, f.fact, f.value
+    ),
     storey AS (
-      SELECT v.pid,
-        (array_agg(v.value ORDER BY v.ads DESC, v.first_rank) FILTER (WHERE v.fact = 'floor'))[1] AS floor,
-        (array_agg(v.value ORDER BY v.ads DESC, v.first_rank) FILTER (WHERE v.fact = 'total'))[1] AS total_floors
-      FROM (
-        SELECT k.property_id AS pid, f.fact, f.value,
-               count(*) AS ads, min(k.canonical_rank) AS first_rank
-        FROM kids k
-        CROSS JOIN LATERAL (VALUES ('floor', k.floor), ('total', k.total_floors)) f(fact, value)
-        WHERE f.value IS NOT NULL
-        GROUP BY k.property_id, f.fact, f.value
-      ) v
-      GROUP BY v.pid
+      SELECT v.pid, s.floor,
+        (array_agg(v.value ORDER BY v.ads DESC, v.first_rank)
+           FILTER (WHERE v.fact = 'total' AND (s.floor IS NULL OR v.value > s.floor)))[1] AS total_floors
+      FROM storey_votes v
+      LEFT JOIN (
+        SELECT pid, (array_agg(value ORDER BY ads DESC, first_rank))[1] AS floor
+        FROM storey_votes WHERE fact = 'floor' GROUP BY pid
+      ) s USING (pid)
+      GROUP BY v.pid, s.floor
     ),
     -- The house type and the condition: the value most adverts state, a tie going to the advert
     -- first in the canonical order. A house type belongs to one category, so only the adverts of
@@ -263,80 +270,6 @@ _RECOMPUTE_BATCH_SQL = f"""
       ) v
       GROUP BY v.pid
     ),
-    -- The canonical advert and its same-portal predecessors (MS10): each predecessor is the advert
-    -- on that portal last seen latest, strictly before the later link was first seen, so adverts
-    -- that ran at the same time never link; first_seen_at falls along the chain, so it ends.
-    lineage AS (
-      WITH RECURSIVE link AS (
-        SELECT c.property_id AS pid, c.id, c.source, c.first_seen_at, 0 AS hop FROM canon c
-        UNION ALL
-        SELECT k.pid, pre.id, k.source, pre.first_seen_at, k.hop + 1
-        FROM link k
-        CROSS JOIN LATERAL (
-          SELECT l.id, l.first_seen_at FROM listings l
-          WHERE l.property_id = k.pid AND l.source = k.source
-            AND l.last_seen_at < k.first_seen_at AND l.first_seen_at < k.first_seen_at
-          ORDER BY l.last_seen_at DESC, l.id DESC
-          LIMIT 1
-        ) pre
-      )
-      SELECT * FROM link
-    ),
-    -- Each priced link's first and last price over its own snapshots, dated by the first.
-    members AS (
-      SELECT g.pid, g.hop,
-        (array_agg(s.price_czk ORDER BY s.scraped_at, s.id))[1]           AS first_price,
-        min(s.scraped_at)                                                 AS first_at,
-        (array_agg(s.price_czk ORDER BY s.scraped_at DESC, s.id DESC))[1] AS last_price,
-        count(*)                                                          AS price_points
-      FROM lineage g
-      JOIN listing_snapshots s ON s.listing_id = g.id
-      WHERE s.price_czk IS NOT NULL
-      GROUP BY g.pid, g.hop
-    ),
-    -- The steps the price figures count: each link's OWN steps (`listing_price_steps`, migration
-    -- 559, the one step definition the alerts read too) plus one handover step into each priced
-    -- link from the last price of the next older priced link, dated at the newer link's first.
-    steps AS (
-      SELECT g.pid, ps.scraped_at, ps.price_czk, ps.prev_price_czk
-      FROM lineage g
-      JOIN listing_price_steps ps ON ps.listing_id = g.id
-      UNION ALL
-      SELECT h.pid, h.first_at, h.first_price, h.prev_price_czk
-      FROM (SELECT m.pid, m.first_at, m.first_price,
-                   lead(m.last_price) OVER (PARTITION BY m.pid ORDER BY m.hop) AS prev_price_czk
-            FROM members m) h
-      WHERE h.first_price <> h.prev_price_czk
-    ),
-    -- Each step dated by its own scraped_at. The windowed counts decay as events age out, so they
-    -- are only as fresh as the last recompute of the row -- the daily full sweep is the bound.
-    price_hist AS (
-      SELECT
-        ps.pid,
-        count(*) FILTER (WHERE ps.price_czk < ps.prev_price_czk) AS drops,
-        count(*) FILTER (WHERE ps.price_czk > ps.prev_price_czk) AS rises,
-        count(*)                                                 AS changes,
-        count(*) FILTER (WHERE ps.scraped_at >= now() - interval '30 days')  AS changes_30d,
-        count(*) FILTER (WHERE ps.scraped_at >= now() - interval '90 days')  AS changes_90d,
-        count(*) FILTER (WHERE ps.scraped_at >= now() - interval '365 days') AS changes_365d,
-        max((ps.prev_price_czk - ps.price_czk)::numeric / ps.prev_price_czk * 100)
-          FILTER (WHERE ps.price_czk < ps.prev_price_czk)        AS max_drop_pct
-      FROM steps ps
-      GROUP BY ps.pid
-    ),
-    -- The headline delta, compounded over those steps: it telescopes to the oldest priced link's
-    -- first price against the canonical advert's last. (No literal percent sign in this comment on
-    -- purpose -- prose percent inside executed SQL is an `incomplete placeholder` crash in
-    -- psycopg; tests/test_sql_placeholders.py guards it.) NULL under two priced snapshots or with
-    -- an unpriced canonical advert.
-    lineage_span AS (
-      SELECT pid,
-        (array_agg(first_price ORDER BY hop DESC))[1]     AS first_price,
-        (array_agg(last_price) FILTER (WHERE hop = 0))[1] AS last_price,
-        sum(price_points)                                 AS price_points
-      FROM members
-      GROUP BY pid
-    ),
     -- Last content change = the newest snapshot of any advert (snapshots are content-change
     -- only, rule 2): the "recently changed" timestamp Browse filters on (migration 158).
     changes AS (
@@ -345,6 +278,15 @@ _RECOMPUTE_BATCH_SQL = f"""
       JOIN listings l ON l.id = s.listing_id
       JOIN batch b ON b.id = l.property_id
       GROUP BY l.property_id
+    ),
+    -- The price figures are the canonical advert's history (MS10, migration 768): the one definition
+    -- the broker book and the broker inventory read too, here over every same-portal predecessor.
+    -- MATERIALIZED, one call per canonical advert: as a lateral in the UPDATE's FROM the planner put
+    -- it on the outer side of a nested loop and re-ran every aggregate above once per advert.
+    prices AS MATERIALIZED (
+      SELECT c.property_id AS pid, h.*
+      FROM canon c
+      CROSS JOIN LATERAL listing_price_history(c.id, NULL) h
     )
     UPDATE properties p SET
 {_ROLLUP_SET}
@@ -354,9 +296,8 @@ _RECOMPUTE_BATCH_SQL = f"""
     JOIN loc la ON la.property_id = r.pid
     LEFT JOIN storey sy ON sy.pid = r.pid
     LEFT JOIN stated sd ON sd.pid = r.pid
-    LEFT JOIN price_hist ph ON ph.pid = r.pid
-    LEFT JOIN lineage_span cs ON cs.pid = r.pid
     LEFT JOIN changes ch ON ch.pid = r.pid
+    LEFT JOIN prices ph ON ph.pid = r.pid
     WHERE p.id = r.pid
       AND {_ROLLUP_CHANGED}
 """
@@ -378,7 +319,7 @@ _RECOMPUTE_SCOPED_SQL = _RECOMPUTE_BATCH_SQL.replace(
 _BROKER_BOOK_BATCH_SQL = """
     WITH spells AS (
       SELECT property_id, broker_id, is_active, all_sources, active_sources,
-             started_at, ended_at, tom_observed
+             started_at, ended_at, tom_observed, first_price_czk, last_price_czk
       FROM broker_book_projection
       WHERE property_id >= %(lo)s AND property_id < %(hi)s
     ), gone AS (
@@ -389,17 +330,19 @@ _BROKER_BOOK_BATCH_SQL = """
     )
     INSERT INTO broker_book AS b
       (property_id, broker_id, is_active, all_sources, active_sources,
-       started_at, ended_at, tom_observed)
+       started_at, ended_at, tom_observed, first_price_czk, last_price_czk)
     SELECT * FROM spells
     ORDER BY property_id, broker_id
     ON CONFLICT (property_id, broker_id) DO UPDATE
       SET is_active = EXCLUDED.is_active, all_sources = EXCLUDED.all_sources,
           active_sources = EXCLUDED.active_sources, started_at = EXCLUDED.started_at,
-          ended_at = EXCLUDED.ended_at, tom_observed = EXCLUDED.tom_observed
+          ended_at = EXCLUDED.ended_at, tom_observed = EXCLUDED.tom_observed,
+          first_price_czk = EXCLUDED.first_price_czk, last_price_czk = EXCLUDED.last_price_czk
       WHERE (b.is_active, b.all_sources, b.active_sources, b.started_at, b.ended_at,
-             b.tom_observed)
+             b.tom_observed, b.first_price_czk, b.last_price_czk)
             IS DISTINCT FROM (EXCLUDED.is_active, EXCLUDED.all_sources, EXCLUDED.active_sources,
-                              EXCLUDED.started_at, EXCLUDED.ended_at, EXCLUDED.tom_observed)
+                              EXCLUDED.started_at, EXCLUDED.ended_at, EXCLUDED.tom_observed,
+                              EXCLUDED.first_price_czk, EXCLUDED.last_price_czk)
 """
 _BROKER_BOOK_SCOPED_SQL = _BROKER_BOOK_BATCH_SQL.replace(
     "property_id >= %(lo)s AND property_id < %(hi)s", "property_id = ANY(%(ids)s)")

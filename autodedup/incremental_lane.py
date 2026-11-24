@@ -519,6 +519,11 @@ MAX_RETIRE_FRACTION: float = 0.05
 # double it. `rt_scope = all` is gated by `CORPUS_PROJECTION_MB` (17,000) through
 # `guard_agrees`, and this budget stays below it, so raising it never enables the corpus.
 #
+# 16,000 MB since 2026-11-23 (operator ruling): the schema read 13,374 MB, 626 MB under the
+# budget, growing 20-60 MB a day, and a schema over it stops every pass with no Health cell to
+# say so. The in-place switch to the next settings row adds ~1,100 MB of ledger. The database
+# is 158 GB, so the raise is ~1 % of it; still under CORPUS_PROJECTION_MB.
+#
 # 14,000 MB since 2026-10-30, raised to its projection for E964's next batch: the operator's
 # widening to kraje 86, 94 and 108 (14 okresy, 95,343 adverts the store does not hold). On the
 # schema's 8,334 MB its seed projects 1,963 MB of build and cut plus 27 MB of snapshot (~10,324
@@ -542,7 +547,7 @@ MAX_RETIRE_FRACTION: float = 0.05
 # eight towns plus all 157 Prague quarters (~170,000, ~3,700 MB projected) and E941's 1,500 for
 # S1's 38,000. A DELETE never shrinks a file, so the schema's size is a high-water mark that
 # pruned generations leave behind.
-MAX_SCHEMA_MB: float = 14000.0
+MAX_SCHEMA_MB: float = 16000.0
 # What the build writes for ONE in-scope advert — its rt_fp row, its fp_key rows, its share of
 # the stored pairs and of the groups — at what the live store costs, not at E916's row bytes:
 # on 2026-10-09 generation `rt` held 129.2 MB for 7,298 adverts, 18.1 KiB an advert (its

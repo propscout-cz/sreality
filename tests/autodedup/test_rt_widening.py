@@ -720,10 +720,10 @@ def test_a_replacement_the_wider_block_does_not_list_is_refused(tmp_path: Path) 
 
 
 def test_a_carried_advert_never_fingerprinted_holds_its_group_whatever_its_block() -> None:
-    """R2: a vouched advert that moved into a READ block after its last walk (no snapshot row,
+    """R2: a carried advert that moved into a READ block after its last walk (no snapshot row,
     its live location in the block) and that the generation never fingerprinted would ride
-    along compared with nothing: it holds the group until the lane has read it; then the
-    stream's grouping decides (here it joined the group)."""
+    along compared with nothing: it holds the group until the lane has read it; then it rides
+    along with its property, grouped or not (E989)."""
     from tests.autodedup.test_apply import _engine_merged
 
     db, old_block, new_block = _two_blocks()
@@ -737,13 +737,14 @@ def test_a_carried_advert_never_fingerprinted_holds_its_group_whatever_its_block
     out = _reconcile(db, [old_block, new_block], building=False)
     assert out["counts"][reconcile.WAITING] == 1 and db.listings[12]["property_id"] == 200
     db.read.add(12)                                    # a feed fingerprinted it
-    db.members.append((RT, 10, 12))                    # and the pass grouped it
     assert _reconcile(db, [old_block, new_block], building=False)["counts"]["applied"] == 1
+    assert db.listings[12]["property_id"] == 100
 
 
 def test_a_carried_advert_outside_rt_scope_is_held_inside_the_apply_scope_only() -> None:
     """R2: an apply-scope block outside `rt_scope` admits no advert the lane never read — the
-    rider there holds its group; a rider outside both scopes stays the plan's refusal."""
+    rider there holds its group; a rider outside both scopes rides along with its property
+    (E989)."""
     from tests.autodedup.test_apply import _engine_merged
 
     db, old_block, _new = _two_blocks(blocks=["town:563510", "town:888888"])
@@ -760,8 +761,9 @@ def test_a_carried_advert_outside_rt_scope_is_held_inside_the_apply_scope_only()
     db.read |= {10, 11, 20, 21}
 
     out = _reconcile(db, [old_block], building=False)
-    assert out["counts"][reconcile.WAITING] == 1 and out["counts"]["applied"] == 0
-    assert out["counts"]["skipped_by_reason"] == {AP.SKIP_CARRIES_OUT_OF_SCOPE: 1}
+    assert out["counts"][reconcile.WAITING] == 1 and out["counts"]["applied"] == 1
+    assert out["counts"]["skipped_by_reason"] == {}
+    assert db.listings[12]["property_id"] == 200 and db.listings[22]["property_id"] == 300
 
 
 def test_w8_reads_a_replaced_town_as_its_okres_and_a_quarter_as_its_town(tmp_path: Path) -> None:
