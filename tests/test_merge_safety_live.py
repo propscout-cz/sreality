@@ -624,6 +624,8 @@ def test_the_energy_rating_is_the_best_class_any_advert_states(cur, canonical, e
     ((6, 7), [(5, 7), (5, 7)], (5, 7)),          # most adverts agree, against the canonical one
     ((6, 7), [(5, 6)], (6, 7)),                  # a tie goes to the canonical order
     ((None, None), [(2, None), (3, 5)], (2, 5)),  # each fact on its own; an unstated one never votes
+    ((4, None), [(None, 2), (4, 6)], (4, 6)),     # a count the chosen storey reaches never votes
+    ((4, None), [(None, 2), (None, 4)], (4, None)),  # ... and none is left when every count is reached
     ((None, None), [(None, None)], (None, None))])
 def test_the_storey_is_the_one_most_adverts_state(cur, canonical, others, chosen):
     """#2552 W4: the storey and the above-ground count are each the value most adverts state,
