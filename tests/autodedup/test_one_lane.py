@@ -3077,3 +3077,15 @@ def test_an_unnamed_error_files_no_row_without_the_lease_and_is_raised_itself() 
         AP.apply_group(db, planned, scope, run_id="rt:test", generation=RT, merge=crashes,
                        fence=gone)
     assert fenced == [1] and not db.ledger
+
+
+def test_the_pass_readout_names_its_slowest_statements() -> None:
+    from autodedup import incremental_lane as lane
+    from autodedup import incremental_sql
+
+    name = next(n for n, v in vars(incremental_sql).items() if n.isupper() and isinstance(v, str))
+    assert lane._sql_name(getattr(incremental_sql, name)) == name
+    assert lane._sql_name("select  1\n from x") == "select 1 from x"
+    book = {f"S{i}": [1, float(i), i] for i in range(20)}
+    top = lane.top_sql(book, {"S19": [2, 1.0, 5]})
+    assert len(top) == lane.SQL_TOP and next(iter(top.items())) == ("S19", [3, 20.0, 24])
