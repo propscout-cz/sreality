@@ -51,6 +51,8 @@ class MiniMirror:
     points: list[AddressPoint] = field(default_factory=list)
     # obec_kod -> (lat, lon, radius_m) polygon stand-in: a circle around the centre.
     obec_polygons: dict[int, tuple[float, float, float]] = field(default_factory=dict)
+    # katastr_kod -> the same stand-in for a KÚ, which only `katastr_at` asks.
+    katastr_polygons: dict[int, tuple[float, float, float]] = field(default_factory=dict)
     cz_polygon: tuple[float, float, float] | None = (49.8, 15.5, 300_000.0)
 
     # ---- protocol
@@ -134,6 +136,19 @@ class MiniMirror:
 
     def obec_codes_for_psc(self, psc: str) -> list[int]:
         return sorted({p.obec_kod for p in self.points if p.psc == psc})
+
+    def katastr_at(self, lat: float, lon: float) -> int | None:
+        for code, (clat, clon, radius) in sorted(self.katastr_polygons.items()):
+            if haversine_m(lat, lon, clat, clon) <= radius:
+                return code
+        return None
+
+    def katastr_parts(self, katastr_kod: int, obec_kod: int) -> list[int | None]:
+        """`_KATASTR_PARTS_SQL` in python: a fixture door's `katastr_kod` stands in for the
+        KÚ polygon covering it."""
+        return sorted({p.cast_obce_kod for p in self.points
+                       if p.katastr_kod == katastr_kod and p.obec_kod == obec_kod},
+                      key=lambda c: (c is None, c or 0))
 
     def containing_obec(self, lat: float, lon: float) -> AdminUnit | None:
         for code, (clat, clon, radius) in sorted(self.obec_polygons.items()):
@@ -624,6 +639,15 @@ def w4_mirror() -> MiniMirror:
         obec(uid, code, name, psc)
         for level, part_uid, part_code, part_name in matched:
             part(part_uid, level, part_code, part_name, (uid, code))
+        # Each KÚ's doors in the town, as `ruian:current` holds them (read 2026-11-24): every one
+        # in the row's one část, so the door rule (v5.11) binds what the spelled name did.
+        cast = next((m for m in matched if m[0] == "cast_obce"), None)
+        for level, _, part_code, _ in matched:
+            if level == "katastralni_uzemi" and cast is not None:
+                points.append(AddressPoint(
+                    kod_adm=80_000_000 + part_code % 1_000_000, obec_unit_id=uid, obec_kod=code,
+                    psc=psc, lat=None, lon=None, cast_obce_unit_id=cast[1], cast_obce_kod=cast[2],
+                    katastr_kod=part_code))
         if namesake:
             obec(namesake[0], namesake[1], matched[0][3], "99999")
 

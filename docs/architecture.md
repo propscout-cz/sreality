@@ -5314,7 +5314,8 @@ around a town-centroid pin is exactly the false-merge class the grade axes exist
 **27 columns** in five roles — the listing (`listing_id`); one position (`geom`,
 `geometry(Point,4326)`); nine names (`country_code`, kraj, okres, obec, část obce, street, čp, čo,
 psč); seven RÚIAN codes (kraj, okres, obec, část obce, ulice, `ruian_adm_kod`, and `katastr_kod` —
-the single KÚ of the BOUND entity, never a pin's: migration 566, resolver v5.4); three grade columns,
+the single KÚ of the BOUND entity: migration 566, resolver v5.4; since v5.11 also the KÚ covering a
+pin the portal declares precise on a row the words bound to its town only); three grade columns,
 all NOT NULL (`match_confidence`, `granularity`, `uncertainty_radius_m`); two status columns
 (`country_status` NOT NULL, `disputed`); and four housekeeping (`resolver_version`, `resolved_at`,
 `claim_set_hash`, `registry_version`). `location_data/resolver/projection.py`'s column tuple IS that
@@ -5657,7 +5658,7 @@ portal's payload or its own page, and every other stamp is class E outright.
   the PSČ, else by okres/kraj and — when a PSČ exists or the pin is declared precise — within 40 km
   of the pin; a tie goes to the pin's obec, else the nearest). Since v5.7 (W4) the village a town name
   CLIMBED from is the part (`climbed_from_town_name`: "Hracholusky" is a část of Úlice; a KÚ through
-  the část its qualifier-free name spells) when ONE town survives, inheriting how it was chosen (a
+  the one část all its doors in the town stand in, the door rule of v5.11) when ONE town survives, inheriting how it was chosen (a
   tie-break's low confidence; the one claim's agreements), never the eponymous main part; a name that
   is no register name retries without its " u X" tail, kept to X where X is one of the obce the base
   climbs to, else only the PSČ may place it (`qualifier_stripped`: "Boudy u Jesenice"); a PSČ shared by
@@ -5682,7 +5683,8 @@ portal's payload or its own page, and every other stamp is class E outright.
   `statutory_city_obec` regex over eight hand-typed city names and its `address_part_cast_obce` mirror
   are deleted, the claim carries the portal's line verbatim, and both names on the answer row are the
   register's own spelling. A part claim matches like a town name; `composite.part_of` decides what a
-  match binds: a část, the část a KÚ's name spells, never a MOMC (W5). **A STREET IS BOUND THE SAME
+  match binds: a část, the one část all a KÚ's doors in the town stand in (v5.11; it was the část the
+  KÚ's name spelled), never a MOMC (W5). **A STREET IS BOUND THE SAME
   WAY** (`composite.resolve_street`, W18; v5.6): every street claim is matched EXACTLY against `ruian_streets` inside the anchoring obec,
   in two tiers — a full-name match wins outright, the type-word-tolerant fold only when nothing matched
   exactly — with **both keys** (the register keeps `náměstí`/`třída`/`nábřeží` in `name_norm` while S1
@@ -5706,7 +5708,10 @@ portal's payload or its own page, and every other stamp is class E outright.
   that state included the hallucination class the rule exists to stop; so is a house number (v5.5):
   only a bound `č.p.` point publishes one, and only psč still falls back to a claim, preserve-if-null.
   A street bound in a town the advert's town field names takes the část obce all its doors lie in
-  (Q3), else the claimed část where it has doors (Q2, W5), else none. Only an operator correction outranks the registry. It also fills
+  (Q3), else the claimed část where it has doors (Q2, W5), else none. A row the words bound to its
+  town only, placed by a pin the portal declares precise, takes the KÚ covering the pin and that KÚ's
+  door-rule část (`bind.pin_part`, v5.11, operator ruling B 2026-11-24: a point gives every unit it
+  lies in). Only an operator correction outranks the registry. It also fills
   **the position: the portal pin where `bind.place` lets it place the row (v5.10) — else the finest
   bound unit's point on surface** — the boundary's stored
   inscribed-circle centre, inside the polygon where `ST_Centroid` need not be, read off the same

@@ -131,4 +131,13 @@ from __future__ import annotations
 #      (no such row known as of 2026-10-31; the count's SELECT: the W5 design, As built). The
 #      grain is the row's finest key. An address point without coordinates takes its část's KÚ.
 #      The bump re-resolves the corpus through W2's reconcile.
-RESOLVER_VERSION = "resolver:v5.10"
+# v5.11 = a point gives every unit it lies in (operator rulings 2026-11-24, B + Q2). Where the
+#      words bound the row to its town only and a pin the portal declares precise (sreality
+#      gps/address, mmreality accurate, maxima Point: `core.pin_is_precise`) placed it, the row
+#      takes the KÚ covering the pin and that KÚ's část (`bind.pin_part`; ≈ 7.4k active rows
+#      measured, 119 in Praha). A KÚ gives a část by THE DOOR RULE — the one část every door of
+#      the KÚ inside the town stands in — for a pin and for a KÚ the words name alike
+#      (`composite.katastr_part`); the část its name spelled is gone (15 of 60 such KÚ sampled
+#      held doors of other části). A pin no portal declares precise decides nothing new. The
+#      bump re-resolves the corpus through W2's reconcile.
+RESOLVER_VERSION = "resolver:v5.11"

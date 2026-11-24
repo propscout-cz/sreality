@@ -36,10 +36,12 @@ binds through the register like any claim.
 registry entity, else NULL** — a KÚ on the bound unit's chain; the one KÚ of a one-KÚ obec,
 which every entity inside it lies in; an address point's own KÚ (one with no coordinates has
 none: its část's, W5); a street or část obce whose every RÚIAN door lies in one KÚ (the Q7 door
-rule). A portal pin never decides it, whatever the portal labels it: the labels a contract does not list as blurred read
-as "precise" (`core.pin_is_precise`; idnes `no_exact_address` and sreality `not_address` ARE
-blur-declared by their contracts since W1-c), so a pin-based KÚ would be a guess. Nothing else is NULL-masked specially: a foreign row loses it with every other code in
-`core`, and a disputed row keeps its bound entity's.
+rule); and since v5.11 (operator ruling B, 2026-11-24) the KÚ covering a pin the portal
+declares precise on a row the words bound to its town only (`bind.pin_part`: a point gives
+every unit it lies in; measured 2026-11-24, such sreality pins lie in their own door's KÚ on
+99.6 % of rows that state a door). A pin no portal declares precise never decides it. Nothing
+else is NULL-masked specially: a foreign row loses it with every other code in `core`, and a
+disputed row keeps its bound entity's.
 """
 
 from __future__ import annotations
@@ -166,8 +168,8 @@ def _katastr_kod(
     registry: RegistryView,
 ) -> int | None:
     """The single KÚ of the bound entity, else None. Each answer is the registry's own read
-    of that entity — the chain, the address point, the street's doors, the část's doors —
-    so no coordinate a portal supplied is ever asked where it lies."""
+    of that entity — the chain, the address point, the street's doors or the precise pin BIND
+    read (`binding.katastr_kod`), the část's doors."""
     for unit in chain:
         if unit.level == "katastralni_uzemi":
             return unit.code
@@ -176,8 +178,8 @@ def _katastr_kod(
         return obec.sole_katastr_kod
     if point is not None and point.katastr_kod is not None:
         return point.katastr_kod
-    if binding.target_kind == "street":
-        return binding.street_katastr_kod
+    if binding.target_kind == "street" or binding.katastr_kod is not None:
+        return binding.katastr_kod
     if chain and chain[0].level == "cast_obce":
         part = registry.part_point(chain[0].unit_id)
         return None if part is None else part.katastr_kod

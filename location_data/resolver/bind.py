@@ -29,6 +29,7 @@ from location_data.resolver.composite import (
     MATCH_LEVELS,
     CompositeBind,
     StreetBind,
+    katastr_part,
     match_streets,
     obec_of,
     part_of,
@@ -583,7 +584,8 @@ def bind(
     # names (1c). Both inherit how their town was chosen (a tie-break's low confidence); the
     # climbed part is published for ONE surviving town only and counts the town claim's
     # agreements, since it is one claim. A unit named by several sources is ONE candidate. A
-    # part claim matches like a town name: a KÚ binds the část it spells, a MOMC none (W5).
+    # part claim matches like a town name: a KÚ binds the část its doors stand in (v5.11), a MOMC
+    # none (W5).
     said: list[_Part] = []
     for key in constraints.cast_obce_keys if constraining_obec_kods else ():
         for unit in registry.admin_units_by_name(key, levels=PART_NAME_LEVELS):
@@ -821,7 +823,7 @@ def bind(
             lon=top.lon if street_point is None else street_point.lon,
             cast_obce_unit_id=part_unit_id,
             street_extent_m=None if street_point is None else street_point.extent_m,
-            street_katastr_kod=None if street_point is None else street_point.katastr_kod,
+            katastr_kod=None if street_point is None else street_point.katastr_kod,
             agreed=top.agreed,
             relaxations=top.relaxations,
             ambiguous=ambiguous,
@@ -849,7 +851,7 @@ def climbed_part(
     town: AdminUnit, climbed: Sequence[AdminUnit], registry: RegistryView
 ) -> AdminUnit | None:
     """1a: the ONE část obce a town name climbed from (`part_of`: the part itself, or the část a
-    KÚ's qualifier-free name spells). None for two, and for the town's eponymous main part, which
+    KÚ's doors stand in). None for two, and for the town's eponymous main part, which
     adds nothing and overstates the precision (18827725: "Nové Hrady u Skutče" is Nové Hrady's
     own KÚ). A claimed part keeps no such rule: 38,095 rows are bound to their main část."""
     found = {p.unit_id: p for unit in climbed if (p := part_of(unit, town.code, registry))}
@@ -1092,3 +1094,28 @@ def place(
             source_claim_ids=(pin_claim.id,),  # type: ignore[union-attr]
         )
     return Position(lat=None, lon=None, origin="none")
+
+
+def pin_part(
+    binding: Binding, position: Position, *, pin_is_precise: bool, registry: RegistryView
+) -> Binding:
+    """v5.11 (operator ruling B, 2026-11-24): a point gives every unit it lies in. Where the words
+    bound the row to its town only and a pin the portal declares precise placed it, the row takes
+    the KÚ covering the pin and that KÚ's část (`katastr_part`: the one část all its doors in the
+    town stand in). The words still decide the town; a finer word (a street, a part, a door)
+    leaves the row as it is."""
+    if (position.origin != "portal_pin" or not pin_is_precise
+            or binding.target_kind != "admin_unit" or binding.admin_unit_id is None
+            or binding.obec_kod is None or binding.cast_obce_unit_id is not None
+            or position.lat is None or position.lon is None):
+        return binding
+    # A část the words bound is an `admin_unit` bind as well; only the town itself is refined.
+    bound = registry.admin_chain(binding.admin_unit_id)
+    if not bound or bound[0].level != "obec":
+        return binding
+    katastr = registry.katastr_at(position.lat, position.lon)
+    if katastr is None:
+        return binding
+    part = katastr_part(katastr, binding.obec_kod, registry)
+    return replace(binding, katastr_kod=katastr,
+                   cast_obce_unit_id=None if part is None else part.unit_id)

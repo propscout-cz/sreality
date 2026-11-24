@@ -85,6 +85,8 @@ def resolve(
     pin_inside_obec = step_bind.pin_inside_bound_obec(binding, pin_claim, ctx.registry)
     position = step_bind.place(
         binding, pin_claim, declared=declared, pin_inside_bound_obec=pin_inside_obec)
+    binding = step_bind.pin_part(
+        binding, position, pin_is_precise=pin_is_precise, registry=ctx.registry)
 
     # ---- 2. FILL. It answers the hierarchy AND the position the hierarchy implies: a row
     # the claims could not place is placed at the finest bound unit's own registry point, so

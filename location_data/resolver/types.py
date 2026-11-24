@@ -274,6 +274,13 @@ class RegistryView(Protocol):
 
     def obec_codes_for_psc(self, psc: str) -> Sequence[int]: ...
 
+    def katastr_at(self, lat: float, lon: float) -> int | None:
+        """The code of the KÚ whose `pip` piece covers the point, else None."""
+
+    def katastr_parts(self, katastr_kod: int, obec_kod: int) -> Sequence[int | None]:
+        """The codes of the části every valid RÚIAN door of the KÚ inside that town stands in
+        (None for a door with no část), each once. Empty when the KÚ has no door there."""
+
     def containing_obec(self, lat: float, lon: float) -> AdminUnit | None:
         """`ST_Covers` against the `pip` pieces, which tile the authoritative polygon (never
         the simplified one). It does double duty: BIND's reverse-geocode rung and CHECK's
@@ -331,8 +338,10 @@ class Binding:
     # and never for a loser. `lat`/`lon` above carry the point; this carries its size, which
     # is what `place()` compares a pin against and what floors the published radius.
     street_extent_m: float | None = None
-    # The same read's door rule: the one KÚ holding every door of the bound street (PR-B).
-    street_katastr_kod: int | None = None
+    # The KÚ BIND itself established: a bound street's door rule (the one KÚ holding every
+    # door, PR-B), or the KÚ covering a precise pin on a row the words bound to its town only
+    # (v5.11, `bind.pin_part`).
+    katastr_kod: int | None = None
     agreed: tuple[str, ...] = ()
     relaxations: tuple[str, ...] = ()
     ambiguous: bool = False
