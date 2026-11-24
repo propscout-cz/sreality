@@ -243,8 +243,8 @@ _RECOMPUTE_BATCH_SQL = f"""
            FILTER (WHERE v.fact = 'total' AND (s.floor IS NULL OR v.value > s.floor)))[1] AS total_floors
       FROM storey_votes v
       LEFT JOIN (
-        SELECT DISTINCT ON (pid) pid, value AS floor FROM storey_votes
-        WHERE fact = 'floor' ORDER BY pid, ads DESC, first_rank
+        SELECT pid, (array_agg(value ORDER BY ads DESC, first_rank))[1] AS floor
+        FROM storey_votes WHERE fact = 'floor' GROUP BY pid
       ) s USING (pid)
       GROUP BY v.pid, s.floor
     ),
