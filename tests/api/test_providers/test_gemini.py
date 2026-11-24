@@ -52,11 +52,8 @@ class _FakeFunctionResponse:
 
 
 class _FakeFunctionDeclaration:
-    def __init__(self, name: str, description: str, parameters: dict[str, Any]) -> None:
-        self.name = name
-        self.description = description
-        self.parameters = parameters
-
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
 
 class _FakeTool:
     def __init__(self, function_declarations: list[_FakeFunctionDeclaration]) -> None:
@@ -309,6 +306,28 @@ def test_no_tool_config_when_tool_choice_unset(patch_gemini):
         model="gemini-3.5-flash",
     )
     assert "tool_config" not in client.models.calls[0]["config"].kwargs
+
+
+def test_a_tool_reaches_gemini_as_its_json_schema_unchanged(patch_gemini):
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["days", "rank", "quote"],
+        "properties": {
+            "days": {"type": "integer", "enum": [1, 3, 7], "description": "Integer vocabulary."},
+            "rank": {"anyOf": [{"type": "integer"}, {"type": "null"}], "description": "Null is an answer."},
+            "quote": {"type": ["string", "null"], "description": "Type array."},
+        },
+    }
+    client = patch_gemini(_text_response("ok"))
+    GeminiProvider().complete(
+        system="",
+        messages=[Message(role="user", content=[TextBlock(text="x")])],
+        tools=[ToolSchema(name="record", description="d", input_schema=schema)],
+        model="gemini-3.5-flash",
+    )
+    declaration = client.models.calls[0]["config"].kwargs["tools"][0].function_declarations[0]
+    assert declaration.kwargs == {"name": "record", "description": "d", "parameters_json_schema": schema}
 
 
 def test_schema_for_gemini_strips_additional_properties_recursively():
