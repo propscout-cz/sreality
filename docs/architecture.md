@@ -2429,20 +2429,17 @@ renumber.** Navigate by area:
     `listing_price_steps` (a predecessor is the advert on that portal last seen latest, strictly
     before the later one was first seen, so concurrent adverts never form a step), plus one
     handover step per link; the total compounds to the oldest priced link's first price against
-    the shown price. That rule is ONE function, `listing_price_history(head, broker)` (migration
-    768), and the percent `measure_price_change_pct(first, last)`: the rollup asks it for the
-    canonical advert, `broker_book_projection` for the broker's lead advert (their first in the
-    canonical order) bounded to the broker's own adverts, storing `first_price_czk` /
-    `last_price_czk` on the book, and the broker inventory for each advert. A broker's price
-    figures (`toolkit.brokers.price_change`: priced, repriced, cut, raised, the share repriced from
-    `MIN_N` priced up and the median over the repriced from `MIN_N` up; all, active and inactive
-    book rows) read the book and ride in the dossier (`get_broker`, since #2633).
-    The book's pair is NOT the property's figure even when the canonical advert is the broker's
-    (768's header says otherwise and is wrong): it leaves out predecessors another broker
-    advertised. The lead advert is chosen price-blind, so an unpriced lead beside a priced advert
-    of the same broker on another portal reads NULL (5 of 2,617 rows, 2026-11-23). The view now
-    calls `property_canonical_listings`, so 635's "one caller" note is stale and
-    `migrations/reverts/635` (which drops that function) fails until the view is restated first.
+    the shown price. That rule is ONE function, `listing_price_history(head, broker)` (migrations
+    768, 770), with its percent `change_pct` (`measure_price_change_pct(first, last)` from two
+    priced snapshots up, NULL below: nothing on the advert ever changed): the rollup asks it for the
+    canonical advert, the broker inventory for each advert, and `broker_book_projection` for every
+    advert of the broker on the property, bounded to the broker's own adverts, storing on the book
+    the history of their most-repriced one (`first_price_czk`, `last_price_czk`, `price_changes`).
+    A broker's price figures (`toolkit.brokers.price_change`: priced, repriced = at least one price
+    step, a price cut and restored included (operator ruling 2026-11-24); the share from `MIN_N`
+    priced up and the median change over the repriced from `MIN_N` up; all, active and inactive
+    book rows) read the book and ride in the dossier (`get_broker`). The book's pair is not the
+    property's figure: another broker's predecessors are left out (ruling 2, own adverts only).
     In the rollup the call sits in a MATERIALIZED CTE: as a lateral in the UPDATE's FROM it
     re-ran every aggregate once per canonical advert (11 to 30 s a batch, production 2026-11-23). The rollup also writes `all_sources` / `active_sources` (sorted; the active
     one empty when none is) and one `newest_ad_at_<portal>` per `PORTAL_OPTIONS` code (the first

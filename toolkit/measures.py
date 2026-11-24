@@ -189,12 +189,6 @@ def exit_within_sql(spell: str, prop: str, days: str) -> str:
     )
 
 
-# --- the price change between a first and a last price (migration 768) ------------------------
-def price_change_pct_sql(first: str, last: str) -> str:
-    """The signed percent between two price expressions: `measure_price_change_pct`, never an inline division."""
-    return f"measure_price_change_pct({first}, {last})"
-
-
 # --- a share's lower bound (the broker board's rank, every health gauge's judgement) ----------
 
 

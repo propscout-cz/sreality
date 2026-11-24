@@ -167,8 +167,7 @@ _ROLLUP = {
     "price_change_count_30d": "coalesce(ph.changes_30d, 0)",
     "price_change_count_90d": "coalesce(ph.changes_90d, 0)",
     "price_change_count_365d": "coalesce(ph.changes_365d, 0)",
-    "total_price_change_pct": "CASE WHEN ph.price_points >= 2 "
-                              "THEN measure_price_change_pct(ph.first_price_czk, ph.last_price_czk) END",
+    "total_price_change_pct": "ph.change_pct",
     "last_change_at": "coalesce(ch.last_change_at, r.first_seen_at)",
     **{f"newest_ad_at_{o.value}": f"r.newest_ad_at_{o.value}" for o in PORTAL_OPTIONS},
 }
@@ -319,7 +318,7 @@ _RECOMPUTE_SCOPED_SQL = _RECOMPUTE_BATCH_SQL.replace(
 _BROKER_BOOK_BATCH_SQL = """
     WITH spells AS (
       SELECT property_id, broker_id, is_active, all_sources, active_sources,
-             started_at, ended_at, tom_observed, first_price_czk, last_price_czk
+             started_at, ended_at, tom_observed, first_price_czk, last_price_czk, price_changes
       FROM broker_book_projection
       WHERE property_id >= %(lo)s AND property_id < %(hi)s
     ), gone AS (
@@ -330,19 +329,20 @@ _BROKER_BOOK_BATCH_SQL = """
     )
     INSERT INTO broker_book AS b
       (property_id, broker_id, is_active, all_sources, active_sources,
-       started_at, ended_at, tom_observed, first_price_czk, last_price_czk)
+       started_at, ended_at, tom_observed, first_price_czk, last_price_czk, price_changes)
     SELECT * FROM spells
     ORDER BY property_id, broker_id
     ON CONFLICT (property_id, broker_id) DO UPDATE
       SET is_active = EXCLUDED.is_active, all_sources = EXCLUDED.all_sources,
           active_sources = EXCLUDED.active_sources, started_at = EXCLUDED.started_at,
           ended_at = EXCLUDED.ended_at, tom_observed = EXCLUDED.tom_observed,
-          first_price_czk = EXCLUDED.first_price_czk, last_price_czk = EXCLUDED.last_price_czk
+          first_price_czk = EXCLUDED.first_price_czk, last_price_czk = EXCLUDED.last_price_czk,
+          price_changes = EXCLUDED.price_changes
       WHERE (b.is_active, b.all_sources, b.active_sources, b.started_at, b.ended_at,
-             b.tom_observed, b.first_price_czk, b.last_price_czk)
+             b.tom_observed, b.first_price_czk, b.last_price_czk, b.price_changes)
             IS DISTINCT FROM (EXCLUDED.is_active, EXCLUDED.all_sources, EXCLUDED.active_sources,
                               EXCLUDED.started_at, EXCLUDED.ended_at, EXCLUDED.tom_observed,
-                              EXCLUDED.first_price_czk, EXCLUDED.last_price_czk)
+                              EXCLUDED.first_price_czk, EXCLUDED.last_price_czk, EXCLUDED.price_changes)
 """
 _BROKER_BOOK_SCOPED_SQL = _BROKER_BOOK_BATCH_SQL.replace(
     "property_id >= %(lo)s AND property_id < %(hi)s", "property_id = ANY(%(ids)s)")

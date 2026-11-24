@@ -10,7 +10,7 @@
  * broker (`brokerId`, the MS19 allowlist behind the desktop "explore" view),
  * live ads only — one cohort definition for both shells. */
 
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { useMemo, useRef, type ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
@@ -28,7 +28,7 @@ import {
   BROKER_PRICE_SCOPES,
   contactState,
   fetchBrokerDossier,
-  priceChangeSummary,
+  useBrokerPriceSlice,
   prettyPhone,
   telHref,
   type BrokerCategoryShare,
@@ -117,11 +117,9 @@ export default function PhoneBrokerDetail() {
       <Facts b={b} />
       {/* Section cards like the phone property page's (operator ruling 2026-10-28). */}
       <div className="space-y-4 border-t border-[var(--color-rule)] p-4">
-        {dossier.price_change && (
-          <Panel title="Změna ceny">
-            <PriceChange figures={dossier.price_change} />
-          </Panel>
-        )}
+        <Panel title="Změna ceny">
+          <PriceChange figures={dossier.price_change} />
+        </Panel>
         <Panel title="Působnost">
           <Footprint shares={dossier.region_shares} />
           <Types rows={dossier.categories} />
@@ -309,10 +307,9 @@ function NumberRows({ rows }: { rows: Array<{ key: string | number; label: strin
   );
 }
 
-/* The desktop tile's figures (lib/brokers priceChangeSummary), one slice at a time. */
+/* The desktop tile's figures (lib/brokers useBrokerPriceSlice), one slice at a time. */
 function PriceChange({ figures }: { figures: Record<BrokerPriceScope, BrokerPriceFigures> }) {
-  const [scope, setScope] = useState<BrokerPriceScope>('all');
-  const { share, median, hint } = priceChangeSummary(figures[scope]);
+  const { scope, setScope, share, median, hint } = useBrokerPriceSlice(figures);
   return (
     <div>
       <SegmentedBar fill tone="phone" label="Změna ceny podle stavu" options={BROKER_PRICE_SCOPES} value={scope}

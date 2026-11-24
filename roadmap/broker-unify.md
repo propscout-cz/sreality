@@ -39,8 +39,9 @@ waves and W0's measurements: `docs/design/broker-board.md`.
   then merge.
 - **Price change on the dossier** (#2626, 2026-11-23): migration 768 moves the rollup's price lineage into
   `listing_price_history`, the book stores the broker's own first and last price, the dossier shows the share
-  repriced and the median change (all / active / inactive), each inventory row its ad's change. Owed: the gate on
-  the book's fill after the first full sweep.
+  repriced and the median change (all / active / inactive), each inventory row its ad's change. Review fixes #2639
+  (2026-11-24, migrations 770-771): repriced = a price step (cut and restored counts), every ad of the broker read,
+  one "no change" rule for every surface.
 
 ## Done
 
