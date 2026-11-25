@@ -70,10 +70,10 @@ or the apply path (the scope predicate lives in `autodedup/apply_scope.py`, move
    never reaches the export, which would read it as the trial cohort). W4's full gate (run 41226328406)
    printed 515 blocks / 319,731 ads, 14 groups, before this filter.
    `--block-group i/n` (default 1/1) sorts the blocks by key, cuts them into n contiguous groups and
-   exports and judges group i only; `--max-blocks` (40) and `--max-ads` (60,000) apply to that group, and
+   exports and judges group i only; `--max-blocks` (40) and `--max-ads` (20,000: the harness died judging a 57k group; the workflow's `max_ads` input raises it only on the engine owner's word) apply to that group, and
    a group over them is refused with exit 2, naming the n to dispatch. Then the group's cohort, the rulings
    and the live generation's scorer (`RT_CALIBRATION_SCORER_SQL`, generation `rt`) into `scorer.json`, and
-   the group into `group.json`.
+   the group into `group.json`, with both caps.
 3. **The gate**: `python3 -m autodedup.harness shadow` (DB-free). `shadow.override` rewrites the movers'
    blocks with `build_location` (other records byte-identical); both arms run under the live scorer with
    the labels' `must_not_link.jsonl` / `must_link.jsonl` (the same body as `harness run`); then
@@ -117,7 +117,7 @@ candidate's `evaluate.json`, and `shadow.json`), never a cohort artifact.
 
 **A wave too wide for one runner** runs in block groups over ONE set of positions:
 1. Dispatch with `group=1/1`. Step 1 computes the positions; step 2 prints every block with its ad count
-   and `groups needed under the caps: n`, and exits 2 when 1/1 is over them (the artifact still uploads).
+   and `groups needed under the caps (<blocks>, <ads>): n`, and exits 2 when 1/1 is over them (the artifact still uploads).
 2. Dispatch groups `1/n` .. `n/n` with `positions_run_id=<that run's id>`: each run downloads that run's
    artifact (`gh run download`), skips step 1 (its ids, scope and limit come from that `what_if.json`),
    and exports and judges its group. The wave passes when every group passes.
@@ -148,7 +148,11 @@ python3 -m autodedup.harness shadow shadow/w4/base/cohort.jsonl.gz shadow/w4/pos
     shadow/w4/labels --scorer shadow/w4/scorer.json --out shadow/w4/judge
 ```
 W5, W5b, W6: `--claims none` from the wave's branch (W5, #2251: `scope=apply`, slice by slice with the
-ids_sql of `w5-resolver-v5-10.md` §4.4, PASS on every slice). A block costs what its town does (Pardubice:
+ids_sql of `w5-resolver-v5-10.md` §4.4, PASS on every slice; W5b, #2338: the same dispatch with
+`wave=w5b`, `all_blocks=true` and the ids_sql of `w5b-pin-door.md` § Rollout, whose pass rule also reads
+`shadow.json`'s `door`, `autodedup.shadow.door_report`: blockers, flips, new `addr` pairs, cap displacement,
+merge gains and losses, block-key splits, two doors in one building, with the pair ids; its gate sampled 24
+of 421 groups, stage 1 by Q23 losers and part gains, `w5b-pin-door.md` § Rollout). A block costs what its town does (Pardubice:
 7,252 ads, 107 MB, 5-minute export, 180 s harness run at 2.2 GB RSS; all of Praha would be 167k ads, about
 2.4 GB); over the caps, narrow the ids (one id list per slice of the apply scope).
 

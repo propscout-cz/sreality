@@ -422,7 +422,7 @@ class _Slice:
     """Everything the slice's listings need that can be read BEFORE any of them writes."""
 
     claims: dict[int, list[Claim]] = field(default_factory=dict)
-    sources: dict[int, str] = field(default_factory=dict)
+    sources: dict[int, tuple[str, str | None]] = field(default_factory=dict)
 
 
 def _prefetch(
@@ -452,7 +452,7 @@ def _prefetch(
 
 
 def _warm(slice_: _Slice, ctx: ResolverContext, cache: resolve_db.RunCache) -> None:
-    """Pre-answer the two coordinate-keyed registry questions for the whole slice.
+    """Pre-answer the three coordinate-keyed registry questions for the whole slice.
 
     They are the ones the run cache can never share between listings. `warm_points` is a
     no-op on a view that is not the SQL one (the mini-mirror tests), and warming a point the
@@ -887,13 +887,15 @@ def _compute_one(
         # "nothing to go on" (granularity unknown, no position, country undetermined), so
         # coverage is measurable and the nightly sweep does not re-enqueue it.
         LOG.info("RESOLVE no_claims listing_id=%s", listing_id)
+    source, ad_type = slice_.sources.get(listing_id, ("unknown", None))
     return core.resolve(
         claims,
         ctx,
         resolver_version=RESOLVER_VERSION,
         registry_version=registry_label,
         listing_id=listing_id,
-        source=slice_.sources.get(listing_id, "unknown"),
+        source=source,
+        ad_type=ad_type,
     )
 
 

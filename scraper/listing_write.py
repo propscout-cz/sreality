@@ -96,6 +96,22 @@ _RECORD_SPEC = ", ".join(f"{c} {_LISTING_COLUMN_PGTYPE[c]}" for c in LISTING_COL
 _LATEST_ORDER_BY = "ORDER BY s.scraped_at DESC, s.id DESC"
 
 
+def resolve_requeue_cte(moved_ids: str) -> str:
+    """AD TYPE IS A RESOLVER INPUT (`bind.pin_door`), so a statement that changes `category_main`
+    queues those listings, bumped as a claim change is (`claims_store`). `claim_insert` is the
+    queue's "this listing's evidence moved"; `moved_ids` selects exactly the rows that changed. Every
+    producer locks queue rows in id order, or two overlapping batches could deadlock."""
+    return f"""requeued AS (
+        INSERT INTO dirty_locations (listing_id, reason)
+        SELECT id, 'claim_insert' FROM ({moved_ids}) moved
+        ORDER BY id
+        ON CONFLICT (listing_id) DO UPDATE
+           SET enqueued_at = now(), reason = EXCLUDED.reason,
+               attempts = 0, next_eligible_at = now()
+        RETURNING listing_id
+    )"""
+
+
 @lru_cache(maxsize=None)
 def _upsert_sql(source: str) -> str:
     """ONE fixed text per source: the contract picks the preserve set, the broker registry the pre-read."""
@@ -104,7 +120,8 @@ def _upsert_sql(source: str) -> str:
     cols = ", ".join(LISTING_COLUMNS)
     j_cols = ", ".join(f"j.{c}" for c in LISTING_COLUMNS)
     # `prior` reads the pre-statement rows: the old is_active (a revival) and, for the
-    # fingerprinted sources only, the broker block before raw_json is replaced. `source` is
+    # fingerprinted sources only, the broker block before raw_json is replaced; the old
+    # category_main, so a new row (no prior) never queues a re-resolve. `source` is
     # stamped inline (its column default is 'sreality'; the #825 drain wedge). The arbiter is
     # the natural key, so neither sreality_id nor source is ever in the SET clause, and the
     # mint CASE draws a synthetic id only for a first-sight crawler row with Gate 2 off.
@@ -114,7 +131,8 @@ def _upsert_sql(source: str) -> str:
             source_id_native text, sreality_id bigint, {_RECORD_SPEC},
             raw_json jsonb, discovered_at timestamptz)
     ), prior AS (
-        SELECT l.source_id_native, l.is_active, {stored_broker} AS stored_broker
+        SELECT l.source_id_native, l.is_active, {stored_broker} AS stored_broker,
+               l.category_main AS stored_category
         FROM listings l
         WHERE l.source = %(source)s
           AND l.source_id_native IN (SELECT source_id_native FROM j)
@@ -137,8 +155,10 @@ def _upsert_sql(source: str) -> str:
           {_listing_update_set_sql(source)},
           raw_json = EXCLUDED.raw_json,
           discovered_at = COALESCE(listings.discovered_at, EXCLUDED.discovered_at)
-        RETURNING id, source_id_native, (xmax = 0) AS inserted
-    )
+        RETURNING id, source_id_native, (xmax = 0) AS inserted, category_main
+    ), {resolve_requeue_cte("""
+        SELECT up.id FROM up JOIN prior ON prior.source_id_native = up.source_id_native
+        WHERE up.category_main IS DISTINCT FROM prior.stored_category""")}
     SELECT up.id, up.source_id_native, up.inserted,
            COALESCE(prior.is_active = false, false) AS reactivated,
            prior.stored_broker

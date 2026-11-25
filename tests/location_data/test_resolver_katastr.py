@@ -88,10 +88,10 @@ def _mirror() -> mm.MiniMirror:
     })
 
 
-def _resolve(claims, mirror=None):
+def _resolve(claims, mirror=None, *, ad_type=None):
     return core.resolve(
         claims, mm.context(mirror or _mirror()), resolver_version=RESOLVER_VERSION,
-        registry_version="ruian:2026-08-31",
+        registry_version="ruian:2026-08-31", ad_type=ad_type,
     )
 
 
@@ -213,6 +213,17 @@ def test_a_precise_pin_gives_its_ku_and_the_part_its_doors_stand_in():
     assert (resolution.obec_kod, resolution.katastr_kod) == (554782, VELESLAVIN_KU)
     assert (resolution.cast_obce_kod, resolution.granularity) == (490211, "cast_obce_or_quarter")
     assert (resolution.lat, resolution.lon) == (50.09810, 14.31510)
+
+
+def test_the_door_an_exact_pin_names_carries_its_ku():
+    """W5b: the door is a bound address point like any other, so FILL reads its KÚ off it."""
+    resolution = _resolve([
+        mm.claim(1, "obec_name", value_text="Praha"),
+        mm.claim(2, "coordinate", lat=50.10100, lon=14.34800, declared_precision_label="gps"),
+        mm.claim(3, "street_name", value_text="Nad Bořislavkou"),
+    ], ad_type="dum")
+    assert resolution.ruian_adm_kod == 21690278
+    assert resolution.katastr_kod == VOKOVICE_KU
 
 
 def test_a_ku_holding_doors_of_two_parts_gives_its_ku_and_no_part():
@@ -370,8 +381,9 @@ def test_the_katastr_rule_carries_its_own_resolver_version():
     W4's parts and streets (v5.7), nor a část placed at its own doors (v5.8), nor one claim per
     type read with no tie rule (v5.9.1, W3), nor a pin placing a row only inside the town the
     words bound, the quarter a část and the grain the finest key (v5.10, W5), nor a precise pin
-    giving its KÚ and that KÚ's door-rule část (v5.11)."""
-    assert RESOLVER_VERSION == "resolver:v5.11"
+    giving its KÚ and that KÚ's door-rule část (v5.11), nor the door an exact pin names for a
+    flat or a house (v5.12, W5b)."""
+    assert RESOLVER_VERSION == "resolver:v5.12"
 
 
 # ------------------------------------------------------------------ the SQL side

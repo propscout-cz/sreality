@@ -464,3 +464,62 @@ def test_t_the_straggler_attach_births_recomputes_and_browse_syncs(conn, monkeyp
     for lid, pid in zip(lids, pids):
         assert _one(conn, "SELECT repr_listing_ref_id FROM properties WHERE id = %s", (pid,)) == lid
     assert set(pids) <= set(synced)
+
+
+def _queued(conn: Any, listing_id: int) -> tuple[Any, ...] | None:
+    return _one(conn, "SELECT reason, attempts FROM dirty_locations WHERE listing_id = %s", (listing_id,))
+
+
+def _with_type(source: str, native: str, category: str | None) -> listing_write.ListingWrite:
+    w = _scraped(source, native)
+    return listing_write.ListingWrite(
+        source=w.source, source_id_native=w.source_id_native, row={**w.row, "category_main": category},
+        raw=w.raw, hash_doc={"category_main": category}, images=w.images, videos=w.videos,
+        sreality_id=int(native) if source == "sreality" else None)
+
+
+@pytest.mark.parametrize("source", PORTALS)
+def test_k_a_changed_ad_type_queues_its_re_resolve_and_nothing_else_does(conn, source):
+    """Ad type is a resolver input (`bind.pin_door`): a flat turned commercial must lose its door. Only a row whose
+    value moved queues, a new row never, and the write and the queue share one transaction."""
+    native = str(next(_SIDS)) if source == "sreality" else f"w5b-{uuid.uuid4().hex}"
+    lid = _write(conn, _with_type(source, native, "byt"))[0].listing_id
+    assert _queued(conn, lid) is None, "a new row needs nothing"
+    _write(conn, _with_type(source, native, "byt"))
+    assert _queued(conn, lid) is None, "an unchanged type"
+    _write(conn, _with_type(source, native, "komercni"))
+    assert _queued(conn, lid) == ("claim_insert", 0)
+    _exec(conn, "DELETE FROM dirty_locations WHERE listing_id = %s", (lid,))
+    _write(conn, _with_type(source, native, "komercni"))
+    assert _queued(conn, lid) is None, "the same value again"
+    _write(conn, _with_type(source, native, None))
+    assert _queued(conn, lid) == ("claim_insert", 0), "a cleared type moved too"
+
+
+def test_l_a_changed_ad_type_bumps_a_row_already_queued(conn):
+    """The queue is re-entrant: a row a slice may hold is bumped, or the slice's delete would lose the change."""
+    native = f"w5b-{uuid.uuid4().hex}"
+    lid = _write(conn, _with_type("bazos", native, "byt"))[0].listing_id
+    _exec(conn, "INSERT INTO dirty_locations (listing_id, reason, enqueued_at, attempts) "
+                "VALUES (%s, 'full_sweep', now() - interval '1 hour', 3)", (lid,))
+    _write(conn, _with_type("bazos", native, "dum"))
+    assert _queued(conn, lid) == ("claim_insert", 0)
+    assert _one(conn, "SELECT enqueued_at > now() - interval '1 minute' FROM dirty_locations "
+                      "WHERE listing_id = %s", (lid,))
+
+
+def test_m_a_heal_that_moves_the_ad_type_queues_only_the_rows_it_moved(conn):
+    """reparse's compare-and-set, the one other writer of the column: a row healed on another field stays out."""
+    from scripts.reparse import _update_sql
+
+    moved = _write(conn, _with_type("bazos", f"w5b-{uuid.uuid4().hex}", "byt"))[0].listing_id
+    other = _write(conn, _with_type("bazos", f"w5b-{uuid.uuid4().hex}", "dum"))[0].listing_id
+    _exec(conn, _update_sql(("category_main", "disposition")), {
+        "ids": [moved, other], "category_main": ["komercni", "dum"], "was_category_main": ["byt", "dum"],
+        "disposition": ["2+kk", "3+kk"], "was_disposition": [None, None]})
+    assert _one(conn, "SELECT category_main FROM listings WHERE id = %s", (moved,)) == "komercni"
+    assert _queued(conn, moved) == ("claim_insert", 0) and _queued(conn, other) is None
+    other_field = _write(conn, _with_type("bazos", f"w5b-{uuid.uuid4().hex}", "byt"))[0].listing_id
+    _exec(conn, _update_sql(("disposition",)), {
+        "ids": [other_field], "disposition": ["1+1"], "was_disposition": [None]})
+    assert _queued(conn, other_field) is None and "dirty_locations" not in _update_sql(("disposition",))
