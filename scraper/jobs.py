@@ -23,8 +23,9 @@ REPLICA_MEMORY_MB, CO_TENANCY_SHARE = 7629, 0.81
 # The runner's SIGKILL grace after its SIGTERM stays under this; the API's stuck-run cutoff exceeds the longest
 # walk by it, and the DB-heavy hour census counts it (tests/scraper/test_job_registry.py).
 STUCK_RUN_GRACE_S = 600
-# The claim intake and the RÚIAN load never overlap (2026-08-10: four heavy location lanes at once dropped backends
-# across the instance). It replaced GitHub's `location-batch` group (#2028); the load claims it with job_lease.held_job.
+# The claim intake and the RÚIAN address and building loads never overlap (2026-08-10: four heavy location lanes at
+# once dropped backends across the instance). It replaced GitHub's `location-batch` group (#2028); the address load,
+# on GitHub until #2033, claims it with job_lease.held_job.
 LOCATION_HEAVY = "location-heavy"
 WALK_PREFIX = "walk_"
 WALK_MEMORY_MB, WALK_CPUS = 512, 1
@@ -82,7 +83,7 @@ _FIXED: tuple[Job, ...] = (
     # The register's building facts (#2604): a month's ~6,250 obec files, resumed daily until none is pending, then
     # a no-op until the next vintage. It starts obce only 13:00-17:00 UTC (a run restarted by a deploy keeps those
     # hours) and none in :40-:50, so the largest obec (Praha, 65 s) is written before the :45 Browse rebuild. The
-    # registry load is a GitHub workflow, which location-heavy cannot exclude: the loader asks before every obec.
+    # registry load claims location-heavy too (#2028); the loader still asks before every obec, for a cut load.
     Job("ruian_buildings",
         ("location_data.ruian_buildings", "--max-seconds", "10800", "--window-utc", "13:00-17:00",
          "--quiet-minutes", "40-50"),

@@ -312,10 +312,13 @@ def test_no_two_db_heavy_jobs_share_an_hour() -> None:
 
 
 def test_a_job_waits_for_its_resource_as_long_as_a_sibling_can_hold_it() -> None:
-    """The registry load, on GitHub until #2033, claims location-heavy itself and waits out the intake's longest run."""
+    """The registry load, on GitHub until #2033, claims location-heavy itself and waits out its longest sibling's run:
+    the building load's, not the intake's."""
     load = jobs.entry("ruian_load")
     assert load == _entry("ruian_load")
-    assert jobs.resource_wait_s(load) == _entry("location_intake").timeout_s + jobs.STUCK_RUN_GRACE_S
+    siblings = [_entry("location_intake"), _entry("ruian_buildings")]
+    assert {s.resource for s in siblings} == {load.resource}
+    assert jobs.resource_wait_s(load) == max(s.timeout_s for s in siblings) + jobs.STUCK_RUN_GRACE_S
     assert jobs.resource_wait_s(_entry("clip")) == 0, "no resource, no sibling to wait for"
 
 

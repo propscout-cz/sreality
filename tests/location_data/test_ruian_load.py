@@ -688,7 +688,7 @@ def _main_holding(monkeypatch: pytest.MonkeyPatch, mine: bool, *argv: str,
 
 def test_the_load_runs_only_while_it_holds_the_location_heavy_resource(monkeypatch):
     """The GitHub `location-batch` group is gone: the load claims its registry entry's resource through the
-    lease module, waiting as long as the intake can hold it, and a load that never got it writes nothing."""
+    lease module, waiting as long as a sibling can hold it, and a load that never got it writes nothing."""
     wait_s = jobs.resource_wait_s(jobs.entry("ruian_load"))
     held = ("held", "ruian_load", jobs.LOCATION_HEAVY, wait_s)
     assert _main_holding(monkeypatch, True) == (0, [held, "run", ("closed with", 0)])

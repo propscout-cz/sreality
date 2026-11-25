@@ -6057,11 +6057,11 @@ test); the `location_town_coverage` gauge's `registry` cell reads Problem when t
 (no current version, a current one older than 40 d, or a load staged for more than 24 h:
 `location_registry_max_age_days`, `location_registry_max_staged_hours`).
 
-**OPS RULES THE INCIDENTS WROTE.** The heavy lanes — registry load and claim intake — share the job
+**OPS RULES THE INCIDENTS WROTE.** The heavy lanes — registry load, claim intake, building load — share the job
 runner's `location-heavy` resource (`scraper/jobs.py`; GitHub's `location-batch` group until #2028) so
 **at most one runs at a time**: the runner claims the intake through it, and the load, on GitHub until
 #2033, claims it in its own main (`job_lease.held_job`: its row and an open `job_runs` row, waiting
-as long as an intake run can hold it), so the intake's Health cell reads `waiting for ruian_load`
+as long as a sibling can hold it), so the intake's Health cell reads `waiting for ruian_load`
 during a load, never red; a load that never got it exits 1 with nothing loaded, one that returns
 non-zero closes its run `failed` (`HeldRun.exit_code`), and a run its host dropped is closed `lost`
 by the runner's reaper. A new heavy lane joins the resource. On 2026-08-10

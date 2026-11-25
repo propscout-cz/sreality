@@ -79,7 +79,7 @@ production.
 - **One table**: `scheduled_jobs` = `location_jobs` renamed (migration, with a temporary alias view). Added:
   `argv`, `offset_s`, `timeout_s`, `memory_mb`, `cpus`, `due_at`, `paused_until` (finite, with a
   note and author), `requested_at/args/by`, `registry_at`, `retired_at`, a `resource` column for jobs that
-  must never overlap (the intake and the RÚIAN load share `location-heavy`, and the retire tool did until #2223
+  must never overlap (the intake and the RÚIAN address and building loads share `location-heavy`, and the retire tool did until #2223
   deleted it; it replaces the GitHub `location-batch` group). `last_outcome` gains `timeout`, `interrupted`, `lost`. The dead columns
   (`enabled`, `concurrency_group`, `alert_route`, `note`) drop under R6b behind a backup receipt.
 - **One history table**: `job_runs` (closed in place; pruned daily by the runner after 90 days): holder, version

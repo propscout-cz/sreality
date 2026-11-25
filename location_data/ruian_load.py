@@ -1366,8 +1366,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if args.dry_run:
                 return load()
-            # The claim intake never runs beside a load (`jobs.LOCATION_HEAVY`): claimed here on any host, and waited
-            # for as long as the intake can hold it.
+            # No other heavy location job runs beside a load (`jobs.LOCATION_HEAVY`): claimed here on any host, and
+            # waited for as long as a sibling can hold it.
             job = jobs.entry("ruian_load")
             wait_s = jobs.resource_wait_s(job)
             with db.connect() as conn, job_lease.held_job(conn, job, wait_s=wait_s) as held:
