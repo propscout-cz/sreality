@@ -108,7 +108,8 @@ _UNIT_PATTERNS: tuple[re.Pattern[str], ...] = (
 # and `a 2 sklepy` count something else and leave `byt č. 5` a designator.
 _UNIT_LIST_TAIL = re.compile(
     r"(?:\s*,\s*|\s+a\s+|\s+i\s+)\d{1,4}"
-    r"(?![\d+.]|,\d|\s*\+|\s\d{3}\b|\s*(?:kk|np\b|m(?:2|\b)|kc\b|pokoj|sklep|garaz|parkov"
+    r"(?![\d+.]|,\d|\s*\+\s*(?:kk|\d)|(?:\s\d{3}){1,2}\s*(?:kc\b|,-|czk)"
+    r"|\s*(?:kk|np\b|m(?:2|\b)|kc\b|pokoj|sklep|garaz|parkov"
     r"|balkon|lodzi|teras|koupel|mistnost|loznic))")
 
 # --- printed floor areas ------------------------------------------------------------------
@@ -150,9 +151,13 @@ _HEADLINE = re.compile(r"(?:prodej|pronajem|drazba)\b[^.!?]{0,90}$")
 # A headline that prints no figure runs straight into the body, and the first figure is then
 # the BODY's own (`Prodej pozemku Babice Nabízíme k prodeji pozemek o výměře 452 m²`): the
 # body's opening words say the headline is over.
-_BODY_OPENS = re.compile(
-    r"\b(?:nabizi\w*|nabidce|k\s+prodeji|k\s+pronajmu|prodam|pronajmu"
-    r"|o\s+(?:celkove\s+)?(?:vymere|plose|velikosti|rozloze))\b")
+_BODY_OPENS = re.compile(r"\b(?:nabizim\w*|nabidce|k\s+prodeji|k\s+pronajmu|prodam|pronajmu)\b")
+# The body may also open on its own area (`Prodej bytu 2+kk, Brno - Židenice Byt o výměře 55 m²`),
+# but a headline says the same words of ITS figure (`Prodej bytu 1+kk o ploše 28,6 m2`). The
+# headline names its locality after a comma, so the words open the body only behind one.
+_BODY_OPENS_ON_AREA = re.compile(
+    r",.*\b(?:nabizi\w*|o\s+(?:celkove\s+)?(?:vymere|plose|velikosti|rozloze)"
+    r"|s\s+(?:uzitnou|obytnou|podlahovou|celkovou)\s+plochou)\b")
 _BUILDING_TOTAL = re.compile(
     r"(?:budov|objekt|areal|komplex)\w*\s+(?:o\s+)?(?:celkov\w+\s+)?"
     r"(?:velikosti|rozloze|ploche|plochou|vymere|vymera)\s+(?:cca\s+)?" + _AREA_NUMBER + r"\s*m2"
@@ -1028,7 +1033,8 @@ def _stated_areas(
     ]
     opening = folded[: mentions[0][0]]
     label = (mentions[0][:2] if headline and _HEADLINE.match(opening)
-             and not _BODY_OPENS.search(opening) else None)
+             and not _BODY_OPENS.search(opening)
+             and not _BODY_OPENS_ON_AREA.search(opening) else None)
     low, high = STATED_AREA_MIN_M2, STATED_AREA_MAX_M2
     if stored_area_m2 is not None and stored_area_m2 > 0.0:
         low = max(low, stored_area_m2 / STATED_AREA_STORED_RATIO)

@@ -422,3 +422,25 @@ def test_an_idnes_headline_that_runs_into_the_bodys_own_area_keeps_it() -> None:
     assert stated_areas(text, 55.0, "idnes") == {55.0}
     text = "Pronájem domu, Beroun Dům nabízí užitnou plochu 120 m²"
     assert stated_areas(text, 120.0, "idnes") == {120.0}
+
+
+@pytest.mark.parametrize(("text", "stored"), [
+    ("Prodej bytu 1+kk o ploše 28,6 m2.", 28.6),
+    ("Prodej bytu 2+kk o celkové ploše 96 m², Praha Byt s terasou.", 75.0),
+    ("Prodej stavebního pozemku o výměře 1 200 m², Babice", 1200.0),
+])
+def test_an_area_word_inside_the_idnes_headline_does_not_open_the_body(
+        text: str, stored: float) -> None:
+    assert stated_areas(text, stored, "idnes") == set()
+
+
+def test_an_area_word_behind_the_headlines_locality_opens_the_body() -> None:
+    text = "Prodej rodinného domu, Kolín Rodinný dům s užitnou plochou 120 m² na pozemku 900 m²"
+    assert stated_areas(text, 120.0, "idnes") == {120.0}
+    text = "Prodej pozemku vodní tok, Babice Pozemek o výměře 452 m² leží u potoka"
+    assert stated_areas(text, 452.0, "idnes") == {452.0}
+
+
+@pytest.mark.parametrize("text", ["byty č. 5 a 6 + garáž", "byty č. 4 a 5 120 m2"])
+def test_a_real_unit_list_before_a_plus_or_an_area_stays_a_list(text: str) -> None:
+    assert unit_designators(text) == set()

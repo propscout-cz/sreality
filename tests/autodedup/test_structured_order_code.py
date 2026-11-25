@@ -302,3 +302,27 @@ def test_a_code_whose_later_carriers_disagree_on_the_unit_stops_certifying() -> 
 def test_under_settings_that_read_no_column_no_code_is_stored_or_counted() -> None:
     assert carried_codes(ad(1, code="556677"), W31) == ()
     assert crowded_codes(MemoryStore(), W31, {1: ad(1, code="556677")}) == frozenset()
+
+
+def test_the_sql_store_reads_a_codes_carriers_up_to_one_past_the_cap() -> None:
+    """The statement the lane runs: this generation's rows only, `CODE_CARRIER_READ` a code."""
+    from autodedup import incremental_sql as S
+    from autodedup.incremental import CODE_CARRIER_READ
+    from autodedup.incremental_lane import SqlStore
+    from tests.autodedup.fake_pg import FakePg
+
+    db = FakePg()
+    for i in range(1, 15):
+        db.rt_fp[("rt", i)] = {"disposition": "2+kk", "area_m2": 61.0, "ref_codes": ["556677"]}
+    db.rt_fp[("rt", 20)] = {"disposition": "3+kk", "area_m2": 80.0, "ref_codes": ["112233"]}
+    db.rt_fp[("other", 21)] = {"disposition": "1+kk", "area_m2": 30.0, "ref_codes": ["112233"]}
+    db.rt_fp[("rt", 22)] = {"disposition": "1+kk", "area_m2": 30.0, "ref_codes": None}
+    store = SqlStore(db, "rt", calibration_digest="c", engine_digest="e")
+    found = store.code_carriers(["112233", "556677", "999999"])
+    assert found == {"112233": [("3+kk", 80.0)],
+                     "556677": [("2+kk", 61.0)] * CODE_CARRIER_READ}
+    assert CODE_CARRIER_READ == MAX_CODE_POPULATION + 1
+    assert "f.ref_codes is not null" in S.RT_CODE_CARRIERS_SQL
+    assert "limit %(cap)s" in S.RT_CODE_CARRIERS_SQL
+    assert crowded_codes(store, W34, {1: ad(1, code="556677"), 2: ad(2, code="112233")}) == {
+        "556677"}

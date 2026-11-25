@@ -400,8 +400,9 @@ def _with_a_realitymix_floor_pair(conn: FakePg) -> FakePg:
     return conn
 
 
+@pytest.mark.parametrize("max_listings", [500, 3])
 def test_rows_main_wrote_with_none_of_the_new_columns_end_as_a_fresh_w34_seed(
-        tmp_path: Path) -> None:
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, max_listings: int) -> None:
     """#2056 review, (e): production's rows before the switch hold NULL in every column
     migration 769 adds, and during the sweep a refreshed advert sits beside neighbours that
     still do. The end state is the fresh seed's all the same, the realitymix floor pair and
@@ -422,7 +423,13 @@ def test_rows_main_wrote_with_none_of_the_new_columns_end_as_a_fresh_w34_seed(
     held = {key for key in conn.rt_fp if key[0] == GEN}
     _seed(conn, tmp_path, "w34", recut="true", rescore="true")
     conn.now += timedelta(minutes=10)
-    _quiesce(conn, keys=held)
+    # At 3 adverts a pass the sweep takes several passes, and each decides its adverts beside
+    # neighbours whose stored columns are still NULL.
+    monkeypatch.setattr(incremental_lane, "PASS_LIMITS",
+                        Limits(max_listings=max_listings, max_component=400))
+    passes = _quiesce(conn, keys=held)
+    if max_listings == 3:
+        assert sum(1 for p in passes if (p.get("rescore") or {}).get("taken")) >= 4
 
     assert _decisions(conn) == _decisions(fresh)
     assert _groups(conn) == _groups(fresh) and list(KR) in _groups(conn)
@@ -452,3 +459,23 @@ def test_a_w31_cut_is_written_without_the_keys_main_does_not_know(tmp_path: Path
     conn.now += timedelta(minutes=10)
     _quiesce(conn)
     assert _pairs(conn)[KR]["certificate"] is None, "back on w31 the column certifies nothing"
+
+
+def test_a_stale_queue_as_long_as_the_limit_still_lets_the_sweep_take_one() -> None:
+    """The delta review's blocker: room 0 with rows owed read `taken[-1]` of an empty list. The
+    sweep takes one advert, its cursor stops there, and the next pass goes on from it."""
+    db = _sweep_world()
+    db.settings[rescore_key(GEN)] = {"since": db.now.isoformat(), "settings": "w34"}
+    scope = Scope((ScopeBlock("obec", 563510),))
+    seen: list[int] = []
+    for _ in range(3):
+        work = SqlWork(db, scope, GEN, straggler_window=0, revive_slice=0, drift_slice=0,
+                       enter_slice=0, evidence_slice=0, rescore=db.settings[rescore_key(GEN)])
+        work.stale_claims = list(range(101, 109))
+        items = work.claim(8)
+        swept = [item.listing_id for item in items if item.feed == "rescore"]
+        assert len(swept) == 1 and len(items) == 9
+        seen += swept
+        work.commit(items)
+        assert db.cursors[CURSOR_RESCORE]["last_listing_id"] == swept[0]
+    assert seen == LIVE_OWED[:3]

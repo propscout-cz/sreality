@@ -1735,9 +1735,10 @@ class SqlWork:
         if self.rescore is not None and self.rescore_slice:
             # The stale re-claims below ride on the same pass: the sweep leaves them their room,
             # so a pass holds what the feeds above took plus the sweep's room, never more.
+            # A build's entrant feed reserved them already (`reserved`, above).
             stale = (sum(1 for i in self.stale_claims
                          if i not in {item.listing_id for item in items if item.retire})
-                     if self.attempt == 0 else 0)
+                     if self.attempt == 0 and not self.bootstrap else 0)
             items.extend(self._rescore_feed(self.rescore, cursors[CURSOR_RESCORE][0], limit,
                                             share, items, scope, stale))
             cut = cut or bool(self.rescore_report and self.rescore_report["left"])
@@ -1776,7 +1777,9 @@ class SqlWork:
                                        if rows else (int(after_id), 0, []))
         retiring = {item.listing_id for item in items if item.retire}
         owed = [int(i) for i in owed if int(i) not in retiring]
-        room = max(0, max(share, limit - len(items)) - stale)
+        # Never less than one: a stale queue as long as the limit would else hold the sweep for as
+        # long as it stays that long, and the cursor below needs a row to stop at.
+        room = max(1, max(share, limit - len(items)) - stale)
         taken = owed[:room]
         self._rescore_ended = len(taken) == len(owed) and slice_size < self.rescore_slice
         self._pending[CURSOR_RESCORE] = (taken[-1] if len(taken) < len(owed)

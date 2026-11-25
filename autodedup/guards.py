@@ -143,9 +143,9 @@ def area_basis_exempt(a: GuardSide, b: GuardSide, gap: float, cfg: Settings) -> 
     and the gap is within that portal's `area_veto_basis_floor_exempt` cap."""
     for side, other in ((a, b), (b, a)):
         cap = cfg.area_veto_basis_floor_exempt.get(side.source or "")
-        # Two rows of one portal on one basis measure the same thing: their gap is a gap.
+        # Two rows on one basis measure the same thing, whatever their portals: their gap is a gap.
         if (cap is not None and side.area_basis == FLOOR_AREA_BASIS and gap <= cap
-                and (other.source, other.area_basis) != (side.source, side.area_basis)):
+                and other.area_basis != side.area_basis):
             return True
     return False
 

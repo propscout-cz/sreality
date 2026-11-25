@@ -23,8 +23,9 @@
 -- migration: the sweep never selects it, and the rescore sweep fills it.
 --
 -- `ref_codes`: every order code the advert carries (body text and `listings.ad_reference`), for
--- the live carrier count above. NULL until the rescore sweep refreshes the row: until then the
--- count sees only refreshed carriers, and the calibration cut taken at the switch is the bound.
+-- the live carrier count above. NULL until the rescore sweep refreshes the row. Until the sweep
+-- ends the count sees refreshed carriers only, so a code whose carriers straddle the switch
+-- (five at the cut, four first seen after it) is judged in two halves and the whole never is.
 --
 -- Additive and idempotent; schema `autodedup` only (ruling D8). Adding nullable columns with no
 -- default rewrites nothing.

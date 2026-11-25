@@ -175,3 +175,9 @@ def test_two_realitymix_floor_rows_measure_one_thing_and_keep_the_veto() -> None
     a = GuardRow(1, "komercni", "prodej", 100.0, None, None, "realitymix", "floor")
     b = GuardRow(2, "komercni", "prodej", 87.0, None, None, "realitymix", "floor")
     assert pair_veto(a, b, W34) == "area"
+
+
+def test_a_floor_row_of_another_portal_is_no_basis_difference_either() -> None:
+    a = GuardRow(1, "komercni", "prodej", 100.0, None, None, "realitymix", "floor")
+    b = GuardRow(2, "komercni", "prodej", 88.0, None, None, "maxima", "floor")
+    assert pair_veto(a, b, W34) == "area" and pair_veto(b, a, W34) == "area"

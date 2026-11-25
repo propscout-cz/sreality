@@ -53,6 +53,9 @@ select to_regclass('autodedup.fp_key')         is not null
                 where attrelid = to_regclass('autodedup.rt_fp')
                   and attname = 'block_key' and not attisdropped)
    and exists (select 1 from pg_attribute
+                where attrelid = to_regclass('autodedup.rt_fp')
+                  and attname = 'ref_codes' and not attisdropped)
+   and exists (select 1 from pg_attribute
                 where attrelid = to_regclass('autodedup.rt_calibration')
                   and attname = 'payload_zlib' and not attisdropped) as present
 """

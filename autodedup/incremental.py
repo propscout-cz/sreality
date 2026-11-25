@@ -288,8 +288,9 @@ class FpRow:
     # when today's location gives another (A). None on a row written before migration 769.
     block_key: str | None = None
     # Every order code the advert carries, body and column (finding 2 of the #2056 review): the
-    # lane counts a code's carriers off these rows when a pair is decided, so a code that became
-    # a crowd AFTER the cut stops certifying. Empty on a row written before migration 769.
+    # lane counts a code's carriers off these rows when a pair is decided, so a code read off
+    # the COLUMN that became a crowd after the cut stops certifying (a body code keeps the cut's
+    # verdict, as on main). Empty on a row written before migration 769.
     ref_codes: tuple[str, ...] = ()
 
     @property
