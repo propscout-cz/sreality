@@ -541,3 +541,48 @@ def test_a_stored_block_key_that_is_not_the_digests_is_rewritten(tmp_path: Path)
     assert sum(p["feeds"].get("relocated", 0) for p in passes) == 1
     assert conn.rt_fp[(GEN, KR[0])]["block_key"] == true_key
     assert _pairs(conn)[KR]["certificate"] == "K-R"
+
+
+class _BuildWork(SqlWork):
+    """A build whose snapshot offers `entrants` unread adverts, without the scope walk."""
+
+    entrants: int = 0
+
+    def refresh_scope_ids(self, pointer: int, *, seed: bool = False) -> int:
+        return pointer
+
+    def _measure_bootstrap(self, taken: int) -> None:
+        return None
+
+    def _query(self, sql: str, params: Any = None) -> list[Any]:
+        from autodedup.incremental_sql import RT_SCOPE_BUILD_ENTRANTS_SQL
+        if sql == RT_SCOPE_BUILD_ENTRANTS_SQL:
+            count = min(self.entrants, int(params["limit"]))
+            return [(9000 + k, self.conn.now) for k in range(count)]
+        return super()._query(sql, params)
+
+
+@pytest.mark.parametrize(("entrants", "by_feed"), [
+    (50, {"entered": 5, "rescore": 1, "stale": 3}),   # plentiful: the build takes limit - stale
+    (2, {"entered": 2, "rescore": 3, "stale": 3}),    # few: the sweep takes what both leave
+    (0, {"rescore": 5, "stale": 3}),
+])
+def test_in_a_build_the_sweep_holds_the_slots_reserved_for_the_stale_re_claims(
+        entrants: int, by_feed: dict[str, int]) -> None:
+    """The third review's must-fix: a build's entrant feed shrinks by the stale re-claims but
+    holds nothing for them, so a sweep that did not subtract them filled their slots and the
+    re-claims came on top (limit 8, three stale, plentiful entrants: 5 + 3 + 3 = 11). The pass
+    holds its limit, one more where the sweep's floor of one applies."""
+    db = _sweep_world()
+    db.settings[rescore_key(GEN)] = {"since": db.now.isoformat(), "settings": "w34"}
+    work = _BuildWork(db, Scope((ScopeBlock("obec", 563510),)), GEN, straggler_window=0,
+                      revive_slice=0, drift_slice=0, enter_slice=5, evidence_slice=0,
+                      bootstrap=True, rescore=db.settings[rescore_key(GEN)])
+    work.entrants = entrants
+    work.stale_claims = [101, 102, 103]
+    items = work.claim(8)
+    counts: dict[str, int] = {}
+    for item in items:
+        counts[item.feed] = counts.get(item.feed, 0) + 1
+    assert counts == by_feed
+    assert len(items) <= 8 + 1

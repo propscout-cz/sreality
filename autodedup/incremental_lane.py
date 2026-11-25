@@ -1735,10 +1735,11 @@ class SqlWork:
         if self.rescore is not None and self.rescore_slice:
             # The stale re-claims below ride on the same pass: the sweep leaves them their room,
             # so a pass holds what the feeds above took plus the sweep's room, never more.
-            # A build's entrant feed reserved them already (`reserved`, above).
+            # In a build too: the entrant feed only SHRANK by them (`reserved`, above), which
+            # leaves their slots open in `limit - len(items)`; taken out here once, they are held.
             stale = (sum(1 for i in self.stale_claims
                          if i not in {item.listing_id for item in items if item.retire})
-                     if self.attempt == 0 and not self.bootstrap else 0)
+                     if self.attempt == 0 else 0)
             items.extend(self._rescore_feed(self.rescore, cursors[CURSOR_RESCORE][0], limit,
                                             share, items, scope, stale))
             cut = cut or bool(self.rescore_report and self.rescore_report["left"])
