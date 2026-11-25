@@ -94,7 +94,7 @@ describe('auth mode', () => {
     await b.searchBrokersByName('novak');
     await b.searchBrokerFirms('mmreality');
     await b.fetchListingBrokersByIds([1]);
-    await b.fetchBrokerListings(7);
+    await b.fetchBrokerProperties(7, { categoryMain: null, categoryType: null }, null);
     expect(calls).toHaveLength(4);
     for (const c of calls) expect(authHeader(c)).toBe('Bearer USER-JWT');
   });

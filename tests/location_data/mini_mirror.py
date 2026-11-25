@@ -51,6 +51,8 @@ class MiniMirror:
     points: list[AddressPoint] = field(default_factory=list)
     # obec_kod -> (lat, lon, radius_m) polygon stand-in: a circle around the centre.
     obec_polygons: dict[int, tuple[float, float, float]] = field(default_factory=dict)
+    # katastr_kod -> the same stand-in for a KÚ, which only `katastr_at` asks.
+    katastr_polygons: dict[int, tuple[float, float, float]] = field(default_factory=dict)
     cz_polygon: tuple[float, float, float] | None = (49.8, 15.5, 300_000.0)
 
     # ---- protocol
@@ -134,6 +136,19 @@ class MiniMirror:
 
     def obec_codes_for_psc(self, psc: str) -> list[int]:
         return sorted({p.obec_kod for p in self.points if p.psc == psc})
+
+    def katastr_at(self, lat: float, lon: float) -> int | None:
+        for code, (clat, clon, radius) in sorted(self.katastr_polygons.items()):
+            if haversine_m(lat, lon, clat, clon) <= radius:
+                return code
+        return None
+
+    def katastr_parts(self, katastr_kod: int, obec_kod: int) -> list[int | None]:
+        """`_KATASTR_PARTS_SQL` in python: a fixture door's `katastr_kod` stands in for the
+        KÚ polygon covering it."""
+        return sorted({p.cast_obce_kod for p in self.points
+                       if p.katastr_kod == katastr_kod and p.obec_kod == obec_kod},
+                      key=lambda c: (c is None, c or 0))
 
     def containing_obec(self, lat: float, lon: float) -> AdminUnit | None:
         for code, (clat, clon, radius) in sorted(self.obec_polygons.items()):

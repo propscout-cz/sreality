@@ -102,6 +102,11 @@ waves and W0's measurements: `docs/design/broker-board.md`.
   609: chips — the three id lists became Browse's four chip arrays (five levels,
   excludes); the count book answers kraj/okres/obec includes, anything else reads live.
 
+- **The inventory by property** (#2654, 2026-11-24): the broker page's table reads the book,
+  one row per property with the broker's own price and price change, exact counts and paging
+  (`docs/design/broker-board.md` § The inventory by property). Owed: the follow-up PR that
+  deletes `GET /brokers/{id}/listings` and drops `broker_listings_public`.
+
 ## Next
 
 **Cut, deliberately.** W5 (one lease primitive across property/notification/broker):

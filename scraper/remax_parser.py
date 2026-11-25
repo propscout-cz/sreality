@@ -46,6 +46,7 @@ from scraper.area import (
 )
 from scraper.attribute_contract import floor_convention, source_value, source_values
 from scraper.floor import floor_from_portal, total_floors_from_portal
+from scraper.portal_base import states_closed
 from scraper.portal_identity import native_id
 from scraper.price_reading import PriceReading, read_price_text, resolve
 from scraper.scraped_listing import ScrapedListing
@@ -194,6 +195,7 @@ class IndexItem:
     price_text: str | None = None
     gps: str | None = None
     address: str | None = None
+    closed: bool = False  # the card says sold/let: collected, never a sighting (rule #3)
 
 
 @dataclass(frozen=True)
@@ -369,12 +371,14 @@ def parse_index(html: str) -> IndexPage:
         if not source_id or source_id in seen:
             continue
         seen.add(source_id)
+        price_text = unescape(attrs.get("data-price") or "") or None
         items.append(
             IndexItem(
                 source_id_native=source_id,
                 detail_path=url,
                 title=unescape(attrs.get("data-title") or "") or None,
-                price_text=unescape(attrs.get("data-price") or "") or None,
+                price_text=price_text,
+                closed=states_closed(price_text),
                 gps=unescape(attrs.get("data-gps") or "") or None,
                 address=unescape(attrs.get("data-display-address") or "") or None,
             )

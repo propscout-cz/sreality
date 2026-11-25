@@ -10,11 +10,7 @@ mixed index paginated `/page/N/`, a `/nemovitosti/{id}/` detail).
 
 from __future__ import annotations
 
-import logging
-
 from scraper.portal_base import BasePortalClient
-
-LOG = logging.getLogger(__name__)
 
 BASE_URL = "https://nemovitosti.maxima.cz"
 
@@ -44,5 +40,4 @@ class MaximaClient(BasePortalClient):
         return response.text, response.status_code
 
     def fetch_detail(self, path_or_url: str) -> tuple[str, int]:
-        response = self._request(detail_url(path_or_url))
-        return response.text, response.status_code
+        return self._fetch_detail_page(detail_url(path_or_url))

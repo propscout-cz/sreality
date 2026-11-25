@@ -265,3 +265,29 @@ def test_a_gone_status_never_retires_the_exit_ip() -> None:
     with pytest.raises(Exception):
         c.fetch_index("prodej", "byty")
     assert c._fetcher.rotations == []
+
+
+def _intro(*badges: str) -> str:
+    items = "".join(f'<li> <div class="badge --gray"> <span class="badge__title">{b}</span> </div> </li>'
+                    for b in badges)
+    return (f'<div class="s-estate-detail-intro__badges"> <ul class="g-badges --horizontal"> {items} '
+            '</ul> </div> <header class="s-estate-detail-intro__header"><h1>Prodej bytu</h1></header>')
+
+
+# The "Podobné nemovitosti" slider: other ads' badges, below the ad's own intro.
+_SLIDER = ('<section class="s-estates-slide"><article class="i-estate"><div class="i-estate__image-badges">'
+           '<div class="badge --gray"> <span class="badge__title">Prodáno</span> </div></div></article></section>')
+
+
+@pytest.mark.parametrize("badges", [("Prodáno",), ("Pronajato",), ("Developerský projekt", "Prodáno")])
+def test_a_page_whose_own_intro_badge_says_sold_or_let_is_gone(badges):
+    c = _client([FakeResponse(200, f"<html>{_intro(*badges)}</html>", url=_DETAIL)])
+    with pytest.raises(ListingGoneError):
+        c.fetch_detail(_DETAIL)
+
+
+@pytest.mark.parametrize("badges", [(), ("Rezervováno",), ("Novinka",)])
+def test_a_live_or_reserved_page_beside_a_sold_slider_card_is_returned(badges):
+    body = f"<html>{_intro(*badges)}<p>Hala 1 je již prodána.</p>{_SLIDER}</html>"
+    c = _client([FakeResponse(200, body, url=_DETAIL)])
+    assert c.fetch_detail(_DETAIL) == (body, 200)

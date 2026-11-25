@@ -26,6 +26,7 @@ import { brokerContact } from '@/lib/brokerContact';
 import { browseKeys } from '@/lib/browseKeys';
 import {
   BROKER_PRICE_SCOPES,
+  categoryShareLabel,
   contactState,
   fetchBrokerDossier,
   useBrokerPriceSlice,
@@ -39,7 +40,6 @@ import {
   type BrokerRegionShare,
   type ContactState,
 } from '@/lib/brokers';
-import { categoryMainLabelPlural, categoryTypeLabel } from '@/lib/enums';
 import { FEED_ALL_FILTERS, dayRuleLabel, pragueDayKey } from '@/lib/feed';
 import type { ListingFilters } from '@/lib/filters';
 import { COPY_WORDS, copyText } from '@/lib/clipboard';
@@ -363,12 +363,7 @@ function Types({ rows }: { rows: BrokerCategoryShare[] }) {
         <NumberRows
           rows={rows.map((c) => ({
             key: `${c.category_main ?? ''}|${c.category_type ?? ''}`,
-            label: [
-              c.category_main ? categoryMainLabelPlural(c.category_main) : 'Ostatní',
-              c.category_type ? categoryTypeLabel(c.category_type).toLowerCase() : null,
-            ]
-              .filter(Boolean)
-              .join(' · '),
+            label: categoryShareLabel(c),
             value: <Pair active={c.active_properties} total={c.properties} />,
           }))}
         />

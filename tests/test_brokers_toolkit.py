@@ -8,6 +8,7 @@ portals that insert NULL there, which reads as "unattributed", not as a bug.
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 
 from tests._cursor_stub import _Conn
 from toolkit import brokers
@@ -75,6 +76,41 @@ def test_broker_property_ids_clamps_limit() -> None:
     brokers.broker_property_ids(conn, 4, limit=999_999)
     _, params = conn.cur.seen[0]
     assert params["limit"] == 50_001
+
+
+def _property_row(pid: int, active: bool, at: datetime) -> dict:
+    return {"property_id": pid, "is_active": active, "sort_at": at, "last_seen_at": at}
+
+
+def test_broker_properties_reads_one_row_per_property_of_the_book() -> None:
+    """The inventory is the book joined to Browse's row: the broker's own status, portals, last price and the change
+    from the pair the price figures count (none without a price step), never an ad-grain view."""
+    at = datetime(2026, 11, 24, tzinfo=UTC)
+    conn = _Conn([_property_row(10, True, at)])
+    out = brokers.broker_properties(conn, 4, category_main="byt", category_type="prodej")
+    sql, params = conn.cur.seen[0]
+    flat = " ".join(sql.split())
+    assert "FROM broker_book b JOIN browse_list l USING (property_id)" in flat
+    assert "b.last_price_czk AS price_czk" in flat
+    assert ("CASE WHEN b.price_changes > 0 THEN measure_price_change_pct(b.first_price_czk, b.last_price_czk) END"
+            in flat)
+    assert "broker_listings_public" not in flat and "listing_price_history" not in flat
+    assert flat.endswith("ORDER BY b.is_active DESC, sort_at DESC, b.property_id DESC LIMIT %(limit)s")
+    assert params == {"broker_id": 4, "category_main": "byt", "category_type": "prodej", "after_active": None,
+                      "after_at": None, "after_id": None, "limit": brokers.BROKER_PROPERTIES_PAGE}
+    assert out["data"] == [{"property_id": 10, "is_active": True, "last_seen_at": at.isoformat()}]
+    assert out["metadata"]["next_after"] is None
+
+
+def test_broker_properties_names_the_next_page_only_after_a_full_one() -> None:
+    at = datetime(2026, 11, 24, tzinfo=UTC)
+    conn = _Conn([_property_row(11, True, at), _property_row(10, False, at)])
+    out = brokers.broker_properties(conn, 4, limit=2, after=(True, "2026-11-25T00:00:00+00:00", 12))
+    _, params = conn.cur.seen[0]
+    assert (params["after_active"], params["after_at"], params["after_id"]) == (
+        True, "2026-11-25T00:00:00+00:00", 12)
+    assert out["metadata"]["next_after"] == [False, at.isoformat(), 10]
+    assert all("sort_at" not in r for r in out["data"])
 
 
 def test_firm_options_with_no_query_browses_the_top_firms_by_broker_count() -> None:

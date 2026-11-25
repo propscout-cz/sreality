@@ -253,6 +253,53 @@ def broker_listings(conn: Any, broker_id: int, *, limit: int = 500) -> dict[str,
                      len(rows), _iso(fresh))
 
 
+# The broker's inventory, one row per property of the book that Browse serves (the footprint's join): the property's
+# label, type and area, and the broker's own spell there: whether an ad of theirs still runs, their portals, their
+# last price and the change from their first (the pair the price figures count, which also count the book's rows
+# Browse does not serve yet; no change without a price step). Live spells first, newest first; `last_seen_at` = when the spell ended, the
+# property's last sighting while it runs.
+_BROKER_PROPERTIES_SQL = """
+    SELECT b.property_id, l.listing_id, l.display_label, l.category_main, l.category_type, l.disposition, l.subtype,
+           l.area_m2, b.is_active, b.all_sources, b.active_sources, b.last_price_czk AS price_czk,
+           (CASE WHEN b.price_changes > 0
+                 THEN measure_price_change_pct(b.first_price_czk, b.last_price_czk) END)::float8 AS price_change_pct,
+           b.price_changes AS price_change_count, coalesce(b.ended_at, l.last_seen_at) AS last_seen_at,
+           coalesce(b.ended_at, b.started_at) AS sort_at
+    FROM broker_book b JOIN browse_list l USING (property_id)
+    WHERE b.broker_id = %(broker_id)s
+      AND (%(category_main)s::text IS NULL OR l.category_main = %(category_main)s)
+      AND (%(category_type)s::text IS NULL OR l.category_type = %(category_type)s)
+      AND (%(after_id)s::bigint IS NULL OR (b.is_active, coalesce(b.ended_at, b.started_at), b.property_id)
+                                           < (%(after_active)s::boolean, %(after_at)s::timestamptz, %(after_id)s))
+    ORDER BY b.is_active DESC, sort_at DESC, b.property_id DESC
+    LIMIT %(limit)s
+"""
+BROKER_PROPERTIES_PAGE = 100
+
+
+def broker_properties(conn: Any, broker_id: int, *, category_main: str | None = None,
+                      category_type: str | None = None, after: tuple[bool, str, int] | None = None,
+                      limit: int = BROKER_PROPERTIES_PAGE) -> dict[str, Any]:
+    """A page of the broker's book, one row per property, optionally one type and one deal. `after` is the last
+    row's `metadata.next_after` (its spell status, sort time and property id); a full page names the next one."""
+    limit = max(1, min(int(limit), 500))
+    after_active, after_at, after_id = after or (None, None, None)
+    filters = {"broker_id": broker_id, "category_main": category_main, "category_type": category_type}
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(_BROKER_PROPERTIES_SQL, {**filters, "after_active": after_active, "after_at": after_at,
+                                             "after_id": after_id, "limit": limit})
+        rows = cur.fetchall()
+    last = rows[-1] if len(rows) == limit else None
+    next_after = [last["is_active"], _iso(last["sort_at"]), last["property_id"]] if last else None
+    fresh = max((r["last_seen_at"] for r in rows if r.get("last_seen_at")), default=None)
+    for r in rows:
+        del r["sort_at"]
+        r["last_seen_at"] = _iso(r.get("last_seen_at"))
+    envelope = _envelope("broker_properties", rows, {**filters, "limit": limit}, len(rows), _iso(fresh))
+    envelope["metadata"]["next_after"] = next_after
+    return envelope
+
+
 def book_rule_sql(alias: str) -> str:
     """MS19's broker side, THE one rendering: the portal rule (migration 657) over a `broker_book` row (692), so
     "broker + portal" means ONE ad of the broker on `%(portals)s` (any, with none) in `%(status)s`, the names the

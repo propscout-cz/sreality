@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import os
+import re
 import signal
 import threading
 import time
@@ -18,7 +19,14 @@ import pytest
 import requests
 
 from scraper import stop
-from scraper.portal_base import BasePortalClient, ListingGoneError, client_hints
+from scraper.portal_base import (
+    BasePortalClient,
+    ListingGoneError,
+    client_hints,
+    gone_phrases,
+    stated_closed,
+    states_closed,
+)
 from scraper.rate_ledger import RateBudgetUnavailable
 from scraper.rate_limit import RateLimiter
 
@@ -340,3 +348,53 @@ def test_a_stop_signal_cuts_a_hung_request_short_and_refuses_the_run() -> None:
         timer.cancel()
     assert len(c._session.calls) == 1
     assert lim.refused_reason == "stop"
+
+
+@pytest.mark.parametrize("text", ["Prodáno", " PRODÁNO ", "Pronajato", "pronajato\n"])
+def test_a_slot_reading_sold_or_let_states_closed(text):
+    assert states_closed(text)
+
+
+@pytest.mark.parametrize("text", [None, "", "Rezervováno", "Prodej bytu 2+1", "již prodáno", "4 990 000 Kč"])
+def test_reserved_a_title_or_a_sentence_never_states_closed(text):
+    assert not states_closed(text)
+
+
+def test_gone_phrases_match_case_and_any_single_whitespace():
+    pattern = gone_phrases("nabídka již není aktivní", "s-estate-archive")
+    assert pattern.search("<p>Nabídka\xa0již NENÍ aktivní</p>")
+    assert pattern.search('<section class="s-estate-archive">')
+    assert not pattern.search("nabídka je aktivní")
+
+
+def test_stated_closed_reads_only_the_anchored_slot():
+    pattern = stated_closed(r'<b class="own">')
+    assert pattern.search('<b class="own"> Prodáno </b>')
+    assert not pattern.search('<b class="own">Rezervováno</b><i class="other">Prodáno</i>')
+
+
+class _Page:
+    def __init__(self, text: str, url: str) -> None:
+        self.status_code = 200
+        self.text = text
+        self.url = url
+
+
+class _Declared(BasePortalClient):
+    DETAIL_URL = re.compile(r"/detail/")
+    GONE_PAGE = (gone_phrases("ad removed"),)
+
+
+def _declared(text: str, final_url: str) -> _Declared:
+    client = object.__new__(_Declared)
+    client._request = lambda url: _Page(text, final_url)  # noqa: SLF001
+    return client
+
+
+def test_fetch_detail_page_applies_both_declarations():
+    ad = "https://x/detail/1"
+    assert _declared("live", ad)._fetch_detail_page(ad) == ("live", 200)
+    with pytest.raises(ListingGoneError):
+        _declared("live", "https://x/search")._fetch_detail_page(ad)
+    with pytest.raises(ListingGoneError):
+        _declared("<p>Ad removed</p>", ad)._fetch_detail_page(ad)
