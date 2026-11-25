@@ -1901,6 +1901,19 @@ def test_a_cluster_verdict_touches_no_must_not_link_either_way(admin_client, con
     )
 
 
+def test_a_cluster_verdict_on_a_group_that_changed_since_the_card_is_a_409(admin_client, conn):
+    conn.canned = {"cluster_exists": [(1,)], "cluster_member_ids": [(11,), (12,), (13,)],
+                   "verdict_write": [_verdict_row(kind="cluster")]}
+    payload = {"kind": "cluster", "cluster_key": 101, "verdict": "same", "generation": "g1"}
+    stale = admin_client.post("/autodedup/verdict", json={**payload, "seen_member_ids": [11, 12]})
+    assert stale.status_code == 409
+    assert all(sql != usql.VERDICT_CLUSTER_APPEND_SQL for sql, _ in conn.calls)
+    seen = admin_client.post(
+        "/autodedup/verdict", json={**payload, "seen_member_ids": [13, 11, 12]})
+    assert seen.status_code == 200
+    assert _last_call(conn, usql.VERDICT_CLUSTER_APPEND_SQL)["member_ids"] == [11, 12, 13]
+
+
 def test_a_cluster_verdict_records_only_the_verdict(admin_client, conn):
     """Flagging a GROUP is not the same statement as forbidding each of its pairs: the splits
     happen on the pair view, so no must-not-link is written here."""
