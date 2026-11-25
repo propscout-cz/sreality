@@ -13,9 +13,8 @@
  * property has fewer than two priced SNAPSHOTS. A snapshot is written only when
  * an ad's content changes (rule 2), so that is an ad nothing ever changed on,
  * however long it was watched (84 % of such rows had been watched for over a
- * week, 2026-11-23), not an ad seen once; the property surfaces show nothing
- * for it. A caller that passes `measure_price_change_pct` of a first and a last
- * price (the broker inventory) gets 0 there and the flat arrow. So:
+ * week, 2026-11-23), not an ad seen once, and every surface shows nothing for
+ * it (`listing_price_history.change_pct`, migration 770, the one rule). So:
  *
  *   pct == null            → render NOTHING (absence is honest)
  *   pct === 0, changes 0   → flat arrow, muted: observed twice, never moved

@@ -75,6 +75,14 @@ _FIXED: tuple[Job, ...] = (
         15 * 60, 5 * 60, 55 * 60, 3072, 4, RUNNER),
     Job("ruian_load", ("location_data.ruian_load",), 30 * DAY, 10 * HOUR, 6 * HOUR, 2048, 1, UNTIL_MOVED,
         LOCATION_HEAVY, db_heavy=True),
+    # The register's building facts (#2604): a month's ~6,250 obec files, resumed daily until none is pending, then
+    # a no-op until the next vintage. It starts obce only 13:00-17:00 UTC (a run restarted by a deploy keeps those
+    # hours) and none in :40-:50, so the largest obec (Praha, 65 s) is written before the :45 Browse rebuild. The
+    # registry load is a GitHub workflow, which location-heavy cannot exclude: the loader asks before every obec.
+    Job("ruian_buildings",
+        ("location_data.ruian_buildings", "--max-seconds", "10800", "--window-utc", "13:00-17:00",
+         "--quiet-minutes", "40-50"),
+        DAY, 13 * HOUR, 270 * 60, 2048, 1, RUNNER, LOCATION_HEAVY, db_heavy=True),
     Job("price_stats", ("scraper.price_stats_main", "--start-year", "2015", "--window-years", "5"),
         7 * DAY, 4 * DAY + 4 * HOUR, 1 * HOUR, 1024, 1, GITHUB),  # the epoch began on a Thursday: Monday 04:00
     Job("verify_pipeline", ("scripts.verify_pipeline", "--host", "github-actions"),

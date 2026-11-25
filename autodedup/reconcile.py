@@ -79,6 +79,8 @@ RUN_PREFIX: str = "rt:"
 # so the list stays full, and a cycle is ~17 passes; the swept groups are planned in bulk
 # (~36 s for 2,000) before the time-bound apply loop, so a late find is still handed on.
 SWEEP_SLICE: int = 2000
+# E992: how long an operator `same` keeps its group in every pass's plan.
+RULED_SAME_HOURS: int = 24
 # A group is started only while this much of the pass's time is left: one group is a handful
 # of statements and one merge, and the reconcile stops between groups, never inside one.
 GROUP_MARGIN_S: float = 30.0
@@ -472,9 +474,12 @@ def run(
     # E960: every group handed on is re-planned, so one refreshed whole merges in this pass.
     handed = (set(group_of({int(i) for group in waiting for i in group}).values())
               if waiting else set())
-    keys = sorted({int(k) for k in touched} | set(swept) | handed)
+    ruled = {int(row[0]) for row in _rows(conn, S.RC_RULED_SAME_SQL, {
+        "generation": generation, "hours": RULED_SAME_HOURS})}
+    keys = sorted({int(k) for k in touched} | set(swept) | handed | ruled)
     counts: dict[str, Any] = {"groups": len(keys), "touched": len(set(touched)),
-                              "swept": len(swept), "handed_replanned": len(handed)}
+                              "swept": len(swept), "handed_replanned": len(handed),
+                              "ruled_same": len(ruled)}
     out: dict[str, Any] = {"run_id": run_id, "counts": counts, "applied": [],
                            "skipped_at_apply": [], "refused": [], "failed": [],
                            QUARANTINED: []}

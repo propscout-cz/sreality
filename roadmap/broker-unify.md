@@ -39,8 +39,9 @@ waves and W0's measurements: `docs/design/broker-board.md`.
   then merge.
 - **Price change on the dossier** (#2626, 2026-11-23): migration 768 moves the rollup's price lineage into
   `listing_price_history`, the book stores the broker's own first and last price, the dossier shows the share
-  repriced and the median change (all / active / inactive), each inventory row its ad's change. Owed: the gate on
-  the book's fill after the first full sweep.
+  repriced and the median change (all / active / inactive), each inventory row its ad's change. Review fixes #2639
+  (2026-11-24, migrations 770-771): repriced = a price step (cut and restored counts), every ad of the broker read,
+  one "no change" rule for every surface.
 
 ## Done
 
@@ -100,6 +101,11 @@ waves and W0's measurements: `docs/design/broker-board.md`.
   double-count test retired for a count-once pin + a disjoint-additivity pin.
   609: chips — the three id lists became Browse's four chip arrays (five levels,
   excludes); the count book answers kraj/okres/obec includes, anything else reads live.
+
+- **The inventory by property** (#2654, 2026-11-24): the broker page's table reads the book,
+  one row per property with the broker's own price and price change, exact counts and paging
+  (`docs/design/broker-board.md` § The inventory by property); the per-ad route and its view
+  `broker_listings_public` are deleted (migration 772).
 
 ## Next
 

@@ -290,6 +290,22 @@ VERDICT_FILTER_VALUES: tuple[str, ...] = ("unreviewed", *VERDICT_VALUES)
 # never go stale that way, so `changed` is offered here and refused there rather than silently
 # matching nothing.
 GROUP_VERDICT_FILTER_VALUES: tuple[str, ...] = ("changed", *VERDICT_FILTER_VALUES)
+# WHY apply left a group unmerged (`autodedup.applied_merges`, the newest live row): `any`,
+# an outcome, or a skip reason. The reasons are apply's `SKIP_*` constants, spelled here
+# because nothing but the lane may import the apply path (a test pins the two together); the
+# three retired by E989 stay because their rows stand until apply reads the group again.
+HOLD_RETIRED_REASONS: tuple[str, ...] = (
+    "property_spans_groups", "carries_ungrouped_listings", "carries_out_of_scope_listings",
+)
+HOLD_SKIP_REASONS: tuple[str, ...] = (
+    "carries_legacy_merged_listing", "category_type_mix", "category_main_incompatible",
+    "member_out_of_scope", "unattached_member", "property_not_active",
+    "operator_group_verdict", "operator_pair_verdict", "must_not_link",
+    "refused_at_chokepoint_before", "changed_since_plan",
+)
+HOLD_FILTER_VALUES: tuple[str, ...] = (
+    "any", "refused", "failed", *HOLD_SKIP_REASONS, *HOLD_RETIRED_REASONS,
+)
 ZONE_VALUES: tuple[str, ...] = ("merge", "band", "reject")
 VERDICT_KINDS: tuple[str, ...] = ("pair", "cluster")
 
@@ -314,7 +330,7 @@ GROUP_FILTER_KEYS: frozenset[str] = frozenset(
     {
         "generation", "after", "limit", "block", "block_grain", "source", "category_main",
         "category_type", "min_size", "max_size", "min_score", "max_score", "verdict",
-        "shared_photo", "sort", "seed",
+        "shared_photo", "sort", "seed", "hold",
     }
 )
 RESIDUAL_FILTER_KEYS: frozenset[str] = frozenset(
@@ -1085,6 +1101,7 @@ def groups(
     max_score: float | None = Query(None),
     verdict: str | None = Query(None),
     shared_photo: int | None = Query(None),
+    hold: str | None = Query(None),
     sort: str = Query("weakest"),
     seed: str | None = Query(None),
     conn: Any = Depends(deps.get_db_conn),
@@ -1101,12 +1118,14 @@ def groups(
     _one_of("sort", sort, tuple(GROUP_SORTS))
     sample_seed = _seed(seed)
     _one_of("verdict", verdict, GROUP_VERDICT_FILTER_VALUES)
+    _one_of("hold", hold, HOLD_FILTER_VALUES)
     _one_of("block_grain", block_grain, usql.BLOCK_GRAIN_VALUES)
     if not store_ready(conn):
         return _not_ready()
 
     params: dict[str, Any] = {
         "generation": generation,
+        "hold": hold,
         "block": block,
         # The grain travels WITH the code, never instead of it: a cast-obce code and an obec
         # code share one number space (migration 529), so `block` alone can name two blocks.
@@ -1157,6 +1176,7 @@ def groups(
         members: dict[int, list[dict[str, Any]]] = {key: [] for key in keys}
         edges: dict[int, dict[str, Any]] = {}
         member_verdicts: dict[int, list[dict[str, Any]]] = {key: [] for key in keys}
+        holds: dict[int, dict[str, Any]] = {}
         if keys:
             for row in _rows(
                 usql.MEMBER_COLUMNS,
@@ -1182,6 +1202,11 @@ def groups(
                 row["family_names"] = _families(row.pop("families"))
                 edges[row.pop("cluster_key")] = row
             member_verdicts = _member_verdicts(conn, members)
+            for row in _rows(
+                usql.HOLD_COLUMNS,
+                _fetch(conn, usql.GROUP_HOLDS_SQL, {"keys": keys, "generation": generation}),
+            ):
+                holds[row.pop("cluster_key")] = row
     except _STORE_BEHIND:
         return _not_ready()
 
@@ -1202,6 +1227,9 @@ def groups(
                 # The operator's own rulings on the members' PAIRS, so a card can show the
                 # split that is stored rather than a blank set of letters over it (E50).
                 "member_verdicts": member_verdicts.get(cluster["cluster_key"], []),
+                # Why apply left the group unmerged: its newest live ledger row when that
+                # row is not a merge. Null on a merged group and on one apply has not read.
+                "hold": holds.get(cluster["cluster_key"]),
             }
         )
 
@@ -2153,6 +2181,10 @@ class VerdictIn(BaseModel):
     # so a ruling that does not say which pass it was taken on is a ruling about nothing. The
     # SERVER then resolves the member set for that (generation, cluster_key) and stamps it.
     generation: str | None = Field(default=None, max_length=40)
+    # The adverts the CARD SHOWED when the operator clicked (cluster verdicts only). Never
+    # stamped: the server stamps its own read, and answers 409 when the two differ, so a ruling
+    # cannot land on an advert the group gained after the page rendered it (E992).
+    seen_member_ids: list[int] | None = Field(default=None, max_length=5000)
     note: str | None = Field(default=None, max_length=2000)
     # WHY the operator ruled this way (migration 533), validated against the registry.
     reasons: list[str] = Field(default_factory=list,
@@ -2269,6 +2301,12 @@ def verdict(
             # server reads.
             cluster_key, generation = body.cluster_key, body.generation
             ids: list[int] | None = _cluster_member_ids(conn, body.cluster_key, body.generation)
+            if body.seen_member_ids is not None and sorted(set(body.seen_member_ids)) != ids:
+                raise HTTPException(
+                    status_code=409,
+                    detail="this group's adverts changed since the page loaded it: reload and "
+                           "decide on the group as it is now",
+                )
         try:
             with conn.transaction():
                 if body.supersedes is not None:

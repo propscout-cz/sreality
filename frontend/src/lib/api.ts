@@ -704,7 +704,15 @@ export interface RegisterBuilding {
   /* The zones and regimes the register lists for the building (heritage, nature, water source…); empty = none
    * stated. A null label is a code our list does not hold. Absent on an answer from an API one deploy behind. */
   protection?: { code: number; label: string | null }[];
+  /* What the property says against this record (`shown`: the values its page shows, rolled up over its ads) and
+   * what each of its ads says, keyed by listing id (`api/register_comparison`). Both absent on an answer from an
+   * API one deploy behind. */
+  shown?: RegisterVerdicts;
+  ads?: Record<string, RegisterVerdicts>;
 }
+/* null = the fact has no common basis or one side is silent. `ad` is the ad side's own value. */
+export type RegisterVerdicts = Record<ComparedFact, { differs: boolean; ad: unknown } | null>;
+export type ComparedFact = 'lift' | 'floors' | 'construction';
 export const fetchPropertyBuilding = (propertyId: number): Promise<{ building: RegisterBuilding | null }> =>
   request<{ building: RegisterBuilding | null }>(`/properties/${propertyId}/building`);
 /* A registered sale in a property's building (GET /properties/{id}/building/sales), newest first. */
@@ -4322,6 +4330,16 @@ export interface AutodedupClusterRow {
   last_changed_at?: string | null;
 }
 
+/* Why apply left a proposed group unmerged: its newest live ledger row
+ * (`autodedup.applied_merges`) when that row is not a merge. */
+export interface AutodedupApplyHold {
+  outcome: string;
+  reason: string | null;
+  held_at: string | null;
+  property_ids: number[];
+  detail: { legacy_merged_listings?: number[] } | null;
+}
+
 /* The cluster as the page renders it: the row, flattened together with its
  * members, its edge rollup and the operator's latest verdict. The server sends
  * those as four sibling objects (`{cluster, members, edges, verdict}`); the
@@ -4338,6 +4356,7 @@ export interface AutodedupGroup extends AutodedupClusterRow {
   member_verdicts: AutodedupVerdictRow[];
   /* The ruling that no longer applies, and what moved under it (E58). */
   stale_verdict: AutodedupStaleVerdict | null;
+  hold: AutodedupApplyHold | null;
   /* Decoded once — from the server's names when it sends them, from the bitmask
    * otherwise. The chips read this and never the raw smallint. */
   family_names: string[];
@@ -4367,6 +4386,7 @@ interface WireGroupItem {
   verdict?: AutodedupVerdictRow | null;
   stale_verdict?: AutodedupStaleVerdict | null;
   member_verdicts?: AutodedupVerdictRow[] | null;
+  hold?: (Omit<AutodedupApplyHold, 'property_ids'> & { property_ids?: number[] | null }) | null;
 }
 
 /* Decode an evidence-family value that may arrive as the stored bitmask or as
@@ -4398,6 +4418,7 @@ export function normalizeGroup(item: WireGroupItem & Partial<AutodedupClusterRow
     verdict: item.verdict ?? null,
     stale_verdict: item.stale_verdict ?? null,
     member_verdicts: item.member_verdicts ?? [],
+    hold: item.hold ? { ...item.hold, property_ids: item.hold.property_ids ?? [] } : null,
     family_names: decodeFamilies(
       cluster.evidence_family_names ?? edges?.family_names ?? edges?.families ??
         cluster.evidence_families,
@@ -4661,6 +4682,8 @@ export interface AutodedupGroupFilters {
   min_score?: number | null;
   max_score?: number | null;
   verdict?: string | null;
+  /* Why apply left the group unmerged: `any`, an outcome or a skip reason. */
+  hold?: string | null;
   shared_photo?: 0 | 1 | null;
   /* `random` is the SEEDED sample order (D6) — stable across pages and reloads
    * for one seed, and uncorrelated with anything the engine did, which is what
@@ -4818,6 +4841,9 @@ export interface AutodedupVerdictInput {
    * say which pass is a ruling about nothing; the SERVER then resolves the
    * member set for that (generation, cluster_key) and stamps it on the row. */
   generation?: string | null;
+  /* The adverts the card SHOWED at the click (a group ruling only). The server
+   * still stamps its own read, and answers 409 when the group has changed. */
+  seen_member_ids?: number[];
   note?: string | null;
   /* Reason CODES, never labels: the label is the registry's rendering of the
    * code and changing one must not change what a past verdict recorded. */

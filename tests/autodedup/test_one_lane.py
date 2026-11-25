@@ -517,6 +517,11 @@ class LaneDb(FakeDb):
             keys = sorted(k for g, k in self.clusters if g == p["generation"]
                           and k > p["after"])
             return [(k,) for k in keys[:p["limit"]]]
+        if sql == AS.RC_RULED_SAME_SQL:
+            held = {k for g, k in self.clusters if g == p["generation"]}
+            return sorted({(v["cluster_key"],) for v in self.verdicts
+                           if v["kind"] == "cluster" and v["verdict"] == "same"
+                           and v["cluster_key"] in held})
         if sql == AS.RC_CLUSTERS_SQL:
             return [row for row in self.dispatch(AS.CLUSTERS_SQL, p) if row[0] in p["keys"]]
         if sql == AS.RC_MEMBERS_SQL:
@@ -583,6 +588,22 @@ def _read(db: LaneDb, *lids: int) -> None:
     for lid in lids:
         db.snapshot[lid] = BLOCK
         db.read.add(lid)
+
+
+def test_a_group_the_operator_ruled_same_is_planned_before_the_sweep_reaches_it() -> None:
+    # E992: the sweep's cursor is past group 10 and no pass touched it; the ruling brings it in.
+    db = LaneDb()
+    db.live_scope()
+    _pair_group(db, 10, [10, 11], [100, 200], gen=RT)
+    _read(db, 10, 11)
+    db.cursors[reconcile.CURSOR] = 10
+    assert _lane(db)["counts"]["groups"] == 0
+    db.cursors[reconcile.CURSOR] = 10
+    db.verdicts.append({"kind": "cluster", "cluster_key": 10, "verdict": "same",
+                        "member_ids": [10, 11]})
+    out = _lane(db)
+    assert out["counts"]["ruled_same"] == 1 and out["counts"]["groups"] == 1
+    assert [row["outcome"] for row in db.ledger] == ["applied"]
 
 
 def test_the_reconcile_merges_an_rt_group_through_the_chokepoint() -> None:
@@ -3077,3 +3098,15 @@ def test_an_unnamed_error_files_no_row_without_the_lease_and_is_raised_itself() 
         AP.apply_group(db, planned, scope, run_id="rt:test", generation=RT, merge=crashes,
                        fence=gone)
     assert fenced == [1] and not db.ledger
+
+
+def test_the_pass_readout_names_its_slowest_statements() -> None:
+    from autodedup import incremental_lane as lane
+    from autodedup import incremental_sql
+
+    name = next(n for n, v in vars(incremental_sql).items() if n.isupper() and isinstance(v, str))
+    assert lane._sql_name(getattr(incremental_sql, name)) == name
+    assert lane._sql_name("select  1\n from x") == "select 1 from x"
+    book = {f"S{i}": [1, float(i), i] for i in range(20)}
+    top = lane.top_sql(book, {"S19": [2, 1.0, 5]})
+    assert len(top) == lane.SQL_TOP and next(iter(top.items())) == ("S19", [3, 20.0, 24])

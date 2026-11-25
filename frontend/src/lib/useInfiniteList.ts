@@ -76,6 +76,8 @@ export interface InfiniteListResult<
   /* First page in flight with nothing yet to show (render a skeleton). */
   isLoading: boolean;
   isFetchingNextPage: boolean;
+  /* The rows are the PREVIOUS key's, kept on screen while this key's first page loads. */
+  isPlaceholderData: boolean;
   hasNextPage: boolean;
   isError: boolean;
   /* The failure is the NEXT page's: the pages already loaded are intact. */
@@ -163,6 +165,7 @@ export function useInfiniteList<
     firstPage: query.data?.pages?.[0] as TPage | undefined,
     isLoading: enabled && query.isLoading,
     isFetchingNextPage: query.isFetchingNextPage,
+    isPlaceholderData: query.isPlaceholderData,
     hasNextPage: query.hasNextPage,
     isError: query.isError,
     isFetchNextPageError: query.isFetchNextPageError,

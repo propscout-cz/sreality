@@ -351,7 +351,8 @@ Database:
   Connection string → Session pooler, port 5432; same host/user as `SUPABASE_DB_URL`, just
   port 5432 not 6543). **Optional**; used only by the scraper's hot detail-write loop
   (`connect_session()`, i.e. the Phase-2 detail-drain's batched writes) so its repeated SQL
-  gets prepared statements. Unset → falls back to `SUPABASE_DB_URL`. Set it on the realtime
+  gets prepared statements. Unset → falls back to `SUPABASE_DB_URL`; the location loaders
+  (`loader_db.open_loader_connection`, so `ruian_buildings` on the job runner) REFUSE that fallback. Set it on the realtime
   worker's Railway service, the drain's only runtime since W0 (#2010), and on the API only if it
   ever calls `connect_session()`.
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (`sb_secret_...`, **not** a JWT): scrapers

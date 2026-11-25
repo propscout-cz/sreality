@@ -18,6 +18,7 @@
  * Every advert address ever handed out (`/listing/{source}/{native}`,
  * `/listing/{sreality_id}`, `/listing?property=`) is an alias: `AdvertRedirect`
  * resolves the advert's property and lands here with its row open. */
+import { RegisterBadge, RegisterMark } from '@/components/register/RegisterMark';
 import { Suspense, useMemo } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
@@ -350,6 +351,8 @@ export default function PropertyDetail() {
         <div className="min-w-0 space-y-5">
           <PropertyIdentity
             listing={property}
+            registerMark={(fact) => <RegisterMark propertyId={propertyId} fact={fact} />}
+            badge={<RegisterBadge propertyId={propertyId} />}
             priceNote={priceNote}
             statusHref={statusHref}
             addressAction={isAdmin ? (

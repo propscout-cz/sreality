@@ -31,12 +31,13 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
 from scraper.browser_fetch import BrowserFetcher, BrowserResponse, classify_status
 from scraper.portal import CZ_KRAJ_SLUGS
-from scraper.portal_base import BasePortalClient, ListingGoneError
+from scraper.portal_base import BasePortalClient, gone_phrases, stated_closed
 
 LOG = logging.getLogger(__name__)
 
@@ -227,6 +228,13 @@ def detail_url(path_or_url: str) -> str:
 
 class CeskerealityClient(BasePortalClient):
     ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    # Removed: a redirect off its .html page; sold/let: its OWN intro badges (not the slider's below).
+    DETAIL_URL = re.compile(r"\.html")
+    GONE_PAGE = (
+        gone_phrases(*_GONE_MARKERS),
+        stated_closed(r'<div class="s-estate-detail-intro__badges">(?:(?!</ul>)[\s\S]){0,2000}?'
+                      r'<span class="badge__title">'),
+    )
     # Route through the residential proxy (SCRAPER_PROXY_URL) with the shared
     # browser UA, so no USER_AGENT override.
     USE_PROXY = True
@@ -332,15 +340,4 @@ class CeskerealityClient(BasePortalClient):
         return self.fetch_search(index_url(sale_type, category, page))
 
     def fetch_detail(self, path_or_url: str) -> tuple[str, int]:
-        url = detail_url(path_or_url)
-        response = self._request(url)
-        # A removed listing redirects off its .html detail page (to the category
-        # results); after requests follows it the status is 200 but the URL is
-        # no longer a listing page.
-        final_url = getattr(response, "url", url) or url
-        if ".html" not in final_url:
-            raise ListingGoneError(url, response.status_code)
-        text = response.text
-        if any(marker in text.lower() for marker in _GONE_MARKERS):
-            raise ListingGoneError(url, response.status_code)
-        return text, response.status_code
+        return self._fetch_detail_page(detail_url(path_or_url))

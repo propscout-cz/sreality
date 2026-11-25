@@ -258,7 +258,7 @@ def test_the_runner_reads_the_workers_secrets_by_reference() -> None:
     declared = re.findall(r"(\w+): ", env.group(1))
     assert len(declared) == len(set(declared))
     plain = {"EXTRAS", "HF_HUB_OFFLINE"}
-    assert set(declared) == plain | {"SUPABASE_DB_URL", *image_storage.R2_ENV_VARS}
+    assert set(declared) == plain | {"SUPABASE_DB_URL", "SUPABASE_DB_SESSION_URL", *image_storage.R2_ENV_VARS}
     worker_kept = re.search(r"\bkept\((.*?)\)", iac_entry("worker"), re.S)
     assert worker_kept, "the worker keeps its secrets"
     kept_names = set(re.findall(r'"(\w+)"', worker_kept.group(1)))
@@ -266,6 +266,16 @@ def test_the_runner_reads_the_workers_secrets_by_reference() -> None:
         assert re.search(rf"\b{name}: sreality\.env\.{name}\b", env.group(1)), f"{name} is not the worker's"
         assert name in kept_names, f"the worker keeps no {name}"
     assert not re.search(r"preserve\(|kept\(|ctx\.shared", runner)
+
+
+def test_a_location_load_on_the_runner_has_its_session_mode_url() -> None:
+    """#2604: `loader_db.open_loader_connection` refuses the transaction pooler, so a location-heavy job on the
+    runner aborts at its first line unless the runner names a session-mode URL."""
+    from scraper import jobs
+
+    loads = [j.name for j in jobs.runner_jobs() if j.resource == jobs.LOCATION_HEAVY]
+    assert loads, "the census proves nothing without a location load on the runner"
+    assert "SUPABASE_DB_SESSION_URL: sreality.env.SUPABASE_DB_SESSION_URL" in iac_entry("jobRunner"), loads
 
 
 def test_the_api_and_the_worker_pass_their_extras_to_the_root_dockerfile_build() -> None:

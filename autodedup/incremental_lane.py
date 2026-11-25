@@ -639,6 +639,42 @@ def _exec_many(conn: Any, sql: str, params: Sequence[Mapping[str, Any]]) -> None
         cur.executemany(sql, [dict(row) for row in params])
 
 
+_SQL_NAMES: dict[str, str] = {}
+SQL_TOP: int = 12
+
+
+def _sql_name(sql: str) -> str:
+    """The constant a statement is spelled under, for the pass's readout."""
+    if not _SQL_NAMES:
+        from autodedup import export_sql, incremental_sql
+        for module in (export_sql, incremental_sql):
+            for name, value in vars(module).items():
+                if name.isupper() and isinstance(value, str):
+                    _SQL_NAMES.setdefault(value, name)
+    return _SQL_NAMES.get(sql) or " ".join(sql.split())[:40]
+
+
+def _timed(book: dict[str, list[float]], sql: str, started: float, rows: int) -> None:
+    entry = book.setdefault(_sql_name(sql), [0, 0.0, 0])
+    entry[0] += 1
+    entry[1] += time.perf_counter() - started
+    entry[2] += rows
+
+
+def top_sql(*books: Mapping[str, Sequence[float]]) -> dict[str, list[float]]:
+    """The pass's slowest statements: name -> [calls, seconds, rows], seconds first."""
+    merged: dict[str, list[float]] = {}
+    for book in books:
+        for name, (calls, seconds, rows) in book.items():
+            entry = merged.setdefault(name, [0, 0.0, 0])
+            entry[0] += calls
+            entry[1] += seconds
+            entry[2] += rows
+    ranked = sorted(merged.items(), key=lambda kv: -kv[1][1])[:SQL_TOP]
+    return {name: [int(calls), round(seconds, 2), int(rows)] for name, (calls, seconds, rows)
+            in ranked}
+
+
 def _epoch(value: Any) -> float | None:
     if value is None:
         return None
@@ -686,6 +722,7 @@ class SqlStore:
         self.pairs_retained = 0
         self.pairs_evicted = 0
         self.statements = 0
+        self.sql: dict[str, list[float]] = {}
         self._pending: dict[int, tuple[FpRow, list[tuple[str, str]]]] = {}
         self._lookups: dict[tuple[str, str], list[int]] = {}
         self._fp: dict[int, FpRow | None] = {}
@@ -699,17 +736,24 @@ class SqlStore:
     # ------------------------------------------------------------------ plumbing
     def _query(self, sql: str, params: Mapping[str, Any] | None = None) -> list[tuple]:
         self.statements += 1
-        return _rows(self.conn, sql, params)
+        started = time.perf_counter()
+        rows = _rows(self.conn, sql, params)
+        _timed(self.sql, sql, started, len(rows))
+        return rows
 
     def _run(self, sql: str, params: Mapping[str, Any] | None = None) -> None:
         self.statements += 1
+        started = time.perf_counter()
         _exec(self.conn, sql, params)
+        _timed(self.sql, sql, started, 0)
 
     def _run_many(self, sql: str, params: Sequence[Mapping[str, Any]]) -> None:
         if not params:
             return
         self.statements += 1
+        started = time.perf_counter()
         _exec_many(self.conn, sql, params)
+        _timed(self.sql, sql, started, len(params))
 
     def _barrier(self) -> None:
         """Make the pass's buffered fingerprint writes visible before anything reads them."""
@@ -1239,6 +1283,7 @@ class SqlFacts:
         self.population = population
         self.reads = 0
         self.statements = 0
+        self.sql: dict[str, list[float]] = {}
         # The population readout, for the pass summary: how many phash-bearing images this pass
         # scored with a population the frozen table could not give it.
         self.images_with_phash = 0
@@ -1247,9 +1292,11 @@ class SqlFacts:
 
     def _dicts(self, sql: str, params: Mapping[str, Any]) -> list[dict[str, Any]]:
         self.statements += 1
+        started = time.perf_counter()
         with self.conn.cursor() as cur:
             cur.execute(sql, dict(params))
             rows = list(cur.fetchall())
+            _timed(self.sql, sql, started, len(rows))
             if rows and isinstance(rows[0], dict):
                 return [dict(row) for row in rows]
             names = [column[0] for column in cur.description]
@@ -3844,6 +3891,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
             summary["population"]["recut_due"] = unfit is None
         summary["fact_reads"] = facts.reads
         summary["statements"] = store.statements + facts.statements + work.statements
+        # Where the pass's database seconds went: its slowest statements by name.
+        summary["sql"] = top_sql(store.sql, facts.sql)
         summary["settings"] = settings.to_dict()
         summary["model_version"] = model.version
         summary["store_rows"] = int(

@@ -123,17 +123,17 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
    DESC, id DESC`). Payload-free writes never snapshot (derived/enrichment/link/lifecycle columns; `scripts/reparse.py` heals of
    a stored page); each outside `scraper/db.py`'s lifecycle writers is ledgered in `tests/scraper/test_listing_write_census.py`.
 3. **Never delete; delist via `is_active=false`.** History is sacred. **Since 2026-09-07 index absence NOMINATES,
-   the page DECIDES** (`portal_runner._queue_presence_checks`); **since 2026-09-08 the gate is STRUCTURAL, not
+   the page DECIDES** (`portal_runner._queue_presence_checks`; a sold/let card is no sighting); **since 2026-09-08 the gate is STRUCTURAL, not
    numeric** — a walk that REACHED THE PORTAL'S END (`scraper.portal.walk_reached_end`: every unit walked, each page
    loop out on a portal terminator, no stop of OURS — deadline / page cap / `--limit` / slice subset / a loop-ending
    error (one refused page per place is evidence) / uncorroborated empty page) queues every active row it did not see into `listing_detail_queue` at
    `QUEUE_PRIORITY_VERIFY` (last, 20% reserve); the drain fetches the page: a POSITIVE gone signal (404/410,
-   redirect off the listing, the portal's "no longer active" text → `ListingGoneError`) is RECORDED in
-   `detail_queue_completions` and **since 2026-10-09 flips that one listing only when the ledger already holds an
+   redirect off the listing, a "no longer active" text, its OWN slot reading sold/let → `ListingGoneError`) is RECORDED in
+   `detail_queue_completions` and **since 2026-10-09 flips that one listing only when the ledger holds an
    earlier gone verdict ≥ `delist_policy.GONE_DWELL` (12 h) old with no sighting since** (`db.gone_evidence`;
-   portals blink — sreality took 35–70% of its "gone" ads back within hours), a live page refreshes it, an error
-   waits. `walk_coverage` is a logged `COVERAGE` warning, NEVER a gate. No staleness rail, no absence sweep, no
-   `supports_complete_walk` gate (an `indexless` portal — `web` — nominates live ads via the shared orphan recheck). `delist_flip_cap` (10%, floor 2k) THROTTLES nominations per walk (rest deferred;
+   portals blink: sreality took back 35–70% within hours), a live page refreshes it, an error
+   waits. `walk_coverage` is a logged warning, NEVER a gate. No staleness rail/absence sweep/
+   `supports_complete_walk` gate (an `indexless` portal — `web` — nominates live ads via the orphan recheck). `delist_flip_cap` (10%, floor 2k) THROTTLES nominations per walk (rest deferred;
    `.overrides` lift it). Budget + gone-rate breaker + effective dwell `max(GONE_DWELL, RECHECK_THROTTLE)` = 24 h:
    `scraper/delist_policy.py`; every flip goes through `db.mark_listing_inactive` (guarded, stamps `inactive_at` once, dirties the property).
 4. **`last_seen_at` is driven by index sightings + successful detail fetches only; failed fetches never

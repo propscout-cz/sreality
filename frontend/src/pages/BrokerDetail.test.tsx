@@ -4,11 +4,11 @@
  * "Makléř nenalezen.". Now the dossier answers, so the page must tell apart
  * (1) a masked contact from an absent one, (2) a failed dossier read from an
  * unknown broker, and (3) a failed inventory read from a broker with no
- * listings — the last one contradicting the stats strip rendered right above it.
+ * properties — the last one contradicting the stats strip rendered right above it.
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 
@@ -18,7 +18,7 @@ import * as brokers from '@/lib/brokers';
 vi.mock('@/lib/brokers', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/brokers')>()),
   fetchBrokerDossier: vi.fn(),
-  fetchBrokerListings: vi.fn(),
+  fetchBrokerProperties: vi.fn(),
 }));
 
 /* The explore-broker modal is provider-mounted in Shell (like the area modal);
@@ -29,28 +29,31 @@ vi.mock('@/components/ExploreBrokerModal', () => ({
   useExploreBrokerModal: () => ({ open: openExploreBroker, close: vi.fn(), isOpen: false }),
 }));
 
-const listing = (l: Partial<brokers.BrokerListing>): brokers.BrokerListing =>
-  ({
-    broker_id: 7,
-    sreality_id: null,
-    listing_id: 1,
-    source: 'sreality',
-    source_url: '',
-    locality: 'Praha',
-    district: null,
-    category_main: 'byt',
-    category_type: 'prodej',
-    disposition: '2+kk',
-    subtype: null,
-    area_m2: 50,
-    price_czk: 5_000_000,
-    is_active: true,
-    last_seen_at: new Date().toISOString(),
-    property_id: 11,
-    price_change_pct: null,
-    price_change_count: 0,
-    ...l,
-  }) as brokers.BrokerListing;
+const property = (p: Partial<brokers.BrokerProperty>): brokers.BrokerProperty => ({
+  property_id: 11,
+  display_label: 'Praha',
+  category_main: 'byt',
+  category_type: 'prodej',
+  disposition: '2+kk',
+  subtype: null,
+  area_m2: 50,
+  is_active: true,
+  all_sources: ['sreality'],
+  active_sources: ['sreality'],
+  price_czk: 5_000_000,
+  price_change_pct: null,
+  price_change_count: 0,
+  last_seen_at: new Date().toISOString(),
+  ...p,
+});
+
+const page = (rows: brokers.BrokerProperty[], nextCursor?: string) => ({ rows, nextCursor });
+
+/* The dossier's category rows: what the inventory counts and what Typy lists. */
+const CATEGORIES: brokers.BrokerCategoryShare[] = [
+  { category_main: 'byt', category_type: 'prodej', properties: 30, active_properties: 20 },
+  { category_main: 'dum', category_type: 'pronajem', properties: 12, active_properties: 12 },
+];
 
 const dossier = (broker: Partial<brokers.BrokerPublic>): brokers.BrokerDossier => ({
   broker: {
@@ -67,9 +70,9 @@ const dossier = (broker: Partial<brokers.BrokerPublic>): brokers.BrokerDossier =
   region_shares: [],
   categories: [],
   price_change: {
-    all: { priced: 50, repriced: 10, cut: 8, raised: 2, repriced_pct: 20, median_pct: -7.3 },
-    active: { priced: 35, repriced: 4, cut: 4, raised: 0, repriced_pct: 11.43, median_pct: null },
-    inactive: { priced: 0, repriced: 0, cut: 0, raised: 0, repriced_pct: null, median_pct: null },
+    all: { priced: 50, repriced: 10, repriced_pct: 20, median_pct: -7.3 },
+    active: { priced: 35, repriced: 4, repriced_pct: 11.43, median_pct: null },
+    inactive: { priced: 0, repriced: 0, repriced_pct: null, median_pct: null },
   },
   pii_masked: true,
 });
@@ -89,7 +92,7 @@ function renderPage() {
 
 beforeEach(() => {
   vi.mocked(brokers.fetchBrokerDossier).mockResolvedValue(dossier({}));
-  vi.mocked(brokers.fetchBrokerListings).mockResolvedValue([]);
+  vi.mocked(brokers.fetchBrokerProperties).mockReset().mockResolvedValue(page([]));
 });
 
 describe('<BrokerDetail> contact card', () => {
@@ -140,56 +143,68 @@ describe('<BrokerDetail> honest error states', () => {
   /* The dossier succeeds independently now, so an inventory failure rendered as
      "Žádné inzeráty." would sit directly under a stats strip asserting 35/50. */
   it('does not report a failed inventory read as an empty inventory', async () => {
-    vi.mocked(brokers.fetchBrokerListings).mockRejectedValue(new Error('timeout'));
+    vi.mocked(brokers.fetchBrokerProperties).mockRejectedValue(new Error('timeout'));
     renderPage();
     expect(
-      await screen.findByText(/Inzeráty se nepodařilo načíst: timeout/),
+      await screen.findByText(/Nemovitosti se nepodařilo načíst: timeout/),
     ).toBeInTheDocument();
-    expect(screen.queryByText('Žádné inzeráty.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Žádné nemovitosti.')).not.toBeInTheDocument();
   });
 
   it('reports a genuinely empty inventory as empty', async () => {
     renderPage();
-    expect(await screen.findByText('Žádné inzeráty.')).toBeInTheDocument();
+    expect(await screen.findByText('Žádné nemovitosti.')).toBeInTheDocument();
   });
 });
 
-/* broker_listings_public declares BOTH sreality_id and property_id nullable and
- * carries no source_id_native, so a row here can genuinely have no in-app
- * destination. The cell used to pass `property_id ?? 0` and render a link to
- * `/listing?property=0`, which 404s. A row with a property opens the property
- * page on the advert's own row. */
-describe('<BrokerDetail> locality cell never fabricates a listing link', () => {
-  it('renders inert text when the row has no resolvable destination', async () => {
-    vi.mocked(brokers.fetchBrokerListings).mockResolvedValue([
-      listing({ listing_id: 1, sreality_id: null, property_id: null, display_label: 'Bez cile' }),
-    ]);
-    const { container } = renderPage();
-
-    expect(await screen.findByText('Bez cile')).toBeInTheDocument();
-    expect(container.querySelector('a[href*="property=0"]')).toBeNull();
-    expect(screen.queryByRole('link', { name: /Bez cile/ })).toBeNull();
-  });
-
-  it('still links a row that carries a property id', async () => {
-    vi.mocked(brokers.fetchBrokerListings).mockResolvedValue([
-      listing({ listing_id: 2, sreality_id: null, property_id: 42, display_label: 'S cilem' }),
-    ]);
+/* One row per property of the broker's book (#2654): however many ads the broker
+ * runs on it, the row opens the property page and names the broker's portals. */
+describe('<BrokerDetail> inventory rows are properties', () => {
+  it('links each row to its property page, in a new tab', async () => {
+    vi.mocked(brokers.fetchBrokerProperties).mockResolvedValue(page([
+      property({ property_id: 42, display_label: 'S cilem' }),
+    ]));
     renderPage();
 
     const link = await screen.findByRole('link', { name: /S cilem/ });
-    expect(link).toHaveAttribute('href', '/property/42?advert=2');
+    expect(link).toHaveAttribute('href', '/property/42');
     expect(link).toHaveAttribute('target', '_blank');
   });
 
-  it('still links a row that carries a sreality id', async () => {
-    vi.mocked(brokers.fetchBrokerListings).mockResolvedValue([
-      listing({ listing_id: 3, sreality_id: -284913, property_id: null, display_label: 'Legacy' }),
-    ]);
+  it('names the portals the broker advertises the property on, an ended one receding', async () => {
+    vi.mocked(brokers.fetchBrokerProperties).mockResolvedValue(page([
+      property({ all_sources: ['idnes', 'sreality'], active_sources: ['sreality'] }),
+    ]));
     renderPage();
+    const table = await screen.findByRole('table');
+    expect(within(table).getAllByRole('row')).toHaveLength(2);
+    const cell = within(table).getAllByRole('row')[1].querySelectorAll('td')[5];
+    expect(cell).toHaveTextContent('iDNES · Sreality');
+    expect(cell.querySelector('a')).toBeNull();
+    expect(within(cell).getByText(/iDNES/)).toHaveAttribute('title', 'inzerát ukončen');
+    expect(within(cell).getByText(/Sreality/)).not.toHaveAttribute('title');
+  });
 
-    const link = await screen.findByRole('link', { name: /Legacy/ });
-    expect(link).toHaveAttribute('href', '/listing/-284913');
+  it('marks a property the broker no longer advertises', async () => {
+    vi.mocked(brokers.fetchBrokerProperties).mockResolvedValue(page([
+      property({ property_id: 1, display_label: 'Bezi' }),
+      property({ property_id: 2, display_label: 'Skoncila', is_active: false, active_sources: [] }),
+    ]));
+    renderPage();
+    expect(within(await screen.findByRole('link', { name: /Skoncila/ })).getByTitle('neaktivní')).toBeInTheDocument();
+    expect(within(screen.getByRole('link', { name: /Bezi/ })).queryByTitle('neaktivní')).toBeNull();
+  });
+
+  it('pages the book on a click, the next page read from the cursor', async () => {
+    vi.mocked(brokers.fetchBrokerProperties)
+      .mockResolvedValueOnce(page(
+        Array.from({ length: brokers.BROKER_PROPERTIES_PAGE }, (_, i) => property({ property_id: i + 1 })), 'CUR'))
+      .mockResolvedValueOnce(page([property({ property_id: 1000 })]));
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Načíst další' }));
+    await waitFor(() => expect(screen.getAllByRole('row')).toHaveLength(brokers.BROKER_PROPERTIES_PAGE + 2));
+    expect(vi.mocked(brokers.fetchBrokerProperties).mock.calls.map((c) => c[2])).toEqual([null, 'CUR']);
+    expect(screen.queryByRole('button', { name: 'Načíst další' })).toBeNull();
   });
 });
 
@@ -200,10 +215,7 @@ describe('<BrokerDetail> explore this broker', () => {
   beforeEach(() => openExploreBroker.mockClear());
 
   it('opens the modal scoped to this broker with the current Typ/Nabídka selection', async () => {
-    vi.mocked(brokers.fetchBrokerListings).mockResolvedValue([
-      listing({ listing_id: 1, category_main: 'byt', category_type: 'prodej' }),
-      listing({ listing_id: 2, category_main: 'dum', category_type: 'pronajem' }),
-    ]);
+    vi.mocked(brokers.fetchBrokerDossier).mockResolvedValue({ ...dossier({}), categories: CATEGORIES });
     renderPage();
     const button = await screen.findByRole('button', { name: /Explore this broker's listings/ });
 
@@ -233,7 +245,8 @@ describe('<BrokerDetail> explore this broker', () => {
  * 2026-10-27, system.md § Option groups); Vše keeps its place, first. */
 describe('<BrokerDetail> inventory filters', () => {
   it('draws Typ and Nabídka as joined bars, Vše lit by default, the chosen segment filled copper', async () => {
-    vi.mocked(brokers.fetchBrokerListings).mockResolvedValue([listing({})]);
+    vi.mocked(brokers.fetchBrokerDossier).mockResolvedValue({ ...dossier({}), categories: CATEGORIES });
+    vi.mocked(brokers.fetchBrokerProperties).mockResolvedValue(page([property({})]));
     renderPage();
     const typ = await screen.findByRole('group', { name: 'Typ' });
     const offer = screen.getByRole('group', { name: 'Nabídka' });
@@ -249,6 +262,35 @@ describe('<BrokerDetail> inventory filters', () => {
     expect(within(typ).getByRole('button', { name: 'Domy' })).toHaveAttribute('aria-pressed', 'true');
     expect(within(typ).getByRole('button', { name: 'Vše' })).toHaveAttribute('aria-pressed', 'false');
   });
+
+  it('narrows the read itself, and counts the selection from the dossier', async () => {
+    vi.mocked(brokers.fetchBrokerDossier).mockResolvedValue({ ...dossier({}), categories: CATEGORIES });
+    vi.mocked(brokers.fetchBrokerProperties).mockResolvedValue(page([property({})]));
+    renderPage();
+    const card = await screen.findByRole('region', { name: 'Inventář' });
+    const count = () => within(card).getByRole('heading', { level: 2 }).nextElementSibling?.textContent;
+    await within(card).findByRole('table');
+    expect(count()).toBe('42');
+    fireEvent.click(within(card).getByRole('button', { name: 'Domy' }));
+    expect(count()).toBe('12 z 42');
+    await waitFor(() => expect(vi.mocked(brokers.fetchBrokerProperties).mock.lastCall?.[1])
+      .toEqual({ categoryMain: 'dum', categoryType: null }));
+    fireEvent.click(within(card).getByRole('button', { name: 'Prodej' }));
+    expect(count()).toBe('0 z 42');
+  });
+
+  it('recedes the previous selection while the new one loads', async () => {
+    vi.mocked(brokers.fetchBrokerDossier).mockResolvedValue({ ...dossier({}), categories: CATEGORIES });
+    vi.mocked(brokers.fetchBrokerProperties)
+      .mockResolvedValueOnce(page([property({})]))
+      .mockReturnValueOnce(new Promise(() => {}));
+    renderPage();
+    const box = (await screen.findByRole('table')).parentElement!;
+    expect(box).toHaveAttribute('aria-busy', 'false');
+    fireEvent.click(screen.getByRole('button', { name: 'Domy' }));
+    await waitFor(() => expect(box).toHaveAttribute('aria-busy', 'true'));
+    expect(box).toHaveClass('opacity-50');
+  });
 });
 
 /* Section cards (operator ruling 2026-10-28, system.md § Section cards): the
@@ -260,7 +302,7 @@ describe('<BrokerDetail> section cards', () => {
   const countOf = (region: HTMLElement) =>
     within(region).getByRole('heading', { level: 2 }).nextElementSibling?.textContent;
 
-  it('draws Kde inzeruje, Kanceláře and Inventář as cards with their counts', async () => {
+  it('draws Kde inzeruje, Typy, Kanceláře and Inventář as cards with their counts', async () => {
     vi.mocked(brokers.fetchBrokerDossier).mockResolvedValue({
       ...dossier({}),
       region_shares: [
@@ -270,18 +312,24 @@ describe('<BrokerDetail> section cards', () => {
       memberships: [
         { firm_id: 5, firm_name: 'RE/MAX', firm_domain: null, is_current: true },
       ] as unknown as brokers.BrokerMembership[],
+      categories: CATEGORIES,
     });
-    vi.mocked(brokers.fetchBrokerListings).mockResolvedValue([listing({ listing_id: 1 }), listing({ listing_id: 2 })]);
+    vi.mocked(brokers.fetchBrokerProperties).mockResolvedValue(page([property({ property_id: 1 }), property({ property_id: 2 })]));
     renderPage();
     await screen.findByRole('table');
-    for (const name of ['Kde inzeruje', 'Kanceláře', 'Inventář']) {
+    for (const name of ['Kde inzeruje', 'Typy', 'Kanceláře', 'Inventář']) {
       const r = card(name);
       expect(r.tagName).toBe('SECTION');
       expect(r).toHaveClass('border', 'bg-[var(--color-paper-2)]', 'rounded-[var(--radius-md)]');
     }
     expect(countOf(card('Kde inzeruje'))).toBe('2');
     expect(countOf(card('Kanceláře'))).toBe('1');
-    expect(countOf(card('Inventář'))).toBe('2');
+    /* The inventory's count is the book's (the dossier's), not the page read. */
+    expect(countOf(card('Inventář'))).toBe('42');
+    /* Typy: active / total properties per type and deal, the total only when it differs. */
+    expect(countOf(card('Typy'))).toBe('2');
+    expect(within(card('Typy')).getAllByRole('listitem').map((li) => li.textContent))
+      .toEqual(['Byty · prodej20 / 30', 'Domy · pronájem12']);
     // Ruling 4: property grain, no ad counts.
     expect(screen.queryByText('Inzeráty')).toBeNull();
     /* No box in a box: the lists sit on the card itself; the table keeps its own. */
@@ -293,30 +341,21 @@ describe('<BrokerDetail> section cards', () => {
       .toHaveClass('uppercase', 'tracking-[0.08em]', 'font-semibold');
   });
 
-  it('marks a full inventory page as a cap, not the whole book', async () => {
-    vi.mocked(brokers.fetchBrokerListings).mockResolvedValue(
-      Array.from({ length: brokers.BROKER_LISTINGS_LIMIT }, (_, i) => listing({ listing_id: i + 1 })),
-    );
-    renderPage();
-    await screen.findByRole('table');
-    expect(countOf(card('Inventář'))).toBe('500+');
-    fireEvent.click(within(card('Inventář')).getByRole('button', { name: 'Domy' }));
-    expect(countOf(card('Inventář'))).toBe('0 z 500+');
-  });
-
   it('keeps an empty section as its card with count 0 and one muted line', async () => {
     renderPage();
-    expect(await screen.findByText('Žádné inzeráty.')).toBeInTheDocument();
+    expect(await screen.findByText('Žádné nemovitosti.')).toBeInTheDocument();
     expect(countOf(card('Kde inzeruje'))).toBe('0');
+    expect(countOf(card('Typy'))).toBe('0');
+    expect(within(card('Typy')).getByText('Žádná nemovitost.')).toBeInTheDocument();
     expect(within(card('Kde inzeruje')).getByText('Bez aktivního regionu.')).toBeInTheDocument();
     expect(countOf(card('Kanceláře'))).toBe('0');
     expect(countOf(card('Inventář'))).toBe('0');
-    expect(within(card('Inventář')).getByText('Žádné inzeráty.').closest('.border')).toBe(card('Inventář'));
+    expect(within(card('Inventář')).getByText('Žádné nemovitosti.').closest('.border')).toBe(card('Inventář'));
   });
 });
 
-/* Migration 768: how much the broker changes prices. The tile reads the book's
- * figures under one status at a time; an inventory row carries its own ad's change. */
+/* Migrations 768, 770: how much the broker changes prices. The tile reads the book's
+ * figures under one status at a time; an inventory row carries the book's own pair. */
 describe('<BrokerDetail> price changes', () => {
   it('shows the share repriced and the median, and switches the status slice', async () => {
     renderPage();
@@ -325,36 +364,29 @@ describe('<BrokerDetail> price changes', () => {
     expect(within(group).getByRole('button', { name: 'Vše' })).toHaveAttribute('aria-pressed', 'true');
     expect(tile).toHaveTextContent(/20\s%/);
     expect(tile).toHaveTextContent(/medián -7,3\s%/);
-    expect(tile).toHaveTextContent('přeceněno 10 z 50 · 8 zlevněno, 2 zdraženo');
+    expect(tile).toHaveTextContent('přeceněno 10 z 50');
 
     fireEvent.click(within(group).getByRole('button', { name: 'Aktivní' }));
-    expect(tile).toHaveTextContent('přeceněno 4 z 35 · 4 zlevněno, 0 zdraženo');
+    expect(tile).toHaveTextContent('přeceněno 4 z 35');
     expect(tile).not.toHaveTextContent('medián');
 
     fireEvent.click(within(group).getByRole('button', { name: 'Neaktivní' }));
     expect(tile).toHaveTextContent('žádná cena k porovnání');
   });
 
-  it('draws no price tile while the dossier carries no figures', async () => {
-    vi.mocked(brokers.fetchBrokerDossier).mockResolvedValue({ ...dossier({}), price_change: undefined });
-    renderPage();
-    expect(await screen.findByText('Regiony')).toBeInTheDocument();
-    expect(screen.queryByRole('group', { name: 'Změna ceny' })).not.toBeInTheDocument();
-  });
-
-  it('marks each ad with its own price change, and leaves an unpriced one blank', async () => {
-    vi.mocked(brokers.fetchBrokerListings).mockResolvedValue([
-      listing({ listing_id: 1, price_change_pct: -4.2, price_change_count: 1 }),
-      listing({ listing_id: 2, price_change_pct: 0, price_change_count: 0 }),
-      listing({ listing_id: 3, price_czk: null, price_change_pct: null, price_change_count: 0 }),
-    ]);
+  it('marks each property with the change the broker made, and leaves an unchanged one blank', async () => {
+    vi.mocked(brokers.fetchBrokerProperties).mockResolvedValue(page([
+      property({ property_id: 1, price_change_pct: -4.2, price_change_count: 1 }),
+      property({ property_id: 2, price_change_pct: 0, price_change_count: 2 }),
+      property({ property_id: 3, price_change_pct: null, price_change_count: 0 }),
+    ]));
     renderPage();
     const table = await screen.findByRole('table');
     expect(within(table).getByRole('columnheader', { name: 'Změna ceny' })).toBeInTheDocument();
     const cells = within(table).getAllByRole('row').slice(1).map((r) => within(r).getAllByRole('cell')[4]);
     expect(cells[0].querySelector('span')).toHaveAttribute('title', expect.stringContaining('Pokles'));
     expect(cells[0]).toHaveTextContent(/4,2\s%/);
-    expect(cells[1].querySelector('span')).toHaveAttribute('title', 'Cena se od prvního záznamu nezměnila');
+    expect(cells[1]).toHaveTextContent(/0,0\s%/);
     expect(cells[2]).toBeEmptyDOMElement();
   });
 });
