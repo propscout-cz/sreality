@@ -144,14 +144,17 @@ def _migration_code() -> str:
     return re.sub(r"\s+", " ", body)
 
 
-def test_migration_677_adds_three_nullable_columns_without_a_rewrite() -> None:
+def test_migration_769_adds_nullable_columns_and_one_index_without_a_rewrite() -> None:
     code = _migration_code()
     assert re.findall(r"alter table (\S+)", code) == ["autodedup.rt_fp"]
     assert "add column if not exists source text," in code
     assert "add column if not exists area_basis text," in code
-    assert "add column if not exists block_key text;" in code
-    assert "default" not in code and "not null" not in code
-    for verb in ("drop ", "delete from", "truncate", "update ", "create "):
+    assert "add column if not exists block_key text," in code
+    assert "add column if not exists ref_codes text[];" in code
+    assert "default" not in code and "not null" not in code.replace("is not null", "")
+    assert re.findall(r"create (\w+)", code) == ["index"]
+    assert "using gin (ref_codes) where ref_codes is not null" in code
+    for verb in ("drop ", "delete from", "truncate", "update "):
         assert verb not in code, verb
     assert "set lock_timeout = '5s';" in code and "reset lock_timeout;" in code
 
@@ -164,3 +167,11 @@ def test_the_lane_writes_reads_and_checks_the_columns_it_adds() -> None:
         "f.dd, f.source, f.area_basis, f.block_key")
     assert "attname = 'area_basis'" in S.RT_STORE_PRESENT_SQL
     assert "attname = 'block_key'" in S.RT_STORE_PRESENT_SQL
+
+
+def test_two_realitymix_floor_rows_measure_one_thing_and_keep_the_veto() -> None:
+    """#2056 review: the exemption answers a BASIS difference; two rows of one portal on one
+    basis have none, so 100 against 87 m² is the gap it looks like."""
+    a = GuardRow(1, "komercni", "prodej", 100.0, None, None, "realitymix", "floor")
+    b = GuardRow(2, "komercni", "prodej", 87.0, None, None, "realitymix", "floor")
+    assert pair_veto(a, b, W34) == "area"

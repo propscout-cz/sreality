@@ -23,7 +23,16 @@ from autodedup.dataset import Image, Listing, Location
 from autodedup.decide import certificate_of
 from autodedup.features import ABSENT, FeatureContext, pair_features
 from autodedup.fingerprint import build_fingerprint
-from autodedup.incremental import Calibration, context_for, decision_digest
+from autodedup.incremental import (
+    Calibration,
+    FpRow,
+    carried_codes,
+    context_for,
+    crowded_codes,
+    decision_digest,
+    guard_row,
+)
+from autodedup.incremental_store import MemoryStore
 from autodedup.settings import Settings
 from autodedup.text_facts import MAX_CODE_POPULATION, structured_code
 
@@ -229,3 +238,67 @@ def test_settings_name_only_category_main_values() -> None:
                               ).ref_code_structured_categories == ("byt",)
     with pytest.raises(ValueError, match="ref_code_structured_categories"):
         Settings(ref_code_structured_categories=("flat",))
+
+
+# ------------------------------------------ what is no code at all (#2056 review, finding 1)
+
+
+@pytest.mark.parametrize("value", ["Novák", "SaleMaso", "IDNES-Beroun", "VK_VYS", "0012", "00003",
+                                   "IDNES-00035", "00075-1", "REALITYMIX-0179"])
+def test_a_name_or_a_zero_padded_short_number_is_no_code(value: str) -> None:
+    assert structured_code(value) is None
+    assert certificate(W34, ad(1, code=value), ad(2, code=value)) is None
+
+
+@pytest.mark.parametrize(("value", "code"), [("01607", "01607"), ("N00930", "N00930"),
+                                             ("IDNES-1166", "1166"), ("84015", "84015")])
+def test_four_significant_characters_with_a_digit_are_a_code(value: str, code: str) -> None:
+    assert structured_code(value) == code
+
+
+# ------------------------------- a code that became a crowd AFTER the cut (finding 2)
+
+
+def _lane_certificate(store: MemoryStore, calibration: Calibration, a: Listing, b: Listing,
+                      *others: Listing) -> str | None:
+    ads = {listing.id: listing for listing in (a, b, *others)}
+    fps = {i: build_fingerprint(listing, [], W34) for i, listing in ads.items()}
+    for i, listing in ads.items():
+        store.put_listing(i, FpRow(guard_row(fps[i]), "d", "cell", "g", True,
+                                   ref_codes=carried_codes(listing, W34)), [])
+    pair = {a.id: a, b.id: b}
+    ctx = context_for(calibration, W34, {i: fps[i] for i in pair}, pair,
+                      crowded_codes(store, W34, pair))
+    feats = pair_features(fps[a.id], fps[b.id], a, b, [], [], ctx, W34)
+    return certificate_of(feats, a, b, W34)
+
+
+def _cut(*ads_at_cut: Listing) -> Calibration:
+    ads = {listing.id: listing for listing in ads_at_cut}
+    fps = {i: build_fingerprint(listing, [], W34) for i, listing in ads.items()}
+    return Calibration.build(fps, ads, W34, GEN)
+
+
+def test_a_carrier_added_after_the_cut_certifies_while_the_code_stays_rare_and_pure() -> None:
+    first = ad(1, code="556677")
+    assert _lane_certificate(MemoryStore(), _cut(first), first, ad(2, code="IDNES-556677")) == "K-R"
+
+
+def test_a_code_that_became_a_crowd_after_the_cut_stops_certifying() -> None:
+    first = ad(1, code="556677")
+    crowd = [ad(i, code="556677") for i in range(3, 3 + MAX_CODE_POPULATION)]
+    assert _lane_certificate(MemoryStore(), _cut(first), first, ad(2, code="556677"),
+                             *crowd) is None
+
+
+def test_a_code_whose_later_carriers_disagree_on_the_unit_stops_certifying() -> None:
+    first = ad(1, code="556677")
+    assert _lane_certificate(MemoryStore(), _cut(first), first, ad(2, code="556677"),
+                             ad(3, code="556677", dispo="3+kk")) is None
+    assert _lane_certificate(MemoryStore(), _cut(first), first, ad(2, code="556677"),
+                             ad(3, code="556677", area=80.0)) is None
+
+
+def test_under_settings_that_read_no_column_no_code_is_stored_or_counted() -> None:
+    assert carried_codes(ad(1, code="556677"), W31) == ()
+    assert crowded_codes(MemoryStore(), W31, {1: ad(1, code="556677")}) == frozenset()

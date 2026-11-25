@@ -141,9 +141,11 @@ def identical_gallery(a: "Fingerprint", b: "Fingerprint", cfg: Settings) -> bool
 def area_basis_exempt(a: GuardSide, b: GuardSide, gap: float, cfg: Settings) -> bool:
     """Whether a side's portal prints its area as the total floor area (`area_basis='floor'`)
     and the gap is within that portal's `area_veto_basis_floor_exempt` cap."""
-    for side in (a, b):
+    for side, other in ((a, b), (b, a)):
         cap = cfg.area_veto_basis_floor_exempt.get(side.source or "")
-        if cap is not None and side.area_basis == FLOOR_AREA_BASIS and gap <= cap:
+        # Two rows of one portal on one basis measure the same thing: their gap is a gap.
+        if (cap is not None and side.area_basis == FLOOR_AREA_BASIS and gap <= cap
+                and (other.source, other.area_basis) != (side.source, side.area_basis)):
             return True
     return False
 

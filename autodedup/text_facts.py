@@ -104,8 +104,12 @@ _UNIT_PATTERNS: tuple[re.Pattern[str], ...] = (
 # notice `byty č. 1, 5, 9, 11` read as unit 1 against `byty č. 2, 6, 8, 10 a 11` as unit 2.
 # A disposition (`, 2+kk`, `, 1kk`), an area (`, 115 m2`) or a storey (`, 1. np`, `, 3np`) is
 # not a list.
+# What follows the number may still say it is no list: `, 2 + kk`, `, 3 pokoje`, `, 4 990 000 Kč`
+# and `a 2 sklepy` count something else and leave `byt č. 5` a designator.
 _UNIT_LIST_TAIL = re.compile(
-    r"(?:\s*,\s*|\s+a\s+|\s+i\s+)\d{1,4}(?![\d+.]|,\d|\s*(?:kk|np\b|m(?:2|\b)))")
+    r"(?:\s*,\s*|\s+a\s+|\s+i\s+)\d{1,4}"
+    r"(?![\d+.]|,\d|\s*\+|\s\d{3}\b|\s*(?:kk|np\b|m(?:2|\b)|kc\b|pokoj|sklep|garaz|parkov"
+    r"|balkon|lodzi|teras|koupel|mistnost|loznic))")
 
 # --- printed floor areas ------------------------------------------------------------------
 # A body text names the balcony, the plot and the cellar too; anything outside this window is
@@ -146,7 +150,9 @@ _HEADLINE = re.compile(r"(?:prodej|pronajem|drazba)\b[^.!?]{0,90}$")
 # A headline that prints no figure runs straight into the body, and the first figure is then
 # the BODY's own (`Prodej pozemku Babice Nabízíme k prodeji pozemek o výměře 452 m²`): the
 # body's opening words say the headline is over.
-_BODY_OPENS = re.compile(r"\b(?:nabizim\w*|nabidce|k\s+prodeji|k\s+pronajmu|prodam|pronajmu)\b")
+_BODY_OPENS = re.compile(
+    r"\b(?:nabizi\w*|nabidce|k\s+prodeji|k\s+pronajmu|prodam|pronajmu"
+    r"|o\s+(?:celkove\s+)?(?:vymere|plose|velikosti|rozloze))\b")
 _BUILDING_TOTAL = re.compile(
     r"(?:budov|objekt|areal|komplex)\w*\s+(?:o\s+)?(?:celkov\w+\s+)?"
     r"(?:velikosti|rozloze|ploche|plochou|vymere|vymera)\s+(?:cca\s+)?" + _AREA_NUMBER + r"\s*m2"
@@ -194,7 +200,13 @@ def structured_code(value: str | None) -> str | None:
         return None
     code = _STRUCTURED_ID.sub("", _STRUCTURED_PREFIX.sub("", value.strip()))
     code = re.sub(r"\s", "", code).upper()
-    return code if len(code) >= MIN_STRUCTURED_CODE_LEN else None
+    # A name (`SaleMaso`, `Beroun`) is no number at all, and `00003` is the broker's third
+    # order: its zeros are padding, and 6.7 % of such codes sit on two firms' adverts in one
+    # block against 0.6 % of the rest (nine blocks, 2026-11-25).
+    significant = re.sub(r"[^A-Z0-9]", "", code).lstrip("0")
+    if not any(ch.isdigit() for ch in code) or len(significant) < MIN_STRUCTURED_CODE_LEN:
+        return None
+    return code
 
 
 def mask_codes(text: str | None) -> str | None:

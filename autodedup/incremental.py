@@ -56,6 +56,7 @@ from autodedup.cluster import cluster_pairs, cluster_rows
 from autodedup.dataset import Image, Listing
 from autodedup.decide import Decision, decide_pair
 from autodedup.features import (
+    CODE_AREA_TOL,
     FEATURE_VERSION,
     FeatureContext,
     Feats,
@@ -77,7 +78,12 @@ from autodedup.model import LogisticModel
 from autodedup.indistinguishable import FEATURE_SLOTS
 from autodedup.settings import Settings
 from autodedup.store_score import storable
-from autodedup.text_facts import reference_codes, states_from_price, structured_code
+from autodedup.text_facts import (
+    MAX_CODE_POPULATION,
+    reference_codes,
+    states_from_price,
+    structured_code,
+)
 
 GENERATION: str = "rt"
 
@@ -281,6 +287,10 @@ class FpRow:
     # The `block_key` its postings were keyed under: the lane's drift sweep re-claims the row
     # when today's location gives another (A). None on a row written before migration 769.
     block_key: str | None = None
+    # Every order code the advert carries, body and column (finding 2 of the #2056 review): the
+    # lane counts a code's carriers off these rows when a pair is decided, so a code that became
+    # a crowd AFTER the cut stops certifying. Empty on a row written before migration 769.
+    ref_codes: tuple[str, ...] = ()
 
     @property
     def cell(self) -> tuple[str, str]:
@@ -532,11 +542,48 @@ class Keyer:
         return {probe for probe, token in self.index_keys(fp) if self.is_exploded(probe, token)}
 
 
+# A code's carriers are read up to this many: one past the cap is already a crowd.
+CODE_CARRIER_READ: int = MAX_CODE_POPULATION + 1
+
+
+def carried_codes(listing: Listing, settings: Settings) -> tuple[str, ...]:
+    """Every order code the advert carries as the cut's union reads it; empty when the settings
+    read no column (the row then hashes and stores what it did before)."""
+    if not settings.ref_code_structured_categories:
+        return ()
+    found = reference_codes(listing.description)
+    column = structured_code(listing.ad_reference)
+    return tuple(sorted(found | {column} if column else found))
+
+
+def crowded_codes(store: "Store", settings: Settings,
+                  listings: Mapping[int, Listing]) -> frozenset[str]:
+    """The codes of this pass's adverts that fail E60's two rails over their carriers TODAY.
+
+    The cut judges RARE and PURE once; a code with one carrier at the cut passes both, and every
+    advert that later prints it would inherit the certificate until the next re-cut. The stored
+    rows are the carriers as the lane last read them, this pass's own refreshes included."""
+    codes = sorted({code for listing in listings.values()
+                    for code in carried_codes(listing, settings)})
+    if not codes:
+        return frozenset()
+    crowded: set[str] = set()
+    for code, carriers in store.code_carriers(codes).items():
+        dispositions = {dispo for dispo, _ in carriers if dispo is not None}
+        areas = [area for _, area in carriers if area is not None and area > 0.0]
+        spread = (max(areas) - min(areas)) / max(areas) if areas else 0.0
+        if (len(carriers) > MAX_CODE_POPULATION or len(dispositions) > 1
+                or spread > CODE_AREA_TOL):
+            crowded.add(code)
+    return frozenset(crowded)
+
+
 def context_for(
     calibration: Calibration,
     settings: Settings,
     fps: Mapping[int, Fingerprint],
     listings: Mapping[int, Listing],
+    crowded: frozenset[str] = frozenset(),
 ) -> FeatureContext:
     """A `FeatureContext` over the WORKING SET whose cohort statistics are the frozen ones.
 
@@ -555,7 +602,7 @@ def context_for(
     certifying = set(calibration.certifying_codes)
     # A calibration cut before the column was read carries no structured verdicts, so the
     # column certifies nothing until the generation is re-cut under settings that read it.
-    structured = (set(calibration.certifying_structured_codes)
+    structured = (set(calibration.certifying_structured_codes) - crowded
                   if settings.ref_code_structured_categories else set())
     for listing_id, fp in fps.items():
         block = _block_of(fp)
@@ -613,6 +660,8 @@ class Store(Protocol):
     def drop_listing(self, listing_id: int) -> None: ...
     def keys_many(self, ids: Iterable[int]) -> dict[int, list[tuple[str, str]]]: ...
     def rows(self, ids: Iterable[int]) -> dict[int, FpRow]: ...
+    def code_carriers(self, codes: Sequence[str]
+                      ) -> dict[str, list[tuple[str | None, float | None]]]: ...
     def known(self, ids: Iterable[int]) -> set[int]: ...
     def pairs_touching(self, ids: Iterable[int]) -> dict[tuple[int, int], PairRow]: ...
     def pairs_within(self, members: Iterable[int]) -> list[PairRow]: ...
@@ -1432,7 +1481,10 @@ def run_pass(
         # pairs are re-decided, not only its ledgered rejects; a row with no digest yet (written
         # before migration 604) is stamped.
         if (old is not None and old.digest == digest and old_keys == new_keys
-                and listing_id not in redecide and (not old.dd or old.dd == dd)):
+                and listing_id not in redecide and (not old.dd or old.dd == dd)
+                # A stored block key that is not the one the digest was taken under (a row main
+                # refreshed after a move) is rewritten, or the drift sweep re-claims it for ever.
+                and (old.block_key is None or old.block_key == fp.block_key)):
             if old.dd != dd:
                 stamps[listing_id] = dd
             continue  # idempotence: an unchanged listing costs a digest, not a pass
@@ -1450,7 +1502,8 @@ def run_pass(
                   # horizon is measured from it, and a refresh that reset it would hold a
                   # merge for ever (E92). The store coalesces it on the way down too.
                   first_decided_at=old.first_decided_at if old is not None else None, dd=dd,
-                  block_key=fp.block_key),
+                  block_key=fp.block_key,
+                  ref_codes=carried_codes(listing, settings)),
             new_keys, old_keys,
         )
         view.bump_cell(listing)
@@ -1625,7 +1678,8 @@ def run_pass(
                 working.listings[listing_id], working.images.get(listing_id, ()), settings)
     if stamps:
         store.put_decision_digests(stamps)
-    ctx = context_for(calibration, settings, working.fps, working.listings)
+    ctx = context_for(calibration, settings, working.fps, working.listings,
+                      crowded_codes(store, settings, working.listings))
     census = _census(store, working.listings, working.images)
     # E93's two inputs, batched for the whole pass: what each endpoint's photographs ARE right
     # now (off the facts this pass read) and when this generation first decided it.

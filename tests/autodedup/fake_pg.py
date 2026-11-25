@@ -495,6 +495,7 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
             "ev_clip": p["ev_clip"], "ev_tags": p["ev_tags"],
             "ev_complete": p["ev_complete"], "dd": p["dd"],
             "source": p["source"], "area_basis": p["area_basis"], "block_key": p["block_key"],
+            "ref_codes": p["ref_codes"],
             "first_decided_at": held.get("first_decided_at") or db.now,
             "updated_at": db.now,
         }
@@ -539,6 +540,14 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
                         stamp.timestamp() if hasattr(stamp, "timestamp") else stamp,
                         row.get("dd"), row.get("source"), row.get("area_basis"),
                         row.get("block_key")))
+        return out
+    if sql == S.RT_CODE_CARRIERS_SQL:
+        out = []
+        for code in p["codes"]:
+            carriers = [row for (g, _), row in sorted(db.rt_fp.items())
+                        if g == gen and code in (row.get("ref_codes") or ())]
+            out.extend((code, row["disposition"], row["area_m2"])
+                       for row in carriers[:int(p["cap"])])
         return out
     if sql == S.RT_KNOWN_SQL:
         return [(int(i),) for i in p["ids"] if (gen, int(i)) in db.rt_fp]

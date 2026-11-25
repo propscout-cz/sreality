@@ -362,3 +362,18 @@ def test_a_fresh_seed_forgets_the_rescore_and_its_cursor(tmp_path: Path) -> None
     assert CURSOR_RESCORE in RESET_CURSORS
     reset_generation(conn, GEN)
     assert rescore_key(GEN) not in conn.settings and CURSOR_RESCORE not in conn.cursors
+
+
+def test_the_sweep_leaves_the_stale_re_claims_their_room() -> None:
+    """#2056 review, finding 4: the stale re-claims ride on the same pass, so the sweep's room
+    is what the limit leaves after them; the pass holds no more than its limit."""
+    db = _sweep_world()
+    db.settings[rescore_key(GEN)] = {"since": db.now.isoformat(), "settings": "w34"}
+    work = SqlWork(db, Scope((ScopeBlock("obec", 563510),)), GEN, straggler_window=0,
+                   revive_slice=0, drift_slice=0, enter_slice=0, evidence_slice=0,
+                   rescore=db.settings[rescore_key(GEN)])
+    work.stale_claims = [101, 102, 103]
+    items = work.claim(8)
+    assert [item.listing_id for item in items if item.feed == "rescore"] == LIVE_OWED[:5]
+    assert [item.listing_id for item in items if item.feed == "stale"] == [101, 102, 103]
+    assert len(items) == 8

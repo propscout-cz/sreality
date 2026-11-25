@@ -20,6 +20,7 @@ from autodedup.dataset import Dataset, Image, Listing
 from autodedup.features import FEATURE_VERSION
 from autodedup.hazard_context import ContextStamp, address_block_key, category_group
 from autodedup.incremental import (
+    CODE_CARRIER_READ,
     SET_CAP,
     CellRow,
     FpRow,
@@ -61,6 +62,7 @@ class MemoryStore:
         self.postings: dict[tuple[str, str], list[int]] = {}
         self.keys: dict[int, list[tuple[str, str]]] = {}
         self.fp: dict[int, FpRow] = {}
+        self.code_ids: dict[str, set[int]] = {}
         self.pairs: dict[tuple[int, int], PairRow] = {}
         self.clusters: dict[int, list[int]] = {}
         self.cluster_row: dict[int, dict[str, Any]] = {}
@@ -93,7 +95,11 @@ class MemoryStore:
                    is not None else row.first_decided_at)
         if stamped is None:
             stamped = self.now
+        for code in (held.ref_codes if held is not None else ()):
+            self.code_ids.get(code, set()).discard(listing_id)
         self.fp[listing_id] = replace(row, first_decided_at=stamped)
+        for code in row.ref_codes:
+            self.code_ids.setdefault(code, set()).add(listing_id)
         self.keys[listing_id] = list(keys)
         for key in keys:
             bucket = self.postings.setdefault(key, [])
@@ -119,7 +125,9 @@ class MemoryStore:
 
     def drop_listing(self, listing_id: int) -> None:
         self._drop_keys(listing_id)
-        self.fp.pop(listing_id, None)
+        held = self.fp.pop(listing_id, None)
+        for code in (held.ref_codes if held is not None else ()):
+            self.code_ids.get(code, set()).discard(listing_id)
         for pair in [p for p in self.pairs if listing_id in p]:
             self.delete_pairs([pair])
 
@@ -131,6 +139,16 @@ class MemoryStore:
 
     def known(self, ids: Iterable[int]) -> set[int]:
         return {i for i in ids if i in self.fp}
+
+    def code_carriers(self, codes: Sequence[str]
+                      ) -> dict[str, list[tuple[str | None, float | None]]]:
+        out: dict[str, list[tuple[str | None, float | None]]] = {}
+        for code in codes:
+            carriers = sorted(self.code_ids.get(code, ()))[:CODE_CARRIER_READ]
+            if carriers:
+                out[code] = [(self.fp[i].guard.disposition, self.fp[i].guard.area_m2)
+                             for i in carriers]
+        return out
 
     # ------------------------------------------------------------------------ pair grain
     def pairs_touching(self, ids: Iterable[int]) -> dict[tuple[int, int], PairRow]:

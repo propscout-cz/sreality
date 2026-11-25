@@ -81,6 +81,7 @@ from autodedup.harness import (
 )
 from autodedup.hazard_context import ContextStamp, address_block_key, category_group
 from autodedup.incremental import (
+    CODE_CARRIER_READ,
     EVIDENCE_HOLD_REASON,
     GENERATION,
     SEED_VERSION,
@@ -123,6 +124,7 @@ from autodedup.incremental_sql import (
     RT_CALIBRATION_SCORER_SQL,
     RT_CALIBRATION_WRITE_SQL,
     RT_CELL_READ_SQL,
+    RT_CODE_CARRIERS_SQL,
     RT_CELL_UPSERT_SQL,
     RT_CHANGED_LISTINGS_SQL,
     RT_CLOSURE_CONFLICT_APPEND_SQL,
@@ -795,6 +797,7 @@ class SqlStore:
                 "source": pending[listing_id][0].guard.source,
                 "area_basis": pending[listing_id][0].guard.area_basis,
                 "block_key": pending[listing_id][0].block_key,
+                "ref_codes": list(pending[listing_id][0].ref_codes) or None,
             }
             for listing_id in ids
         ])
@@ -853,6 +856,19 @@ class SqlStore:
         for row in self._query(RT_KEYS_MANY_SQL,
                                {"generation": self.generation, "ids": wanted}):
             out[int(row[0])].append((str(row[1]), str(row[2])))
+        return out
+
+    def code_carriers(self, codes: Sequence[str]
+                      ) -> dict[str, list[tuple[str | None, float | None]]]:
+        self._barrier()
+        out: dict[str, list[tuple[str | None, float | None]]] = {}
+        if not codes:
+            return out
+        for row in self._query(RT_CODE_CARRIERS_SQL, {
+                "generation": self.generation, "codes": list(codes),
+                "cap": CODE_CARRIER_READ}):
+            out.setdefault(str(row[0]), []).append(
+                (row[1], float(row[2]) if row[2] is not None else None))
         return out
 
     def rows(self, ids: Iterable[int]) -> dict[int, FpRow]:
@@ -1717,8 +1733,13 @@ class SqlWork:
         # pair it holds is decided again. It takes what the feeds above left of the limit, never
         # less than a fifth (a build's entrant feed leaves it the fifth), as the build itself does.
         if self.rescore is not None and self.rescore_slice:
+            # The stale re-claims below ride on the same pass: the sweep leaves them their room,
+            # so a pass holds what the feeds above took plus the sweep's room, never more.
+            stale = (sum(1 for i in self.stale_claims
+                         if i not in {item.listing_id for item in items if item.retire})
+                     if self.attempt == 0 else 0)
             items.extend(self._rescore_feed(self.rescore, cursors[CURSOR_RESCORE][0], limit,
-                                            share, items, scope))
+                                            share, items, scope, stale))
             cut = cut or bool(self.rescore_report and self.rescore_report["left"])
         # E960: the groups a merge waits on, re-claimed WHOLE in `reconcile._rank`'s order
         # (E974: Praha, the scope's towns, the rest; E972, E974: flats for sale, flats for rent,
@@ -1743,7 +1764,8 @@ class SqlWork:
         return items
 
     def _rescore_feed(self, rescore: Mapping[str, Any], after_id: int, limit: int, share: int,
-                      items: Sequence[WorkItem], scope: Mapping[str, Any]) -> list[WorkItem]:
+                      items: Sequence[WorkItem], scope: Mapping[str, Any],
+                      stale: int = 0) -> list[WorkItem]:
         """E991's one slice: the owed rows past the cursor, as many as the room allows; the
         cursor stops at the last one taken, and a short slice taken whole ends the cycle."""
         active = rescore.get("phase") != RESCORE_INACTIVE
@@ -1754,7 +1776,7 @@ class SqlWork:
                                        if rows else (int(after_id), 0, []))
         retiring = {item.listing_id for item in items if item.retire}
         owed = [int(i) for i in owed if int(i) not in retiring]
-        room = max(share, limit - len(items))
+        room = max(0, max(share, limit - len(items)) - stale)
         taken = owed[:room]
         self._rescore_ended = len(taken) == len(owed) and slice_size < self.rescore_slice
         self._pending[CURSOR_RESCORE] = (taken[-1] if len(taken) < len(owed)

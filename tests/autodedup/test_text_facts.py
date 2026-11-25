@@ -398,3 +398,27 @@ def test_the_same_words_opening_another_portals_body_keep_their_figure() -> None
     text = "Prodej bytu 1+kk o ploše 28,6 m2."
     assert stated_areas(text, 28.6, "sreality") == {28.6}
     assert stated_areas(text, 28.6) == {28.6}
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("byt č. 5, 2 + kk", {"5"}),
+    ("byt č. 12, 3 pokoje", {"12"}),
+    ("Byt č. 7, 4 990 000 Kč", {"7"}),
+    ("byt č. 3 a 2 sklepy", {"3"}),
+    ("byt č. 150, 2 koupelny", {"150"}),
+    ("Apartmán č. A311, 2+kk", {"A311"}),
+    ("byt s označením B36, 3 pokoje", {"B36"}),
+    ("číslo bytu: 14, 2 + kk", {"14"}),
+    ("byty č. 1, 5, 9, 11", set()),
+    ("2 nové byt č. 235 a 238 o dispozici 2+kk", set()),
+])
+def test_a_number_that_counts_something_else_does_not_make_a_unit_list(
+        text: str, expected: set[str]) -> None:
+    assert unit_designators(text) == expected
+
+
+def test_an_idnes_headline_that_runs_into_the_bodys_own_area_keeps_it() -> None:
+    text = "Prodej bytu 2+kk, Brno - Židenice Byt o výměře 55 m²"
+    assert stated_areas(text, 55.0, "idnes") == {55.0}
+    text = "Pronájem domu, Beroun Dům nabízí užitnou plochu 120 m²"
+    assert stated_areas(text, 120.0, "idnes") == {120.0}

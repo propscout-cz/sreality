@@ -977,14 +977,15 @@ RT_FP_UPSERT_SQL = """
 insert into autodedup.rt_fp (
     generation, listing_id, category_main, category_type, area_m2, disposition, floor,
     fp_digest, cell_key, cell_group, is_active, ev_images, ev_phash, ev_clip, ev_tags,
-    ev_complete, dd, source, area_basis, block_key, first_decided_at, updated_at
+    ev_complete, dd, source, area_basis, block_key, ref_codes, first_decided_at, updated_at
 ) values (
     %(generation)s::text, %(listing_id)s::bigint, %(category_main)s::text,
     %(category_type)s::text, %(area_m2)s::double precision, %(disposition)s::text,
     %(floor)s::integer, %(fp_digest)s::text, %(cell_key)s::text, %(cell_group)s::text,
     %(is_active)s::boolean, %(ev_images)s::integer, %(ev_phash)s::integer,
     %(ev_clip)s::integer, %(ev_tags)s::integer, %(ev_complete)s::boolean, %(dd)s::text,
-    %(source)s::text, %(area_basis)s::text, %(block_key)s::text, now(), now()
+    %(source)s::text, %(area_basis)s::text, %(block_key)s::text, %(ref_codes)s::text[],
+    now(), now()
 )
 on conflict (generation, listing_id) do update set
     category_main    = excluded.category_main,
@@ -1005,6 +1006,7 @@ on conflict (generation, listing_id) do update set
     source           = excluded.source,
     area_basis       = excluded.area_basis,
     block_key        = excluded.block_key,
+    ref_codes        = excluded.ref_codes,
     first_decided_at = coalesce(autodedup.rt_fp.first_decided_at,
                                 excluded.first_decided_at),
     updated_at       = now()
@@ -1049,6 +1051,20 @@ RT_FP_DELETE_SQL = """
 delete from autodedup.rt_fp
  where generation = %(generation)s::text
    and listing_id = any(%(ids)s::bigint[])
+"""
+
+# The carriers of each order code as the lane last read them (finding 2 of the #2056 review),
+# at most `cap` per code: one past `MAX_CODE_POPULATION` is already a crowd. Served by the GIN
+# index on `rt_fp.ref_codes` (migration 769).
+RT_CODE_CARRIERS_SQL = """
+select c.code, f.disposition, f.area_m2
+  from unnest(%(codes)s::text[]) as c(code)
+ cross join lateral (
+       select f.listing_id, f.disposition, f.area_m2
+         from autodedup.rt_fp f
+        where f.generation = %(generation)s::text
+          and f.ref_codes @> array[c.code]
+        limit %(cap)s::integer) f
 """
 
 RT_FP_READ_SQL = """
