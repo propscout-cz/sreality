@@ -96,7 +96,8 @@ def registry_load_in_flight(conn: psycopg.Connection, version: Version) -> int |
 @dataclass(frozen=True)
 class Clock:
     """When a run may START an obec, in UTC. `window`: (first, last) minute of the day, the run does nothing outside
-    it, so a run restarted by a deploy keeps the hours its schedule was given and never its full budget again.
+    it, so a run restarted by a deploy keeps the hours its schedule was given (its seconds budget starts afresh, the
+    window's end does not move).
     `quiet`: minutes of each hour to wait out (the Browse rebuild)."""
 
     window: tuple[int, int] | None = None
@@ -355,15 +356,12 @@ def run(*, max_seconds: int | None, only: list[int] | None, work_dir: Path,
     log_level = logging.INFO if only is not None else logging.DEBUG
     try:
         version = current_version(conn)
-        if only is None and (merging := registry_load_in_flight(conn, version)) is not None:
-            LOG.warning("BUILDINGS not started: registry version %d is being merged over served version %d",
-                        merging, version.id)
-            return 0
         todo = [(i, c) for i, c in pending_obce(conn, version) if only is None or c in only]
         LOG.info("BUILDINGS start version=%d vintage=%s pending=%d", version.id, version.source_date, len(todo))
         sess = requests.Session()
         sess.headers["User-Agent"] = contact.USER_AGENT
         done = failed = refused = buildings = links = missing_run = 0
+        unpublished = False
         for obec_unit_id, obec_kod in todo:
             if max_seconds is not None and time.monotonic() - started > max_seconds:
                 break
@@ -371,6 +369,12 @@ def run(*, max_seconds: int | None, only: list[int] | None, work_dir: Path,
                 sleep(wait)
             if not clock.open(now()):
                 LOG.info("BUILDINGS stopping: %s UTC is the end of the run's hours", now().strftime("%H:%M"))
+                break
+            # Asked before every obec, the first too: the registry load is a GitHub workflow that can start at any
+            # minute of this run.
+            if only is None and (merging := registry_load_in_flight(conn, version)) is not None:
+                LOG.warning("BUILDINGS stopping: registry version %d is being merged over served version %d",
+                            merging, version.id)
                 break
             began = time.monotonic()
             try:
@@ -388,6 +392,7 @@ def run(*, max_seconds: int | None, only: list[int] | None, work_dir: Path,
                 if missing_run >= _MISSING_STOP:
                     LOG.error("BUILDINGS stopped: %d files in a row answered 404; vintage %s is not published "
                               "as per-obec state files", missing_run, version.source_date)
+                    unpublished = True
                     break
                 time.sleep(_PAUSE_S)
                 continue
@@ -397,15 +402,19 @@ def run(*, max_seconds: int | None, only: list[int] | None, work_dir: Path,
                 LOG.info("BUILDINGS progress obce=%d/%d buildings=%d links=%d last_obec=%d last_seconds=%.1f",
                          done, len(todo), buildings, links, obec_kod, time.monotonic() - began)
             if done % _ANALYZE_EVERY == 0:
-                with conn.cursor() as cur:
-                    cur.execute("analyze ruian_address_points (stavebni_objekt_code)")
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("analyze ruian_address_points (stavebni_objekt_code)")
+                except psycopg.Error as exc:  # statistics only: a lock wait here must not end the day's run
+                    LOG.warning("BUILDINGS analyze skipped: %s", type(exc).__name__)
             time.sleep(_PAUSE_S)
         LOG.info("BUILDINGS done obce=%d failed=%d refused=%d remaining=%d buildings=%d links=%d seconds=%d",
                  done, failed, refused, len(todo) - done - failed - refused, buildings, links,
                  int(time.monotonic() - started))
     finally:
         conn.close()
-    return 0
+    # A run that tried obce and loaded none made no progress: it must not settle as an ok run.
+    return 1 if unpublished or (done == 0 and failed + refused > 0) else 0
 
 
 def _minutes_span(text: str) -> tuple[int, int]:

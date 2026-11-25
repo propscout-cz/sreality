@@ -109,7 +109,8 @@ def _run(monkeypatch: pytest.MonkeyPatch, outcomes: dict[int, Any], tmp_path: An
     monkeypatch.setattr(rb, "registry_load_in_flight", lambda c, v: None)
     monkeypatch.setattr(rb, "load_obec", load)
     monkeypatch.setattr(rb, "record_failure", lambda c, v, code, err: seen["failed"].append((code, err, c)))
-    assert rb.run(max_seconds=None, only=None, work_dir=tmp_path) == 0
+    monkeypatch.setattr(rb.time, "sleep", lambda s: None)
+    seen["exit"] = rb.run(max_seconds=None, only=None, work_dir=tmp_path)
     return seen
 
 
@@ -121,6 +122,37 @@ def test_no_kind_of_failure_in_one_obec_stops_the_others(monkeypatch, tmp_path):
     assert seen["loaded"] == [1, 2, 3, 4, 5]
     assert [code for code, _err, _c in seen["failed"]] == [1, 2, 3, 4]
     assert seen["failed"][0][1].startswith("ValueError: ")
+    assert seen["exit"] == 0, "one obec loaded: the run made progress"
+
+
+@pytest.mark.parametrize("outcomes", [
+    {1: ValueError("a new schema"), 2: ValueError("a new schema")},
+    {1: rb.ShrinkRefused("x")},
+    {1: ValueError("x"), 2: rb.ShrinkRefused("x")},
+])
+def test_a_run_that_tried_obce_and_loaded_none_does_not_settle_ok(monkeypatch, tmp_path, outcomes) -> None:
+    assert _run(monkeypatch, outcomes, tmp_path)["exit"] == 1
+
+
+def test_a_run_with_nothing_pending_settles_ok(monkeypatch, tmp_path) -> None:
+    assert _run(monkeypatch, {}, tmp_path)["exit"] == 0
+
+
+def test_a_lock_wait_on_the_statistics_does_not_end_the_run(monkeypatch, tmp_path) -> None:
+    class _Locked(_Conn):
+        def cursor(self) -> Any:
+            raise rb.psycopg.errors.LockNotAvailable("lock timeout")
+
+    monkeypatch.setattr(rb, "_ANALYZE_EVERY", 1)
+    monkeypatch.setattr(rb.loader_db, "open_loader_connection", _Locked)
+    monkeypatch.setattr(rb, "current_version", lambda c: rb.Version(4, _at(0, 0).date()))
+    monkeypatch.setattr(rb, "registry_load_in_flight", lambda c, v: None)
+    monkeypatch.setattr(rb, "pending_obce", lambda c, v: [(1, 1), (2, 2)])
+    loaded: list[int] = []
+    monkeypatch.setattr(rb, "load_obec", lambda c, s, v, unit, code, w, **kw: loaded.append(code) or (1, 1))
+    monkeypatch.setattr(rb.time, "sleep", lambda s: None)
+    assert rb.run(max_seconds=None, only=None, work_dir=tmp_path) == 0
+    assert loaded == [1, 2]
 
 
 def test_a_dropped_connection_is_reopened_before_the_failure_is_written(monkeypatch, tmp_path):
@@ -137,6 +169,7 @@ def test_a_vintage_that_is_not_published_stops_the_run_with_one_message(monkeypa
         seen = _run(monkeypatch, outcomes, tmp_path)
     assert len(seen["loaded"]) == rb._MISSING_STOP
     assert "is not published" in caplog.text
+    assert seen["exit"] == 1
 
 
 def _at(hour: int, minute: int, second: int = 0) -> Any:
@@ -216,6 +249,25 @@ def test_a_registry_version_still_merging_holds_a_full_run_but_not_a_named_obec(
     assert loaded == []
     assert rb.run(max_seconds=None, only=[1], work_dir=tmp_path) == 0
     assert loaded == [1], "a hand run on a named obec is the operator's own call"
+
+
+def test_a_registry_load_that_starts_during_the_run_stops_it_before_the_next_obec(monkeypatch, tmp_path) -> None:
+    loaded: list[int] = []
+
+    class _C:
+        closed = broken = False
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(rb.loader_db, "open_loader_connection", _C)
+    monkeypatch.setattr(rb, "current_version", lambda c: rb.Version(4, _at(0, 0).date()))
+    monkeypatch.setattr(rb, "registry_load_in_flight", lambda c, v: 5 if len(loaded) == 2 else None)
+    monkeypatch.setattr(rb, "pending_obce", lambda c, v: [(1, 1), (2, 2), (3, 3)])
+    monkeypatch.setattr(rb, "load_obec", lambda c, s, v, unit, code, w, **kw: loaded.append(code) or (1, 1))
+    monkeypatch.setattr(rb.time, "sleep", lambda s: None)
+    assert rb.run(max_seconds=None, only=None, work_dir=tmp_path) == 0
+    assert loaded == [1, 2]
 
 
 @pytest.mark.parametrize("argv", [["--window-utc", "17:00-13:00"], ["--window-utc", "13-17"],

@@ -1671,8 +1671,8 @@ on 2026-12-01, and until then a file of that name would override the applied set
     the bound to `scraper/job_runner.py`, +30 s at most, since a deploy waits on it);
   - `BACKEND_WATCH`: every repo tree the Dockerfile COPYs (not `COPY --from=` a stage) plus `/Dockerfile` and
     `/.dockerignore`, pinned to the COPY lines by a census, so a move PR never forgets a tree; `.railway/` stays out;
-  - variables `EXTRAS`, `HF_HUB_OFFLINE: "1"` (no runtime download), `SUPABASE_DB_URL: sreality.env.SUPABASE_DB_URL`
-    and the R2 set, by reference (#2032: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`,
+  - variables `EXTRAS`, `HF_HUB_OFFLINE: "1"` (no runtime download), `SUPABASE_DB_URL: sreality.env.SUPABASE_DB_URL`,
+    `SUPABASE_DB_SESSION_URL` likewise (#2604: `ruian_buildings` refuses the transaction pooler) and the R2 set, by reference (#2032: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`,
     each `sreality.env.<NAME>`), references to the worker's variables (`${{sreality.NAME}}`, ruling #2025-R3): one
     stored value each, so a rotation changes one place, and applying the worker's staged change redeploys job-runner
     after it (Railway's deployment dependencies), cutting any run in flight (closed `interrupted`, re-claimed at once).
@@ -6209,8 +6209,10 @@ location programme's work, not this one's.
 - **Load.** `python -m location_data.ruian_buildings` (`--obec <code>`, `--max-seconds`). The job runner runs it
   daily at 13:00 UTC (`scraper/jobs.py` `ruian_buildings`, #2604) until no obec is pending, then as a no-op until
   the next vintage; it starts obce only 13:00-17:00 UTC (`--window-utc`: a run restarted by a deploy keeps those
-  hours, not a fresh budget), waits out the :45 Browse rebuild (`--quiet-minutes`), and does nothing while a newer
-  registry version is merging. Stop it with the operator's runner pause. A hand run needs a SESSION-mode database
+  hours), starts none in :40-:50 (`--quiet-minutes`: Praha, the largest, is 65 s, so it is written before the :45
+  Browse rebuild), and asks before every obec whether a newer registry version is merging, stopping if so. It exits
+  1, so its run settles failed, when twenty 404s stopped it or when it tried obce and loaded none; a "run now"
+  outside its hours loads nothing and settles ok. Stop it with the operator's runner pause. A hand run needs a SESSION-mode database
   URL in its environment, `SUPABASE_DB_SESSION_URL` or `LOCATION_DB_DIRECT_URL` (`loader_db.open_loader_connection`
   refuses the transaction pooler): the operator puts it in the local `.env`, never in a chat or a ticket. A run on
   named obce logs every statement's rows and seconds. It reads
