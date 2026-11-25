@@ -377,3 +377,78 @@ def test_the_sweep_leaves_the_stale_re_claims_their_room() -> None:
     assert [item.listing_id for item in items if item.feed == "rescore"] == LIVE_OWED[:5]
     assert [item.listing_id for item in items if item.feed == "stale"] == [101, 102, 103]
     assert len(items) == 8
+
+
+RM = (4300, 4301)
+NEW_COLUMNS = ("source", "area_basis", "block_key", "ref_codes")
+
+
+def _with_a_realitymix_floor_pair(conn: FakePg) -> FakePg:
+    """4300/4301: one 2+1 at 88 m² of realitymix's total floor area and 100 m² usable on
+    sreality (12 % apart), one price and one gallery. w31 vetoes it on area at retrieval; under
+    w34 the floor-basis exemption reads the STORED `source` and `area_basis` of the neighbour."""
+    gallery = [0x7777_1234_9ABC_0001 + 104729 * k for k in range(4)]
+    _advert(conn, RM[0], "realitymix", gallery, disposition="2+1", area_m2=88.0,
+            usable_area=88.0, area_basis="floor", price_czk=5_300_000,
+            description="Byt 2+1 s balkonem a sklepem, puvodni stav, klidna ulice. " * 3)
+    _advert(conn, RM[1], "sreality", gallery, disposition="2+1", area_m2=100.0,
+            usable_area=100.0, price_czk=5_300_000,
+            description="Prodej bytu 2+1, balkon, sklep, dobra dostupnost do centra. " * 3)
+    for row in conn.image_rows:
+        conn.clip_vectors[int(row["image_id"])] = _vector(int(row["phash"]) % 97)
+        row["clip_tagged_at"] = lane_world.EXPORTED_AT
+    return conn
+
+
+def test_rows_main_wrote_with_none_of_the_new_columns_end_as_a_fresh_w34_seed(
+        tmp_path: Path) -> None:
+    """#2056 review, (e): production's rows before the switch hold NULL in every column
+    migration 769 adds, and during the sweep a refreshed advert sits beside neighbours that
+    still do. The end state is the fresh seed's all the same, the realitymix floor pair and
+    the order-code pair included, and no row keeps a NULL."""
+    fresh = _with_a_realitymix_floor_pair(_world())
+    _seed(fresh, tmp_path, "w34")
+    _quiesce(fresh)
+    assert RM in _pairs(fresh), "the exemption seats the pair under w34"
+
+    conn = _with_a_realitymix_floor_pair(_world())
+    _seed(conn, tmp_path, "w31")
+    _quiesce(conn)
+    assert RM not in _pairs(conn), "w31's area bar vetoes it before it is a candidate"
+    for key, row in conn.rt_fp.items():
+        if key[0] == GEN:
+            row.update(dict.fromkeys(NEW_COLUMNS))
+    conn.now += timedelta(hours=1)
+    held = {key for key in conn.rt_fp if key[0] == GEN}
+    _seed(conn, tmp_path, "w34", recut="true", rescore="true")
+    conn.now += timedelta(minutes=10)
+    _quiesce(conn, keys=held)
+
+    assert _decisions(conn) == _decisions(fresh)
+    assert _groups(conn) == _groups(fresh) and list(KR) in _groups(conn)
+    assert _fingerprints(conn) == _fingerprints(fresh)
+    assert all(row["source"] is not None and row["block_key"] is not None
+               for (g, _), row in conn.rt_fp.items() if g == GEN)
+    assert conn.rt_fp[(GEN, KR[0])]["ref_codes"] == ["778899"]
+
+
+def test_a_w31_cut_is_written_without_the_keys_main_does_not_know(tmp_path: Path) -> None:
+    """#2056 review, finding 5: main refuses a settings key it does not know. A generation
+    switched BACK to w31 in place stores none of the four, so a reverted worker reads it; a w34
+    cut names every one it sets, and both read back as the row that wrote them."""
+    from autodedup.incremental_lane import SETTINGS_KEYS_SINCE_W31, stored_settings
+    from autodedup.settings import Settings
+
+    conn = _fresh_w34(tmp_path)
+    stored = json.loads(conn.calibration[GEN]["settings"])
+    assert {"area_veto_gallery_exempt", "area_veto_basis_floor_exempt",
+            "ref_code_structured_categories"} <= set(stored)
+    conn.now += timedelta(hours=1)
+    _seed(conn, tmp_path, "w31", recut="true", rescore="true")
+    stored = json.loads(conn.calibration[GEN]["settings"])
+    assert not set(SETTINGS_KEYS_SINCE_W31) & set(stored)
+    w31 = Settings.from_json(Path(incremental_lane.__file__).parent / "settings/w31.json")
+    assert Settings.from_dict(stored) == w31 == Settings.from_dict(stored_settings(w31))
+    conn.now += timedelta(minutes=10)
+    _quiesce(conn)
+    assert _pairs(conn)[KR]["certificate"] is None, "back on w31 the column certifies nothing"

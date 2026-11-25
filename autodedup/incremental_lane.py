@@ -3184,6 +3184,21 @@ def read_cut(conn: Any, settings: Settings, generation: str = GENERATION, *,
         "statements": facts.statements + 4, "read_seconds": round(time.perf_counter() - clock, 3)})
 
 
+# The settings keys this engine added. Main's `Settings.from_dict` refuses a key it does not
+# know, so a cut whose settings leave them at their defaults (w31) is written without them:
+# after a switch back to w31 in place, a reverted worker reads the generation again.
+SETTINGS_KEYS_SINCE_W31: tuple[str, ...] = (
+    "area_veto_gallery_exempt", "area_veto_basis_floor_exempt",
+    "ref_code_structured_categories", "content_key_town_grain")
+
+
+def stored_settings(settings: Settings) -> dict[str, Any]:
+    """`settings` as the calibration row keeps them: a key added since w31 only where it is set."""
+    defaults = Settings().to_dict()
+    return {key: value for key, value in settings.to_dict().items()
+            if key not in SETTINGS_KEYS_SINCE_W31 or value != defaults[key]}
+
+
 def write_cut(conn: Any, cut: Cut, settings: Settings, model_version: str | None,
               generation: str = GENERATION) -> dict[str, Any]:
     """`read_cut`'s calibration and population into the store, inside the caller's transaction,
@@ -3200,7 +3215,7 @@ def write_cut(conn: Any, cut: Cut, settings: Settings, model_version: str | None
         "generation": generation, "digest": cut.calibration.digest(),
         "n_listings": cut.calibration.n_listings,
         "payload_zlib": encode_payload(cut.calibration),
-        "settings": json.dumps(settings.to_dict(), sort_keys=True),
+        "settings": json.dumps(stored_settings(settings), sort_keys=True),
         "model_version": model_version})
     report = dict(cut.report)
     report["seconds"] = round(report.pop("read_seconds") + time.perf_counter() - clock, 3)
@@ -4159,7 +4174,10 @@ def widen_generation(conn: Any, plan: Widening, scope: Scope, *, parents: Mappin
     switched: dict[str, Any] | None = None
     if rescore is not None:
         recorded = _rows(conn, RT_CALIBRATION_SCORER_SQL, {"generation": generation})
-        was = json.loads(json.dumps(recorded[0][0] or {})) if recorded else {}
+        # Read through `Settings`: a row written without a key (main's, or `stored_settings`)
+        # holds that key's default, which is no change.
+        was = (json.loads(json.dumps(Settings.from_dict(dict(recorded[0][0] or {})).to_dict()))
+               if recorded else {})
         now = json.loads(json.dumps(settings.to_dict()))
         switched = {"settings": rescore, "model_version": model.version,
                     "dials": sorted(key for key in set(was) | set(now)

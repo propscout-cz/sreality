@@ -1055,7 +1055,8 @@ delete from autodedup.rt_fp
 
 # The carriers of each order code as the lane last read them (finding 2 of the #2056 review),
 # at most `cap` per code: one past `MAX_CODE_POPULATION` is already a crowd. Served by the GIN
-# index on `rt_fp.ref_codes` (migration 769).
+# index on `rt_fp.ref_codes` (migration 769): partial, so the statement states `is not null`
+# itself (without it the planner scans the table: 35 s on 560k rows against 3 ms).
 RT_CODE_CARRIERS_SQL = """
 select c.code, f.disposition, f.area_m2
   from unnest(%(codes)s::text[]) as c(code)
@@ -1063,6 +1064,7 @@ select c.code, f.disposition, f.area_m2
        select f.listing_id, f.disposition, f.area_m2
          from autodedup.rt_fp f
         where f.generation = %(generation)s::text
+          and f.ref_codes is not null
           and f.ref_codes @> array[c.code]
         limit %(cap)s::integer) f
 """
