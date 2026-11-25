@@ -32,7 +32,7 @@ what tests/test_sql_placeholders.py exists to reject.
 
 from __future__ import annotations
 
-from autodedup.text_facts import MAX_CODE_POPULATION, MIN_CODE_LEN
+from autodedup.text_facts import MAX_CODE_POPULATION, MIN_CODE_LEN, STRUCTURED_CODE_PREFIXES
 
 # ---------------------------------------------------------------- clusters (the groups view)
 
@@ -917,10 +917,12 @@ _RESIDUAL_PHOTOS = (
 
 
 def _order_code(ref: str) -> str:
-    """`listings.ad_reference` as one comparable code: portal prefix and spaces dropped, upper-cased."""
+    """`listings.ad_reference` as one comparable code: portal prefix and spaces dropped, upper-cased.
+    The engine's twin is `text_facts.structured_code`."""
     return (
         f"upper(regexp_replace(regexp_replace(regexp_replace(btrim({ref}),"
-        " '^(IDNES|REALITYMIX)-', '', 'i'), '^ID\\s+', '', 'i'), '\\s', '', 'g'))"
+        f" '^({'|'.join(STRUCTURED_CODE_PREFIXES)})-', '', 'i'), '^ID\\s+', '', 'i'),"
+        " '\\s', '', 'g'))"
     )
 
 
