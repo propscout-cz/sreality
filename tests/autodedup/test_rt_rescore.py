@@ -479,3 +479,65 @@ def test_a_stale_queue_as_long_as_the_limit_still_lets_the_sweep_take_one() -> N
         work.commit(items)
         assert db.cursors[CURSOR_RESCORE]["last_listing_id"] == swept[0]
     assert seen == LIVE_OWED[:3]
+
+
+# ------------------------------------------------- the live carrier count, through the lane
+
+CROWD_CODE = "445566"
+FIRST, SECOND = 4400, 4401
+
+
+def _carrier(conn: FakePg, listing_id: int, source: str = "sreality") -> None:
+    """One more 5+1 of 130 m² under `CROWD_CODE`; its own text and photographs, so nothing but
+    the order code joins it to another carrier."""
+    _advert(conn, listing_id, source,
+            [0x5A5A_0000_0000_0001 + 1_000_003 * listing_id + 17 * k for k in range(3)],
+            disposition="5+1", area_m2=130.0, usable_area=130.0,
+            price_czk=12_000_000 + 1_000 * (listing_id % 7), ad_reference=CROWD_CODE,
+            description=f"Velky byt 5+1 cislo popisu {listing_id}, tri loznice, dve lodzie. " * 3)
+    for row in conn.image_rows:
+        if int(row["listing_id"]) == listing_id:
+            conn.clip_vectors[int(row["image_id"])] = _vector(int(row["phash"]) % 97)
+            row["clip_tagged_at"] = lane_world.EXPORTED_AT
+
+
+def test_a_code_certifies_its_second_carrier_and_stops_once_it_is_a_crowd(
+        tmp_path: Path) -> None:
+    """#2056 review, finding 2, through `run_incremental`: the cut holds ONE carrier of the code,
+    so the frozen set certifies it for ever. The carrier that arrives next is K-R; eight more
+    make ten, and no pair decided from then on is certified by the code."""
+    conn = _world()
+    _carrier(conn, FIRST)
+    _seed(conn, tmp_path, "w34")
+    _quiesce(conn)
+    assert CROWD_CODE in json.loads(json.dumps(
+        conn.rt_fp[(GEN, FIRST)]["ref_codes"])), "the store keeps the code it will count"
+
+    conn.now += timedelta(hours=1)
+    _carrier(conn, SECOND, "idnes")
+    _quiesce(conn)
+    assert _pairs(conn)[(FIRST, SECOND)]["certificate"] == "K-R"
+
+    conn.now += timedelta(hours=1)
+    late = list(range(4402, 4410))
+    for listing_id in late:
+        _carrier(conn, listing_id, "bezrealitky")
+    _quiesce(conn)
+    fresh_pairs = {key: row for key, row in _pairs(conn).items() if set(key) & set(late)}
+    assert fresh_pairs, "the late carriers were decided against the others"
+    assert all(row["certificate"] != "K-R" for row in fresh_pairs.values())
+    assert not any(set(group) & set(late) and len(group) > 1 for group in _groups(conn))
+
+
+def test_a_stored_block_key_that_is_not_the_digests_is_rewritten(tmp_path: Path) -> None:
+    """#2056 review, (d): a row main refreshed after a move keeps the old `block_key` beside a
+    digest and keys of the new one. The drift sweep hands it over as relocated; the pass rewrites
+    the column, so the next cycle does not claim it again."""
+    conn = _fresh_w34(tmp_path)
+    true_key = conn.rt_fp[(GEN, KR[0])]["block_key"]
+    conn.rt_fp[(GEN, KR[0])]["block_key"] = "o999999"
+    conn.now += timedelta(hours=1)
+    passes = _quiesce(conn)
+    assert sum(p["feeds"].get("relocated", 0) for p in passes) == 1
+    assert conn.rt_fp[(GEN, KR[0])]["block_key"] == true_key
+    assert _pairs(conn)[KR]["certificate"] == "K-R"
