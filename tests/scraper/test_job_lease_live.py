@@ -636,6 +636,29 @@ def test_a_held_job_waits_out_a_sibling_and_gives_up_past_its_bound(
         assert mine, "taken once the sibling's run lets go"
 
 
+def test_a_held_job_that_waited_holds_only_what_its_host_has_left(cur: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Its host kills it `timeout_s` after it began, not after the claim: a load that waited two hours for a sibling
+    holds four, so a dead load never keeps the sibling waiting past that kill."""
+    monkeypatch.delenv("JOB_NAME", raising=False)
+    _now(cur)
+    conn = cur.connection
+    running = job_lease.claim(conn, _due_sibling(cur), holder="A")
+    assert running is not None
+    now = [0.0]
+
+    def sleep(seconds: float) -> None:
+        now[0] += 2 * 3600
+        job_lease.release(conn, running, "ok")
+
+    monkeypatch.setattr(job_lease, "clock", lambda: now[0])
+    monkeypatch.setattr(job_lease.time, "sleep", sleep)
+    load = _until_moved()
+    with job_lease.held_job(conn, load, wait_s=3 * 3600) as mine:
+        assert mine
+        ttl = _row(cur, load.name)["ttl"]
+    assert timedelta(hours=4) - timedelta(seconds=5) <= ttl <= timedelta(hours=4)
+
+
 @pytest.mark.parametrize("raised,outcome", [(RuntimeError("load aborted"), "failed"), (KeyboardInterrupt(), "interrupted")])
 def test_a_held_job_closes_its_run_with_how_it_ended(
         cur: Any, monkeypatch: pytest.MonkeyPatch, raised: BaseException, outcome: str) -> None:

@@ -68,7 +68,8 @@ Recipes:
   `jobs.resource_wait_s` (its longest sibling's timeout + 10 min) and exiting 1 with nothing loaded if it never got it; a
   load that returns non-zero hands its code to the `HeldRun` it was given, which closes the run `failed`. While
   it holds, the intake is not due-listed and its cell reads `waiting for ruian_load`; a run its workflow dropped
-  without a release lapses after the load's `timeout_s` and the reaper closes it `lost`. Under the runner
+  without a release lapses when its host's ceiling does (the lease is what is left of `timeout_s` after the wait,
+  and its exit code reaches `job_runs`) and the reaper closes it `lost`. Under the runner
   (`JOB_NAME` = the job) `held_job` is the runner's own claim.
 
 ## Log lines (Railway logs)

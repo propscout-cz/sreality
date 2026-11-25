@@ -70,6 +70,9 @@ TTL_S = 180
 FENCE_MARGIN_S = 30
 # How often a `held` that may wait tries the lane again.
 WAIT_POLL_S = 10
+# A held job's lease is what its host has left of its timeout_s, never less than a lane's TTL (a claim at the
+# ceiling).
+HELD_JOB_MIN_TTL_S = TTL_S
 
 RELEASE_OUTCOMES = frozenset({"ok", "failed", "cancelled", "skipped", "timeout", "interrupted"})
 NOT_FAILURES = frozenset({"cancelled", "skipped", "interrupted"})
@@ -806,11 +809,11 @@ def end_predecessor(conn: psycopg.Connection, job_name: str, *, host: str, pid: 
     return _predecessor(conn, _END_PREDECESSOR_SQL, job_name, host, pid, booted_epoch)
 
 
-def _claim_held_job(conn: psycopg.Connection, job: Job, *, runner: str, holder: str) -> Lease | None:
-    """The job's run, claimed as the runner claims one and held for its `timeout_s`, as long as its host lets it run;
+def _claim_held_job(conn: psycopg.Connection, job: Job, *, runner: str, holder: str, ttl_s: int) -> Lease | None:
+    """The job's run, claimed as the runner claims one and held for `ttl_s`, what its host has left of `timeout_s`;
     None while the row or its resource is held, or the row is paused or retired."""
     params = {"job": job.name, "every_s": job.every_s, "runner": runner, "timeout_s": job.timeout_s,
-              "resource": job.resource, "holder": holder, "ttl": job.timeout_s, "args": None, "requested_by": None,
+              "resource": job.resource, "holder": holder, "ttl": ttl_s, "args": None, "requested_by": None,
               "version": os.environ.get("RAILWAY_GIT_COMMIT_SHA") or os.environ.get("GITHUB_SHA")}
     sent_at = clock()
     try:
@@ -825,8 +828,7 @@ def _claim_held_job(conn: psycopg.Connection, job: Job, *, runner: str, holder: 
     except psycopg.errors.UniqueViolation:
         LOG.info("LEASE race lost job=%s: another holder opened a run on it or its resource", job.name)
         return None
-    return Lease(job.name, holder, job.timeout_s, _fence_at(sent_at, job.timeout_s), run_id=run_id, args=None,
-                 requested_by=None)
+    return Lease(job.name, holder, ttl_s, _fence_at(sent_at, ttl_s), run_id=run_id, args=None, requested_by=None)
 
 
 @contextmanager
@@ -853,9 +855,14 @@ def held_job(conn: psycopg.Connection, job: Job, *, wait_s: float, runner: str =
     if os.environ.get("JOB_NAME") == job.name:
         yield ran
         return
-    holder = holder_id()
-    with _holding(conn, job.name, lambda: _claim_held_job(conn, job, runner=runner, holder=holder), wait_s,
-                  connect, ran) as lease:
+    holder, began = holder_id(), clock()
+
+    def take() -> Lease | None:
+        # Its host kills it timeout_s after it began: a lease past that would keep a sibling waiting on a dead run.
+        left_s = max(job.timeout_s - int(clock() - began), HELD_JOB_MIN_TTL_S)
+        return _claim_held_job(conn, job, runner=runner, holder=holder, ttl_s=left_s)
+
+    with _holding(conn, job.name, take, wait_s, connect, ran) as lease:
         yield ran if lease is not None else None
 
 
