@@ -672,7 +672,18 @@ def door_report(base: Arm, candidate: Arm, lists: Mapping[str, Any], changed: se
                 key = pair_key(i, other)
                 displaced.append([*key, base.run.rows.get(key, {}).get("zone"), *tagged(key)])
     zone = lambda key: candidate.run.rows.get(key, {}).get("zone")  # noqa: E731
+
+    def probes(index: BlockIndex, fps: Mapping[int, Fingerprint], key: PairKey) -> list[str]:
+        """The probes that reach the pair, from either side."""
+        return sorted(index.candidates(fps[key[0]]).get(key[1], set())
+                      | index.candidates(fps[key[1]]).get(key[0], set()))
+
+    def merges_touching(arm: Arm) -> int:
+        return sum(1 for key, row in arm.run.rows.items()
+                   if row.get("zone") == "merge" and (key[0] in changed or key[1] in changed))
+
     return {
+        "merge_zone_movers": {"base": merges_touching(base), "candidate": merges_touching(candidate)},
         "door_gainers": len(gained),
         "position_moved": _position_moved(base, candidate, changed),
         "e242": _moved(e242_base, e242_candidate),
@@ -681,7 +692,10 @@ def door_report(base: Arm, candidate: Arm, lists: Mapping[str, Any], changed: se
         "addr_new": [[*key, zone(key)] for key in sorted(addr_new)],
         "cap_displaced": displaced,
         "merge_gained": list(lists["merge_gained"]),
-        "merge_lost": [[*pair, *tagged(tuple(pair))] for pair in lists["merge_lost"]],
+        # [lo, hi, source pair, část gained, the probes that found it in the base, its zone now, the probes now]
+        "merge_lost": [[*pair, *tagged(tuple(pair)), probes(index_base, base.fps, tuple(pair)),
+                        zone(tuple(pair)), probes(index_candidate, candidate.fps, tuple(pair))]
+                       for pair in lists["merge_lost"]],
         "block_key_split": _block_key_split(base, candidate),
         "two_doors_one_building": [[*key, *pair, zone(key)] for key, pair in sorted(doors.items())],
     }

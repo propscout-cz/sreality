@@ -128,7 +128,7 @@ SELECT l.id FROM listings l JOIN listing_location ll ON ll.listing_id = l.id
    - `same_house_number_to_1`: `[lo, hi, zone]`, stored rows now reading 1 that did not.
    - `addr_new`: `[lo, hi, zone]`, candidate pairs the `addr` probe now reaches. Zone null = under the store floor.
    - `cap_displaced`: `[lo, hi, base zone, source pair, část gained]`, base pairs still sharing a key that neither side retrieves now, because a side sits at the fan-out cap (60). `část gained` is true when a mover in the pair gained one.
-   - `merge_gained`: `[lo, hi]`; `merge_lost`: `[lo, hi, source pair, část gained]`. Merge-zone rows, `evaluate --base`'s own lists.
+   - `merge_gained`: `[lo, hi]`; `merge_lost`: `[lo, hi, source pair, část gained, base probes, zone now, probes now]`, the probes that reach the pair from either side in each arm, zone null when the pair is gone. Merge-zone rows, `evaluate --base`'s own lists. `merge_zone_movers`: the merge-zone rows touching a mover, `base` and `candidate`.
    - `block_key_split`: `count`, and `pairs` as `[lo, hi, zone, source pair]`: pairs with a stored decision in either arm that shared a `block_key` in the base and not in the candidate, read off the fingerprints (`block_key_of`). A door's část moves a row from `o<obec>` to `c<cast>`, and `attr_dispo` and `attr_area` key on it. Zone is the candidate's, null when the pair is gone there.
    - `two_doors_one_building`: `[lo, hi, door, door, zone]`, a door-gaining pair on two different doors with one č.p. and one část. That is the building proxy, since the mirror holds no building code.
 

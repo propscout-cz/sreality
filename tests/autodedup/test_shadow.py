@@ -571,7 +571,9 @@ def test_the_door_report_names_new_addr_pairs_flips_and_two_doors_in_one_buildin
                   5: ({}, {}, far), 6: ({}, held, held), 7: ({}, held, held)}, Settings(),
                  pairs={(1, 2): ({"zone": "band", "feats": {"same_house_number": [0.0, False]}}, flip)},
                  lists={"merge_gained": [[1, 2]], "merge_lost": [[3, 4]]})
-    assert door["merge_lost"] == [[3, 4, "sreality|sreality", True]], "both gained část 9"
+    assert door["merge_lost"] == [[3, 4, "sreality|sreality", True, ["attr_area", "attr_dispo"], None,
+                                   ["addr", "attr_area", "attr_dispo"]]], "both gained část 9"
+    assert door["merge_zone_movers"] == {"base": 0, "candidate": 0}, "no stored merge row in either arm"
     assert door["door_gainers"] == 5
     assert door["same_house_number_to_1"] == [[1, 2, "band"]]
     assert [1, 2, "band"] in door["addr_new"] and not door["cap_displaced"]
@@ -685,10 +687,13 @@ def test_the_door_report_splits_a_block_key_and_marks_the_part_gained():
     row = {"zone": "band", "feats": {}}
     report = _arms({1: ({}, {}, part), 2: ({"source": "idnes"}, {}, {}), 3: ({}, {}, {}), 4: ({}, held, held),
                     5: ({}, held, held), 6: ({}, _location(cast_obce_kod=7), _location(cast_obce_kod=7))}, Settings(),
-                   pairs={(1, 2): (row, None), (2, 3): (row, row), (4, 5): (row, row), (5, 6): (row, row)},
+                   pairs={(1, 2): ({"zone": "merge", "feats": {}}, None), (2, 3): (row, row), (4, 5): (row, row),
+                          (5, 6): (row, row)},
                    lists={"merge_gained": [], "merge_lost": [[1, 2]]})
     assert report["block_key_split"] == {"count": 1, "pairs": [[1, 2, None, "idnes|sreality"]]}
-    assert report["merge_lost"] == [[1, 2, "idnes|sreality", True]]
+    assert report["merge_lost"] == [[1, 2, "idnes|sreality", True, ["attr_area", "attr_dispo"], None, []]], (
+        "the base found it only through the block key the část split: no probe reaches it now")
+    assert report["merge_zone_movers"] == {"base": 1, "candidate": 0}
 
 
 _MOVER = {"listing_id": 1, "source": "ceskereality", "old": {"obec_kod": 11}, "new": {"obec_kod": 11, "cast_obce_kod": 5}}
