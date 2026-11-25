@@ -272,7 +272,7 @@ describe('the phone property page', () => {
 
     /* Facts, in Czech, from the one facts definition. */
     const facts = within(screen.getByRole('region', { name: 'Fakta' }));
-    expect(facts.getByText('Patro').nextSibling).toHaveTextContent('4. patro z 8 podlaží');
+    expect(facts.getByText('Podlaží').nextSibling).toHaveTextContent('5. podlaží z 8');
     expect(facts.getByText('Výtah').nextSibling).toHaveTextContent('ano');
     expect(facts.getByText('Vlastnictví').nextSibling).toHaveTextContent('Osobní');
 
@@ -391,7 +391,8 @@ describe('the phone property page', () => {
     expect(gallery.getAllByRole('button')).toHaveLength(3);
     expect(gallery.queryByText('P1')).toBeNull();
     expect(gallery.queryByText('Prohlídka')).toBeNull();
-    expect(screen.getByRole('group', { name: 'Fotky' }).querySelector('[aria-hidden="true"]')).toBeNull();
+    /* Nothing laid over a photo (the round swiper's two end copies are slides themselves, hidden from readers). */
+    expect(screen.getByRole('group', { name: 'Fotky' }).querySelector('button [aria-hidden="true"]')).toBeNull();
     /* A live deal is never hidden. */
     expect(screen.getByRole('button', { name: 'Rozpracovaný obchod nelze skrýt' })).toHaveAttribute(
       'aria-disabled',

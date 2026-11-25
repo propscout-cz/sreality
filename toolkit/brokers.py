@@ -1,4 +1,4 @@
-"""Read-only broker intelligence queries (detail, contacts, listings, Browse's broker scope).
+"""Read-only broker intelligence queries (detail, contacts, inventory, Browse's broker scope).
 
 The server side of the browser read layer (frontend/src/lib/brokers.ts): the
 /brokers/* routes (api/routes/brokers.py), the property download and an agent's
@@ -20,6 +20,7 @@ from typing import Any
 from psycopg.rows import dict_row
 
 from toolkit import _now_iso
+from toolkit.stats_registry import MIN_N
 
 MAX_BATCH = 1000
 _REDACTED = "[redacted]"
@@ -113,8 +114,8 @@ def _mask(value: Any) -> Any:
     """Swap every contact column for a has_* flag, recursing into the dossier.
 
     Matched on the column NAME, not a fixed list of today's columns: these queries
-    are `select *` over views a migration can widen (broker_listings_public has
-    already grown twice), so a denylist would leak a new *_email the day it lands.
+    are `select *` over views a migration can widen (listing_broker_public gained
+    its contact pair in 419), so a denylist would leak a new *_email the day it lands.
     The dossier's contact list carries its PII in a generic `value` column no name
     rule can catch, so it is dropped whole — /brokers/{id}/contacts is admin-only.
     `has_email` / `has_phone` mean "a current primary contact is on file", i.e. the
@@ -217,29 +218,61 @@ def get_broker(conn: Any, broker_id: int) -> dict[str, Any] | None:
         memberships = cur.fetchall()
         region_shares, categories = footprint(cur, broker_id)
         contacts = _contacts(cur, broker_id)
+        prices = price_change(cur, broker_id)
     for coll in (broker, *memberships):
         for k in ("first_seen_at", "last_seen_at"):
             if k in coll:
                 coll[k] = _iso(coll[k])
     data = {"broker": broker, "memberships": memberships, "region_shares": region_shares,
-            "categories": categories, "contacts": contacts}
+            "categories": categories, "contacts": contacts, "price_change": prices}
     return _envelope("broker_detail", data, {"broker_id": broker_id}, 1, broker.get("last_seen_at"))
 
 
-def broker_listings(conn: Any, broker_id: int, *, limit: int = 500) -> dict[str, Any]:
-    """A broker's listings (active first), via broker_listings_public."""
-    limit = max(1, min(int(limit), 2000))
+# The broker's inventory, one row per property of the book that Browse serves (the footprint's join): the property's
+# label, type and area, and the broker's own spell there: whether an ad of theirs still runs, their portals, their
+# last price and the change from their first (the pair the price figures count, which also count the book's rows
+# Browse does not serve yet; no change without a price step). Live spells first, newest first; `last_seen_at` = when the spell ended, the
+# property's last sighting while it runs.
+_BROKER_PROPERTIES_SQL = """
+    SELECT b.property_id, l.listing_id, l.display_label, l.category_main, l.category_type, l.disposition, l.subtype,
+           l.area_m2, b.is_active, b.all_sources, b.active_sources, b.last_price_czk AS price_czk,
+           (CASE WHEN b.price_changes > 0
+                 THEN measure_price_change_pct(b.first_price_czk, b.last_price_czk) END)::float8 AS price_change_pct,
+           b.price_changes AS price_change_count, coalesce(b.ended_at, l.last_seen_at) AS last_seen_at,
+           coalesce(b.ended_at, b.started_at) AS sort_at
+    FROM broker_book b JOIN browse_list l USING (property_id)
+    WHERE b.broker_id = %(broker_id)s
+      AND (%(category_main)s::text IS NULL OR l.category_main = %(category_main)s)
+      AND (%(category_type)s::text IS NULL OR l.category_type = %(category_type)s)
+      AND (%(after_id)s::bigint IS NULL OR (b.is_active, coalesce(b.ended_at, b.started_at), b.property_id)
+                                           < (%(after_active)s::boolean, %(after_at)s::timestamptz, %(after_id)s))
+    ORDER BY b.is_active DESC, sort_at DESC, b.property_id DESC
+    LIMIT %(limit)s
+"""
+BROKER_PROPERTIES_PAGE = 100
+
+
+def broker_properties(conn: Any, broker_id: int, *, category_main: str | None = None,
+                      category_type: str | None = None, after: tuple[bool, str, int] | None = None,
+                      limit: int = BROKER_PROPERTIES_PAGE) -> dict[str, Any]:
+    """A page of the broker's book, one row per property, optionally one type and one deal. `after` is the last
+    row's `metadata.next_after` (its spell status, sort time and property id); a full page names the next one."""
+    limit = max(1, min(int(limit), 500))
+    after_active, after_at, after_id = after or (None, None, None)
+    filters = {"broker_id": broker_id, "category_main": category_main, "category_type": category_type}
     with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(
-            "SELECT * FROM broker_listings_public WHERE broker_id = %s "
-            "ORDER BY is_active DESC, last_seen_at DESC NULLS LAST LIMIT %s",
-            (broker_id, limit))
+        cur.execute(_BROKER_PROPERTIES_SQL, {**filters, "after_active": after_active, "after_at": after_at,
+                                             "after_id": after_id, "limit": limit})
         rows = cur.fetchall()
+    last = rows[-1] if len(rows) == limit else None
+    next_after = [last["is_active"], _iso(last["sort_at"]), last["property_id"]] if last else None
     fresh = max((r["last_seen_at"] for r in rows if r.get("last_seen_at")), default=None)
     for r in rows:
+        del r["sort_at"]
         r["last_seen_at"] = _iso(r.get("last_seen_at"))
-    return _envelope("broker_listings", rows, {"broker_id": broker_id, "limit": limit},
-                     len(rows), _iso(fresh))
+    envelope = _envelope("broker_properties", rows, {**filters, "limit": limit}, len(rows), _iso(fresh))
+    envelope["metadata"]["next_after"] = next_after
+    return envelope
 
 
 def book_rule_sql(alias: str) -> str:
@@ -271,6 +304,40 @@ _FOOTPRINT_SQL = f"""
     GROUP BY GROUPING SETS ((l.region_id, k.name), (l.category_main, l.category_type))
     ORDER BY active_properties DESC, properties DESC, k.name, l.category_main, l.category_type
 """
+
+
+# How much the broker changes prices, over the book (migration 770): per property, the history of the broker's own
+# most-repriced ad there. `priced` = the properties with a price of theirs, `repriced` = those where they changed it
+# at least once (a price cut and restored included: operator ruling 2026-11-24); the median of the change from their
+# first price to their last is over the repriced only, since most properties never move and a median over all of
+# them is 0 for nine brokers in ten (production, 2026-11-23).
+_PRICE_CHANGE_SQL = """
+    SELECT grouping(b.is_active) = 1 AS every, b.is_active,
+           count(*) FILTER (WHERE b.first_price_czk IS NOT NULL) AS priced,
+           count(*) FILTER (WHERE b.price_changes > 0) AS repriced,
+           (percentile_cont(0.5) WITHIN GROUP (ORDER BY measure_price_change_pct(b.first_price_czk, b.last_price_czk))
+              FILTER (WHERE b.price_changes > 0))::float8 AS median_pct
+    FROM broker_book b
+    WHERE b.broker_id = %(broker_id)s
+    GROUP BY GROUPING SETS ((), (b.is_active))
+"""
+
+
+def price_change(cur: Any, broker_id: int) -> dict[str, dict[str, Any]]:
+    """The broker's price figures over every property of the book (`all`), those with an ad of theirs still running
+    (`active`) and the rest (`inactive`). The share answers from MIN_N priced properties up, the median from MIN_N
+    repriced ones (a dict_row cursor)."""
+    out = {k: {"priced": 0, "repriced": 0, "repriced_pct": None, "median_pct": None}
+           for k in ("all", "active", "inactive")}
+    cur.execute(_PRICE_CHANGE_SQL, {"broker_id": broker_id})
+    for r in cur.fetchall():
+        priced, repriced = r["priced"], r["repriced"]
+        out["all" if r["every"] else "active" if r["is_active"] else "inactive"] = {
+            "priced": priced, "repriced": repriced,
+            "repriced_pct": 100 * repriced / priced if priced >= MIN_N else None,
+            "median_pct": r["median_pct"] if repriced >= MIN_N else None,
+        }
+    return out
 
 
 def footprint(cur: Any, broker_id: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:

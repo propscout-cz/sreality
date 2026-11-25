@@ -68,6 +68,7 @@ vi.mock('@/lib/brokers', async (importOriginal) => ({
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   addPipelineCard: vi.fn(),
+  fetchPropertyBuildingSales: vi.fn(),
   listCollections: vi.fn(),
   addPropertiesToCollection: vi.fn(),
   removePropertyFromCollection: vi.fn(),
@@ -338,8 +339,7 @@ describe('<ListingCards> the storey tag', () => {
 
     renderGrid({ floors: true });
 
-    const tag = await screen.findByText('2. patro z 5');
-    expect(tag).toHaveAttribute('title', '2. patro z 5 podlaží');
+    expect(await screen.findByText('3. podlaží z 5')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: TITLE_RE })).toBeInTheDocument();
   });
 
@@ -351,7 +351,7 @@ describe('<ListingCards> the storey tag', () => {
     renderGrid({ floors: true });
 
     expect(await screen.findByRole('link', { name: TITLE_RE })).toBeInTheDocument();
-    expect(screen.queryByText(/patro|přízemí/)).toBeNull();
+    expect(screen.queryByText(/podlaží/)).toBeNull();
   });
 
   it('reads the cohort once, keyed on the surrogate listing id', async () => {
@@ -359,7 +359,7 @@ describe('<ListingCards> the storey tag', () => {
 
     renderGrid({ floors: true });
 
-    await screen.findByText('2. patro z 5');
+    await screen.findByText('3. podlaží z 5');
     expect(queries.fetchListingFloors).toHaveBeenCalledTimes(1);
     expect(queries.fetchListingFloors).toHaveBeenCalledWith([111], expect.anything());
   });
@@ -369,7 +369,7 @@ describe('<ListingCards> the storey tag', () => {
 
     renderGrid({ floors: true, row: { ...ROW, display_label: null } as CardRow });
 
-    expect(await screen.findByText('2. patro z 5')).toBeInTheDocument();
+    expect(await screen.findByText('3. podlaží z 5')).toBeInTheDocument();
   });
 
   it('drops the count when the building\'s podlaží is unknown', async () => {
@@ -377,8 +377,7 @@ describe('<ListingCards> the storey tag', () => {
 
     renderGrid({ floors: true });
 
-    const tag = await screen.findByText('3. patro');
-    expect(tag).toHaveAttribute('title', '3. patro');
+    expect(await screen.findByText('4. podlaží')).toBeInTheDocument();
   });
 
   it('says nothing for an ad with no floor, rather than a gap or a zero', async () => {
@@ -388,17 +387,17 @@ describe('<ListingCards> the storey tag', () => {
 
     await waitFor(() => expect(queries.fetchListingFloors).toHaveBeenCalled());
     expect(await screen.findByRole('link', { name: TITLE_RE })).toBeInTheDocument();
-    expect(screen.queryByText(/patro|přízemí|\bz 5\b/)).toBeNull();
+    expect(screen.queryByText(/podlaží|\bz 5\b/)).toBeNull();
   });
 
-  it('keeps a house\'s ground floor off the card — "přízemí" on a house is noise', async () => {
+  it('keeps a house\'s ground floor off the card — a storey on a house is noise', async () => {
     storeyOf(0, 2);
 
     renderGrid({ floors: true, row: { ...ROW, category_main: 'dum' } as CardRow });
 
     await waitFor(() => expect(queries.fetchListingFloors).toHaveBeenCalled());
     expect(await screen.findByRole('link', { name: /^Dům na prodej/ })).toBeInTheDocument();
-    expect(screen.queryByText(/přízemí/)).toBeNull();
+    expect(screen.queryByText(/podlaží/)).toBeNull();
   });
 
   it('tags a commercial unit\'s ground floor', async () => {
@@ -406,7 +405,7 @@ describe('<ListingCards> the storey tag', () => {
 
     renderGrid({ floors: true, row: { ...ROW, category_main: 'komercni', disposition: null } as CardRow });
 
-    expect(await screen.findByText('přízemí z 3')).toBeInTheDocument();
+    expect(await screen.findByText('1. podlaží z 3')).toBeInTheDocument();
   });
 });
 
@@ -1187,7 +1186,7 @@ describe('<ListingCards> the storey label', () => {
   it('is an inset label with no border', async () => {
     floors();
     renderGrid({ floors: true });
-    const tag = await screen.findByText('2. patro z 5');
+    const tag = await screen.findByText('3. podlaží z 5');
     expect(tag).toHaveClass('bg-[var(--color-inset)]');
     expect(tag.className).not.toMatch(/\bborder\b/);
   });
@@ -1195,7 +1194,7 @@ describe('<ListingCards> the storey label', () => {
   it('sits one step up on a delisted card, whose surface is the inset', async () => {
     floors();
     renderGrid({ floors: true, row: { ...ROW, is_active: false, active_sources: [] } as CardRow });
-    expect(await screen.findByText('2. patro z 5')).toHaveClass('bg-[var(--color-paper)]');
+    expect(await screen.findByText('3. podlaží z 5')).toHaveClass('bg-[var(--color-paper)]');
   });
 });
 
@@ -1250,5 +1249,44 @@ describe('<ListingCards> the empty slot', () => {
   it('without one, the filter empty state stays', async () => {
     renderGrid({ rows: [] });
     expect(await screen.findByText('No listings match these filters.')).toBeInTheDocument();
+  });
+});
+
+
+/* The delisted card's "Prodeje v domě" corner: asked only on a click, answered in place, building-level. */
+describe('the sold corner on a delisted card', () => {
+  const SALE = {
+    source: 'reas', source_record_id: 'x', sold_at: '2025-03-14', price_czk: 6450000, asking_last_czk: null,
+    category_main: 'byt', disposition: '3+kk', area_m2: 62, unit_label: '105/37', source_url: null,
+    price_per_m2: 104032, price_per_m2_basis: 'sale_capital_czk_m2',
+  };
+  const delisted = { ...ROW, is_active: false, active_sources: [] } as CardRow;
+
+  it('is not on a live card, and asks nothing until it is clicked', async () => {
+    const api = await import('@/lib/api');
+    vi.mocked(api.fetchPropertyBuildingSales).mockClear();
+    renderGrid({ row: ROW as CardRow });
+    expect(screen.queryByRole('button', { name: 'Prodeje v domě' })).toBeNull();
+    renderGrid({ row: delisted });
+    expect(await screen.findByRole('button', { name: 'Prodeje v domě' })).toBeInTheDocument();
+    expect(api.fetchPropertyBuildingSales).not.toHaveBeenCalled();
+  });
+
+  it('answers in place with the count and the median, linking to the list', async () => {
+    const api = await import('@/lib/api');
+    vi.mocked(api.fetchPropertyBuildingSales).mockResolvedValue({ sales: [SALE, { ...SALE, source_record_id: 'y' }] });
+    renderGrid({ row: delisted });
+    fireEvent.click(await screen.findByRole('button', { name: 'Prodeje v domě' }));
+    const link = await screen.findByRole('link', { name: /V domě 2 prodeje · medián 104\s032/ });
+    expect(link.getAttribute('href')).toContain('tab=hodnota');
+    expect(api.fetchPropertyBuildingSales).toHaveBeenCalledWith(delisted.property_id);
+  });
+
+  it('says so when the building has no sale we hold', async () => {
+    const api = await import('@/lib/api');
+    vi.mocked(api.fetchPropertyBuildingSales).mockResolvedValue({ sales: [] });
+    renderGrid({ row: delisted });
+    fireEvent.click(await screen.findByRole('button', { name: 'Prodeje v domě' }));
+    expect(await screen.findByText('V domě žádný známý prodej')).toBeInTheDocument();
   });
 });

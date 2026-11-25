@@ -144,13 +144,16 @@ def function_bodies(conn) -> dict[str, str]:
 # definition is not a call.
 #
 # 514 and 523 are the case again: their literal stamps sit in refresh_location_pin_audit_mv's
-# bodies, and migration 719 dropped that function and the location_audit_waterfall row. The
-# matview's evidence is now 719's own `refresh_matview` cron command.
+# bodies, and migration 719 dropped that function and the location_audit_waterfall row.
+# 719 then follows: its `refresh_matview` cron command names the matview, and 765 dropped
+# the matview, its job and its row; 765's revert re-registers the row it would rebuild.
 _RETIRED_MIGRATIONS = {
     "migrations/510_location_pin_audit.sql",
     "migrations/441_stamp_derived_artifact.sql",
     "migrations/514_location_w5_serve_resolved.sql",
     "migrations/523_location_w14_audit_waterfall.sql",
+    "migrations/719_location_audit_waterfall_drop.sql",
+    "migrations/reverts/765_revert_location_w6c2_pin_audit_drop.sql",
 }
 
 

@@ -78,8 +78,8 @@ def test_a_group_whose_carried_rider_is_unread_still_waits() -> None:
     db.read.add(12)
     counts = _run(db, building=True)["counts"]
     assert reconcile.WAITING not in counts, "read, the rail lets it through"
-    assert counts["skipped_by_reason"] == {"carries_ungrouped_listings": 1}, (
-        "to the plan's own rule for an advert no group holds")
+    assert counts["applied"] == 1 and db.listings[12]["property_id"] == 100, (
+        "and it rides along with its property (E989)")
 
 
 def test_a_never_walked_block_still_holds_every_group() -> None:

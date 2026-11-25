@@ -288,8 +288,8 @@ DEJVICE, VOKOVICE, BUBENEC, HRADCANY, JOSEFOV, HOLESOVICE = 400459, 400441, 4900
 
 def test_praha_6_answers_one_shortcut_row_whose_places_are_its_quarters_chips(mirror, client):
     """#2380: a městská část is no served level, so its row is a shortcut whose places are its quarters' chips, the
-    register's pairs, in name order; it flies to its doors. Then what the word "praha" reaches by similarity, the kraj
-    and the town, the lower code first."""
+    register's pairs, in name order; it flies to its doors. Then what the word "praha" reaches by similarity: the town,
+    then its own kraj (#2548, ruling 2)."""
     praha = _praha(mirror)
     praha_6 = mirror.unit("momc", PRAHA_6, "Praha 6", praha)
     dejvice = mirror.unit("cast_obce", DEJVICE, "Dejvice", praha)
@@ -304,8 +304,8 @@ def test_praha_6_answers_one_shortcut_row_whose_places_are_its_quarters_chips(mi
          "places": [{"level": "cast_obce", "id": BUBENEC, "name": "Bubeneč", "context": "Praha"},
                     {"level": "cast_obce", "id": DEJVICE, "name": "Dejvice", "context": "Praha"},
                     {"level": "cast_obce", "id": VOKOVICE, "name": "Vokovice", "context": "Praha"}]},
-        {"level": "kraj", "id": PRAHA_KRAJ, "name": "Hlavní město Praha", "context": None, "point": None},
         {"level": "obec", "id": PRAHA, "name": "Praha", "context": "území Hlavního města Prahy", "point": None},
+        {"level": "kraj", "id": PRAHA_KRAJ, "name": "Hlavní město Praha", "context": None, "point": None},
     ]
 
 
@@ -351,12 +351,12 @@ def test_a_mestska_cast_with_no_pairs_at_the_index_s_version_answers_no_row_and_
     mirror.quarters(praha_6, mirror.unit("cast_obce", DEJVICE, "Dejvice", praha), version=mirror.old)
     mirror.publish()
     assert _chips(_suggest(client, "Praha 6")) == [
-        ("kraj", PRAHA_KRAJ, "Hlavní město Praha", None),
         ("obec", PRAHA, "Praha", "území Hlavního města Prahy"),
+        ("kraj", PRAHA_KRAJ, "Hlavní město Praha", None),
     ]
     res = client.post("/places/suggest", json={"query": "Praha 6", "limit": 1})
     assert res.status_code == 200, res.text
-    assert _chips(res.json()["items"]) == [("kraj", PRAHA_KRAJ, "Hlavní město Praha", None)]
+    assert _chips(res.json()["items"]) == [("obec", PRAHA, "Praha", "území Hlavního města Prahy")]
 
 
 def test_a_shortcut_reads_its_quarters_at_the_index_s_version_while_a_load_writes_the_next(mirror, client):
@@ -527,13 +527,13 @@ def test_a_failed_read_is_a_503_and_no_log_line_carries_the_typed_text(mirror, c
     _jihomoravsky(mirror)
     mirror.publish()
     with caplog.at_level("INFO"):
-        assert _suggest(client, "Brnoxq") == []
+        assert _suggest(client, "Qxzwvk") == []
         conn.execute("ALTER MATERIALIZED VIEW place_facts RENAME TO place_facts_gone")
-        res = client.post("/places/suggest", json={"query": "Brnoxq"})
+        res = client.post("/places/suggest", json={"query": "Qxzwvk"})
     assert (res.status_code, res.json()) == (503, {"detail": UNAVAILABLE})
     lines = [r.getMessage() for r in caplog.records if r.name == "location_data.place_search"]
     assert lines == ["place_search: read failed (SQLSTATE 42P01)"]
-    assert not any("brnoxq" in r.getMessage().lower() or r.exc_info for r in caplog.records)
+    assert not any("qxzwvk" in r.getMessage().lower() or r.exc_info for r in caplog.records)
 
 
 def test_a_database_it_cannot_reach_is_the_same_503(client, monkeypatch, caplog):
@@ -630,8 +630,8 @@ def test_a_town_and_a_number_is_never_read_as_a_door_so_praha_6_stays_its_shortc
     mirror.publish()
     assert _chips(_suggest(client, "Praha 6")) == [
         ("momc", PRAHA_6, "Praha 6", "Praha"),
-        ("kraj", PRAHA_KRAJ, "Hlavní město Praha", None),
         ("obec", PRAHA, "Praha", "území Hlavního města Prahy"),
+        ("kraj", PRAHA_KRAJ, "Hlavní město Praha", None),
     ]
 
 
@@ -973,7 +973,8 @@ KLADNO_OKRES, KLADNO, LHOTA, LHOTA_LHOTA, LHOTA_KLADNO = 3203, 532053, 513041, 7
 
 def test_a_village_and_its_cp_typed_with_its_town_answer_the_streetless_door_of_that_town_s_village(mirror, client):
     """Two villages called Lhota: one is its own obec in okres Kladno and serves a property, the other a část of the
-    town Kladno (its code invented). "Lhota 25, Kladno" answers the town's: an okres is a region, never the town."""
+    town Kladno (its code invented). "Lhota 25, Kladno" answers the town's: an okres is a region, never the town. On
+    equal served properties the town Lhota goes before its own část (#2548, ruling 2)."""
     okres = mirror.unit("okres", KLADNO_OKRES, "Kladno", mirror.unit("kraj", STREDOCESKY, "Středočeský kraj"))
     kladno, lhota = mirror.unit("obec", KLADNO, "Kladno", okres), mirror.unit("obec", LHOTA, "Lhota", okres)
     mirror.house(21000201, lhota, part=mirror.unit("cast_obce", LHOTA_LHOTA, "Lhota", lhota), cp=25,
@@ -990,9 +991,9 @@ def test_a_village_and_its_cp_typed_with_its_town_answer_the_streetless_door_of_
          "point": {"lat": 50.1703, "lng": 14.0021}, "street": None},
         {"level": "adresni_misto", "id": 21000203, "name": "Lhota, Kladno", "context": "Kladno", "point": None,
          "street": None},
+        {"level": "obec", "id": LHOTA, "name": "Lhota", "context": "Kladno", "point": None},
         {"level": "cast_obce", "id": LHOTA_LHOTA, "name": "Lhota", "context": "Lhota",
          "point": {"lat": 50.1703, "lng": 14.0021}},
-        {"level": "obec", "id": LHOTA, "name": "Lhota", "context": "Kladno", "point": None},
         {"level": "cast_obce", "id": LHOTA_KLADNO, "name": "Lhota", "context": "Kladno", "point": None},
     ]
 
@@ -1057,7 +1058,7 @@ NADRAZNI_PRAHA = 401003
 
 
 @pytest.mark.parametrize(("query", "kod"), [("Nádražní 12, Praha 6", 21000611), ("Praha 7, Nádražní 12", 21000612),
-                                           ("Nádražní 12 Praha 6", 21000611)])
+                                           ("Nádražní 12 Praha 6", 21000611), ("Nádražní 12, Praha6", 21000611)])
 def test_a_mestska_cast_typed_as_the_town_answers_the_door_that_lies_in_it(mirror, client, query, kod):
     """A street runs through several městské části of its town, and its doors carry the one each lies in: Nádražní 12
     is in Praha 6, Nádražní 345/12 in Praha 7. Both pieces of "Praha 7, Nádražní 12" carry a number; "Praha 7" in a town
@@ -1143,3 +1144,442 @@ def test_a_failed_read_of_a_text_with_a_town_is_the_same_503_with_one_line_namin
     assert not any(word in r.getMessage().lower() for word in ("kolín", "kolin", "nádražní", "nadrazni")
                    for r in caplog.records)
     assert not any(r.exc_info for r in caplog.records)
+
+
+VYSOCINA, JIHLAVA_OKRES, JIHLAVA, JIHLAVA_CAST = 108, 3707, 586846, 412317
+
+
+def test_jihlava_answers_the_town_before_its_namesake_okres_and_quarter_though_the_okres_serves_more(mirror, client):
+    """#2497 ruling 1 as #2548 ruling 2 narrows it: a town ranks right above its own okres, and every other place of
+    that name keeps the ruled order (its own část, on equal served properties, after it). 68 of 77 okresy share a
+    town's exact name, and an okres serves at least what its town does: here 2 against 1, the second property in
+    another town of the okres."""
+    okres = mirror.unit("okres", JIHLAVA_OKRES, "Jihlava", mirror.unit("kraj", VYSOCINA, "Kraj Vysočina"))
+    mirror.unit("cast_obce", JIHLAVA_CAST, "Jihlava", mirror.unit("obec", JIHLAVA, "Jihlava", okres))
+    mirror.served(region=VYSOCINA, okres=JIHLAVA_OKRES, obec=JIHLAVA, part=JIHLAVA_CAST)
+    mirror.served(region=VYSOCINA, okres=JIHLAVA_OKRES)
+    mirror.publish()
+    assert _suggest(client, "Jihlava") == [
+        {"level": "obec", "id": JIHLAVA, "name": "Jihlava", "context": "Jihlava", "point": None},
+        {"level": "okres", "id": JIHLAVA_OKRES, "name": "Jihlava", "context": "Kraj Vysočina", "point": None},
+        {"level": "cast_obce", "id": JIHLAVA_CAST, "name": "Jihlava", "context": "Jihlava", "point": None},
+    ]
+
+
+PRAHA_10, VRSOVICE = 500224, 490237
+
+
+def test_praha_1_answers_its_mestska_cast_exactly_and_praha_10_only_by_its_start_though_praha_10_serves_more(
+        mirror, client):
+    """#2497: the town Praha is no exact match for "Praha 1", so the městská část keeps the first row, and "Praha 1"
+    never makes Praha 10 exact: it serves 2 against none and still answers after, as a prefix row. The town and the
+    kraj follow by similarity, the town first as it serves Praha 10's properties."""
+    praha = _praha(mirror)
+    mirror.quarters(mirror.unit("momc", PRAHA_1, "Praha 1", praha), mirror.unit("cast_obce", JOSEFOV, "Josefov", praha))
+    mirror.quarters(mirror.unit("momc", PRAHA_10, "Praha 10", praha),
+                    mirror.unit("cast_obce", VRSOVICE, "Vršovice", praha))
+    for _ in range(2):
+        mirror.served(obec=PRAHA, part=VRSOVICE)
+    mirror.publish()
+    assert _suggest(client, "Praha 1") == [
+        {"level": "momc", "id": PRAHA_1, "name": "Praha 1", "context": "Praha", "point": None,
+         "places": [{"level": "cast_obce", "id": JOSEFOV, "name": "Josefov", "context": "Praha"}]},
+        {"level": "momc", "id": PRAHA_10, "name": "Praha 10", "context": "Praha", "point": None,
+         "places": [{"level": "cast_obce", "id": VRSOVICE, "name": "Vršovice", "context": "Praha"}]},
+        {"level": "obec", "id": PRAHA, "name": "Praha", "context": "území Hlavního města Prahy", "point": None},
+        {"level": "kraj", "id": PRAHA_KRAJ, "name": "Hlavní město Praha", "context": None, "point": None},
+    ]
+
+
+PARDUBICE_OKRES, PARDUBICE, PARDUBICE_II, POLABINY = 3606, 555134, 555126, 410632
+
+
+@pytest.mark.parametrize("query", ["Pardubice 2", "Pardubice II"])
+def test_pardubice_2_answers_the_mestska_cast_pardubice_ii_first_as_its_exact_name_does(mirror, client, query):
+    """#2497, ruling 2: the register numbers Pardubice's městské části in Roman numerals, and a number typed in the
+    other form is the same name. Then what "pardubice" reaches by similarity: the town, then its own okres (#2548,
+    ruling 2)."""
+    pardubice = mirror.unit("obec", PARDUBICE, "Pardubice", mirror.unit("okres", PARDUBICE_OKRES, "Pardubice"))
+    mirror.quarters(mirror.unit("momc", PARDUBICE_II, "Pardubice II", pardubice),
+                    mirror.unit("cast_obce", POLABINY, "Polabiny", pardubice))
+    mirror.publish()
+    assert _suggest(client, query) == [
+        {"level": "momc", "id": PARDUBICE_II, "name": "Pardubice II", "context": "Pardubice", "point": None,
+         "places": [{"level": "cast_obce", "id": POLABINY, "name": "Polabiny", "context": "Pardubice"}]},
+        {"level": "obec", "id": PARDUBICE, "name": "Pardubice", "context": "Pardubice", "point": None},
+        {"level": "okres", "id": PARDUBICE_OKRES, "name": "Pardubice", "context": None, "point": None},
+    ]
+
+
+PLZEN_1, BOLEVEC, PLZEN_2, BOZKOV, PLZEN_10, LHOTA_PLZEN = 545970, 122122, 545988, 122297, 557978, 80942
+PLZEN_20_INVENTED, NOVA_CTVRT_INVENTED = 599920, 499920
+
+
+def _plzen(m: _Mirror) -> None:
+    """Plzeň's městské části as the register names them, each with one quarter: Plzeň 1, Plzeň 2-Slovany and Plzeň
+    10-Lhota, which serves 2 properties. Plzeň 20 and its quarter Nová Čtvrť are invented (production has no Plzeň 20;
+    Praha has Praha 2 beside Praha 20-22): a name that starts with "Plzeň 2" and serves 1."""
+    plzen = m.unit("obec", PLZEN, "Plzeň", m.unit("okres", PLZEN_MESTO, "Plzeň-město"))
+    for momc, name, part, quarter in ((PLZEN_1, "Plzeň 1", BOLEVEC, "Bolevec"),
+                                      (PLZEN_2, "Plzeň 2-Slovany", BOZKOV, "Božkov"),
+                                      (PLZEN_10, "Plzeň 10-Lhota", LHOTA_PLZEN, "Lhota"),
+                                      (PLZEN_20_INVENTED, "Plzeň 20", NOVA_CTVRT_INVENTED, "Nová Čtvrť")):
+        m.quarters(m.unit("momc", momc, name, plzen), m.unit("cast_obce", part, quarter, plzen))
+    for part in (LHOTA_PLZEN, LHOTA_PLZEN, NOVA_CTVRT_INVENTED):
+        m.served(obec=PLZEN, part=part)
+
+
+def _plzen_row(momc: int, name: str, part: int, quarter: str) -> dict[str, Any]:
+    return {"level": "momc", "id": momc, "name": name, "context": "Plzeň", "point": None,
+            "places": [{"level": "cast_obce", "id": part, "name": quarter, "context": "Plzeň"}]}
+
+
+def test_plzen_2_and_plzen_ii_answer_plzen_2_slovany_exactly_and_plzen_1_never_makes_plzen_10_lhota_exact(
+        mirror, client):
+    """#2497, ruling 2, the suffix half: the number, in either form, followed by the register's suffix is the exact
+    name, so Plzeň 2-Slovany answers before Plzeň 20, which only starts so and serves more, and before the town, which
+    "plzen ii" reaches by similarity and serves the most. A suffix follows a space: "Plzeň 1" is no start of Plzeň
+    10-Lhota's name, which stays a prefix row though it serves more. Two rows a question, so nothing fuzzy follows a
+    full list."""
+    _plzen(mirror)
+    mirror.publish()
+
+    def suggest(query: str) -> list[dict[str, Any]]:
+        res = client.post("/places/suggest", json={"query": query, "limit": 2})
+        assert res.status_code == 200, res.text
+        return res.json()["items"]
+
+    slovany = _plzen_row(PLZEN_2, "Plzeň 2-Slovany", BOZKOV, "Božkov")
+    assert suggest("Plzeň 2") == [slovany, _plzen_row(PLZEN_20_INVENTED, "Plzeň 20", NOVA_CTVRT_INVENTED, "Nová Čtvrť")]
+    assert suggest("Plzeň II") == [
+        slovany, {"level": "obec", "id": PLZEN, "name": "Plzeň", "context": "Plzeň-město", "point": None}]
+    assert suggest("Plzeň 1") == [_plzen_row(PLZEN_1, "Plzeň 1", BOLEVEC, "Bolevec"),
+                                  _plzen_row(PLZEN_10, "Plzeň 10-Lhota", LHOTA_PLZEN, "Lhota")]
+
+
+PARDUBICE_I, NADRAZNI_PLZEN, NADRAZNI_PARDUBICE = 574716, 401021, 401022
+
+
+@pytest.mark.parametrize(("query", "kod"), [("Nádražní 12, Plzeň 2", 21000621), ("Nádražní 12, Pardubice 2", 21000623)])
+def test_a_mestska_cast_typed_by_its_number_as_the_town_answers_the_door_that_lies_in_it(mirror, client, query, kod):
+    """#2497, ruling 2 in the address town (#2485): "Plzeň 2" names Plzeň 2-Slovany and "Pardubice 2" Pardubice II, so
+    each narrows to the door in that městská část: Nádražní 12, never Nádražní 345/12 in Plzeň 1 or Pardubice I. The
+    streets' codes are invented. The whole text names nothing by similarity."""
+    plzen = mirror.unit("obec", PLZEN, "Plzeň", mirror.unit("okres", PLZEN_MESTO, "Plzeň-město"))
+    pardubice = mirror.unit("obec", PARDUBICE, "Pardubice", mirror.unit("okres", PARDUBICE_OKRES, "Pardubice"))
+    for town, street, door, inside, beside in (
+            (plzen, NADRAZNI_PLZEN, 21000621, (PLZEN_2, "Plzeň 2-Slovany"), (PLZEN_1, "Plzeň 1")),
+            (pardubice, NADRAZNI_PARDUBICE, 21000623, (PARDUBICE_II, "Pardubice II"), (PARDUBICE_I, "Pardubice I"))):
+        nadrazni = mirror.street(street, "Nádražní", town)
+        mirror.house(door, town, street=nadrazni, cp=12, momc=mirror.unit("momc", *inside, town))
+        mirror.house(door + 1, town, street=nadrazni, cp=345, co=12, momc=mirror.unit("momc", *beside, town))
+    mirror.publish()
+    door = {
+        21000621: {"level": "adresni_misto", "id": 21000621, "name": "Nádražní 12, Plzeň", "context": "Plzeň-město",
+                   "point": None,
+                   "street": {"level": "ulice", "id": NADRAZNI_PLZEN, "name": "Nádražní", "context": "Plzeň"}},
+        21000623: {"level": "adresni_misto", "id": 21000623, "name": "Nádražní 12, Pardubice",
+                   "context": "Pardubice", "point": None,
+                   "street": {"level": "ulice", "id": NADRAZNI_PARDUBICE, "name": "Nádražní", "context": "Pardubice"}},
+    }
+    assert _suggest(client, query) == [door[kod]]
+
+
+def test_kolin_3_names_the_cast_obce_kolin_iii_as_its_exact_name_does_and_as_the_town_its_door(mirror, client):
+    """#2499: the register also numbers části obce in Roman numerals ("Kolín III"), and a number typed in the other
+    form is the same name: Kolín III answers first, then what "kolin 3" reaches by similarity: the town right above its
+    own okres (#2548, ruling 2), then Kolín II. As the address
+    town it narrows to the door that lies in Kolín III, never Kolín II's door 12 on the same street."""
+    towns = _towns(mirror)
+    nadrazni = mirror.street(NADRAZNI_KOLIN, "Nádražní", towns["kolin"])
+    kolin_ii = mirror.unit("cast_obce", KOLIN_II, "Kolín II", towns["kolin"])
+    kolin_iii = mirror.unit("cast_obce", KOLIN_III, "Kolín III", towns["kolin"])
+    mirror.house(21000121, towns["kolin"], street=nadrazni, part=kolin_ii, cp=12)
+    mirror.house(21000122, towns["kolin"], street=nadrazni, part=kolin_iii, cp=12)
+    mirror.publish()
+    assert _suggest(client, "Nádražní 12, Kolín 3") == [
+        {"level": "adresni_misto", "id": 21000122, "name": "Nádražní 12, Kolín", "context": "Kolín", "point": None,
+         "street": {"level": "ulice", "id": NADRAZNI_KOLIN, "name": "Nádražní", "context": "Kolín"}},
+    ]
+    assert _suggest(client, "Kolín 3") == [
+        {"level": "cast_obce", "id": KOLIN_III, "name": "Kolín III", "context": "Kolín", "point": None},
+        {"level": "obec", "id": KOLIN, "name": "Kolín", "context": "Kolín", "point": None},
+        {"level": "okres", "id": KOLIN_OKRES, "name": "Kolín", "context": "Středočeský kraj", "point": None},
+        {"level": "cast_obce", "id": KOLIN_II, "name": "Kolín II", "context": "Kolín", "point": None},
+    ]
+
+
+LIBEREC_OKRES, LIBEREC, LIBEREC_I, LIBEREC_IX = 3505, 563889, 408638, 408671
+JABLONNE, JABLONNE_CAST = 561631, 56219
+
+
+def test_liberec_1_names_liberec_i_stare_mesto_but_a_preposition_v_never_reads_as_a_number(mirror, client):
+    """#2499, the suffix half: the number in either form, then the register's suffix after a hyphen, is the exact name,
+    so "Liberec 1" names Liberec I-Staré Město and never Liberec IX-Janův Důl. A suffix follows the number after a
+    hyphen or a dot, never a space: in Czech "v" is 5 and also "in", and "Jablonné v Podještědí" is no numbered name.
+    Typed so far, "Jablonné v" starts the town's name and its část's alike, and the town, which has people, goes first.
+    One row for "Liberec 1", so nothing fuzzy follows."""
+    liberec_okres = mirror.unit("okres", LIBEREC_OKRES, "Liberec")
+    liberec = mirror.unit("obec", LIBEREC, "Liberec", liberec_okres)
+    mirror.unit("cast_obce", LIBEREC_I, "Liberec I-Staré Město", liberec)
+    mirror.unit("cast_obce", LIBEREC_IX, "Liberec IX-Janův Důl", liberec)
+    jablonne = mirror.unit("obec", JABLONNE, "Jablonné v Podještědí", liberec_okres)
+    mirror.unit("cast_obce", JABLONNE_CAST, "Jablonné v Podještědí", jablonne)
+    mirror.population(JABLONNE, 3700)
+    mirror.publish()
+    res = client.post("/places/suggest", json={"query": "Liberec 1", "limit": 1})
+    assert res.status_code == 200, res.text
+    assert res.json()["items"] == [
+        {"level": "cast_obce", "id": LIBEREC_I, "name": "Liberec I-Staré Město", "context": "Liberec", "point": None}]
+    assert _suggest(client, "Jablonné v") == [
+        {"level": "obec", "id": JABLONNE, "name": "Jablonné v Podještědí", "context": "Liberec", "point": None},
+        {"level": "cast_obce", "id": JABLONNE_CAST, "name": "Jablonné v Podještědí", "context": "Jablonné v Podještědí",
+         "point": None},
+    ]
+
+
+KUTNA_HORA_OKRES, HORKA_I, HORKA_I_CAST, HORKA_II, HORKA_II_CAST = 3205, 531430, 195766, 534056, 42030
+
+
+def test_horka_2_names_the_town_horka_ii_first_and_then_its_cast_of_the_same_name(mirror, client):
+    """#2499: the register numbers 11 obce too ("Horka II"), each beside a část of the same name, so the number names
+    the town as it names the část, and the town goes first (#2497, ruling 1). Horka I is no start of "horka 2" in
+    either form. Two rows, so nothing fuzzy follows."""
+    okres = mirror.unit("okres", KUTNA_HORA_OKRES, "Kutná Hora")
+    for obec, cast, name in ((HORKA_I, HORKA_I_CAST, "Horka I"), (HORKA_II, HORKA_II_CAST, "Horka II")):
+        mirror.unit("cast_obce", cast, name, mirror.unit("obec", obec, name, okres))
+    mirror.publish()
+    res = client.post("/places/suggest", json={"query": "Horka 2", "limit": 2})
+    assert res.status_code == 200, res.text
+    assert res.json()["items"] == [
+        {"level": "obec", "id": HORKA_II, "name": "Horka II", "context": "Kutná Hora", "point": None},
+        {"level": "cast_obce", "id": HORKA_II_CAST, "name": "Horka II", "context": "Horka II", "point": None},
+    ]
+
+
+# #2548: the gaps a simulated run of gate #2465 found (244 questions, 2026-11-17), and ruling 2 of that day.
+KARLIN_PRAHA, KARLIN_OBEC, HODONIN_OKRES = 400637, 586340, 3706
+OLOMOUCKY, OLOMOUC_OKRES, OLOMOUC = 124, 3805, 500496
+
+
+def test_a_served_quarter_answers_before_an_unserved_village_of_its_exact_name(mirror, client):
+    """Ruling 2 (2026-11-17): "town first" holds only against the town's own okres and kraj; any other exact tie ranks
+    by served properties, so Praha's Karlín, which serves a property, comes before the village Karlín."""
+    praha = _praha(mirror)
+    mirror.unit("cast_obce", KARLIN_PRAHA, "Karlín", praha)
+    jihomoravsky = mirror.unit("kraj", JIHOMORAVSKY, "Jihomoravský kraj")
+    mirror.unit("obec", KARLIN_OBEC, "Karlín", mirror.unit("okres", HODONIN_OKRES, "Hodonín", jihomoravsky))
+    mirror.served(region=PRAHA_KRAJ, okres=PRAHA_OKRES, obec=PRAHA, part=KARLIN_PRAHA)
+    mirror.population(KARLIN_OBEC, 180)
+    mirror.publish()
+    assert _chips(_suggest(client, "Karlín")) == [
+        ("cast_obce", KARLIN_PRAHA, "Karlín", "Praha"),
+        ("obec", KARLIN_OBEC, "Karlín", "Hodonín"),
+    ]
+
+
+def test_a_town_typed_by_its_start_answers_right_above_its_own_okres_and_kraj_though_they_serve_more(mirror, client):
+    """Ruling 2: a town ranks above its own okres and kraj on every tier, not only an exact one ("olomo" starts all
+    three). The okres and the kraj serve what the town does and more; the nearer region follows the town first."""
+    kraj = mirror.unit("kraj", OLOMOUCKY, "Olomoucký kraj")
+    okres = mirror.unit("okres", OLOMOUC_OKRES, "Olomouc", kraj)
+    mirror.unit("obec", OLOMOUC, "Olomouc", okres)
+    mirror.served(region=OLOMOUCKY, okres=OLOMOUC_OKRES, obec=OLOMOUC)
+    mirror.served(region=OLOMOUCKY, okres=OLOMOUC_OKRES)
+    mirror.served(region=OLOMOUCKY)
+    mirror.publish()
+    assert _chips(_suggest(client, "olomo")) == [
+        ("obec", OLOMOUC, "Olomouc", "Olomouc"),
+        ("okres", OLOMOUC_OKRES, "Olomouc", "Olomoucký kraj"),
+        ("kraj", OLOMOUCKY, "Olomoucký kraj", None),
+    ]
+
+
+MORAVSKOSLEZSKY, BRUNTAL_OKRES, MS_KOCOV = 132, 3801, 551732
+
+
+def test_a_village_named_like_its_kraj_with_no_real_share_of_it_answers_after_the_kraj(mirror, client):
+    """#2612: a town leads its region only with one in twenty of its served properties. Moravskoslezský Kočov serves 1
+    of its kraj's 21 (on production 10 of 32,568), so the kraj answers first."""
+    kraj = mirror.unit("kraj", MORAVSKOSLEZSKY, "Moravskoslezský kraj")
+    mirror.unit("obec", MS_KOCOV, "Moravskoslezský Kočov", mirror.unit("okres", BRUNTAL_OKRES, "Bruntál", kraj))
+    mirror.served(region=MORAVSKOSLEZSKY, okres=BRUNTAL_OKRES, obec=MS_KOCOV)
+    for _ in range(20):
+        mirror.served(region=MORAVSKOSLEZSKY)
+    mirror.publish()
+    assert _chips(_suggest(client, "Moravskoslezský")) == [
+        ("kraj", MORAVSKOSLEZSKY, "Moravskoslezský kraj", None),
+        ("obec", MS_KOCOV, "Moravskoslezský Kočov", "Bruntál"),
+    ]
+
+
+def test_a_town_with_one_in_twenty_of_its_regions_served_properties_still_leads_it(mirror, client):
+    """#2612: one in twenty is a real share (on production every town named like its okres holds 7.58 % or more)."""
+    kraj = mirror.unit("kraj", OLOMOUCKY, "Olomoucký kraj")
+    mirror.unit("obec", OLOMOUC, "Olomouc", mirror.unit("okres", OLOMOUC_OKRES, "Olomouc", kraj))
+    mirror.served(region=OLOMOUCKY, okres=OLOMOUC_OKRES, obec=OLOMOUC)
+    for _ in range(19):
+        mirror.served(region=OLOMOUCKY)
+    mirror.publish()
+    assert _chips(_suggest(client, "olomo")) == [
+        ("obec", OLOMOUC, "Olomouc", "Olomouc"),
+        ("okres", OLOMOUC_OKRES, "Olomouc", "Olomoucký kraj"),
+        ("kraj", OLOMOUCKY, "Olomoucký kraj", None),
+    ]
+
+
+VACLAVSKE_PRAHA, VACLAVSKE_TREBIC, TREBIC_OKRES, TREBIC = 477265, 470701, 3710, 590266
+TR_SVOBODY, TRIDA_SVOBODY_NOVA = 326780, 326781
+
+
+def test_a_street_typed_short_is_exact_under_every_spelling_the_register_uses_and_served_decides(mirror, client):
+    """Gap 2: "nám." and "náměstí" name one street. Třebíč's register spells it short, Praha's long; both are exact,
+    so Praha's, which serves properties, answers first (before, Třebíč's was exact and Praha's only a prefix)."""
+    praha = _praha(mirror)
+    trebic = mirror.unit("obec", TREBIC, "Třebíč", mirror.unit("okres", TREBIC_OKRES, "Třebíč"))
+    mirror.street(VACLAVSKE_PRAHA, "Václavské náměstí", praha)
+    mirror.street(VACLAVSKE_TREBIC, "Václavské nám.", trebic)
+    mirror.served(obec=PRAHA, street=VACLAVSKE_PRAHA)
+    mirror.served(obec=PRAHA, street=VACLAVSKE_PRAHA)
+    mirror.publish()
+    assert _chips(_suggest(client, "Václavské nám."))[:2] == [
+        ("ulice", VACLAVSKE_PRAHA, "Václavské náměstí", "Praha"),
+        ("ulice", VACLAVSKE_TREBIC, "Václavské nám.", "Třebíč"),
+    ]
+
+
+def test_a_street_typed_long_is_exact_under_the_register_s_short_spelling_before_one_it_only_starts(mirror, client):
+    """Gap 2: the register writes Olomouc's "tř. Svobody"; "třída Svobody" is that exact name, so it answers before
+    "třída Svobody Nová", which the text only starts, though that one serves a property."""
+    olomouc = mirror.unit("obec", OLOMOUC, "Olomouc", mirror.unit("okres", OLOMOUC_OKRES, "Olomouc"))
+    mirror.street(TR_SVOBODY, "tř. Svobody", olomouc)
+    mirror.street(TRIDA_SVOBODY_NOVA, "třída Svobody Nová", olomouc)
+    mirror.served(obec=OLOMOUC, street=TRIDA_SVOBODY_NOVA)
+    mirror.publish()
+    assert _chips(_suggest(client, "třída Svobody"))[:2] == [
+        ("ulice", TR_SVOBODY, "tř. Svobody", "Olomouc"),
+        ("ulice", TRIDA_SVOBODY_NOVA, "třída Svobody Nová", "Olomouc"),
+    ]
+
+
+BENESOV_OKRES, BENESOV = 3201, 529303
+
+
+def test_okres_and_a_name_answers_only_the_okres_of_that_name(mirror, client):
+    """Gap 4: "okres Benešov" names the okres. Before, the word "okres" started no name and nothing answered; the town
+    Benešov, which "Benešov" alone answers first, is left out."""
+    stredocesky = mirror.unit("kraj", STREDOCESKY, "Středočeský kraj")
+    mirror.unit("obec", BENESOV, "Benešov", mirror.unit("okres", BENESOV_OKRES, "Benešov", stredocesky))
+    mirror.publish()
+    assert _chips(_suggest(client, "okres Benešov")) == [("okres", BENESOV_OKRES, "Benešov", "Středočeský kraj")]
+
+
+def test_a_number_typed_straight_after_a_name_reads_as_if_spaced(mirror, client):
+    """Gap 5: "Praha6" is "Praha 6". Before, "praha6" started no name and the městská část was missing."""
+    praha = _praha(mirror)
+    praha_6 = mirror.unit("momc", PRAHA_6, "Praha 6", praha)
+    mirror.quarters(praha_6, mirror.unit("cast_obce", DEJVICE, "Dejvice", praha))
+    mirror.publish()
+    items = _suggest(client, "Praha6")
+    assert _chips(items)[0] == ("momc", PRAHA_6, "Praha 6", "Praha")
+    assert items == _suggest(client, "Praha 6")
+
+
+OLOMUCANY, BLANSKO_OKRES, OLOMOUCKA = 581917, 3701, 330120
+
+
+def test_a_typo_reaches_the_town_at_a_word_similarity_of_055_while_a_street_still_needs_060(mirror, client):
+    """Gap 6: "olomuc" starts Olomučany and is 0.57 like Olomouc, which used to be out of reach at 0.6. Place names
+    now reach 0.55; the town goes right above its own okres (ruling 2). The street Olomoucká, also 0.57, stays out: a
+    street still needs 0.6."""
+    olomouc = mirror.unit("obec", OLOMOUC, "Olomouc", mirror.unit("okres", OLOMOUC_OKRES, "Olomouc"))
+    mirror.unit("obec", OLOMUCANY, "Olomučany", mirror.unit("okres", BLANSKO_OKRES, "Blansko"))
+    mirror.street(OLOMOUCKA, "Olomoucká", olomouc)
+    mirror.publish()
+    assert _chips(_suggest(client, "Olomuc")) == [
+        ("obec", OLOMUCANY, "Olomučany", "Blansko"),
+        ("obec", OLOMOUC, "Olomouc", "Olomouc"),
+        ("okres", OLOMOUC_OKRES, "Olomouc", None),
+    ]
+
+
+MASARYKOVA_BRNO, MASARYKOVA_USTI, USTI_OKRES, USTI, PRAHA_3 = 27596, 618659, 3510, 554804, 500097
+
+
+@pytest.mark.parametrize("query", ["Masarykova, Brno", "Brno, Masarykova", "Masarykova Brno"])
+def test_a_street_typed_with_its_town_and_no_number_answers_that_town_s_street_first(mirror, client, query):
+    """Gap 1: the town is read without a number too, as the door read reads it (#2485): after a comma, before it, or
+    as the last words. Brno's Masarykova answers first though Ústí's serves more; Ústí's follows, as the whole text is
+    only similar to it."""
+    towns = _jihomoravsky(mirror)
+    usti = mirror.unit("obec", USTI, "Ústí nad Labem", mirror.unit("okres", USTI_OKRES, "Ústí nad Labem"))
+    mirror.street(MASARYKOVA_BRNO, "Masarykova", towns["brno"])
+    mirror.street(MASARYKOVA_USTI, "Masarykova", usti)
+    mirror.served(obec=USTI, street=MASARYKOVA_USTI)
+    mirror.served(obec=USTI, street=MASARYKOVA_USTI)
+    mirror.publish()
+    assert _chips(_suggest(client, query)) == [
+        ("ulice", MASARYKOVA_BRNO, "Masarykova", "Brno"),
+        ("ulice", MASARYKOVA_USTI, "Masarykova", "Ústí nad Labem"),
+    ]
+
+
+def test_a_quarter_typed_after_its_mestska_cast_answers_only_if_it_lies_in_it(mirror, client):
+    """Gap 1: "Praha 6 Dejvice" names Dejvice in Praha 6 (its pairs). Žižkov lies in Praha 3, so "Praha 6 Žižkov"
+    does not answer it."""
+    praha = _praha(mirror)
+    dejvice = mirror.unit("cast_obce", DEJVICE, "Dejvice", praha)
+    zizkov = mirror.unit("cast_obce", ZIZKOV_PRAHA, "Žižkov", praha)
+    mirror.quarters(mirror.unit("momc", PRAHA_6, "Praha 6", praha), dejvice)
+    mirror.quarters(mirror.unit("momc", PRAHA_3, "Praha 3", praha), zizkov)
+    mirror.publish()
+    assert _chips(_suggest(client, "Praha 6 Dejvice"))[:1] == [("cast_obce", DEJVICE, "Dejvice", "Praha")]
+    assert ("cast_obce", ZIZKOV_PRAHA, "Žižkov", "Praha") not in _chips(_suggest(client, "Praha 6 Žižkov"))
+
+
+FM_OKRES, FRYDEK_MISTEK, FRYDEK_CAST, MISTECKA = 3802, 598003, 598011, 600001
+
+
+def test_a_town_typed_so_far_answers_before_the_streets_its_words_find_in_a_town(mirror, client):
+    """Gap 1's limit: half-way through "Frýdek-Místek" the whole text starts the town and its okres, and that beats
+    reading "Frýdek" as a town and "Mís" as the start of its street Místecká, which follows; the část Frýdek, only
+    similar to the whole text, comes last."""
+    fm = mirror.unit("obec", FRYDEK_MISTEK, "Frýdek-Místek", mirror.unit("okres", FM_OKRES, "Frýdek-Místek"))
+    mirror.unit("cast_obce", FRYDEK_CAST, "Frýdek", fm)
+    mirror.street(MISTECKA, "Místecká", fm)
+    mirror.publish()
+    assert _chips(_suggest(client, "Frýdek-Mís")) == [
+        ("obec", FRYDEK_MISTEK, "Frýdek-Místek", "Frýdek-Místek"),
+        ("okres", FM_OKRES, "Frýdek-Místek", None),
+        ("ulice", MISTECKA, "Místecká", "Frýdek-Místek"),
+        ("cast_obce", FRYDEK_CAST, "Frýdek", "Frýdek-Místek"),
+    ]
+
+
+NOVAKA = 470801
+
+
+def test_a_street_typed_with_three_abbreviations_is_exact_under_the_register_s_full_spelling(mirror, client):
+    """Gap 2's bound: "nám. gen. plk. Nováka" has eight spellings, more than the three prefix slots, and the
+    register's full one is none of the three; it is still read, as the exact keys select rows of their own."""
+    mirror.street(NOVAKA, "náměstí generála plukovníka Nováka", _praha(mirror))
+    mirror.publish()
+    assert _chips(_suggest(client, "nám. gen. plk. Nováka"))[:1] == [
+        ("ulice", NOVAKA, "náměstí generála plukovníka Nováka", "Praha"),
+    ]
+
+
+KOLIN_III_HUSOVA = 228801
+
+
+@pytest.mark.parametrize(("query", "street"), [("Husova, Kolín 3", KOLIN_III_HUSOVA), ("Dejvice, Praha", None)])
+def test_a_town_named_by_its_number_or_a_cast_named_with_its_obec_answers_in_that_town(mirror, client, query, street):
+    """Gap 1: the town by its number's other form ("Kolín 3" is Kolín III, whose obec's streets answer), and a část
+    with its obec ("Dejvice, Praha"). Neither whole text is a name, so each answers by its town alone."""
+    towns = _towns(mirror)
+    mirror.unit("cast_obce", KOLIN_III, "Kolín III", towns["kolin"])
+    mirror.street(KOLIN_III_HUSOVA, "Husova", towns["kolin"])
+    mirror.unit("cast_obce", DEJVICE, "Dejvice", _praha(mirror))
+    mirror.publish()
+    expected = ("ulice", street, "Husova", "Kolín") if street else ("cast_obce", DEJVICE, "Dejvice", "Praha")
+    assert _chips(_suggest(client, query))[:1] == [expected]

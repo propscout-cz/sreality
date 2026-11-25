@@ -134,15 +134,17 @@ _Avoid_: sold, sale speed, time to sell
 **Settled**:
 A property the pipeline is done with: its first photo is stored (or it has none), and the engine has
 read every one of its ads, holds no pending question about them and keeps none of them in a group
-that also holds an ad on another property, or on none yet. Stamped once, by property maintenance; a
-merge passes a settled property's stamp to the survivor only when that publishes the survivor
-earlier, so publication never regresses, and never moves later.
+that also holds an ad on another property, or on none yet. Settled is one of the two ways a property
+becomes published; it has no stamp of its own.
 _Avoid_: evaluated, checked, dedup-checked
 
 **Published**:
-A property Browse, the map, Stats and the watchdog serve: from the moment it is settled, or 6 hours
-after it was first seen, whichever comes first. The 6 hours are the cap, so a slow engine can delay
-a property but never hide it. Its page opens by its link either way.
+A property Browse, the map, Stats and the watchdog serve: from the moment the maintenance pass
+stamps it. The pass never stamps it before the engine has read every ad on it that lies in the
+engine's scope; after that it stamps it once settled, or 6 hours after it was first seen and after
+the engine first read its ads (the cap, which also is the whole wait outside the scope). Stamped
+once; a merge or a split passes the stamp on, so publication never regresses. Its page opens by its
+link either way.
 _Avoid_: gated-in, live (for this)
 
 **Valuo valuation**:
@@ -306,7 +308,8 @@ stage or closed offers to put its card there.
 _Avoid_: visit stage, the stage's key or label as its meaning
 
 **Collection**:
-A named set of properties an account keeps, optionally watched for changes. It may be shared
+A named set of properties an account keeps, optionally watched: its owner is told the property
+events it chose about the properties in it. It may be shared
 read-only with other accounts. As a filter: in any chosen collection, in none of the excluded
 ones, or in no collection at all ("V žádné kolekci"); own and shared-with-me count alike.
 _Avoid_: list, folder, favourites, saved list
@@ -427,8 +430,46 @@ the list's own reads never park.
 _Avoid_: hold (a write's hold, which paints and expires), pause, suspend, throttle
 
 **Watchdog**:
-A saved filter that alerts an account when a property newly matches it or drops its price.
+A saved filter that watches its slice of the market, the properties on the market that match it, and
+tells its account the property events the account chose about any property in that slice. Editing it
+starts it afresh.
 _Avoid_: alert (for the saved filter), subscription, notification
+
+**Velocity filter**:
+A filter on how a property has moved on the market over time: its time on market, when it was first
+or last seen, and how often or how much its price changed.
+_Avoid_: speed filter, TOM filter (alone)
+
+**Notification**:
+One notice in an account's feed: one property event from one watchdog or one watched collection,
+or one share. It names the watchdog or collection it came from.
+_Avoid_: alert (alone), message, dispatch (in prose)
+
+**Property event**:
+Something that happens to a property which a watchdog or a watched collection can be set to tell:
+a new match, a price drop, a price rise, left the market, back on the market, or a new portal.
+_Avoid_: change kind, alert kind, event (alone)
+
+**New match** (UI: "Nová shoda"):
+A property event: a property enters a watchdog's slice because something about it changed (newly
+listed, its price, a new ad, an ad's facts, its place) or, for a watchdog with a velocity
+filter, because time passed. It names why; a property that leaves and later re-enters is a new match
+again, except on its return to the market, which is back on the market.
+_Avoid_: new listing, new ad (for this)
+
+**Left the market** (UI: "Opustilo trh"):
+A property event: every ad of the property became inactive and stayed so for a day. Sold or
+withdrawn; the platform cannot tell which, and an ad may still come back.
+_Avoid_: delisted, withdrawn, sold, removed
+
+**Back on the market** (UI: "Znovu na trhu"):
+A property event: a property off the market for a day or more has an active ad again, by a revival
+or a re-list. A watchdog and a watched collection tell it alike, each when set to.
+_Avoid_: relisted, reactivated
+
+**New portal** (UI: "Nový portál"):
+A property event: a portal that had no ad on the property now has one.
+_Avoid_: new source
 
 **Broker contact record**:
 A broker's email and phone that one account captured from one ad's portal page after showing
@@ -611,7 +652,7 @@ _Avoid_: unknown (in prose), skipped, pending, OK
 
 **Watcher**:
 A check that judges whether the rest of the health system is alive: the realtime worker's
-heartbeat, every alarm measured on time, the API's background loops, every measured Problem given an
+heartbeat, every check measured on time, the API's background loops, every measured Problem given an
 incident. It runs on the database's own scheduler, outside the worker and the API it judges; the one
 watcher is the liveness check, shown as "Watchers".
 _Avoid_: monitor, meta-check, dead-man switch, heartbeat check

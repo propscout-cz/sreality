@@ -69,8 +69,9 @@ the API's loop), so the API's one loop is the health teller*). It runs, as conti
    stored, with a timeout fallback for listings that genuinely have no photos. — *superseded
    2026-10-23 by the publication rule (rule 16, migrations 668/669, `toolkit/publication.py`): the
    maintenance lane's pass stamps `properties.settled_at` once a property's first photo is stored
-   (or it has none) and the engine is done with its ads, and Browse, the map, stats and the
-   watchdog serve a property once it is settled or 6 h old; the image gate is deleted.*
+   (or it has none) and the engine is done with its ads, or it is 6 h old and the engine has read
+   every in-scope ad on it (2026-11-17), and Browse, the map, stats and the watchdog serve a
+   property once it is stamped; the image gate is deleted.*
 4. **Targeted gone-probes** for watchdog/pipeline/collection properties (the per-listing
    `ListingGoneError` → immediate inactive flip already exists) — minutes-grade delisting
    for WATCHED properties; market-wide delisting stays completeness-gated on the walks.
@@ -287,14 +288,21 @@ lag, a 45 s budget and 2 000-row batches. Env knobs on the Railway service:
   without a version bump, and the hourly `location_intake` job, which projects before every run and
   fails on it, is the authoritative projector.
 - **Latency, detail write to Browse:** ≤2 min lag → ≤1 min tick → the resolve lane (~15 s) →
-  `browse_list`'s `*/15` pg_cron rebuild. Claim and verdict in ~3–4 minutes; the read model is now
+  `browse_list`'s pg_cron rebuild, hourly at :45 since migration 740 (the maintenance pass's published
+  enqueue first, for a property first seen within the 6 h cap plus two hours). Claim and verdict in
+  ~3–4 minutes; the read model is now
   the slowest hop, not the claim lane.
 
 **Location-refetch lane (location simplification W8; W2 of the quality programme made its tick a
-constant):** every hour (`LOCATION_REFETCH_TICK_SECONDS` = 3600), queue the active ads with no town
+constant):** every 6 h (`LOCATION_REFETCH_TICK_SECONDS` = 21600, #2506), queue the active ads with no town
 (rule 25) whose newest page or payload is at least `LOCATION_REFETCH_MIN_AGE_S` (6 h) old for ONE
-more detail fetch, at most `LOCATION_REFETCH_CAP_PER_SOURCE` (500) per portal — so a townless ad is
-re-read every 6 h or more while it stays townless. The predicate bounds the traffic, not the tick.
+more detail fetch, at most `LOCATION_REFETCH_CAP_PER_SOURCE` (500) per portal. The predicate and the
+tick bound the traffic together: a townless ad is queued for its second look 6-12 h after its
+discovery fetch, and while it stays townless it is re-read about every 12 h, not 6 — the drain's
+fetch lands after the tick that queued it, so the next tick finds that page a little under 6 h old
+(a worker boot runs one pass too). Health reads the lane late after 18 h without a completed pass,
+and only once the worker has been up 18 h (backend merges redeploy it, so that cell is mostly
+quiet; a failed pass is a Problem at once).
 
 - **Why.** ceskereality and realitymix geocode an ad after publishing it; our detail fetch ran at
   discovery, read empty location fields, and the index card never changed, so no re-fetch was ever
@@ -309,7 +317,10 @@ re-read every 6 h or more while it stays townless. The predicate bounds the traf
 - **Bounded per portal, oldest-fetched first.** `LOCATION_REFETCH_CAP_PER_SOURCE` (500) rows per
   portal per tick, so bazos's dead ads (their page answers with the category listing →
   `ListingGoneError` → delisted by the same fetch) drain over days instead of flooding one drain
-  pass. The heartbeat's `last` carries the UNCAPPED per-portal backlog beside what it queued.
+  pass. At four ticks a day that is a ceiling of 2,000 rows per portal per day plus one pass per
+  worker boot (12,000 at the hourly tick before #2506): kept, because these rows share
+  `QUEUE_PRIORITY_VERIFY` and its reserve with the presence checks, and the backlog was 0 when the
+  tick changed. The heartbeat's `last` carries the UNCAPPED per-portal backlog beside what it queued.
 - **It enqueues and nothing else.** `db.enqueue_location_refetch` writes at
   `QUEUE_PRIORITY_VERIFY` with `LEAST` on priority and `given_up=false, attempts=0` (the rows it
   most wants are the ones the drain gave up on; nothing else re-arms them). `claim_detail_batch`
@@ -518,7 +529,7 @@ nothing else.
   and `skipped: daily cap` + `unfinished` (every due block the pass never reached and every block
   inside a cycle) when the cap stopped the pass; null when the pass walked
   nothing and no block is mid-cycle)}`; an
-  absent store (migrations 539/540/596/604) = `skipped: store_absent` + one warning. A change of the reconcile state is logged once, and the
+  absent store (migrations 539/540/596/604/616/769) = `skipped: store_absent` + one warning. A change of the reconcile state is logged once, and the
   engine logs each release of a dead predecessor's lease.
 - **Latency floor.** The engine ignores rows younger than its settle lag (`SETTLE_LAG_S`, 300 s,
   E73), and a photo-dependent merge waits until every photograph carries its pHash, CLIP vector

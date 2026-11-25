@@ -525,12 +525,12 @@ _RESUME_SQL = """
     SELECT outcome, cursor_after_id, cursor_after_ts
     FROM location_claim_batches
     WHERE lane = %(lane)s
-      AND source IS NOT DISTINCT FROM %(source)s
+      AND (source = %(source)s OR (source IS NULL AND %(source)s::text IS NULL))
       AND scan_mode = %(scan_mode)s
       AND resumable
       AND cursor_after_id IS NOT NULL
       AND outcome IN ('ok', 'stopped', 'failed')
-    ORDER BY started_at DESC, id DESC
+    ORDER BY id DESC
     LIMIT 1
 """
 
@@ -564,9 +564,9 @@ _BODIES_RESUME_SQL = """
     SELECT bodies_cursor_after_id, bodies_cursor_versions
     FROM location_claim_batches
     WHERE lane = %(lane)s
-      AND source IS NOT DISTINCT FROM %(source)s
+      AND (source = %(source)s OR (source IS NULL AND %(source)s::text IS NULL))
       AND outcome IN ('ok', 'stopped', 'failed')
-    ORDER BY started_at DESC, id DESC
+    ORDER BY id DESC
     LIMIT 1
 """
 

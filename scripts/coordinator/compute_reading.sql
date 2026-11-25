@@ -15,13 +15,14 @@ with engine as (
     from public.job_runs r
    where r.ended_at is null and r.started_at > now() - interval '1 day'
 ), browse as (
-  select avg(extract(epoch from d.end_time - d.start_time)) as avg_s
+  -- The newest finished rebuild: it runs hourly at :45 (migration 740), so the last 2 h hold one.
+  select (array_agg(extract(epoch from d.end_time - d.start_time) order by d.start_time desc))[1] as last_s
     from cron.job j
     join cron.job_run_details d on d.jobid = j.jobid
    where j.jobname = 'browse-list-rebuild'
-     and d.start_time > now() - interval '1 hour' and d.end_time is not null
+     and d.start_time > now() - interval '2 hours' and d.end_time is not null
 ), lanes as (
-  -- A lane whose interval is 0 is off (or braked); the two hourly lanes pass once an hour.
+  -- A lane whose interval is 0 is off (or braked); the two slow lanes pass hours apart.
   select string_agg(e.k, ', ' order by e.k) as stale
     from public.worker_heartbeats w, jsonb_each(w.details) e(k, v)
    where w.worker = 'realtime-worker' and jsonb_typeof(e.v) = 'object'
@@ -29,14 +30,14 @@ with engine as (
      and e.k not in ('location_refetch', 'sold_comps')
      and (e.v ->> 'last_pass_at')::timestamptz < now() - interval '15 minutes'
 ), judged as (
-  select engine.unread, queue.pending, queue.oldest_h, jobs.running, browse.avg_s, lanes.stale,
+  select engine.unread, queue.pending, queue.oldest_h, jobs.running, browse.last_s, lanes.stale,
          concat_ws('; ',
            case when engine.unread > 2000 then 'engine backlog ' || engine.unread || ' unread' end,
            case when queue.pending > 20000 then 'detail queue ' || queue.pending || ' pending' end,
            case when queue.oldest_h > 6 then 'detail queue oldest ' || round(queue.oldest_h::numeric, 1) || ' h' end
          ) as load,
          concat_ws('; ',
-           case when browse.avg_s > 300 then 'browse rebuild ' || round(browse.avg_s::numeric) || ' s' end,
+           case when browse.last_s > 300 then 'browse rebuild ' || round(browse.last_s::numeric) || ' s' end,
            case when lanes.stale is not null then 'stale lanes: ' || lanes.stale end
          ) as strain
     from engine, queue, jobs, browse, lanes
@@ -52,7 +53,7 @@ select now() as read_at,
        j.unread as engine_unread,
        j.pending as queue_pending,
        round(j.oldest_h::numeric, 1) as queue_oldest_h,
-       round(j.avg_s::numeric) as browse_rebuild_s,
+       round(j.last_s::numeric) as browse_rebuild_s,
        j.running as jobs_running,
        (select (a.value #>> '{}')::bigint from public.app_settings a
          where a.key = 'realtime_autodedup_interval_seconds') as engine_brake_s,

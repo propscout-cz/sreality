@@ -127,7 +127,7 @@ def test_facts_use_the_registry_labels_and_drop_what_is_missing():
     assert facts["Stav"] == "Velmi dobrý"
     assert facts["Vlastnictví"] == "Osobní"
     assert facts["Vybavení"] == "Částečně"
-    assert facts["Podlaží"] == "1. patro z 6 podlaží"
+    assert facts["Podlaží"] == "2. podlaží z 6"
     assert "Pozemek" not in facts and "Zahrada" not in facts
 
 
@@ -139,20 +139,6 @@ def test_a_plot_says_its_area_is_the_plot():
 
 def test_a_value_outside_the_registry_shows_as_the_portal_wrote_it():
     assert dict(sheet._facts({"condition": "k_nastehovani"}))["Stav"] == "K_nastehovani"
-
-
-@pytest.mark.parametrize(
-    ("floor", "total", "expected"),
-    [
-        (0, None, "přízemí"),
-        (-1, None, "suterén"),
-        (-2, None, "2. podzemní podlaží"),
-        (3, 6, "3. patro z 6 podlaží"),
-        (None, 6, None),
-    ],
-)
-def test_floor_wording_matches_the_page(floor, total, expected):
-    assert sheet._floor(floor, total) == expected
 
 
 def test_amenities_drop_the_unknown_and_strike_the_absent():

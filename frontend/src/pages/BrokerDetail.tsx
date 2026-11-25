@@ -1,13 +1,21 @@
-import { useId, useMemo, useState } from 'react';
+import { useId, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { brokerBoardPath } from '@/lib/browseState';
 import { useNewTabProps } from '@/lib/linkGestures';
 import { useQuery } from '@tanstack/react-query';
 import {
-  BROKER_LISTINGS_LIMIT,
+  BROKER_PRICE_SCOPES,
+  BROKER_PROPERTIES_PAGE,
+  categoryShareLabel,
   fetchBrokerDossier,
-  fetchBrokerListings,
-  type BrokerListing,
+  fetchBrokerProperties,
+  inventoryCount,
+  useBrokerPriceSlice,
+  type BrokerCategoryShare,
+  type BrokerInventoryFilter,
+  type BrokerPriceFigures,
+  type BrokerPriceScope,
+  type BrokerProperty,
   type BrokerRegionShare,
   type BrokerMembership,
 } from '../lib/brokers';
@@ -15,10 +23,13 @@ import { fmtCount, fmtCzk, fmtArea, fmtRelative } from '../lib/format';
 import { portalBadge } from '../lib/portals';
 import { SegmentedBar } from '../components/controls';
 import BrokerContactCard from '@/components/BrokerContactCard';
+import PriceDelta from '@/components/PriceDelta';
 import { brokerContact } from '@/lib/brokerContact';
 import Panel, { PanelEmpty } from '@/components/Panel';
+import LoadMore from '@/components/LoadMore';
+import { useInfiniteList } from '@/lib/useInfiniteList';
 import { useExploreBrokerModal } from '@/components/ExploreBrokerModal';
-import { advertPath, propertyPath } from '@/lib/listingUrl';
+import { propertyPath } from '@/lib/listingUrl';
 import { categoryMainLabel, categoryTypeLabel, listingKindLabel } from '@/lib/enums';
 import { usePageTitle } from '@/lib/pageTitle';
 import { usePhoneShell } from '@/lib/phoneShell';
@@ -58,7 +69,7 @@ function BrokerDetailDesktop() {
   const brokerId = Number(id);
 
   // Lifted out of Inventory so the "Explore this broker's listings" modal
-  // seeds from the SAME Typ/Nabídka selection the table is filtered to —
+  // seeds from the SAME Typ/Nabídka selection the table reads —
   // one cohort definition for both, not two that happen to agree.
   const [categoryMain, setCategoryMain] = useState<string | null>(null);
   const [categoryType, setCategoryType] = useState<string | null>(null);
@@ -70,11 +81,6 @@ function BrokerDetailDesktop() {
   const dossierQ = useQuery({
     queryKey: ['broker-dossier', brokerId],
     queryFn: () => fetchBrokerDossier(brokerId),
-    enabled: Number.isFinite(brokerId),
-  });
-  const listingsQ = useQuery({
-    queryKey: ['broker-listings', brokerId],
-    queryFn: () => fetchBrokerListings(brokerId),
     enabled: Number.isFinite(brokerId),
   });
 
@@ -151,7 +157,7 @@ function BrokerDetailDesktop() {
           </header>
 
           {/* Stats strip */}
-          <div className="mt-6 grid grid-cols-3 border border-[var(--color-rule)] rounded-[var(--radius-md)] divide-x divide-[var(--color-rule-soft)] bg-[var(--color-paper-2)]">
+          <div className="mt-6 grid grid-cols-[1fr_1fr_1fr_minmax(0,1.7fr)] border border-[var(--color-rule)] rounded-[var(--radius-md)] divide-x divide-[var(--color-rule-soft)] bg-[var(--color-paper-2)]">
             <Stat
               label="Nemovitosti"
               value={b.active_properties}
@@ -160,21 +166,21 @@ function BrokerDetailDesktop() {
             />
             <Stat label="Kanceláře" value={dossier.memberships.length} hint="historicky" />
             <Stat label="Regiony" value={dossier.region_shares.length} hint="kde inzeruje" />
+            <PriceChangeStat figures={dossier.price_change} />
           </div>
 
           {/* Section cards, 16 px apart (system.md § Section cards). */}
           <div className="mt-4 space-y-4">
-            <div className="grid gap-4 md:grid-cols-2 items-start">
+            <div className="grid gap-4 md:grid-cols-3 items-start">
               <Footprint shares={dossier.region_shares} />
+              <Types rows={dossier.categories} />
               <Firms rows={dossier.memberships} />
             </div>
 
             <Inventory
-              rows={listingsQ.data ?? []}
-              loading={listingsQ.isLoading}
-              error={listingsQ.isError ? (listingsQ.error as Error) : null}
-              categoryMain={categoryMain}
-              categoryType={categoryType}
+              brokerId={brokerId}
+              categories={dossier.categories}
+              filter={{ categoryMain, categoryType }}
               onCategoryMainChange={setCategoryMain}
               onCategoryTypeChange={setCategoryType}
             />
@@ -186,43 +192,38 @@ function BrokerDetailDesktop() {
 }
 
 
-/* The locality cell links to the listing when a destination exists, and renders
- * inert text when one does not. `broker_listings_public` declares BOTH
- * `sreality_id` and `property_id` nullable and carries no `source_id_native`, so
- * a row can genuinely have nowhere to go. This used to pass `property_id ?? 0`,
- * which built `/listing?property=0` — a link that type-checked and 404'd. The
- * Portál column still carries `source_url`, so the operator is never stranded. */
-/* A broker's ads are a list worked through: each opens in a new tab. */
-function LocalityCell({ l }: { l: BrokerListing }) {
+/* A broker's properties are a list worked through: each opens in a new tab. The
+ * dot marks a property the broker no longer advertises. */
+function LocalityCell({ p }: { p: BrokerProperty }) {
   const newTab = useNewTabProps();
-  const label = l.display_label ?? '—';
-  const dot = !l.is_active && (
-    <span
-      className="w-1.5 h-1.5 rounded-full bg-[var(--color-brick)] shrink-0"
-      title="neaktivní"
-    />
-  );
-  const path = l.property_id != null ? propertyPath(l.property_id, l.listing_id) : advertPath(l);
-
-  if (path == null) {
-    return (
-      <span
-        className="flex items-center gap-2 text-[var(--color-ink-3)]"
-        title="Tento inzerát nemá v aplikaci vlastní stránku — otevřete jej přes odkaz na portál."
-      >
-        {dot}
-        <span className="truncate font-[family-name:var(--font-sans)]">{label}</span>
-      </span>
-    );
-  }
-
   return (
-    <Link to={path} {...newTab} className="flex items-center gap-2 hover:text-[var(--color-copper-2)]">
-      {dot}
-      <span className="truncate font-[family-name:var(--font-sans)]">{label}</span>
+    <Link to={propertyPath(p.property_id)} {...newTab} className="flex items-center gap-2 hover:text-[var(--color-copper-2)]">
+      {!p.is_active && (
+        <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-brick)] shrink-0" title="neaktivní" />
+      )}
+      <span className="truncate font-[family-name:var(--font-sans)]">{p.display_label ?? '—'}</span>
     </Link>
   );
 }
+
+/* The portals the broker advertises the property on; one whose ad ended recedes. */
+function PortalsCell({ p }: { p: BrokerProperty }) {
+  return (
+    <>
+      {p.all_sources.map((source, i) => {
+        const live = p.active_sources.includes(source);
+        return (
+          <span key={source} title={live ? undefined : 'inzerát ukončen'}
+            className={live ? 'text-[var(--color-ink-3)]' : 'text-[var(--color-ink-4)]'}>
+            {i > 0 && ' · '}
+            {portalBadge(source)}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
 function Stat({
   label,
   value,
@@ -246,6 +247,31 @@ function Stat({
         )}
       </p>
       {hint && <p className="mt-1 text-[0.62rem] text-[var(--color-ink-4)]">{hint}</p>}
+    </div>
+  );
+}
+
+/* How much the broker changes prices (migration 770): the share of their priced
+ * properties whose price they changed at least once, and the median change among
+ * those. Over the whole book like its neighbours, not the
+ * inventory's Typ / Nabídka selection; the switch is the status Nemovitosti counts. */
+function PriceChangeStat({ figures }: { figures: Record<BrokerPriceScope, BrokerPriceFigures> }) {
+  const labelId = useId();
+  const { scope, setScope, share, median, hint } = useBrokerPriceSlice(figures);
+  return (
+    <div className="px-4 py-3">
+      <div className="flex items-center justify-between gap-2">
+        <p id={labelId} className="text-[0.6rem] tracking-[0.14em] uppercase text-[var(--color-ink-3)]">
+          Změna ceny
+        </p>
+        <SegmentedBar aria={{ 'aria-labelledby': labelId }} options={BROKER_PRICE_SCOPES} value={scope}
+          onChange={setScope} />
+      </div>
+      <p className="mt-1 font-[family-name:var(--font-mono)] tabular-nums text-[1.35rem] leading-none text-[var(--color-ink)]">
+        {share}
+        {median && <span className="text-[var(--color-ink-3)] text-sm"> · {median}</span>}
+      </p>
+      <p className="mt-1 text-[0.62rem] text-[var(--color-ink-3)]">{hint}</p>
     </div>
   );
 }
@@ -280,6 +306,33 @@ function Footprint({ shares }: { shares: BrokerRegionShare[] }) {
   );
 }
 
+/* What the broker sells and lets, per type and deal, busiest first as served:
+ * the properties with an ad of theirs still running / all of the book's. */
+function Types({ rows }: { rows: BrokerCategoryShare[] }) {
+  return (
+    <Panel title="Typy" count={rows.length}>
+      {rows.length === 0 ? (
+        <PanelEmpty>Žádná nemovitost.</PanelEmpty>
+      ) : (
+        <ul className="space-y-2">
+          {rows.map((c) => (
+            <li key={`${c.category_main ?? ''}|${c.category_type ?? ''}`} className="flex items-baseline justify-between gap-3">
+              <span className="min-w-0 truncate text-sm text-[var(--color-ink-2)]">{categoryShareLabel(c)}</span>
+              <span className="shrink-0 text-xs font-[family-name:var(--font-mono)] tabular-nums text-[var(--color-ink)]"
+                title="aktivní / celkem nemovitostí">
+                {fmtCount(c.active_properties)}
+                {c.properties > c.active_properties && (
+                  <span className="text-[var(--color-ink-4)]"> / {fmtCount(c.properties)}</span>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
+  );
+}
+
 function Firms({ rows }: { rows: BrokerMembership[] }) {
   return (
     <Panel title="Kanceláře" count={rows.length}>
@@ -305,46 +358,39 @@ function Firms({ rows }: { rows: BrokerMembership[] }) {
   );
 }
 
+/* The broker's book, one row per property, a page at a time. Typ / Nabídka narrow
+ * the read itself; the count in the title bar is the dossier's, exact over the
+ * book's properties Browse serves, the ones this table lists ("z" all of them
+ * when a filter narrows it), so it does not wait for the pages. */
 function Inventory({
-  rows,
-  loading,
-  error,
-  categoryMain,
-  categoryType,
+  brokerId,
+  categories,
+  filter,
   onCategoryMainChange,
   onCategoryTypeChange,
 }: {
-  rows: BrokerListing[];
-  loading: boolean;
-  error: Error | null;
-  categoryMain: string | null;
-  categoryType: string | null;
+  brokerId: number;
+  categories: BrokerCategoryShare[];
+  filter: BrokerInventoryFilter;
   onCategoryMainChange: (v: string | null) => void;
   onCategoryTypeChange: (v: string | null) => void;
 }) {
   const captionId = useId();
-  const filtered = useMemo(
-    () =>
-      rows.filter(
-        (l) =>
-          (categoryMain === null || l.category_main === categoryMain) &&
-          (categoryType === null || l.category_type === categoryType),
-      ),
-    [rows, categoryMain, categoryType],
-  );
+  const { categoryMain, categoryType } = filter;
+  const list = useInfiniteList<BrokerProperty>({
+    queryKey: ['broker-properties', brokerId, categoryMain, categoryType],
+    queryFn: (cursor, signal) => fetchBrokerProperties(brokerId, filter, cursor as string | null, signal),
+    pageSize: BROKER_PROPERTIES_PAGE,
+    getRowId: (p) => p.property_id,
+  });
+  const total = inventoryCount(categories, { categoryMain: null, categoryType: null });
+  const selected = inventoryCount(categories, filter);
   const isFiltered = categoryMain !== null || categoryType !== null;
-  /* The count in the title bar: the ads the table shows, "z" the ads read when a
-   * filter narrows them, "+" on a full page (a cap); 0 once the read says empty. */
-  const read = `${fmtCount(rows.length)}${rows.length === BROKER_LISTINGS_LIMIT ? '+' : ''}`;
-  const count = loading || error
-    ? null
-    : isFiltered && rows.length > 0
-      ? `${fmtCount(filtered.length)} z ${read}`
-      : read;
+  const count = isFiltered && total > 0 ? `${fmtCount(selected)} z ${fmtCount(total)}` : fmtCount(total);
 
   return (
     <Panel title="Inventář" count={count}>
-      {rows.length > 0 && (
+      {total > 0 && (
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
           {([
             ['Typ', CATEGORY_OPTIONS, categoryMain, onCategoryMainChange],
@@ -362,83 +408,83 @@ function Inventory({
         </div>
       )}
 
-      {loading ? (
-        <p className="text-sm text-[var(--color-ink-3)]">Načítám inzeráty…</p>
-      ) : error ? (
-        /* The stats strip above already asserts a listing count from the
-           dossier, which now succeeds independently — so a failed inventory
-           read rendered as "Žádné inzeráty." would make the page contradict
-           itself and read as a delisted broker. */
+      {list.isLoading ? (
+        <p className="text-sm text-[var(--color-ink-3)]">Načítám nemovitosti…</p>
+      ) : list.isError && list.rows.length === 0 ? (
+        /* The stats strip above already asserts a property count from the
+           dossier, which succeeds independently — so a failed inventory read
+           rendered as empty would make the page contradict itself. */
         <p className="text-sm text-[var(--color-brick)]">
-          Inzeráty se nepodařilo načíst: {error.message}
+          Nemovitosti se nepodařilo načíst: {list.error?.message}
         </p>
-      ) : rows.length === 0 ? (
-        <PanelEmpty>Žádné inzeráty.</PanelEmpty>
-      ) : filtered.length === 0 ? (
-        <PanelEmpty>Žádné inzeráty pro zvolený filtr.</PanelEmpty>
+      ) : list.rows.length === 0 ? (
+        <PanelEmpty>{isFiltered ? 'Žádné nemovitosti pro zvolený filtr.' : 'Žádné nemovitosti.'}</PanelEmpty>
       ) : (
-        /* A table that scrolls keeps its own box (C9). */
-        <div className="overflow-x-auto border border-[var(--color-rule)] rounded-[var(--radius-md)]">
-          <table className="w-full text-sm border-collapse">
-            <thead>
-              <tr className="border-b border-[var(--color-rule)] bg-[var(--color-paper-2)] text-left">
-                {['Lokalita', 'Typ', 'Plocha', 'Cena', 'Portál', 'Viděno'].map((h) => (
-                  <th
-                    key={h}
-                    className="px-3 py-2 font-normal whitespace-nowrap text-[var(--color-ink-3)] text-xs"
-                  >
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="font-[family-name:var(--font-mono)] text-[0.78rem]">
-              {filtered.map((l) => (
-                <tr
-                  key={l.listing_id}
-                  className="border-b border-[var(--color-rule-soft)] last:border-0 hover:bg-[var(--color-paper-2)]"
-                >
-                  <td className="px-3 py-1.5 max-w-[16rem]">
-                    <LocalityCell l={l} />
-                  </td>
-                  <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-2)] font-[family-name:var(--font-sans)]">
-                    {[
-                      // The specific kind (subtype for commercial/houses, else
-                      // disposition); the umbrella category word only when no
-                      // subtype is shown, to avoid "Ubytování · Komerční" doubling.
-                      listingKindLabel(l),
-                      l.subtype ? null : categoryMainLabel(l.category_main),
-                      l.category_type ? categoryTypeLabel(l.category_type).toLowerCase() : null,
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')}
-                  </td>
-                  <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-right text-[var(--color-ink-3)]">
-                    {fmtArea(l.area_m2)}
-                  </td>
-                  <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-right">
-                    {fmtCzk(l.price_czk)}
-                  </td>
-                  <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-3)] font-[family-name:var(--font-sans)]">
-                    {l.source_url ? (
-                      <a
-                        href={l.source_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="hover:text-[var(--color-copper)] transition-colors"
-                      >
-                        {portalBadge(l.source, l.source_url)}
-                      </a>
-                    ) : portalBadge(l.source)}
-                  </td>
-                  <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-4)] font-[family-name:var(--font-sans)]">
-                    {fmtRelative(l.last_seen_at)}
-                  </td>
+        <>
+          {/* A table that scrolls keeps its own box (C9); the previous selection's rows recede while the new read loads. */}
+          <div aria-busy={list.isPlaceholderData}
+            className={`overflow-x-auto border border-[var(--color-rule)] rounded-[var(--radius-md)] transition-opacity ${list.isPlaceholderData ? 'opacity-50' : ''}`}>
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="border-b border-[var(--color-rule)] bg-[var(--color-paper-2)] text-left">
+                  {['Lokalita', 'Typ', 'Plocha', 'Cena', 'Změna ceny', 'Portály', 'Viděno'].map((h) => (
+                    <th
+                      key={h}
+                      className="px-3 py-2 font-normal whitespace-nowrap text-[var(--color-ink-3)] text-xs"
+                    >
+                      {h}
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="font-[family-name:var(--font-mono)] text-[0.78rem]">
+                {list.rows.map((p) => (
+                  <tr
+                    key={p.property_id}
+                    className="border-b border-[var(--color-rule-soft)] last:border-0 hover:bg-[var(--color-paper-2)]"
+                  >
+                    <td className="px-3 py-1.5 max-w-[16rem]">
+                      <LocalityCell p={p} />
+                    </td>
+                    <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-2)] font-[family-name:var(--font-sans)]">
+                      {[
+                        // The specific kind (subtype for commercial/houses, else
+                        // disposition); the umbrella category word only when no
+                        // subtype is shown, to avoid "Ubytování · Komerční" doubling.
+                        listingKindLabel(p),
+                        p.subtype ? null : categoryMainLabel(p.category_main),
+                        p.category_type ? categoryTypeLabel(p.category_type).toLowerCase() : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </td>
+                    <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-right text-[var(--color-ink-3)]">
+                      {fmtArea(p.area_m2)}
+                    </td>
+                    <td className="px-3 py-1.5 whitespace-nowrap tabular-nums text-right">
+                      {fmtCzk(p.price_czk)}
+                    </td>
+                    <td className="px-3 py-1.5 whitespace-nowrap">
+                      <PriceDelta pct={p.price_change_pct} changes={p.price_change_count} muted={!p.is_active} />
+                    </td>
+                    <td className="px-3 py-1.5 whitespace-nowrap font-[family-name:var(--font-sans)]">
+                      <PortalsCell p={p} />
+                    </td>
+                    <td className="px-3 py-1.5 whitespace-nowrap text-[var(--color-ink-4)] font-[family-name:var(--font-sans)]">
+                      {fmtRelative(p.last_seen_at)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {list.isFetchNextPageError && (
+            <p className="text-sm text-[var(--color-brick)]">
+              Další nemovitosti se nepodařilo načíst: {list.error?.message}
+            </p>
+          )}
+          <LoadMore list={list} />
+        </>
       )}
     </Panel>
   );

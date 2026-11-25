@@ -288,7 +288,8 @@ def test_parse_detail_byt_full():
     assert listing.district == "Praha-východ"
     # 'číslo podlaží v domě' 2 -> ground=0 storey 1 (W8).
     assert listing.floor == 1
-    assert listing.total_floors == 1
+    # 'počet podlaží' 1 under a flat on the 2nd storey: contradicted, so absence.
+    assert listing.total_floors is None
     assert listing.building_type == "cihla"
     assert listing.condition == "velmi_dobry"
     assert listing.ownership == "osobni"
@@ -555,3 +556,24 @@ def test_a_commercial_parcel_that_repeats_the_labelled_plocha_is_not_a_parcel() 
         "\n".join((_row("Plocha", "852 m²"), _row("Plocha parcely", "6841 m²")))),
         source_url=_KOMERCE_URL)
     assert (stated.area_m2, stated.area_basis, stated.estate_area) == (852.0, "total", 6841.0)
+
+
+def _card(price: str) -> str:
+    # The live card markup (2026-11-24): a sold/let card names its status in the price slot.
+    return ('<li class="w-full advert-item"><h2 class="text-lg sm:text-xl font-extrabold">'
+            '<a href="https://realitymix.cz/detail/brno/prodej-bytu-2-1-8458663.html" class="flex text-rmblue">'
+            '<span>Prodej bytu, 2+1, 55 m²</span></a></h2><p class="text-sm sm:text-base text-slate-500">'
+            f'Rybářská, Brno-střed, Brno</p></div><div class="text-xl font-extrabold mb-2.5"> <span>{price}</span>'
+            '</div></li>')
+
+
+def test_a_card_whose_price_slot_says_sold_or_let_is_closed():
+    for price in ("Prodáno", "Pronajato"):
+        (item,) = parse_index(f"<html>{_card(price)}</html>").items
+        assert item.closed and item.price_text == price
+
+
+def test_a_priced_or_reserved_card_is_not_closed():
+    for price in ("6 044 850 Kč", "Rezervováno"):
+        (item,) = parse_index(f"<html>{_card(price)}</html>").items
+        assert not item.closed

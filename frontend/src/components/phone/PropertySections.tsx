@@ -7,6 +7,8 @@
  * sections the phone reuses whole (price history, estimates, freshness, tags +
  * notes) are mounted by PhoneProperty. */
 
+import { RegisterMark } from '@/components/register/RegisterMark';
+import type { ComparedFact } from '@/lib/api';
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -29,7 +31,7 @@ import {
 import { useListingBrokers } from '@/lib/hydration';
 import { buildAmenities, buildFacts } from '@/lib/listingFacts';
 import { areaKindOf, ppm2BasisFromToken } from '@/lib/measure';
-import { portalBadge } from '@/lib/portals';
+import { advertLink, portalBadge } from '@/lib/portals';
 import {
   fetchSoldComparables,
   fetchSoldCoverage,
@@ -109,20 +111,29 @@ const FACT_CS: Record<string, string> = {
   Parking: 'Parkování',
 };
 
-export function phoneFacts(p: ListingPublic): Array<{ label: string; value: string }> {
+export interface PhoneFact {
+  label: string;
+  value: string;
+  compared?: ComparedFact;
+}
+
+export function phoneFacts(p: ListingPublic): PhoneFact[] {
   const kind = listingKindParts(p);
   const floor = fmtFloor(p.floor, p.total_floors);
-  const head = [
+  const head: (PhoneFact | null)[] = [
     kind.length > 0 ? { label: 'Dispozice', value: kind.join(' · ') } : null,
     p.area_m2 != null ? { label: 'Plocha', value: fmtArea(p.area_m2, areaKindOf(p.category_main)) } : null,
-    floor != null ? { label: 'Patro', value: floor } : null,
-  ].filter((f): f is { label: string; value: string } => f != null);
-  const facts = buildFacts(p).map((f) => ({ label: FACT_CS[f.label] ?? f.label, value: f.value ?? '' }));
+    floor != null ? { label: 'Podlaží', value: floor, compared: 'floors' } : null,
+  ];
+  const facts = buildFacts(p).map((f) => ({
+    label: FACT_CS[f.label] ?? f.label, value: f.value ?? '', compared: f.compared,
+  }));
   const amenities = buildAmenities(p).map((a) => ({
     label: FACT_CS[a.label] ?? a.label,
     value: a.present ? (a.note ? `ano · ${a.note}` : 'ano') : 'ne',
+    compared: a.compared,
   }));
-  return [...head, ...facts, ...amenities];
+  return [...head.filter((f) => f != null), ...facts, ...amenities];
 }
 
 export function FactsSection({ property }: { property: ListingPublic }) {
@@ -142,6 +153,7 @@ export function FactsSection({ property }: { property: ListingPublic }) {
             <dt className="shrink-0 text-[12px] text-[var(--color-ink-3)]">{f.label}</dt>
             <dd className="min-w-0 text-right font-mono text-[12px] tabular-nums text-[var(--color-ink)]">
               {f.value}
+              {f.compared ? <RegisterMark propertyId={property.property_id} fact={f.compared} /> : null}
             </dd>
           </div>
         ))}
@@ -217,39 +229,42 @@ export function AdsSection({
   return (
     <PhoneSection label="Inzeráty" count={sources.length} note={portalsAside(portals)}>
       <ul>
-        {sources.map((s, i) => (
-          <li
-            key={s.id}
-            className={`flex flex-col gap-0.5 pb-1 ${i > 0 ? 'border-t border-[var(--color-rule-soft)] pt-3' : ''}`}
-          >
-            <div className="flex items-center gap-2">
-              <span className={CHIP}>{portalBadge(s.source, s.source_url)}</span>
-              {s.id === canonicalId && (
-                <span className="text-[11px] text-[var(--color-ink-3)]">hlavní inzerát</span>
-              )}
-              {s.id === openedId && s.id !== canonicalId && (
-                <span className="text-[11px] text-[var(--color-ink-3)]">tento odkaz</span>
-              )}
-              <span className="ml-auto whitespace-nowrap font-mono text-[13px] tabular-nums text-[var(--color-ink)]">
-                {priceLabel(s.price_czk, details?.get(s.id)?.category_type)}
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-2 text-[12px] text-[var(--color-ink-3)]">
-              <span>
-                {s.is_active ? `aktivní od ${fmtShortDate(s.first_seen_at)}` : `staženo ${fmtShortDate(s.last_seen_at)}`}
-              </span>
-              {s.source_url && (
-                <a
-                  href={s.source_url}
-                  className="inline-flex h-8 items-center gap-0.5 whitespace-nowrap text-[13px] font-medium text-[var(--color-copper)]"
-                >
-                  Otevřít na portálu
-                  <ExternalIcon className="h-4 w-4" />
-                </a>
-              )}
-            </div>
-          </li>
-        ))}
+        {sources.map((s, i) => {
+          const link = advertLink(s);
+          return (
+            <li
+              key={s.id}
+              className={`flex flex-col gap-0.5 pb-1 ${i > 0 ? 'border-t border-[var(--color-rule-soft)] pt-3' : ''}`}
+            >
+              <div className="flex items-center gap-2">
+                <span className={CHIP}>{portalBadge(s.source, s.source_url)}</span>
+                {s.id === canonicalId && (
+                  <span className="text-[11px] text-[var(--color-ink-3)]">hlavní inzerát</span>
+                )}
+                {s.id === openedId && s.id !== canonicalId && (
+                  <span className="text-[11px] text-[var(--color-ink-3)]">tento odkaz</span>
+                )}
+                <span className="ml-auto whitespace-nowrap font-mono text-[13px] tabular-nums text-[var(--color-ink)]">
+                  {priceLabel(s.price_czk, details?.get(s.id)?.category_type)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-2 text-[12px] text-[var(--color-ink-3)]">
+                <span>
+                  {s.is_active ? `aktivní od ${fmtShortDate(s.first_seen_at)}` : `staženo ${fmtShortDate(s.last_seen_at)}`}
+                </span>
+                {link && (
+                  <a
+                    href={link}
+                    className="inline-flex h-8 items-center gap-0.5 whitespace-nowrap text-[13px] font-medium text-[var(--color-copper)]"
+                  >
+                    Otevřít na portálu
+                    <ExternalIcon className="h-4 w-4" />
+                  </a>
+                )}
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </PhoneSection>
   );

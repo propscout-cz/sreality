@@ -61,9 +61,14 @@ beforeAll(async () => {
 const LOADED = { timeout: 5_000 };
 
 const AERIAL = 'https://ags.cuzk.gov.cz/arcgis1/rest/services/ORTOFOTO_WM/MapServer/tile/{z}/{y}/{x}';
-const bar = () => screen.getByRole('group', { name: 'Podklad mapy' });
+/* The map's layers are picked in the Vrstvy sheet its one button opens. */
+const sheet = () => screen.getByRole('dialog', { name: 'Vrstvy' });
+const bar = () => within(sheet()).getByRole('group', { name: 'Podklad mapy' });
+const openLayers = () => userEvent.click(screen.getByRole('button', { name: /^Vrstvy/ }));
 
 beforeEach(() => {
+  /* The picks are this browser's, remembered for every map: each test starts bare. */
+  localStorage.clear();
   resetFakeMaps();
   vi.mocked(api.apiGet).mockReset().mockResolvedValue(LOC);
   vi.mocked(api.apiGetBlob).mockReset();
@@ -145,8 +150,8 @@ describe('<LocationBody>', () => {
       type: 'geojson',
       data: { geometry: { type: 'Point', coordinates: [14.5, 50.105123] } },
     });
-    expect(fakeMaps[0].layers.map((l) => l.id)).toEqual(['aerial', 'pin']);
-    expect(fakeMaps[0].layers[1]).toMatchObject({ type: 'circle', source: 'pin' });
+    expect(fakeMaps[0].layers.map((l) => l.id)).toEqual(['relief', 'contours', 'aerial', 'pin']);
+    expect(fakeMaps[0].layers[3]).toMatchObject({ type: 'circle', source: 'pin' });
   }, 15_000);
 
   /* Ortofoto ČR (CC BY 4.0): hidden, MapLibre fetches none of its tiles. */
@@ -166,30 +171,67 @@ describe('<LocationBody>', () => {
       layout: { visibility: 'none' },
     });
 
+    await openLayers();
     await userEvent.click(within(bar()).getByRole('button', { name: 'Letecká' }));
     expect(map.layout.get('aerial')).toMatchObject({ visibility: 'visible' });
     expect(within(bar()).getByRole('button', { name: 'Letecká' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Vrstvy 1' })).toBeInTheDocument();
     expect(fakeCreateMap).toHaveBeenCalledTimes(1);
     expect(map.removed).toBe(false);
   }, 15_000);
 
-  it('offers Mapa / Letecká only once the map has loaded, with Mapa lit', async () => {
+  it('offers Vrstvy only once the map has loaded: Mapa lit, the terrain off, every layer hidden', async () => {
     wrap(<LocationBody propertyId={7} />);
     await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
-    expect(screen.queryByRole('group', { name: 'Podklad mapy' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Vrstvy/ })).toBeNull();
     act(() => fakeMaps[0].fire('load'));
+    await openLayers();
     const buttons = within(bar()).getAllByRole('button');
     expect(buttons.map((b) => [b.textContent, b.getAttribute('aria-pressed')])).toEqual([
       ['Mapa', 'true'],
       ['Letecká', 'false'],
     ]);
-    expect(fakeMaps[0].layout.get('aerial')).toEqual({ visibility: 'none' });
+    expect(within(sheet()).getByRole('checkbox', { name: 'Reliéf a vrstevnice' })).not.toBeChecked();
+    for (const id of ['aerial', 'relief', 'contours']) {
+      expect(fakeMaps[0].layout.get(id)).toEqual({ visibility: 'none' });
+    }
+  }, 15_000);
+
+  /* DMR 5G's shaded relief and ZABAGED's contours, both exports drawn on request. */
+  it('lays ČÚZK’s relief and contours hidden, shows both from one row, and lifts them over the photo', async () => {
+    wrap(<LocationBody propertyId={7} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
+    const map = fakeMaps[0];
+    act(() => map.fire('load'));
+    expect(map.sources.get('relief')).toMatchObject({ type: 'raster', tileSize: 256, maxzoom: 18 });
+    expect(map.sources.get('contours')).toMatchObject({ type: 'raster', tileSize: 256, minzoom: 16 });
+    const [relief] = (map.sources.get('relief') as { tiles: string[] }).tiles;
+    const [contours] = (map.sources.get('contours') as { tiles: string[] }).tiles;
+    expect(relief).toContain('/dmr5g/ImageServer/exportImage?bbox={bbox-epsg-3857}');
+    expect(new URL(relief).searchParams.get('renderingRule')).toBe('{"rasterFunction":"GrayscaleHillshade"}');
+    expect(contours).toContain('/ZABAGED_VRSTEVNICE/MapServer/export?bbox={bbox-epsg-3857}');
+    expect(new URL(contours).searchParams.get('layerDefs')).toBe(`{"0":"ZOBRAZ_K='1'"}`);
+
+    await openLayers();
+    await userEvent.click(within(sheet()).getByRole('checkbox', { name: 'Reliéf a vrstevnice' }));
+    expect(map.layout.get('relief')).toEqual({ visibility: 'visible' });
+    expect(map.layout.get('contours')).toEqual({ visibility: 'visible' });
+    expect(map.layout.get('aerial')).toEqual({ visibility: 'none' });
+    expect(map.getLayersOrder()).toEqual(['relief', 'contours', 'aerial', 'pin']);
+
+    await userEvent.click(within(bar()).getByRole('button', { name: 'Letecká' }));
+    expect(map.layout.get('aerial')).toEqual({ visibility: 'visible' });
+    expect(map.getLayersOrder()).toEqual(['aerial', 'relief', 'contours', 'pin']);
+    await userEvent.click(within(bar()).getByRole('button', { name: 'Mapa' }));
+    expect(map.getLayersOrder()).toEqual(['relief', 'contours', 'aerial', 'pin']);
+    expect(fakeCreateMap).toHaveBeenCalledTimes(1);
   }, 15_000);
 
   it('hides the aerial photo again on Mapa, on the same map', async () => {
     wrap(<LocationBody propertyId={7} />);
     await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
     act(() => fakeMaps[0].fire('load'));
+    await openLayers();
     await userEvent.click(within(bar()).getByRole('button', { name: 'Letecká' }));
     await userEvent.click(within(bar()).getByRole('button', { name: 'Mapa' }));
     expect(fakeMaps[0].layout.get('aerial')).toEqual({ visibility: 'none' });
@@ -203,6 +245,7 @@ describe('<LocationBody>', () => {
     const { qc } = wrap(<LocationBody propertyId={7} />);
     await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
     act(() => fakeMaps[0].fire('load'));
+    await openLayers();
     await userEvent.click(within(bar()).getByRole('button', { name: 'Letecká' }));
 
     vi.mocked(api.apiGet).mockResolvedValue({ ...LOC, lat: 50.2 });
@@ -212,6 +255,23 @@ describe('<LocationBody>', () => {
     act(() => fakeMaps[1].fire('load'));
     expect(fakeMaps[1].layout.get('aerial')).toEqual({ visibility: 'visible' });
     expect(within(bar()).getByRole('button', { name: 'Letecká' })).toHaveAttribute('aria-pressed', 'true');
+  }, 15_000);
+
+  /* Every map's one remembered selection: the next property opens on the same picks. */
+  it('opens the next map on the picks this browser remembers', async () => {
+    const first = wrap(<LocationBody propertyId={7} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
+    act(() => fakeMaps[0].fire('load'));
+    await openLayers();
+    await userEvent.click(within(sheet()).getByRole('checkbox', { name: 'Reliéf a vrstevnice' }));
+    first.unmount();
+
+    wrap(<LocationBody propertyId={8} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(2), LOADED);
+    act(() => fakeMaps[1].fire('load'));
+    expect(fakeMaps[1].layout.get('relief')).toEqual({ visibility: 'visible' });
+    expect(fakeMaps[1].layout.get('contours')).toEqual({ visibility: 'visible' });
+    expect(screen.getByRole('button', { name: 'Vrstvy 1' })).toBeInTheDocument();
   }, 15_000);
 
   /* iOS caps the WebGL contexts a page may hold. */

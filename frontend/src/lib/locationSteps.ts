@@ -12,12 +12,11 @@
  * THE KEY IS THE CONTRACT; THE WORDING IS HERE. The step keys, their order and
  * each key's shape are declared once in the backend
  * (location_data/location_steps.py) and stamped by the candidate lane into
- * `stats.waterfall`; `hidden_unresolved` and `hidden_pending` are the audit list's
- * two states (`/new-dedup/pin-audit`, Czech). Nothing about a step's NAME is stored,
- * because a better sentence must never cost a migration.
+ * `stats.waterfall`. Nothing about a step's NAME is stored, because a better
+ * sentence must never cost a migration.
  *
  * NO PAGE MAY HARDCODE A STEP NAME. tests/test_location_steps_vocabulary.py
- * greps the three components for these strings; a step renamed here is renamed on
+ * greps the two components for these strings; a step renamed here is renamed on
  * every surface, in both languages, at once.
  */
 
@@ -76,22 +75,6 @@ export const LOCATION_STEPS: Record<string, LocationStepWording> = {
       'Bod známe, obec k němu ale zatím přiřazená není — malý zbytek, který se dá dořešit.',
     note_en:
       'The point is known but no municipality is attached to it yet, or the answer is coarser than a town. A small remainder, and the only other part of the town step’s loss.',
-  },
-  /* The audit list's filter names: the one Czech name each state has on that page.
-   * Two names for one number is the same fault as two names for one step. */
-  hidden_unresolved: {
-    cs: 'zpracováno, nerozhodnuto',
-    en: 'Unresolved — the actual issue',
-    note_cs: 'Rozhodnuto bylo, poloha z toho ale nevyšla — tohle je ten problém.',
-    note_en:
-      'Judged, not queued, no newer snapshot, and still no location. This is the genuine issue.',
-  },
-  hidden_pending: {
-    cs: 'čeká na zpracování',
-    en: 'Waiting to be processed',
-    note_cs: 'Zatím na ně nedošla řada, nebo přišel novější sběr — není to nález.',
-    note_en:
-      'No verdict yet, queued, or a snapshot newer than the verdict. Not a finding.',
   },
   eligible: {
     cs: 'mají údaj, který umí pravidlo porovnat',

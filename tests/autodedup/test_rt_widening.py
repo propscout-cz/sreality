@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 from autodedup import apply as AP
+from autodedup import apply_sql
 from autodedup import incremental_lane, reconcile, rt_lease
 from autodedup import incremental_sql as S
 from scraper import job_lease
@@ -308,6 +309,28 @@ def test_a_build_pass_re_claims_what_the_reconcile_handed_it(
     assert out["bootstrap"]["active"] is True
     assert out["feeds"].get("stale") == 1 and out["evidence"]["stale_claimed"] == 1
     assert world.rt_fp[(GEN, target)]["updated_at"] == world.now, "refreshed in the build"
+
+
+def test_a_steady_pass_reads_the_snapshots_unread_once_and_hands_it_to_the_reconcile(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """E987: outside a build the claim's scan of the snapshot's unread adverts is the pass's only
+    one: the reconcile is handed the blocks the pass left unread, which are exactly the ones it
+    would have read itself, and `rt_block_reads` given them issues no `RC_UNREAD_BLOCKS_SQL`."""
+    conn = _built_town(tmp_path)
+    assert conn.settings.get(bootstrap_key(GEN)) is False
+    handed: list[Any] = []
+    monkeypatch.setattr(reconcile, "run", lambda conn, generation, touched, **kw: (
+        handed.append(kw), {"counts": {}})[1])
+    conn.statements.clear()
+    out = run_incremental(lambda: conn)
+    assert not out["aborted"] and out["bootstrap"]["active"] is False
+    assert conn.statements.count(S.RT_SCOPE_UNREAD_SQL) == out["counts"]["attempts"]
+    assert apply_sql.RC_UNREAD_BLOCKS_SQL not in conn.statements
+    (kw,) = handed
+    assert kw["unread_blocks"] == AP.rt_block_reads(conn, GEN, kw["blocks"])[1]
+    conn.statements.clear()
+    AP.rt_block_reads(conn, GEN, kw["blocks"], unfingerprinted=kw["unread_blocks"])
+    assert apply_sql.RC_UNREAD_BLOCKS_SQL not in conn.statements
 
 
 @pytest.mark.parametrize(("reclaimed", "entered"), [(2, 2), (5, 1)])
@@ -697,10 +720,10 @@ def test_a_replacement_the_wider_block_does_not_list_is_refused(tmp_path: Path) 
 
 
 def test_a_carried_advert_never_fingerprinted_holds_its_group_whatever_its_block() -> None:
-    """R2: a vouched advert that moved into a READ block after its last walk (no snapshot row,
+    """R2: a carried advert that moved into a READ block after its last walk (no snapshot row,
     its live location in the block) and that the generation never fingerprinted would ride
-    along compared with nothing: it holds the group until the lane has read it; then the
-    stream's grouping decides (here it joined the group)."""
+    along compared with nothing: it holds the group until the lane has read it; then it rides
+    along with its property, grouped or not (E989)."""
     from tests.autodedup.test_apply import _engine_merged
 
     db, old_block, new_block = _two_blocks()
@@ -714,13 +737,14 @@ def test_a_carried_advert_never_fingerprinted_holds_its_group_whatever_its_block
     out = _reconcile(db, [old_block, new_block], building=False)
     assert out["counts"][reconcile.WAITING] == 1 and db.listings[12]["property_id"] == 200
     db.read.add(12)                                    # a feed fingerprinted it
-    db.members.append((RT, 10, 12))                    # and the pass grouped it
     assert _reconcile(db, [old_block, new_block], building=False)["counts"]["applied"] == 1
+    assert db.listings[12]["property_id"] == 100
 
 
 def test_a_carried_advert_outside_rt_scope_is_held_inside_the_apply_scope_only() -> None:
     """R2: an apply-scope block outside `rt_scope` admits no advert the lane never read — the
-    rider there holds its group; a rider outside both scopes stays the plan's refusal."""
+    rider there holds its group; a rider outside both scopes rides along with its property
+    (E989)."""
     from tests.autodedup.test_apply import _engine_merged
 
     db, old_block, _new = _two_blocks(blocks=["town:563510", "town:888888"])
@@ -737,8 +761,9 @@ def test_a_carried_advert_outside_rt_scope_is_held_inside_the_apply_scope_only()
     db.read |= {10, 11, 20, 21}
 
     out = _reconcile(db, [old_block], building=False)
-    assert out["counts"][reconcile.WAITING] == 1 and out["counts"]["applied"] == 0
-    assert out["counts"]["skipped_by_reason"] == {AP.SKIP_CARRIES_OUT_OF_SCOPE: 1}
+    assert out["counts"][reconcile.WAITING] == 1 and out["counts"]["applied"] == 1
+    assert out["counts"]["skipped_by_reason"] == {}
+    assert db.listings[12]["property_id"] == 200 and db.listings[22]["property_id"] == 300
 
 
 def test_w8_reads_a_replaced_town_as_its_okres_and_a_quarter_as_its_town(tmp_path: Path) -> None:

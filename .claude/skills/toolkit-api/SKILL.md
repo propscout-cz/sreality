@@ -234,9 +234,7 @@ SPA's `detailText` and the extension render `message`): psycopg's busy classes (
 57014 — a lock-blocked read dying at the 120 s budget — `LockNotAvailable`, `DeadlockDetected`) →
 **503 `db_busy` + `Retry-After`**; everything else → **500 `internal_error` + logged `ref` id**,
 never raw exception text. Route-owned refusals (property_split's 409) stay.
-**No typed text in logs (#2444):** uvicorn's access log is off (it logs query strings); `/maps/resolve`
-logs level and reason, never the typed name. Its optional `pick` `{text 1–200, rank 1–10}` (extra=forbid: a
-malformed one 422s before any bind) is recorded after the answer (architecture § the pick record).
+**No typed text in logs (#2444):** uvicorn's access log is off (it logs query strings).
 `POST /places/suggest` `{query 1–200, limit 1–10}` (extra=forbid) answers `{items}` from `location_data.place_search`:
 uncached, no count, a městská část as a shortcut whose `places` are its quarters' chips, a door (`adresni_misto`)
 with its `street` chip or null; preflight cached 600 s; a failed read or no connection is its own 503
@@ -278,8 +276,7 @@ Seven auth primitives coexist — five in `api/dependencies.py` over ONE header 
   non-admin's `force_refresh: true` on `/tools/summarize_listing` + `/tools/compare_listing_images` (the opt-out's caller
   too; the cached read stays open), and the route census reds on a body taking it without that call. The claim is
   stamped in `auth.users.raw_app_meta_data` (`admins` is the allowlist); Supabase puts `app_metadata` in every JWT, no
-  hook. Both smoke accounts must carry `app_metadata.automation = true` (operator step, smoke-check.mjs fixture 3)
-  before picks record: no pick of theirs is recorded (`deps.is_automation`).
+  hook.
 - `require_account_id` — in `api/tenant_pool.py`, NOT `dependencies.py` (tenant_pool imports it, so
   `TenantConn` there is circular). The ONE no-account posture: resolved once at the route edge,
   else `400 "no account for caller"`; `403` under `X-Act-As` (watchdog, presets, `PUT /stats/dashboard`,
@@ -354,7 +351,8 @@ Database:
   Connection string → Session pooler, port 5432; same host/user as `SUPABASE_DB_URL`, just
   port 5432 not 6543). **Optional**; used only by the scraper's hot detail-write loop
   (`connect_session()`, i.e. the Phase-2 detail-drain's batched writes) so its repeated SQL
-  gets prepared statements. Unset → falls back to `SUPABASE_DB_URL`. Set it on the realtime
+  gets prepared statements. Unset → falls back to `SUPABASE_DB_URL`; the location loaders
+  (`loader_db.open_loader_connection`, so `ruian_buildings` on the job runner) REFUSE that fallback. Set it on the realtime
   worker's Railway service, the drain's only runtime since W0 (#2010), and on the API only if it
   ever calls `connect_session()`.
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (`sb_secret_...`, **not** a JWT): scrapers
@@ -412,16 +410,9 @@ LLM + maps (FastAPI service + scoring jobs):
   Read lazily by a lane pointed at qwen: an Actions secret there, Railway only to call it here.
 - `OSS_LLM_BASE_URL` / `OSS_LLM_API_KEY` — a self-hosted vLLM pod (`oss:<hf id>` ids, `provider='oss'`):
   an EPHEMERAL RunPod proxy root the autodedup judge lane exports per pass, re-read per call and never stored; the key defaults to `none` (vLLM serves unauthenticated).
-- `MAPY_GEOCODE_ENABLED` — **the Mapy kill switch, default OFF.** Mapy.com's terms prohibit
-  storing/caching API results, so `scraper.geocoding.geocode()` raises unless this is
-  explicitly `1`/`true`/`yes`. No caller stores a result any more: what is left is
-  `scripts/seed_curated_cities.py`. Display (`/maps/suggest`) is not gated: the prohibition
-  is on persistence.
-  Do not enable without an operator decision recorded against the Mapy remediation plan.
-- `MAPY_CZ_API_KEY` — Mapy.cz REST key; geocodes locality strings, powers `/maps/*` (not `/maps/sreality-price-map`: key-free sreality suggest proxy, no CORS upstream).
-- `MAPY2_CZ_API_KEY` (optional backup) — a second Mapy.cz key. Geocoding and `/maps/suggest` fail over
-  to it in ONE loop (`scraper.geocoding.with_mapy_key_failover`) **only** on a rejected (401/403) or rate-limited (429)
-  primary, never on a 5xx. GitHub Actions secret (`seed_curated_cities.yml`) + the **Railway API env var**. Unset → no-op.
+- `MAPY_CZ_API_KEY` / `MAPY2_CZ_API_KEY` — Mapy.cz REST keys, still set on the **Railway API** but read by nothing
+  since the switch-over (#2453) deleted `/maps/suggest`; Stage B (#2455) removes them and revokes them at Mapy.
+  `/maps/sreality-price-map` is no Mapy call: a key-free sreality suggest proxy, no CORS upstream.
 - `VALUO_SANDBOX_API_TOKEN` / `VALUO_API_TOKEN` (Railway API, and agent-worker for `valuo_valuation`; never local, never `VITE_*`) — Valuo's paid API v3 at `https://api.valuo.com/v1`
   (`api/valuo_client.py`: `market-value/{type}` + one `advert/detail` for photos); production wins, neither = `GET /properties/{id}/valuo` says
   so and the POST 503s. A row stamps `token_sha` + the environment that ANSWERED (`ver` `-sandbox` = sandbox); tests delete both (`tests/conftest.py`).
@@ -454,6 +445,7 @@ the old email + Telegram transports, the outbox, `ChannelClient`, `POST /webhook
   the file: `python3 -c "import os,base64;from cryptography.hazmat.primitives.asymmetric import ec;os.umask(0o077);k=ec.generate_private_key(ec.SECP256R1()).private_numbers().private_value.to_bytes(32,'big');open(os.path.expanduser('~/vapid_private_key.txt'),'x').write(base64.urlsafe_b64encode(k).rstrip(b'=').decode())"`.
   Transport `api/push.py` (RFC 8291 aes128gcm + RFC 8292 VAPID ES256 on `cryptography` + PyJWT, `*.push.apple.com` only, no
   redirects, a transport error = its class name); devices `api/push_devices.py`; the ledger pass `api/push_delivery.py`.
+- `CUZK_LOGIN_KEY` — Fernet key, API only: encrypts an account's own ČÚZK password (`api/cuzk_login.py`; unset → `PUT /account/cuzk-login` 503; no route returns a password). Generate, rotate: `references/secrets-inventory.md`.
 - The system-alerts loop (`api/system_alerts_loop.py`, the API's only background loop, off under `HEALTH_TELLER_DISABLED`) runs the health ladder `toolkit.system_alerts.reconcile` every 60 s (a constant, no setting): it keeps the `ops_incidents` ladder (onset, reminders by rung, recovery, acknowledgement on Health) and writes no `notification_dispatches` row (ruling R2b, 2026-10-21, superseding Q1's "bell only"); the external alarm is the health canary's GitHub e-mail (scraper-ops skill).
 - `STRIPE_WEBHOOK_SECRET` — Stripe webhook signing secret (Dashboard → Developers →
   Webhooks). Railway API env. Unset = `POST /billing/webhook` 503s (fail closed); the

@@ -1239,10 +1239,29 @@ export const fetchListingsForListingIds = async (
   return out;
 };
 
-/* A card's storey, for the Browse card's title. browse_list carries no floor
- * column (and the card read model is not widened for one attribute), so the
- * visible cards' canonical ads are read here, keyed on listings_public.id, three
- * columns wide. The scale is listings.floor's: ground = 0, below ground < 0. */
+/* Every ad of the given properties, the inactive ones included: what a merge
+ * of those properties puts on one property (the merge confirmation reads it). */
+export const fetchListingsForPropertyIds = async (
+  propertyIds: ReadonlyArray<number>,
+  { signal }: PgReadOptions = {},
+): Promise<ListingPublic[]> => {
+  if (propertyIds.length === 0) return [];
+  const { data } = await pgRead<ListingPublic[] | null>(
+    supabase
+      .from('listings_public')
+      .select(DETAIL_COLS)
+      .in('property_id', propertyIds as number[])
+      .order('id'),
+    { signal },
+  );
+  return data ?? [];
+};
+
+/* The storey of each visible card. browse_list carries no floor column (and the
+ * card read model is not widened for one attribute), so the property rows are read
+ * here from properties_public, keyed on the canonical ad id the card holds, three
+ * columns wide. The value is the property one: the storey most of its ads state
+ * (migration 751), ground = 0, below ground < 0. */
 export type ListingFloor = Pick<ListingPublic, 'floor' | 'total_floors'>;
 
 export const fetchListingFloors = async (
@@ -1251,7 +1270,7 @@ export const fetchListingFloors = async (
 ): Promise<Map<number, ListingFloor>> => {
   if (ids.length === 0) return new Map();
   const { data } = await pgRead<Array<ListingFloor & { id: number }> | null>(
-    supabase.from('listings_public').select('id,floor,total_floors').in('id', ids as number[]),
+    supabase.from('properties_public').select('id:listing_id,floor,total_floors').in('listing_id', ids as number[]),
     { signal },
   );
   const out = new Map<number, ListingFloor>();

@@ -17,12 +17,12 @@ from toolkit.filter_registry import label_cs, type_label_cs
 
 # change_kind -> the title (a property event names its place after it, "Zlevněno · Praha 5").
 TITLES: dict[str, str] = {
-    "new": "Nový inzerát",
+    "new": "Nová shoda",
     "price_drop": "Zlevněno",
     "price_rise": "Zdraženo",
-    "inactive": "Staženo z nabídky",
-    "reactivated": "Znovu v nabídce",
-    "new_source": "Nový zdroj nabídky",
+    "inactive": "Opustilo trh",
+    "reactivated": "Znovu na trhu",
+    "new_source": "Nový portál",
     "shared_collection": "Sdíleno s vámi",
     "shared_dashboard": "Sdíleno s vámi",
     "shared_pipeline": "Sdíleno s vámi",
@@ -30,6 +30,16 @@ TITLES: dict[str, str] = {
 # What a share opens, and nothing about who shared it.
 SHARED_BODIES: dict[str, str] = {
     "shared_collection": "Sbírka", "shared_dashboard": "Dashboard", "shared_pipeline": "Pipeline",
+}
+# Why a New match entered its watchdog's slice (api/notifications.MATCH_REASONS), opening its body; a price
+# change is worded from its frozen prices instead ("Zlevněno 9 000 000 Kč → 8 400 000 Kč"). NULL = 'listed': every
+# New match before migration 735 was newly listed.
+REASONS: dict[str, str] = {
+    "listed": "Nový inzerát",
+    "back": "Znovu na trhu",
+    "portal": "Nový portál",
+    "changed": "Změna inzerátu",
+    "other": "Nově odpovídá",
 }
 # A kind outside TITLES (none since migration 656 narrowed the CHECK to TITLES' keys) still renders, as sw.js's
 # fallback does.
@@ -44,8 +54,8 @@ class Rendered:
 
 
 def render(row: Mapping[str, Any]) -> Rendered:
-    """The push for one event row: `change_kind`, `display_label`, `category_main`, `subtype`, `disposition`,
-    `price_unit`, `trigger_price_czk`, `prev_price_czk` (any may be missing or NULL)."""
+    """The push for one event row: `change_kind`, `match_reason`, `display_label`, `category_main`, `subtype`,
+    `disposition`, `price_unit`, `trigger_price_czk`, `prev_price_czk` (any may be missing or NULL)."""
     kind = row.get("change_kind")
     if kind in SHARED_BODIES:
         return Rendered(TITLES[kind], SHARED_BODIES[kind])
@@ -61,7 +71,11 @@ def render(row: Mapping[str, Any]) -> Rendered:
     if kind in ("price_drop", "price_rise") and trigger and prev:
         return Rendered(title, f"{prev} → {trigger}")
     if kind == "new":
-        return Rendered(title, " · ".join(p for p in (subject, trigger) if p))
+        reason = row.get("match_reason") or "listed"
+        if reason == "price" and trigger and prev:
+            step = TITLES["price_drop" if row["trigger_price_czk"] < row["prev_price_czk"] else "price_rise"]
+            return Rendered(title, " · ".join(p for p in (f"{step} {prev} → {trigger}", subject) if p))
+        return Rendered(title, " · ".join(p for p in (REASONS.get(reason), subject, trigger) if p))
     return Rendered(title, subject)
 
 

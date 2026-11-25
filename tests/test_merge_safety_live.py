@@ -194,6 +194,24 @@ def test_merging_then_detaching_every_advert_restores_every_original_property(cu
     assert cur.fetchone()[0] == 0
 
 
+def test_a_real_merge_of_a_live_published_property_into_one_long_gone_is_no_return(cur):
+    """Migration 754, through the one chokepoint: the survivor (the older record, months off the market) flips
+    active when a live, published property is merged into it, in the merge's own transaction, so the trigger
+    sees the retired record and stamps no return; the unit was on the market in our records all along."""
+    survivor, live = _property(cur), _property(cur)
+    _advert(cur, survivor, source="sreality", active=False)
+    _advert(cur, live, source="idnes")
+    _recompute(cur, survivor)
+    _recompute(cur, live)
+    cur.execute("UPDATE properties SET left_market_at = now() - interval '90 days', back_on_market_at = NULL "
+                "WHERE id = %s", (survivor,))
+    cur.execute("UPDATE properties SET settled_at = now() - interval '3 days' WHERE id = %s", (live,))
+    _merge(cur, [survivor, live])
+    cur.execute("SELECT status, is_active, back_on_market_at, left_market_at FROM properties WHERE id = %s",
+                (survivor,))
+    assert cur.fetchone() == ("active", True, None, None)
+
+
 def test_an_advert_named_new_is_born_a_record_and_a_merge_back_is_undone_to_it(cur):
     """`new` births the advert a record through the one birth path and writes ONE closed ledger
     row the constraints accept: a native advert's (`ingest_grouping`), and a merged one's, its
@@ -600,6 +618,58 @@ def test_the_energy_rating_is_the_best_class_any_advert_states(cur, canonical, e
     assert _recomputed_canonical(cur, pid) == canon
     cur.execute("SELECT energy_rating FROM properties WHERE id = %s", (pid,))
     assert cur.fetchone() == (best,)
+
+
+@pytest.mark.parametrize(("canonical", "others", "chosen"), [
+    ((6, 7), [(5, 7), (5, 7)], (5, 7)),          # most adverts agree, against the canonical one
+    ((6, 7), [(5, 6)], (6, 7)),                  # a tie goes to the canonical order
+    ((None, None), [(2, None), (3, 5)], (2, 5)),  # each fact on its own; an unstated one never votes
+    ((4, None), [(None, 2), (4, 6)], (4, 6)),     # a count the chosen storey reaches never votes
+    ((4, None), [(None, 2), (None, 4)], (4, None)),  # ... and none is left when every count is reached
+    ((None, None), [(None, None)], (None, None))])
+def test_the_storey_is_the_one_most_adverts_state(cur, canonical, others, chosen):
+    """#2552 W4: the storey and the above-ground count are each the value most adverts state,
+    an ended advert too; a tie goes to the advert first in the canonical order."""
+    pid = _property(cur)
+    canon = _advert(cur, pid, source="sreality")
+    ads = [canon] + [_advert(cur, pid, source=source, active=False)
+                     for source, _ in zip(("idnes", "realitymix"), others)]
+    for lid, (floor, total) in zip(ads, [canonical, *others]):
+        cur.execute("UPDATE listings SET floor = %s, total_floors = %s WHERE id = %s",
+                    (floor, total, lid))
+    assert _recomputed_canonical(cur, pid) == canon
+    cur.execute("SELECT floor, total_floors FROM properties WHERE id = %s", (pid,))
+    assert cur.fetchone() == chosen
+
+
+@pytest.mark.parametrize(("canonical", "others", "chosen"), [
+    # (category, subtype, condition, active) per advert; the canonical one is sreality, active.
+    (("dum", None, "dobry", True),
+     [("dum", "rodinny_dum", "pred_rekonstrukci", True), ("dum", "rodinny_dum", "pred_rekonstrukci", True)],
+     ("rodinny_dum", "pred_rekonstrukci")),      # most adverts agree, against the canonical one
+    (("dum", "vila", "dobry", True), [("dum", "rodinny_dum", "po_rekonstrukci", True)],
+     ("vila", "dobry")),                          # a tie goes to the canonical order
+    (("dum", None, None, True),
+     [("komercni", "ubytovani", "dobry", False), ("dum", "rodinny_dum", "po_rekonstrukci", False)],
+     ("rodinny_dum", "dobry")),                   # another category's house type never votes; no active
+                                                  # advert states a condition, so every advert votes
+    (("dum", None, "dobry", True),
+     [("dum", None, "po_rekonstrukci", False), ("dum", None, "po_rekonstrukci", False)],
+     (None, "dobry")),                            # ended adverts do not outvote an active one
+])
+def test_the_house_type_and_the_condition_are_what_most_adverts_state(cur, canonical, others, chosen):
+    """#2574: neither follows the canonical advert alone. The house type is the one most adverts of the
+    property's category state, an ended advert too; the condition the one most ACTIVE adverts state."""
+    pid = _property(cur)
+    canon = _advert(cur, pid, source="sreality")
+    ads = [canon] + [_advert(cur, pid, source=source, active=fact[3])
+                     for source, fact in zip(("idnes", "realitymix"), others)]
+    for lid, (category, subtype, condition, _) in zip(ads, [canonical, *others]):
+        cur.execute("UPDATE listings SET category_main = %s, subtype = %s, condition = %s WHERE id = %s",
+                    (category, subtype, condition, lid))
+    assert _recomputed_canonical(cur, pid) == canon
+    cur.execute("SELECT subtype, condition FROM properties WHERE id = %s", (pid,))
+    assert cur.fetchone() == chosen
 
 
 def test_the_portal_lists_and_newest_ad_dates_follow_every_advert(cur):

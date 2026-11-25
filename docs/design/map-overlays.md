@@ -319,19 +319,23 @@ tile 200 (headers), 204, 404, 400, auth refused without a token.
   only updates the fill paint (no refetch). Layer ids are removed on unmount.
 - `overlayPopupHtml(sectionLabel, props, layer)` — one popup for click on a fill: kicker =
   section label, title = `name`, meta = the class label (and the variant value with its unit via
-  `lib/measure.ts` `PPM2_UNIT` when `scale.unit` is `rent_per_m2`). Browse's click handler keeps
+  `lib/measure.ts` `PPM2_UNIT` when `scale.unit` is `rent_per_m2`; the place word follows the
+  feature's `level`: "Katastrální území" for the MF's `ku`, else "Obec"). Browse's click handler keeps
   listing layers first (the existing `queryRenderedFeatures` precedence).
+- `useOverlayPlacesAtCenter(map, ready, registry, selection)` (#2489) — for each selected layer with an
+  area card (`overlayHasAreaCard`: a scale layer with > 1 variant), the props of its fill's feature at the
+  map container's centre pixel (`queryRenderedFeatures`), null off every place; re-read on every `idle`,
+  the same object kept while nothing changed.
 
 ### `components/MapOverlayControls.tsx`
 
 Same shape as `RentMapControls`: one chip per section in the bottom-right stack (checkbox +
 label); checked = every layer of the section on (variant = the first); the expanded panel below the
 chip (only when checked) holds per-layer checkboxes when the section has > 1 layer (the section
-checkbox is tri-state), variant radios when present, the legend (swatch per class: filled square,
+checkbox is tri-state), the legend (swatch per class: filled square,
 line, dashed line, dot), a hint "Přibližte mapu" when the map zoom < minzoom, the note, and a footer
 "Data k {source_revised_at ?? fetched_at} · {attribution}". `compact` (ComparablesMap): chips only,
-no panel. (The property page's header minimap, `DetailMap`, carries no overlays since 2026-10-23 —
-operator: zoom is its only control.) The chip markup is ONE component, `OverlayChip`, also adopted by
+no panel. The chip markup is ONE component, `OverlayChip`, also adopted by
 `RentMapControls`, `GrowthMapControls` and `CityMapControls` (four copies of the same class string
 today).
 
@@ -343,9 +347,48 @@ layer groups drawn), the per-m² pin labels, the price labels, Piny a ceny, zoom
 rail (a bottom sheet on a map under 520 px — a container query on the map, not the window) holding every
 toggle: Města + "Obarvit podle" + Min., Růst cen a nájmů + its settings, then each registry section as
 above, its toggle a plain row (`OverlayChip` without `compact`) and its settings indented under it
-(`OverlayPanel`). The legends left the panel: `MapOverlayLegends` (plus the growth and city-index keys)
-draws a card per layer group that is on in the map's bottom-left corner, so a choropleth reads with the
-panel closed; the stack folds to one button, remembered per browser. The count pill keeps the pin key
+(`OverlayPanel`), then "Reliéf a vrstevnice" (#2494), drawn like a two-layer section: ČÚZK's shaded
+relief and contours, raster images from ČÚZK's own servers rather than geometry we ingest, so they sit
+in `lib/basemap` beside the aerial photo, not in this registry. The legends left the panel: `MapOverlayLegends` (plus the growth and city-index keys)
+draws a card per layer group that is on in the map's bottom-left corner (`MapLegendDock`), so a
+choropleth reads with the panel closed; the stack folds to one button, remembered per browser.
+A layer that failed to load says so there instead of its key (the dock's `alert`, never folded away):
+since 2026-11-22 Města does, when any of its four reads failed (`lib/readGroup`), with "Zkusit znovu"
+re-reading only the failed ones. Each read is cached for the page's life, so before this one failure
+left the key over an empty map until a reload.
+
+**Every map's one list (2026-11-20, operator: layers on the property map, web and phone).**
+`MapOverlayControls` IS the list, on every map: Podklad (`SegmentedBar` "Mapa" / "Letecká": ČÚZK's aerial
+photo over the whole basemap), then its `children` (Browse's Města and Růst cen a nájmů — Browse's alone,
+by ruling), then the registry sections, then "Reliéf a vrstevnice" (`TerrainControls`, moved out of
+`ListingMap`). `tone="phone"` sizes it for the phone's bottom sheet (15 px rows, 44 px tall; one context,
+`MapControlsToneContext`, read by `OverlayChip`, `OverlayPanel` and the rows). `compact` (ComparablesMap)
+adds a "Letecká" and a "Reliéf a vrstevnice" chip around the section chips. Where it shows:
+- Browse: the Vrstvy flyout, as above.
+- The property page's header minimap (`DetailMap`, 170 px): draws the remembered picks; its rail holds
+  Vrstvy and zoom. Vrstvy opens `PropertyMapDialog`, the large map: the minimap's view in a `Dialog`,
+  the same rail, the list open from the start, the keys in `MapLegendDock`, the area card's `CentreMark`.
+  This supersedes the 2026-10-23 "zoom only" ruling: the minimap's face stays clean, the panel and the
+  keys live on the large map.
+- The phone's Poloha (`PhoneMap`): a "Vrstvy" button on the plate opens a `BottomSheet` with the list,
+  `tone="phone"`; the keys go under the plate (`MapOverlayLegends inline`, portalled into
+  `LocationBody`'s slot), never on a map that small.
+The three point maps (minimap, large map, phone) are ONE hook, `lib/usePointMap`: `createMap`,
+`guardMap`, `addBasemapLayers`, `addPointPin`, `useBasemapPicks`, `useMapOverlays` (under 'pin'),
+`useOverlayCursor`, the click popup (`overlayPopupAt`, which Browse's click handler calls too, with
+its listing layers first) and `useOverlayPlacesAtCenter`. Rendering is all each one owns.
+
+**The area card (#2489, variant D of the 2026-11-09 design page).** A scale layer with variants (the rent
+map) is keyed by an area card instead of a bare scale: the place under the map's centre (its `level` word and
+kraj, then its name; "Střed mapy · Bez údajů" off every place), the caption, then one row per variant with
+its `prop` and, when any variant names one, its `alt_prop` (the rent map: Běžný | Novostavba, both
+Kč/m²/měs), "—" for a value the place lacks. The shown variant's row is lit like a `SegmentedBar` segment
+(copper fill, `aria-pressed`, a `role="group"`); a click repaints the map by that variant (`pickVariant`,
+remembered like any pick), so the Vrstvy panel carries no variant radios. Under the rows the shown
+variant's worked example, `example_m2 × value = … Kč/měs` (title: what the area is), then the ramp with its
+ends beside it. While a card is on (and the legends unfolded), a small cross marks the map's centre
+(`CentreMark`, under every control). The card keeps the legends' 200 px, so on a 450 px Browse map the cross
+stays clear of it. The count pill keeps the pin key
 (swatch + count; the words from a 900 px map up); the full key and the pin limit live in Piny a ceny.
 
 ### State
@@ -355,10 +398,20 @@ panel closed; the stack folds to one button, remembered per browser. The count p
   absent = the remembered selection. Every change writes `layers=` to the URL (Browse) and the
   remembered value. Add `layers` to `OVERLAY_URL_KEYS`, `setOverlay`, `browseUrlFromState`, the
   round-trip test. Memory adapter (Explore modal): initial = remembered.
-- `ComparablesMap`: local state initialised from the remembered selection, written back on change;
-  it mounts the hook (`beforeId` 'comparables-point') and the compact controls. (`DetailMap` did too
-  until 2026-10-23.) `ListingMap`: under the first growth-choropleth layer (where the rent map and the
-  kraj borders have always sat), so a choropleth on top still tints them as before.
+- `ComparablesMap`, `DetailMap`, `PropertyMapDialog`, `PhoneMap`: the remembered selection itself
+  (`useRememberedLayers`, one live store per page, so the minimap and its large map always agree); the
+  comparables map mounts the hook (`beforeId` 'comparables-point') and the compact controls, the point
+  maps `lib/usePointMap`. `ListingMap`: under the first growth-choropleth layer (where the rent map and
+  the kraj borders have always sat), so a choropleth on top still tints them as before.
+- **The basemap picks are keys of the same selection (2026-11-20):** `aerial`, `relief`, `contours`
+  (`BASEMAP_KEYS`, `basemapPicks`, `withBasemap`), never registry keys; `layersOf` keeps them with or
+  without a registry, so a registry edit never drops them. `lib/basemap` `addBasemapLayers` adds all three
+  hidden at load (terrain under the basemap's roads, the photo over the whole basemap, both under every
+  layer of ours); `setBasemapPicks` / `useBasemapPicks` show the picked ones and move the terrain over
+  the photo while it shows, back under the roads when the map does. `MapOverlayState` lost `relief` /
+  `contours`: Browse's 2026-11-11 URL keys `relief=1` / `contours=1` read into `layers` as legacy
+  spellings (`LEGACY_LAYER_KEYS`), rewritten by the next layer change. So the terrain is now remembered
+  per browser like every other pick (it was a URL-only view knob for its first nine days).
 - Delete: `rent_map_kraje_public` fetch (`fetchRentMapKraje`, `RentMapKraj`), `rentKrajeQuery`,
   `toKrajFC`, the `rent-kraje` source/layer/effect, the nested Kraje checkbox, `showKraje`,
   `onToggleShowKraje`, `rentMapKraje`. The view itself is dropped by migration 601 after deploy.
@@ -369,7 +422,7 @@ panel closed; the stack folds to one button, remembered per browser. The count p
 
 `mapOverlays.test.ts` (grammar, legacy mapping, style-layer builders from a legend/scale, protocol
 URL parsing); `browseState.test.ts` (round trip incl. `layers`, `kraje=1` legacy);
-`MapOverlayControls.test.tsx` (chips, tri-state, variant radio, hint, note, footer, compact);
+`MapOverlayControls.test.tsx` (chips, tri-state, area card, hint, note, footer, compact);
 `persistedFlag.test.ts` (string helpers); `geoRing.test.ts`.
 
 ## Cleanup PR (after the feature merges): the MF rent choropleth onto this path
@@ -402,9 +455,12 @@ Backend, as built (2026-10-15):
 - **Layer** `rent_map`: legend empty, store `plain`, `scale = {prop: 'vk1', stops: RENT_RAMP (150
   #eaf0f6 … 600 #1a1a5e), null_color: 'rgba(140, 140, 140, 0.35)', unit: 'rent_per_m2', opacity: 0.62}`
   — `opacity` is new to the scale contract (the SPA's `OverlayScale` had none); `variants` vk1..vk4
-  with the MF labels. `RENT_MAP_SQL` is migration 132's matview query without its GeoJSON column:
-  props `{name, kraj, level, vk1..vk4}` through `jsonb_strip_nulls` (an unpriced VK or a NULL kraj is
-  absent and paints `null_color`), geometry `st_transform(geom::geometry, 3857)`. On production it yields
+  with the MF labels, each since #2489 with `alt_prop: 'novN'` (the area card's new-build column) and
+  `example_m2` (its worked example: the median floor area of active rent flats of that size, 34 / 54 / 75 /
+  106 m² on 2026-11-09). `RENT_MAP_SQL` is migration 132's matview query without its GeoJSON column:
+  props `{name, kraj, level, vk1..vk4, nov1..nov4}` (`novN` = `ref_rent_novostavba_per_m2`, since #2489)
+  through `jsonb_strip_nulls` (an unpriced VK or a NULL kraj is absent and paints `null_color`), geometry
+  `st_transform(geom::geometry, 3857)`. On production it yields
   7,630 features identical (name, kraj, vk1–4) to the matview's 7,630 rows; only 15 polygons exceed 256
   vertices, so `ST_Subdivide` splits almost nothing.
 - **`render_sql_section(conn, key)`**: one SQL-sourced section through `run_section` — datum check,

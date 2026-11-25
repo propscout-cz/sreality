@@ -27,6 +27,7 @@ from types import SimpleNamespace
 import pytest
 
 from scraper import ceskereality_main as m
+from scraper.browser_fetch import BrowserResponse
 from scraper import portal as m_portal
 from scraper import portal_runner
 from scraper.ceskereality_client import (
@@ -149,6 +150,31 @@ def test_full_walk_visits_all_fourteen_kraje_and_no_foreign_tree(monkeypatch):
     for u in fake.urls:
         assert "zahranicni" not in u
         assert "severo." not in u and "vychodo." not in u and "moravskereality" not in u
+
+
+class _SoldCardClient(_PartitionClient):
+    """The same partition, with one card carrying its own "Prodáno" image badge."""
+
+    def __init__(self, counts: dict[str, int], sold: str) -> None:
+        super().__init__(counts)
+        self._sold = sold
+
+    def fetch_search(self, url):  # noqa: ANN001
+        html, status = super().fetch_search(url)
+        link = f'href="/prodej/byty/x/y-{self._sold}.html"></a>'
+        badge = ('<div class="i-estate__image-badges"><div class="badge --dark-blue"> <span class="badge__title">'
+                 'Developerský projekt</span> </div><div class="badge --gray"> <span class="badge__title">'
+                 'Prodáno</span> </div></div>')
+        return html.replace(link, link + badge), status
+
+
+def test_a_sold_card_is_no_sighting_and_the_walk_still_reaches_the_end(monkeypatch):
+    counts = {k: 40 for k in KRAJ_SLUGS}
+    fake = _SoldCardClient(counts, sold="1000000")
+    portal = m.CeskerealityPortal(default_config("ceskereality"))
+    seen, _counts, _total, _pages, complete = _walk(portal, fake, monkeypatch)
+    assert "1000000" not in seen and len(seen) == 14 * 40 - 1
+    assert complete is True
 
 
 def test_a_slice_pages_far_past_twelve(monkeypatch):
@@ -1080,6 +1106,27 @@ def test_probe_category_reads_nejnovejsi_on_www(monkeypatch):
     assert complete is False        # a probe can never justify a delisting sweep
 
 
+def test_probe_category_never_sights_a_sold_card(monkeypatch):
+    # The worker probes every few minutes: a sighting there would refute the dwell forever.
+    fake = _NewestClient({1: [("7000001", "3 200 000 Kč"), ("7000002", "4 100 000 Kč")]})
+    plain = fake.fetch_search
+
+    def fetch_search(url):  # noqa: ANN001, ANN202
+        html, status = plain(url)
+        link = 'href="/prodej/byty/x/y-7000002.html"></a>'
+        badge = '<div class="i-estate__image-badges"><span class="badge__title">Prodáno</span></div>'
+        return html.replace(link, link + badge), status
+
+    fake.fetch_search = fetch_search
+    monkeypatch.setattr(m, "CeskerealityClient", lambda **kw: fake)
+    portal = m.CeskerealityPortal(default_config("ceskereality"))
+    seen, counts, _total, _pages, _complete = portal.probe_category(
+        {"sale_type": "prodej", "category": "byty"},
+        conn=None, dry_run=True, limiter=None, probe_pages=1,
+    )
+    assert seen == {"7000001"} and counts["found_new"] == 1
+
+
 def test_probe_category_early_stops_on_all_known_page(monkeypatch):
     fake = _NewestClient({
         1: [("7000001", "3 200 000 Kč"), ("7000002", "4 100 000 Kč")],
@@ -1281,3 +1328,67 @@ def test_a_walk_of_no_listings_pages_collects_nothing_nominates_nothing_and_read
     assert all(c["collected"] == 0 for c in agg["by_category"])
     assert not any(c["walk_reached_end"] for c in agg["by_category"])
     assert sum(c["listings_to_verify"] for c in agg["by_category"]) == 0
+
+
+# --- the interstitial (the 2026-10-31 wall; #2479) --------------------------
+
+
+_CHALLENGE_HTML = (
+    '<html><head><title>Ujišťujeme se, že nejste robot!</title></head><body>'
+    '<script id="anubis_challenge" type="application/json">'
+    '{"rules":{"algorithm":"fast","difficulty":2}}</script></body></html>'
+)
+
+
+class _WalledFetcher:
+    """The wall as it actually answered: HTTP 200 carrying the interstitial, for every
+    page. Stands where the headless browser does when it cannot clear it."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def fetch(self, url):  # noqa: ANN001, ANN201 - a fetcher stand-in
+        self.calls.append(url)
+        return BrowserResponse(status_code=200, text=_CHALLENGE_HTML, url=url)
+
+    def close(self) -> None:
+        pass
+
+
+def _walled_client() -> CeskerealityClient:
+    return CeskerealityClient(
+        fetcher=_WalledFetcher(), request_delay_s=0.0, max_retries=0
+    )
+
+
+def test_the_interstitial_leaves_the_walk_short_of_the_portals_end(monkeypatch):
+    """The regression that stopped nominations (#2479).
+
+    A walled page answers 200 with challenge HTML and zero cards. Read as content it
+    looks exactly like an empty index — which would let a slice 'finish', let the walk
+    reach the portal's end, and nominate every unseen active ad for a presence check on
+    the strength of a page we never actually read. It must be a FAILED FETCH instead:
+    the slice errors and the walk reports incomplete.
+    """
+    client = _walled_client()
+    portal = m.CeskerealityPortal(default_config("ceskereality"))
+    sliced = portal._walk_slice(client, "prodej", "byty", "zlinsky-kraj")
+    assert sliced.outcome == "error" and sliced.positive is False
+    assert (sliced.stop, sliced.reached_end) == ("error", False)
+    assert sliced.rows == []
+
+    _seen, _counts, _total, _pages, complete = _walk(portal, client, monkeypatch)
+    assert complete is False, "a walled walk must never read as having reached the end"
+
+
+def test_a_walled_walk_collects_nothing_rather_than_a_confirmed_empty_slice(monkeypatch):
+    """`empty_confirmed` is a POSITIVE 'there is nothing here' and makes a slice reach the
+    end (see test_a_kraj_with_no_listings_is_a_valid_slice). The wall must not be able to
+    borrow that verdict."""
+    client = _walled_client()
+    portal = m.CeskerealityPortal(default_config("ceskereality"))
+    seen, _counts, _total, _pages, complete = _walk(portal, client, monkeypatch)
+    assert seen == set()
+    assert complete is False
+    sliced = portal._walk_slice(client, "prodej", "byty", "karlovarsky-kraj")
+    assert sliced.stop != "empty_confirmed"

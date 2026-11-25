@@ -25,6 +25,7 @@ its one view `broker_book_projection` over the ads of the broker's identities on
 | `started_at` | `min(first_seen_at)`: the start `measure_tom_days` uses (617); `first_seen_at` is the drain's first WRITE (444) |
 | `ended_at` | NULL while any of the broker's ads on the property is active, else `max(last_seen_at)` |
 | `tom_observed` | `measure_tom_observed` (625) of the broker's first ad in `browse_projection`'s order (category first, `first_seen_at`, id) |
+| `first_price_czk`, `last_price_czk`, `price_changes` | `listing_price_history` (768, 770) of the broker's MOST-REPRICED ad on the property (every ad of theirs read; ties: one with a last price, one with any price, a live one, the latest seen) over the broker's own same-portal predecessors: the first price the broker asked, their last, and the price steps between (> 0 = repriced, a price that came back included). Not the property's own figure: another broker's predecessors are left out |
 
 A property counts once per broker in volume and in speed; an identity not yet resolved to an active broker has no
 row (its property reads unattributed). Service role only.
@@ -55,6 +56,11 @@ n = `exited` + `not_exited`; share = `exited` / n, shown from n ≥ `MIN_N` (5);
 (z = 1.96, `toolkit.measures.wilson_lower`); `unknown` is its own count, never in n. Label: **„Opustilo trh do N dní
 (prodáno nebo staženo, ne nutně prodej)"** (no portal says sold). An indexless portal's spell (`web`, the `Portal`
 seam) answers no speed: its end is never observed. A coverage line names the cohort's portals that publish no broker.
+
+**Price change** (the dossier, 2026-11-23, #2639 2026-11-24): over the book's rows with a price, the share the
+broker repriced (`price_changes > 0`, a price cut and restored included) and the median change from first to last
+price among those, from `MIN_N` repriced up; all rows, active or inactive (`toolkit.brokers.price_change`). Never a mean or a median over every row: placeholder prices reach +1,379,800 %,
+and nine brokers in ten have a median of 0. Not on the board, and no rank.
 
 ## Waves
 
@@ -107,6 +113,40 @@ each broker, and foreign properties counted (Browse serves the determined foreig
 syndication feed can head a name search, as it can the board). The firm label vote (one vote per idnes identity, no
 longer ad-weighted) changes 8 of 2,945 voted firm names on production (6 gain one, 2 differ; 27 lose a 60 % majority and
 keep their name).
+
+## The inventory by property (#2654, 2026-11-24)
+
+**North star.** The broker page is the broker's book: one row per property, and every figure and every row reads
+that same stored book. Before it the desktop Inventář was the last ad-grain broker surface: 870,278 attributed ads
+stood for 632,622 book rows (production, 2026-11-24), so about 27 % of its rows repeated a property, and its per-ad
+price change (read per row on every load) could not be added up to the Změna ceny tile.
+
+**One read, `toolkit.brokers.broker_properties`** (`GET /brokers/{id}/properties`, bounded as the dossier's): the
+book's rows of the broker joined to `browse_list` (the footprint's join, so a property Browse does not serve yet, 0.8 %
+of book rows, counts in the Nemovitosti total and has no row). Per row: the property's label, type and area, and the
+broker's own spell there: `is_active`, `all_sources` / `active_sources`, `price_czk` = the book's `last_price_czk`,
+`price_change_pct` = `measure_price_change_pct(first_price_czk, last_price_czk)` when `price_changes > 0` (no change
+without a price step: the tile's "repriced"), `last_seen_at` = `ended_at`, the property's last sighting while the
+spell runs. Live spells first, then by `coalesce(ended_at, started_at)` and the property id, both stable under the
+scraper's sightings, in keyset pages of 100 (`next_cursor`, `api/cursor.py`); `category_main` / `category_type`
+narrow the read. Largest book (26,622 rows), one type and deal: 170 ms warm.
+
+**Operator rulings, 2026-11-24.** (1) The row's price is the broker's own last price: it differs from the property's
+Browse price on 5,172 of 245,459 live rows priced on both sides (2.1 %). (2) The Portály column names the broker's
+portals on the property, an ended one muted, with no link to each portal ad (the property page holds them). (3) The
+desktop page shows the dossier's `categories` as a `Typy` card, as the phone does. (4) `broker_listings_public` is
+dropped once this read is live.
+
+**The SPA.** The desktop table pages on a click (`LoadMore`); Typ / Nabídka narrow the read and the title count is
+the dossier's `categories` under the same selection (`lib/brokers.inventoryCount`), exact over the book's properties
+Browse serves (the rows this read returns; the Nemovitosti and Změna ceny tiles count the unserved 0.8 % too), so the
+500-row cap and its `500+` are gone. While a new selection loads, the previous rows recede (`isPlaceholderData`). The phone's offer stays Browse's cards under the `brokerId` scope.
+
+**Known edge.** The book's pair is the history of the broker's most-repriced ad on the property, so with two ads
+of theirs at different prices the row shows that ad's last price.
+
+**Deleted** (migration 772, after the rollout): `GET /brokers/{id}/listings`, `toolkit.brokers.broker_listings` and its
+per-row `listing_price_history` read, the view `broker_listings_public`.
 
 ## W3b as prepared
 

@@ -3,8 +3,9 @@
 The worker's `autodedup` lane decides, groups AND merges in one pass under one lease
 (`rt_lease`): after the pass's transaction commits, `run` takes the groups it
 re-clustered plus a slice swept past the `rt_reconcile` cursor and hands them to THE apply
-path — `apply.plan_groups` (every refusal E903 names: operator negatives, categories, the scope,
-carry-along, spans-groups, refused-before) and `apply.apply_group`
+path — `apply.plan_groups` (every refusal E903 names: operator negatives, categories, the
+members' scope, refused-before; the adverts a merge carries refuse nothing, E989) and
+`apply.apply_group`
 (`recheck_group` over locked rows, `merge_property_set(source='autodedup')` and the ledger row
 in one transaction). Nothing here decides a refusal of its own; the reconcile is the batch
 apply's brain run by the lane.
@@ -78,6 +79,8 @@ RUN_PREFIX: str = "rt:"
 # so the list stays full, and a cycle is ~17 passes; the swept groups are planned in bulk
 # (~36 s for 2,000) before the time-bound apply loop, so a late find is still handed on.
 SWEEP_SLICE: int = 2000
+# E992: how long an operator `same` keeps its group in every pass's plan.
+RULED_SAME_HOURS: int = 24
 # A group is started only while this much of the pass's time is left: one group is a handful
 # of statements and one merge, and the reconcile stops between groups, never inside one.
 GROUP_MARGIN_S: float = 30.0
@@ -209,7 +212,7 @@ def _unread(conn: Any, generation: str, adverts: Sequence[A.Member],
     generation has never fingerprinted is unread whatever its block's state — it may have moved
     into a block after that block's last walk — when a scope block holds it or the apply `scope`
     admits it (an apply-scope block outside `rt_scope` lets in no advert the lane never read);
-    one neither holds is the plan's refusal (`carries_out_of_scope`)."""
+    one neither holds rides along with its property (operator ruling 2026-11-23)."""
     unwalked, unfingerprinted = (A.rt_block_reads(conn, generation, blocks) if reads is None
                                  else reads)
     unread = unwalked | unfingerprinted
@@ -436,6 +439,7 @@ def run(
     engine_since: str | None = None,
     waiting: Sequence[Sequence[int]] = (),
     building: bool = False,
+    unread_blocks: set[str] | None = None,
 ) -> dict[str, Any]:
     """Reconcile the pass's groups onto production. Returns the readout the pass summary and
     the worker's heartbeat carry; writes only through `apply.apply_group` and the ledger.
@@ -446,7 +450,10 @@ def run(
 
     `fence` (E941) is the lane's lease check, run last inside every group's transaction: a
     lease that ended under the reconcile — the worker's shutdown, a `release_lease=` dispatch —
-    rolls that group back and stops the run (`stopped` = `lease_lost`)."""
+    rolls that group back and stops the run (`stopped` = `lease_lost`).
+
+    `unread_blocks` (E987) is the pass's own answer to which blocks still hold an unread advert,
+    from its one scan of the snapshot; None reads the snapshot here."""
     scope, closed = read_scope(conn)
     if scope is None:
         # E960: no merge can follow a re-claim, so the queue goes too (no pass re-claims it).
@@ -467,9 +474,12 @@ def run(
     # E960: every group handed on is re-planned, so one refreshed whole merges in this pass.
     handed = (set(group_of({int(i) for group in waiting for i in group}).values())
               if waiting else set())
-    keys = sorted({int(k) for k in touched} | set(swept) | handed)
+    ruled = {int(row[0]) for row in _rows(conn, S.RC_RULED_SAME_SQL, {
+        "generation": generation, "hours": RULED_SAME_HOURS})}
+    keys = sorted({int(k) for k in touched} | set(swept) | handed | ruled)
     counts: dict[str, Any] = {"groups": len(keys), "touched": len(set(touched)),
-                              "swept": len(swept), "handed_replanned": len(handed)}
+                              "swept": len(swept), "handed_replanned": len(handed),
+                              "ruled_same": len(ruled)}
     out: dict[str, Any] = {"run_id": run_id, "counts": counts, "applied": [],
                            "skipped_at_apply": [], "refused": [], "failed": [],
                            QUARANTINED: []}
@@ -490,7 +500,7 @@ def run(
     # — sits in a block the lane has not fully read, or is carried along and was never
     # fingerprinted (R2); during a build, in a block whose walk is complete, only while that
     # advert itself has no fingerprint (E977).
-    reads = A.rt_block_reads(conn, generation, blocks)
+    reads = A.rt_block_reads(conn, generation, blocks, unfingerprinted=unread_blocks)
     carried = _carried(conn, members_by)
     adverts = {m.listing_id: m for ms in members_by.values() for m in ms}
     riders = {c.listing_id for cs in carried.values() for c in cs} - set(adverts)
@@ -507,8 +517,7 @@ def run(
 
     # The scope row's run cap holds here too, at most `max_clusters_per_run` merges a pass, but
     # over the groups that may merge NOW (E960): it is applied below, after the freshness rule.
-    plan = A.plan_groups(conn, generation, cluster_rows, members_by, scope, group_of=group_of,
-                         cap=False)
+    plan = A.plan_groups(conn, generation, cluster_rows, members_by, scope, cap=False)
     counts.update(plan.counts)
 
     history = _history(conn, generation, sorted({lid for g in plan.groups

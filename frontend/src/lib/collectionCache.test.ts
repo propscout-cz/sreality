@@ -20,11 +20,12 @@ import { tableReads } from './curationSync';
 import { browseKeys } from './browseKeys';
 import { curationKeys, fetchPropertyCollectionMemberSet } from './queries';
 import type { Collection } from './types';
+import { COLLECTION_KINDS } from './notifyKinds';
 
 const own = (over: Partial<Collection> = {}): Collection => ({
   id: 1, name: 'Šortlist', description: null, created_at: '2026-10-01T00:00:00Z',
   updated_at: '2026-10-01T00:00:00Z', listing_count: 1, monitoring_enabled: false,
-  is_system: false, owner_email: null, shared_with: [], ...over,
+  is_system: false, owner_email: null, shared_with: [], notify_kinds: COLLECTION_KINDS.map((k) => k.kind), ...over,
 });
 const sharedBy = (email: string, over: Partial<Collection> = {}): Collection =>
   own({ owner_email: email, shared_with: [{ account_id: 'me', email: null }], ...over });

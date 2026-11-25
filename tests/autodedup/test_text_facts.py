@@ -9,6 +9,7 @@ from autodedup.text_facts import (
     address_block_key,
     compass_points,
     mask_codes,
+    one_block,
     orientations,
     printed_floors,
     printed_floors_by_form,
@@ -52,6 +53,19 @@ def test_mask_codes_hides_the_code_in_the_original_text() -> None:
         ("s označením B36", {"B36"}),
         ("apartmán č. A311", {"A311"}),
         ("prodej jednotku 4+kk", set()),  # a disposition is never a unit designator
+        # E982: a list of units is a price list, never this advert's unit (Šestajovice, 10-26).
+        ("Obec oznamuje záměr pronajmout byty č. 1, 5, 9, 11 v domě čp. 1678", set()),
+        ("Obec oznamuje záměr pronajmout byty č. 2, 6, 8, 10 a 11 v domě čp. 1678", set()),
+        ("byty č. 5 a 7, obě řádně pronajaté", set()),
+        ("Byty č. 2 a 3 jsou ve vlastnictví obce.", set()),
+        # ... but a disposition, an area or a storey after the number is no list.
+        ("byt č. 5, 2+kk, 51 m²", {"5"}),
+        ("byt č. 12, 1kk, 18 m²", {"12"}),
+        ("byt č. 7, 115 m2 obytné plochy", {"7"}),
+        ("byt č. 4, 1. np", {"4"}),
+        ("byt č. 9, 3np", {"9"}),
+        ("byt č. 3, 28. října", {"3"}),
+        ("jeden ze skupiny nevybavených bytů č. 905, kde si můžete", {"905"}),
     ],
 )
 def test_unit_designators(text: str, expected: set[str]) -> None:
@@ -120,6 +134,43 @@ def test_address_block_key_falls_back_through_the_grains() -> None:
     loose = _listing(location=Location(obec_kod=9, street_key="hartigova", house_number="1116/83"))
     assert address_block_key(loose) == "addr:9:hartigova:1116/83"
     assert address_block_key(_listing(location=Location(obec_kod=9))) == "obec:9"
+
+
+def _at(**loc: object) -> Listing:
+    return _listing(location=Location(**loc))  # type: ignore[arg-type]
+
+
+STREET = dict(obec_kod=554782, street_key="mukarovskeho")
+DOOR = dict(STREET, house_number="2590/2", ruian_adm_kod=26741831)
+
+
+@pytest.mark.parametrize(
+    "left, right, expected",
+    [
+        # W5b g45: the door arrived on one side only; the other stays at the street.
+        (DOOR, STREET, True),
+        (dict(STREET, house_number="2590/2"), STREET, True),
+        # A door against an address: the č.p. decides when either side lacks the č.o.
+        (DOOR, dict(STREET, house_number="2590/2"), True),
+        (DOOR, dict(STREET, house_number="2590"), True),
+        (DOOR, dict(STREET, house_number="2592/4"), False),
+        (DOOR, dict(STREET, house_number="2590/4"), False),
+        # Two doors keep their own keys: two entrances stay two blocks.
+        (DOOR, dict(STREET, house_number="2590/4", ruian_adm_kod=26741849), False),
+        (DOOR, DOOR, True),
+        # Another street, another obec, or no street at all: the finest keys decide, as before.
+        (DOOR, dict(obec_kod=554782, street_key="pod pekarnami"), False),
+        (DOOR, dict(obec_kod=582786, street_key="mukarovskeho"), False),
+        (DOOR, dict(obec_kod=554782, lat=50.04, lon=14.32), False),
+        (dict(street_key="mukarovskeho"), dict(street_key="mukarovskeho"), True),
+        (dict(street_key="mukarovskeho", house_number="1"), dict(street_key="mukarovskeho"), False),
+    ],
+)
+def test_e981_one_block_reads_the_coarser_side_s_grain(
+    left: dict[str, object], right: dict[str, object], expected: bool
+) -> None:
+    assert one_block(_at(**left), _at(**right)) is expected
+    assert one_block(_at(**right), _at(**left)) is expected
 
 
 def test_live_end_stamp_prefers_the_sighting_over_the_detection_stamp() -> None:
@@ -324,3 +375,72 @@ def test_upper_storeys_reads_the_number_the_upper_clause_carries() -> None:
 
 def test_a_maisonette_range_is_placed_whole() -> None:
     assert subject_floors("Mezonetový byt se nachází ve 2.-3. NP domu.", True) == {2, 3}
+
+
+def test_an_idnes_headline_figure_never_stands_alone_as_the_stated_area() -> None:
+    # Beside a figure the body prints, the headline's label is one more reading.
+    text = "Prodej bytu 3+1 79 m², Pardubice Prostorný, světlý byt o výměře 78,6 m² v klidné ulici."
+    assert stated_areas(text, 78.6, "idnes") == {78.6, 79.0}
+    text = "Prodej bytu 1+1 44 m² Ateliér má plochu 40 m², k tomu patří sklep."
+    assert stated_areas(text, 44.0, "idnes") == {40.0, 44.0}
+    assert stated_areas("Prodej bytu 3+kk 96 m² Mezi Mosty, Pardubice Prostorný byt.", 75.0, "idnes") == set()
+
+
+def test_an_idnes_headline_with_no_figure_leaves_the_bodys_first_figure_standing() -> None:
+    text = ("Prodej pozemku vodní tok, Babice Nabízíme k prodeji pozemek o výměře 452 m² "
+            "v obci Babice.")
+    assert stated_areas(text, 452.0, "idnes") == {452.0}
+    text = "Prodej bytu 3+1 79 m², Pardubice Nabízíme k prodeji byt o výměře 78,6 m²."
+    assert stated_areas(text, 78.6, "idnes") == {78.6, 79.0}
+
+
+def test_the_same_words_opening_another_portals_body_keep_their_figure() -> None:
+    text = "Prodej bytu 1+kk o ploše 28,6 m2."
+    assert stated_areas(text, 28.6, "sreality") == {28.6}
+    assert stated_areas(text, 28.6) == {28.6}
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("byt č. 5, 2 + kk", {"5"}),
+    ("byt č. 12, 3 pokoje", {"12"}),
+    ("Byt č. 7, 4 990 000 Kč", {"7"}),
+    ("byt č. 3 a 2 sklepy", {"3"}),
+    ("byt č. 150, 2 koupelny", {"150"}),
+    ("Apartmán č. A311, 2+kk", {"A311"}),
+    ("byt s označením B36, 3 pokoje", {"B36"}),
+    ("číslo bytu: 14, 2 + kk", {"14"}),
+    ("byty č. 1, 5, 9, 11", set()),
+    ("2 nové byt č. 235 a 238 o dispozici 2+kk", set()),
+])
+def test_a_number_that_counts_something_else_does_not_make_a_unit_list(
+        text: str, expected: set[str]) -> None:
+    assert unit_designators(text) == expected
+
+
+def test_an_idnes_headline_that_runs_into_the_bodys_own_area_keeps_it() -> None:
+    text = "Prodej bytu 2+kk, Brno - Židenice Byt o výměře 55 m²"
+    assert stated_areas(text, 55.0, "idnes") == {55.0}
+    text = "Pronájem domu, Beroun Dům nabízí užitnou plochu 120 m²"
+    assert stated_areas(text, 120.0, "idnes") == {120.0}
+
+
+@pytest.mark.parametrize(("text", "stored"), [
+    ("Prodej bytu 1+kk o ploše 28,6 m2.", 28.6),
+    ("Prodej bytu 2+kk o celkové ploše 96 m², Praha Byt s terasou.", 75.0),
+    ("Prodej stavebního pozemku o výměře 1 200 m², Babice", 1200.0),
+])
+def test_an_area_word_inside_the_idnes_headline_does_not_open_the_body(
+        text: str, stored: float) -> None:
+    assert stated_areas(text, stored, "idnes") == set()
+
+
+def test_an_area_word_behind_the_headlines_locality_opens_the_body() -> None:
+    text = "Prodej rodinného domu, Kolín Rodinný dům s užitnou plochou 120 m² na pozemku 900 m²"
+    assert stated_areas(text, 120.0, "idnes") == {120.0}
+    text = "Prodej pozemku vodní tok, Babice Pozemek o výměře 452 m² leží u potoka"
+    assert stated_areas(text, 452.0, "idnes") == {452.0}
+
+
+@pytest.mark.parametrize("text", ["byty č. 5 a 6 + garáž", "byty č. 4 a 5 120 m2"])
+def test_a_real_unit_list_before_a_plus_or_an_area_stays_a_list(text: str) -> None:
+    assert unit_designators(text) == set()

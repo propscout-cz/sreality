@@ -19,6 +19,7 @@ import { cardRow } from '@/test/cardRow';
 
 import CollectionDetail from '../CollectionDetail';
 import { MANAGE_NOTE, VIEWER_NOTE } from './PhoneCollections';
+import { COLLECTION_KINDS } from '@/lib/notifyKinds';
 
 vi.mock('@/lib/phoneShell', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/phoneShell')>()),
@@ -54,6 +55,7 @@ const COLLECTION: Collection = {
   is_system: false,
   owner_email: null,
   shared_with: [],
+  notify_kinds: COLLECTION_KINDS.map((k) => k.kind),
 };
 
 const member = (property_id: number, extra: Partial<CollectionPropertyRow> = {}): CollectionPropertyRow => ({

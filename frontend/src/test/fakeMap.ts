@@ -1,6 +1,7 @@
 /* A fake MapLibre map for jsdom (which has no WebGL): `fakeCreateMap` stands in for
  * lib/basemap's createMap, keeps every map it built in `fakeMaps`, records what the map
- * was given (its container, options, sources and layers, in drawing order) and lets a test
+ * was given (its container, options, sources and layers, in drawing order — `moveLayer`
+ * reorders them) and lets a test
  * fire the map's events. `layers` stays what the map was given (`getLayer` reads it);
  * `setLayoutProperty` acts on `layout`, each layer's live layout, so a test reads a layer's
  * birth state apart from its state now. `resetFakeMaps()` clears the record but keeps a
@@ -61,6 +62,47 @@ export class FakeMap {
 
   getLayer(id: string): Record<string, unknown> | undefined {
     return this.layers.find((l) => l.id === id);
+  }
+
+  getLayersOrder(): string[] {
+    return this.layers.map((l) => String(l.id));
+  }
+
+  /* As MapLibre's: under `beforeId`, or to the top without one. */
+  moveLayer(id: string, beforeId?: string): this {
+    const from = this.layers.findIndex((l) => l.id === id);
+    if (from < 0) throw new Error(`Cannot move non-existing layer "${id}".`);
+    const [layer] = this.layers.splice(from, 1);
+    const at = beforeId === undefined ? this.layers.length : this.layers.findIndex((l) => l.id === beforeId);
+    if (at < 0) throw new Error(`Cannot move layer "${id}" before non-existing layer "${beforeId}".`);
+    this.layers.splice(at, 0, layer);
+    return this;
+  }
+
+  getZoom(): number {
+    return Number(this.options.zoom ?? 0);
+  }
+
+  getCenter(): { lng: number; lat: number } {
+    const [lng, lat] = (this.options.center as [number, number] | undefined) ?? [0, 0];
+    return { lng, lat };
+  }
+
+  zoomIn(): this {
+    return this;
+  }
+
+  zoomOut(): this {
+    return this;
+  }
+
+  getContainer(): HTMLElement {
+    return this.container;
+  }
+
+  /* The fake has no basemap style: its layers are only the ones a test's map added. */
+  getStyle(): { layers: Array<Record<string, unknown>> } {
+    return { layers: [...this.layers] };
   }
 
   setLayoutProperty(id: string, name: string, value: unknown): this {

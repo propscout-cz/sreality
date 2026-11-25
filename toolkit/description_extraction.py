@@ -289,7 +289,7 @@ def _coerce(field: str, raw: Any, quote: str) -> tuple[Any, str | None]:
     if "integer" in value_type:
         if isinstance(raw, bool) or not isinstance(raw, int):
             return None, "not_integer"
-        if field == "total_floors" and floor_grammar.total_floors_from_portal(raw) is None:
+        if field == "total_floors" and floor_grammar.total_floors_from_portal(raw, floor=None) is None:
             return None, "implausible_total_floors"
         return raw, None
     if not isinstance(raw, str):
@@ -344,18 +344,22 @@ def _eligible_where(open_sources: Iterable[str]) -> str:
     that grows with every row read at it: 7-23 s on prod's first pass, heading for the 120 s
     statement_timeout), and it runs the delisted arm FIRST, so a delisted advert already read
     is never detoasted. That arm (Q1: read ONCE per SCHEMA_VERSION) is hash-free, as a delisted
-    row is not re-fetched. Accepted edges: a text edited while active and delisted before its
-    re-read keeps the older reading; a given-up delisted row is retried after a version change;
-    a row read while delisted and relisted unchanged fills after the next one.
+    row is not re-fetched, and is a scalar `LIMIT 1` probe, not an EXISTS: inside the CASE an
+    EXISTS was still planned as a HASHED subplan, a parallel seq scan of the whole cache on
+    every pass (prod EXPLAIN, 2026-11-13). Accepted edges: a text edited while active and
+    delisted before its re-read keeps the older reading; a given-up delisted row is retried
+    after a version change; a row read while delisted and relisted unchanged fills after the
+    next one.
     """
     return (
         f"l.source = ANY ({_scope(open_sources)})\n"
         "   AND l.description IS NOT NULL AND l.description <> ''\n"
-        "   AND CASE WHEN l.is_active OR NOT EXISTS (\n"
+        "   AND CASE WHEN l.is_active OR (\n"
         "         SELECT 1 FROM listing_description_enrichments d\n"
         "          WHERE d.listing_id = l.id\n"
         f"            AND d.extractor_version LIKE '{SCHEMA_VERSION}:%%'\n"
-        "            AND d.extracted -> 'error' IS NULL)\n"
+        "            AND d.extracted -> 'error' IS NULL\n"
+        "          LIMIT 1) IS NULL\n"
         "   THEN NOT EXISTS (\n"
         "         SELECT 1 FROM listing_description_enrichments e\n"
         "          WHERE e.listing_id = l.id\n"

@@ -49,6 +49,9 @@ CENSUS: dict[str, str] = {
                                       "its canonical ad, the comparable (price, area, snapshot_id: rule 8)",
     "scraper/db.py": "identity: a singleton is born with its one ad as canonical AND location ad; the refetch lane's "
                      "`listing_location` join is ad-grain (`ll.listing_id = l.id`, rule 25's town-less ads)",
+    "scripts/recompute_property_stats.py": "the rollup picks the canonical ad (price, photos, link); the stamper's "
+                                           "`listing_location` join is ad-grain (`ll.listing_id = l.id`: is this "
+                                           "ad inside the engine's scope), it places no property",
 }
 
 # Every call of the served rule (rule 25) and every read of its constant, by (module, scope, the listing-id key it is
@@ -65,6 +68,10 @@ SERVED_RULE_SITES: dict[tuple[str, str, str], tuple[str, str]] = {
         ("property", "the watchdog matcher over properties_public, served as browse_projection serves"),
     ("scripts/checks/publishing.py", "_STAGE_TAIL", "p.location_listing_ref_id"):
         ("property", "publishing's not-in-Browse stages, judged as browse_projection judges"),
+    ("scripts/recompute_property_stats.py", "_ENQUEUE_PUBLISHED_SQL", "p.location_listing_ref_id"):
+        ("property", "the maintenance pass queues what browse_projection serves and browse_list lacks"),
+    ("scripts/recompute_property_stats.py", "_SETTLE_SQL", "l.id"):
+        ("ad", "the stamper waits for an ad whose own place is undetermined: the engine's scope cannot be judged"),
 }
 
 # Bodies of the replayed schema allowed to key a place on the canonical ad: none (the two dead MF functions left in 631).
@@ -539,14 +546,20 @@ PUBLISHED_RULE_SITES: dict[tuple[str, str, str], tuple[str, str]] = {
         ("property", "the two-model comparison samples only what Browse may serve"),
     ("api/notifications.py", "_build_match_clauses", 'published_property_predicate("l.property_id")'):
         ("property", "both watchdog producers over properties_public, published as browse_projection publishes"),
-    ("api/notifications.py", "match_once", 'visible_since_sql("pp")'):
-        ("property", "the 'new' window: a watchdog tells what became visible after it started"),
+    ("api/notifications.py", "_stale_listed_sql", 'visible_since_sql("rp")'):
+        ("property", "a newly-listed alert is withdrawn when the property it now names was published before the window"),
+    ("api/notifications.py", "_SLICE_SEED_SQL", 'visible_since_sql("p")'):
+        ("property", "a start's slice tells only what was published inside the window and after the watchdog started"),
+    ("api/notifications.py", "_ENTRY_SIGNAL", 'visible_since_sql("p")'):
+        ("property", "an entry into a slice is 'newly listed' when it became visible since the last pass"),
     ("scripts/recompute_property_stats.py", "_SETTLE_SQL", "CAP_SQL"):
-        ("property", "the stamper reads only properties the cap has not yet published"),
+        ("property", "the stamper's one bounded wait, for photos and an engine decision"),
+    ("scripts/recompute_property_stats.py", "_ENQUEUE_PUBLISHED_SQL", 'published_predicate("p")'):
+        ("property", "the maintenance pass queues what is published and browse_list lacks"),
+    ("scripts/recompute_property_stats.py", "_ENQUEUE_PUBLISHED_SQL", "CAP_SQL"):
+        ("property", "that queue reads properties first seen within the cap plus two hours"),
     ("scripts/checks/publishing.py", "_STAGE_TAIL", 'visible_since_sql("p")'):
         ("property", "publishing's 'unpublished' stage, judged at the newest rebuild's start"),
-    ("toolkit/property_identity.py", "_CARRY_SETTLED_SQL", "CAP_SQL"):
-        ("property", "a merge passes a stamp to the survivor only when that publishes it before its cap"),
 }
 _PUBLICATION_FILE = "toolkit/publication.py"
 _PUBLICATION_NAMES = {n: v for n, v in vars(publication).items() if not n.startswith("_")

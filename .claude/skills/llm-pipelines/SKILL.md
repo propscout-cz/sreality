@@ -128,7 +128,7 @@ adjustments. A secondary figure shown ALONGSIDE the comparables estimate — nev
   and the merge/detach recompute are gone); estimations call the measure.
 - **Serving, after 567 applies:** `browse_projection` / `properties_public` call the measure in
   their property lateral with the representative's `ll.obec_kod` + `ll.katastr_kod` (566, FILL
-  v5.4: the single KÚ of the bound entity, never a pin). Until 567 applies they read the
+  v5.11: the bound entity's KÚ, or a precise pin's). Until 567 applies they read the
   stored, writer-less `properties.mf_*` / `listings.mf_*`; PR-F drops those.
 - **Rules:** flats only (else no row). VK = leading integer of the disposition clamped 1..4;
   novostavba = `condition = 'novostavba'` (NULL → older column, adjustments kept); rent =
@@ -148,8 +148,8 @@ adjustments. A secondary figure shown ALONGSIDE the comparables estimate — nev
 - **Estimations:** rent runs store `estimation_runs.reference_rent` (migration 131) from
   `toolkit.rent_map.compute_reference_rent` — a thin wrapper running the measure on the
   service-role connection, stamped `engine: 'mf_sql_v1'`. Our advert → its property's golden
-  facts + stored codes (`_SUBJECT_MF_FACTS_SQL`, the views' lateral inputs); a raw-spec (typed)
-  typed subject → obec from `api.maps.containing_obec_kod`, KÚ NULL. Stored runs keep their
+  facts + stored codes (`_SUBJECT_MF_FACTS_SQL`, the views' lateral inputs); a raw-spec
+  (typed) subject → obec from the resolver's view (`_typed_point_obec_kod`), KÚ NULL. Stored runs keep their
   frozen breakdown (rule #12).
 - **Store + ingest:** `rent_map_revisions` (`file_sha256` UNIQUE) +
   `rent_map_values` + `rent_map_adjustments` (migration 132, history kept).

@@ -77,7 +77,7 @@ became eleven readers composing five different strings, so the composition moved
 SQL function, `location_display_label(street_name, house_number_cp, house_number_co, obec_name,
 cast_obce_name, country_code, country_status)`, and every serving view publishes its result as
 `display_label`: `browse_projection` (→ `browse_list`), `listing_feed_public`,
-`properties_public`, `listings_public`, `broker_listings_public`, and `pipeline_board_public` (which
+`properties_public`, `listings_public`, and `pipeline_board_public` (which
 reads it off `properties_public` — it is `security_invoker` and `listing_location` is revoked from
 `authenticated`). Since 636 the API's property-grain surfaces print the property's own
 `properties_public.display_label` — the collections route, the dispatch feed (the notification

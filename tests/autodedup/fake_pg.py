@@ -404,6 +404,11 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         db.settings[str(p["key"])] = {"digest": p["digest"], "since": since}
         db.settings_by[str(p["key"])] = str(p.get("updated_by") or "")
         return [(since,)]
+    if sql == S.RT_RESCORE_WRITE_SQL:
+        since = db.now.isoformat()
+        db.settings[str(p["key"])] = {**_jsonb(p["value"]), "since": since}
+        db.settings_by[str(p["key"])] = str(p.get("updated_by") or "")
+        return [(since,)]
     if sql == S.RT_FRESH_SETTINGS_SQL:
         gone = [key for key in p["keys"] if key in db.settings]
         for key in gone:
@@ -489,6 +494,8 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
             "ev_images": p["ev_images"], "ev_phash": p["ev_phash"],
             "ev_clip": p["ev_clip"], "ev_tags": p["ev_tags"],
             "ev_complete": p["ev_complete"], "dd": p["dd"],
+            "source": p["source"], "area_basis": p["area_basis"], "block_key": p["block_key"],
+            "ref_codes": p["ref_codes"],
             "first_decided_at": held.get("first_decided_at") or db.now,
             "updated_at": db.now,
         }
@@ -531,7 +538,16 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
                         row.get("ev_images"), row.get("ev_phash"), row.get("ev_clip"),
                         row.get("ev_tags"),
                         stamp.timestamp() if hasattr(stamp, "timestamp") else stamp,
-                        row.get("dd")))
+                        row.get("dd"), row.get("source"), row.get("area_basis"),
+                        row.get("block_key")))
+        return out
+    if sql == S.RT_CODE_CARRIERS_SQL:
+        out = []
+        for code in p["codes"]:
+            carriers = [row for (g, _), row in sorted(db.rt_fp.items())
+                        if g == gen and code in (row.get("ref_codes") or ())]
+            out.extend((code, row["disposition"], row["area_m2"])
+                       for row in carriers[:int(p["cap"])])
         return out
     if sql == S.RT_KNOWN_SQL:
         return [(int(i),) for i in p["ids"] if (gen, int(i)) in db.rt_fp]
@@ -802,8 +818,6 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
     if sql == S.RT_PHASH_POP_SQL:
         wanted = set(p["hashes"])
         return sorted((h, n) for h, n in db.phash_pop.items() if h in wanted)
-    if sql == S.RT_PHASH_POP_COUNT_SQL:
-        return [(len(db.phash_pop),)]
     if sql == S.RT_PHASH_POP_WRITE_SQL:
         # The `is distinct from` limb is READ from the statement (E964 review F6): an upsert that
         # stopped skipping an unmoved count rewrites it here, as it would in Postgres.
@@ -1031,7 +1045,11 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
                if row["id"] > int(p["after_id"]) and row["listing_id"] is not None
                and (row["scraped_at"] is None or row["scraped_at"] <= cut)
                ][:int(p["window"])]
-        keep = [row for row in win if _in_scope(db, row[1], p)]
+        first: dict[int, int] = {}
+        for row in db.snapshots:
+            if row["listing_id"] is not None:
+                first[row["listing_id"]] = min(first.get(row["listing_id"], row["id"]), row["id"])
+        keep = [row for row in win if row[0] > first[row[1]] and _in_scope(db, row[1], p)]
         return [(max((row[0] for row in win), default=int(p["after_id"])), len(win),
                  [row[1] for row in keep], [row[2] for row in keep],
                  [row[0] for row in keep])]
@@ -1052,8 +1070,18 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         slice_ids = sorted(i for g, i in db.rt_fp
                            if g == gen and i > int(p["after_id"]))[:int(p["limit"])]
         departed = [i for i in slice_ids if not _in_scope(db, i, p)]
+        # A: an in-scope row with a location row whose stored key is not today's block key.
+        relocated = []
+        for i in slice_ids:
+            stored, place = db.rt_fp[(gen, i)].get("block_key"), db.locations.get(i)
+            if stored is None or place is None or not _in_scope(db, i, p):
+                continue
+            today = (f"c{place['cast_obce_kod']}" if place.get("cast_obce_kod") is not None
+                     else f"o{place['obec_kod']}" if place.get("obec_kod") is not None else "")
+            if stored != today:
+                relocated.append(i)
         return [(max(slice_ids) if slice_ids else int(p["after_id"]),
-                 len(slice_ids), departed)]
+                 len(slice_ids), departed, relocated)]
     # The sixth feed (W9d-3), as W9e pays for it (R3): the wide block walk on `public` is a
     # cadence-driven REFRESH of the snapshot, and an ordinary pass claims out of the snapshot.
     # E940: one PAGE, the keyset after the block's cursor.
@@ -1107,6 +1135,14 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         db.scope_scans = [row for row in db.scope_scans
                           if not (row["generation"] == gen and row["block_key"] not in keep)]
         return []
+    if sql == S.RT_SCOPE_UNREAD_SQL:
+        cut = db.now - timedelta(seconds=int(p["lag"]))
+        return sorted((block, listing_id, row["resolved_at"],
+                       row["resolved_at"] is None or row["resolved_at"] <= cut,
+                       None if row["resolved_at"] is None
+                       else (db.now - row["resolved_at"]).total_seconds())
+                      for (g, block, listing_id), row in db.scope_ids.items()
+                      if g == gen and (gen, listing_id) not in db.rt_fp)
     if sql == S.RT_SCOPE_ENTRANTS_SQL:
         cut = db.now - timedelta(seconds=int(p["lag"]))
         rows = sorted((listing_id, row["resolved_at"])
@@ -1216,6 +1252,14 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
     if sql == S.RT_SCOPE_OKRES_OBCE_SQL:
         return [(int(code), int(obec)) for code in p["codes"]
                 for obec in db.admin_districts.get(int(code), ())]
+    if sql == S.RT_RESCORE_SQL:
+        since = datetime.fromisoformat(str(p["since"]))
+        slice_ids = sorted(i for g, i in db.rt_fp
+                           if g == gen and bool(db.rt_fp[(g, i)]["is_active"]) is p["active"]
+                           and i > int(p["after_id"]))[:int(p["limit"])]
+        owed = [i for i in slice_ids if db.rt_fp[(gen, i)]["updated_at"] < since
+                and _in_scope(db, i, p)]
+        return [(max(slice_ids) if slice_ids else int(p["after_id"]), len(slice_ids), owed)]
     if sql == S.RT_REVIVED_SQL:
         slice_ids = sorted(i for g, i in db.rt_fp
                            if g == gen and not db.rt_fp[(g, i)]["is_active"]

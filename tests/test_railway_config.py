@@ -259,7 +259,7 @@ def test_the_runner_reads_the_workers_secrets_by_reference() -> None:
     declared = re.findall(r"(\w+): ", env.group(1))
     assert len(declared) == len(set(declared))
     plain = {"EXTRAS", "HF_HUB_OFFLINE"}
-    assert set(declared) == plain | {"SUPABASE_DB_URL", *image_storage.R2_ENV_VARS}
+    assert set(declared) == plain | {"SUPABASE_DB_URL", "SUPABASE_DB_SESSION_URL", *image_storage.R2_ENV_VARS}
     worker_kept = re.search(r"\bkept\((.*?)\)", iac_entry("worker"), re.S)
     assert worker_kept, "the worker keeps its secrets"
     kept_names = set(re.findall(r'"(\w+)"', worker_kept.group(1)))
@@ -269,6 +269,16 @@ def test_the_runner_reads_the_workers_secrets_by_reference() -> None:
     assert not re.search(r"preserve\(|kept\(|ctx\.shared", runner)
 
 
+def test_a_location_load_on_the_runner_has_its_session_mode_url() -> None:
+    """#2604: `loader_db.open_loader_connection` refuses the transaction pooler, so a location-heavy job on the
+    runner aborts at its first line unless the runner names a session-mode URL."""
+    from scraper import jobs
+
+    loads = [j.name for j in jobs.runner_jobs() if j.resource == jobs.LOCATION_HEAVY]
+    assert loads, "the census proves nothing without a location load on the runner"
+    assert "SUPABASE_DB_SESSION_URL: sreality.env.SUPABASE_DB_SESSION_URL" in iac_entry("jobRunner"), loads
+
+
 def test_the_api_and_the_worker_pass_their_extras_to_the_root_dockerfile_build() -> None:
     """Railway has no build-args field: a service variable reaches the Dockerfile ARG of the same name. Unset,
     the image installs `api` as before, and the build log's echo tells a delivered value from the fallback."""
@@ -276,10 +286,26 @@ def test_the_api_and_the_worker_pass_their_extras_to_the_root_dockerfile_build()
     assert "ARG EXTRAS\n" in dockerfile
     assert 'echo "EXTRAS=${EXTRAS:-unset}"' in dockerfile
     assert 'pip install ".[${EXTRAS:-api}]"' in dockerfile
-    for name in ("api", "worker"):
-        assert 'EXTRAS: "api"' in iac_entry(name), name
+    assert 'EXTRAS: "api"' in iac_entry("api")
+    # The worker also takes `browser`: it drains ceskereality, whose pages sit behind a JS
+    # proof-of-work interstitial, so that image bakes chromium (#2529). The API never
+    # scrapes, so it must NOT carry the extra (and the weight).
+    assert 'EXTRAS: "api,browser"' in iac_entry("worker")
+    assert "browser" not in iac_entry("api")
     assert 'EXTRAS: "api,clip,geo"' in iac_entry("jobRunner")
     assert 'EXTRAS: "api"' not in iac_entry("jobRunner")
+
+
+def test_the_browser_layer_installs_libatomic_before_it_runs_playwright() -> None:
+    """`playwright install --with-deps` resolves chromium's system libraries, but it runs on playwright's own
+    bundled node, which this slim base cannot load without libatomic.so.1 — so --with-deps dies at exit 127
+    before resolving anything (2026-11-16). apt must supply that one library first, by hand."""
+    final = (ROOT / "Dockerfile").read_text(encoding="utf-8").rsplit("\nFROM ", 1)[1]
+    layer = final[final.index('case ",${EXTRAS}," in *,browser,*)'):]
+    layer = layer[:layer.index("esac")]
+    assert layer.index("libatomic1") < layer.index("playwright install"), layer
+    assert "--with-deps" in layer, "chromium's own libraries still come from playwright, not a hand-kept apt list"
+    assert "BROWSER baked" in layer, "the build must still launch chromium, so a broken bake fails the build"
 
 
 def test_the_runner_image_is_cpu_torch_baked_and_offline() -> None:
@@ -358,6 +384,18 @@ def test_the_api_image_is_proven_free_of_clip() -> None:
     assert "test ! -e /root/.cache/huggingface" in check, "a verdict, not a print"
     assert "||" not in check, "nothing in the verdict step may swallow its exit status"
     assert "docker image inspect -f '{{.Size}}'" in runs and "pip freeze" in runs
+
+
+def test_the_api_image_is_proven_to_verify_cuzks_certificate() -> None:
+    """#2595: the ČÚZK client verifies against certifi's bundle over stdlib HTTPS. CI asserts it inside the built
+    API image with no network, and builds that image whenever the client changes."""
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "runner_image.yml").read_text(encoding="utf-8"))
+    steps = [s.get("run", "") for job in workflow["jobs"].values() for s in job["steps"]]
+    check, = [r for r in steps if "tls_context()" in r]
+    assert "docker run --rm --network none api-head" in check
+    assert all(part in check for part in ("ssl.CERT_REQUIRED", "check_hostname", "certifi.where()", "get_ca_certs()"))
+    assert check.count("assert ") == 3 and "||" not in check, "verdicts, and nothing swallows their exit status"
+    assert "api/wsdp_client.py" in workflow[True]["pull_request"]["paths"]
 
 
 def test_the_runner_image_workflow_builds_on_every_image_input() -> None:

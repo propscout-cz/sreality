@@ -6,9 +6,16 @@ feed), so this returns raw HTML for `scraper.ceskereality_parser`. The shared
 retry/backoff + adaptive throttle (`RateLimiter` + `penalize()` on 429/403) +
 `ListingGoneError` on a 404/410 all live in `scraper.portal_base.BasePortalClient`.
 
-Three ceskereality specifics live here:
+Four ceskereality specifics live here:
+  - **Headless-browser fetch** (`_send`): since 2026-10-31 every page sits behind a JS
+    proof-of-work interstitial that answers 200 with challenge HTML, so `requests`
+    collects nothing and a walk reads each page as empty (#2479). `scraper.browser_fetch`
+    solves it once per session and the context carries the cookie; an unsolved page comes
+    back as a retryable 403, never as content. The browser is launched on the first fetch
+    and released by `close()`.
   - **Residential egress** (`USE_PROXY`): every request routes through the
-    residential proxy in `SCRAPER_PROXY_URL`, with the shared BROWSER User-Agent.
+    residential proxy in `SCRAPER_PROXY_URL`, with the shared BROWSER User-Agent. Still
+    mandatory with the browser: a datacenter IP is refused before the interstitial runs.
   - **Client hints** (`CLIENT_HINTS`): this client sends the sec-ch-ua client
     hints, derived from the shared UA.
   - **The kraj search URLs**: the 12-page cap is NOT site-wide — it applies to
@@ -23,11 +30,24 @@ Three ceskereality specifics live here:
 from __future__ import annotations
 
 import logging
+import os
+import re
+from typing import Any
+from urllib.parse import urlencode, urlsplit
 
+from scraper.browser_fetch import BrowserFetcher, BrowserResponse, classify_status
 from scraper.portal import CZ_KRAJ_SLUGS
-from scraper.portal_base import BasePortalClient, ListingGoneError
+from scraper.portal_base import BasePortalClient, gone_phrases, stated_closed
 
 LOG = logging.getLogger(__name__)
+
+# Consecutive 403s before the exit IP is retired. Two, not one: a lone refusal among
+# successes is noise, and rotating on it discards a working IP and pays a fresh
+# interstitial solve for nothing.
+REFUSALS_BEFORE_ROTATE = 2
+# Pages one exit IP serves before it is retired unasked. The 2026-11-16 walk put all
+# 1,558 pages of a walk on ONE IP and was blocked for 30 minutes partway through.
+PAGES_PER_EXIT_IP = 250
 
 BASE_URL = "https://www.ceskereality.cz"
 
@@ -208,11 +228,106 @@ def detail_url(path_or_url: str) -> str:
 
 class CeskerealityClient(BasePortalClient):
     ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    # Removed: a redirect off its .html page; sold/let: its OWN intro badges (not the slider's below).
+    DETAIL_URL = re.compile(r"\.html")
+    GONE_PAGE = (
+        gone_phrases(*_GONE_MARKERS),
+        stated_closed(r'<div class="s-estate-detail-intro__badges">(?:(?!</ul>)[\s\S]){0,2000}?'
+                      r'<span class="badge__title">'),
+    )
     # Route through the residential proxy (SCRAPER_PROXY_URL) with the shared
     # browser UA, so no USER_AGENT override.
     USE_PROXY = True
     # Send the sec-ch-ua hints derived from that UA.
     CLIENT_HINTS = True
+    # Read by the worker (`_skip_for_browser`): this portal's bytes arrive through a
+    # headless browser, so without playwright installed its lanes must be skipped rather
+    # than spend every queue row's attempts on a fetch that can only raise.
+    USE_BROWSER = True
+
+    def __init__(self, *, fetcher: Any | None = None, **kwargs: Any) -> None:
+        """`fetcher` replaces the headless browser (tests inject a fake; nothing else
+        does). Left None it is built on the first fetch, so a run that never reaches this
+        portal launches no browser."""
+        super().__init__(**kwargs)
+        self._fetcher = fetcher
+        self._refusals = 0
+
+    def _browser(self) -> Any:
+        if self._fetcher is None:
+            # The same Chrome UA the session advertises: the interstitial records the UA
+            # it issued its cookie to, so the two must not disagree.
+            self._fetcher = BrowserFetcher(
+                proxy_url=os.environ.get(self.PROXY_ENV),
+                user_agent=self._session.headers.get("User-Agent"),
+                timeout_s=self.timeout_s,
+                rotate_after=PAGES_PER_EXIT_IP,
+            )
+        return self._fetcher
+
+    def _note_refusal(self, status: int, url: str) -> None:
+        """Retire the exit IP after a RUN of refusals.
+
+        A 403 here is the portal refusing this residential IP — the interstitial is a
+        separate thing and the browser solves it (1,558 of 1,558 on 2026-11-16; every one
+        of that walk's 403s was nginx, in front of Anubis). Retrying a blocked IP only
+        draws the same refusal, which is how one block cost three category groups a whole
+        walk. One 403 is noise, so the rotation waits for a run of them; a 404/410 is the
+        LISTING speaking and never counts."""
+        if status != 403:
+            self._refusals = 0
+            return
+        self._refusals += 1
+        if self._refusals < REFUSALS_BEFORE_ROTATE:
+            return
+        self._refusals = 0
+        fetcher = self._fetcher
+        rotate = getattr(fetcher, "rotate", None)
+        if rotate is None:
+            return
+        try:
+            rotate(f"{REFUSALS_BEFORE_ROTATE} refusals, last {url}")
+        except Exception as exc:  # noqa: BLE001 - a failed rotation must not end the walk
+            LOG.warning("BROWSER rotation failed (ignored): %r", exc)
+
+    def _send(
+        self,
+        url: str,
+        *,
+        method: str = "GET",
+        params: dict[str, Any] | None = None,
+        json_body: dict[str, Any] | None = None,
+    ) -> Any:
+        """Fetch through the headless browser instead of `requests`: every page of this
+        portal sits behind a JS proof-of-work interstitial (`scraper.browser_fetch`). The
+        shared loop still does the pacing, retrying, penalizing and gone detection — a
+        page that stays challenged comes back as a 403 and is retried, then fails, so it
+        can never reach the parser as a page with no ads."""
+        if method != "GET" or json_body is not None:
+            raise ValueError("ceskereality is fetched with GET only")
+        if params:
+            url = f"{url}{'&' if urlsplit(url).query else '?'}{urlencode(params)}"
+        response = self._browser().fetch(url)
+        # Belt and braces: the fetcher classifies too, but the invariant that an
+        # interstitial is a FAILED FETCH and never content is enforced here, at the seam
+        # every caller goes through, whatever fetcher is in place.
+        status = classify_status(response.status_code, response.text)
+        self._note_refusal(status, url)
+        if status != response.status_code:
+            LOG.warning(
+                "CHALLENGE unsolved url=%s served=%d -> retryable %d",
+                url, response.status_code, status,
+            )
+            return BrowserResponse(
+                status_code=status, text=response.text,
+                url=getattr(response, "url", url) or url,
+            )
+        return response
+
+    def close(self) -> None:
+        if self._fetcher is not None:
+            self._fetcher.close()
+            self._fetcher = None
 
     def fetch_search(self, url: str) -> tuple[str, int]:
         """Fetch one search-results page (any region host / facet path / page)."""
@@ -225,15 +340,4 @@ class CeskerealityClient(BasePortalClient):
         return self.fetch_search(index_url(sale_type, category, page))
 
     def fetch_detail(self, path_or_url: str) -> tuple[str, int]:
-        url = detail_url(path_or_url)
-        response = self._request(url)
-        # A removed listing redirects off its .html detail page (to the category
-        # results); after requests follows it the status is 200 but the URL is
-        # no longer a listing page.
-        final_url = getattr(response, "url", url) or url
-        if ".html" not in final_url:
-            raise ListingGoneError(url, response.status_code)
-        text = response.text
-        if any(marker in text.lower() for marker in _GONE_MARKERS):
-            raise ListingGoneError(url, response.status_code)
-        return text, response.status_code
+        return self._fetch_detail_page(detail_url(path_or_url))

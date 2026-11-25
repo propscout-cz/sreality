@@ -7,6 +7,28 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Map layers on the property map, web and phone; one list for every map (2026-11-20, no migration)
+- **Done** (operator ask 2026-11-20: "turn on the various map layers on the property detail map, both
+  apps; reuse/unify"). Rulings 2026-11-20: (1) the 170 px web minimap keeps a clean face, its Vrstvy
+  button opens a large map dialog with Browse's rail, list and keys, a pick there drawn on the minimap
+  too; (2) ČÚZK's aerial photo on every map, Browse included (Podklad Mapa / Letecká); (3) reference
+  layers only (no Města / Růst cen a nájmů on the property map); (4) phone Poloha: one Vrstvy button →
+  a bottom sheet with the same list, the keys under the plate. Supersedes the 2026-10-23 "minimap = zoom
+  only" ruling.
+- Unified: the photo, relief and contours are keys of the one `layers` selection (one memory, one URL key);
+  `lib/usePointMap` is the one hook of the three point maps; `MapOverlayControls` is every map's one list.
+- Next (unruled): Města / Růst cen a nájmů stay Browse's; the photo carries no street names (a "hybrid"
+  would need the basemap's buildings hidden under it).
+
+### Terrain on the map: ČÚZK relief and contours (2026-11-11, no migration, #2494)
+- **Done** (operator ask 2026-11-11: turn on "relief" and "vrstevnice" to judge the terrain). OpenFreeMap
+  carries no elevation; ČÚZK, already the aerial photo's source, serves DMR 5G shaded relief and ZABAGED
+  contours (1 m base interval, thinned on steep slopes by ZABAGED's own `ZOBRAZ_K` pick, from zoom 16).
+  Browse: "Reliéf a vrstevnice" in Vrstvy, each switchable alone, URL `relief=1` / `contours=1`. Phone
+  Poloha: Mapa / Letecká / Terén. Not the listing-detail minimap (ruling 2026-10-23: no overlay toggles).
+- Next (unruled): both services draw each tile on request; if they turn slow under use, cache the tiles
+  on our side (R2) behind the API.
+
 ### Browse's circle is a true circle, placed on the main map (2026-10-30, migrations 694 + 695)
 - **Done** (operator report 2026-10-30: "I do not see pins for inactive properties" — the view held
   more than the pin limit, and a centre + radius with no centre filtered nothing). Rulings 2026-10-30:
@@ -1257,8 +1279,7 @@ correctness resting on an invisible setting. Verified empirically against prod
   1,000. Live-verified: 60k ask → exactly 50k; map single-shot unaffected.
 - Reported, not fixed: prefilter id-lists ride back on GET `.in()` (~1–2k-id
   URL ceiling, fails loud, server-side predicate is the strategic fix when
-  cohorts grow); `fetchBrokerListings` shows ≤500 of a 20k-listing mega-broker
-  (brokers rebuild owns it).
+  cohorts grow).
 
 ### Broker explore map (done, 2026-09-05)
 "Explore this broker's listings" on `/brokers/:id`. NOT a new map component — a
@@ -1282,7 +1303,6 @@ unmonitored for watchdogs.
   pipeline, so the ~1–2k-id URL ceiling above applies — the largest real broker
   (~1.9k active properties, more listings) can trip it, loudly (map error, not a
   silent subset); the server-side predicate is the strategic fix for all of them.
-  `broker_listings()` ≤500/2000 truncation behind the Inventory table (see U-CAP);
   a shared `PointsMap` primitive (ListingMap + ComparablesMap + DatasetMap still
   duplicate the layer setup); a Watchdog broker dimension; Stats-tab parity (the
   modal hides Stats instead, mirroring the portal filter's accepted gap). WebGL

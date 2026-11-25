@@ -4,7 +4,8 @@ The operator, 2026-10-22: Praha's visible duplicates merged as fast as possible.
 the whole of Praha left 37,910 adverts unread, 11,864 of them live, and the build's feed took them
 in listing-id order after a cursor: the live ones (median id 18.7M against 0.5M overall) came
 last, ~3 days in. During a build the feed now orders live before inactive, ids ascending within
-each, under no id cursor (the `rt_fp` anti-join advances it); outside a build nothing changes.
+each, under no id cursor (the `rt_fp` anti-join advances it); outside a build, since E987, no id
+cursor either: fewest-unread block first, from one scan the reconcile reuses.
 
 E979, the operator 2026-10-25: a newly widened block first, in a category order they choose —
 Liberec, flats for rent, houses for sale, flats for sale, the rest — read out of
@@ -118,20 +119,23 @@ def test_the_build_feed_keeps_the_settle_lag() -> None:
     assert _entered(_work(db, bootstrap=True, lag=300))[:3] == [2, 4, 6]
 
 
-def test_outside_a_build_the_feed_is_the_id_cursor_it_always_was() -> None:
-    """Steady state: the same statement, the same id order after the cursor, the cursor moved
-    to the last id taken (or wrapped on a short claim)."""
+def test_outside_a_build_the_feed_reads_one_scan_and_no_id_cursor() -> None:
+    """E987 replaced the steady state's id cursor: the feed reads one scan of the snapshot's
+    unread adverts (`RT_SCOPE_UNREAD_SQL`), leaves its id half at 0 and is advanced by the
+    fingerprints, as the build's feed is. One block, every advert resolved a day ago: the
+    fairness rule's oldest first, ids ascending among equals, live or not."""
     db = _world()
     ordinary = _work(db)
     taken = _entered(ordinary, limit=10)
-    assert taken == [1, 2], "a fifth of the claim, in id order"
-    assert S.RT_SCOPE_ENTRANTS_SQL in db.statements
+    assert taken == [1, 2], "a fifth of the claim"
+    assert S.RT_SCOPE_UNREAD_SQL in db.statements
     assert S.RT_SCOPE_BUILD_ENTRANTS_SQL not in db.statements
-    assert _decide(db, ordinary, taken)[CURSOR_ENTER][0] == 2
+    assert S.RT_SCOPE_ENTRANTS_SQL not in db.statements
+    assert _decide(db, ordinary, taken)[CURSOR_ENTER][0] == 0, "no id cursor outside a build"
 
     later = _work(db)
-    assert _entered(later, limit=10) == [3, 4], "after the cursor, by id, live or not"
-    db.cursors[CURSOR_ENTER] = {"last_listing_id": 4, "last_snapshot_id": 0, "watermark": None}
+    assert _entered(later, limit=10) == [3, 4], "what the pass decided left the feed"
+    _decide(db, later, [3, 4])
     db.statements.clear()
     assert _entered(_work(db), limit=50) == [5, 6]
     assert S.RT_SCOPE_BUILD_ENTRANTS_SQL not in db.statements

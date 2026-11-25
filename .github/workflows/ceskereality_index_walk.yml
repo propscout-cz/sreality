@@ -62,8 +62,14 @@ jobs:
           cache: pip
           cache-dependency-path: pyproject.toml
 
+      # The `browser` extra + chromium: every page of this portal sits behind a JS
+      # proof-of-work interstitial, so the walk fetches through a headless browser
+      # (#2529). Without this the walk collects nothing and reads red.
       - name: Install
-        run: pip install -e .
+        run: pip install -e ".[browser]"
+
+      - name: Install chromium
+        run: python -m playwright install --with-deps chromium
 
       - name: Run ceskereality index walk
         env:

@@ -66,52 +66,35 @@ export const fmtArea = (
     ? '—'
     : `${czNumber.format(Math.round(n))}${NBSP}m²${areaKind === 'plot' ? `${NBSP}pozemku` : ''}`;
 
-/* THE storey, in Czech, and the only place the app says which convention it means.
+/* THE storey label, and the only place the app turns the stored scale into words.
  *
- * `listings.floor` is ground = 0 on every portal since W8 (přízemí 0, 1. patro 1,
- * suterén −1). Before that it was a ~50/50 mix of two conventions printed as a bare
- * number, so one flat read "3" from its idnes row and "4" from its sreality row in the
- * same list and nothing on screen said which scale either was on. A bare integer cannot
- * carry that fact; the Czech word can, which is why this is the one renderer for every
- * surface that shows `listings.floor` or an estimation subject's storey. The one place
- * still printing a bare number is BuildingDetail's unit table, whose `floor` is the
- * operator-curated building decomposition, not this column.
+ * `listings.floor` is stored ground = 0 on every portal (`scraper/floor.py`). The label
+ * is the storey ORDINAL the Czech portals print (ruling 2026-11-17, #2552): the ground
+ * storey is "1. podlaží", so the number reads straight against `total_floors`, an
+ * above-ground podlaží count: "7. podlaží z 7" is the top storey. The earlier wording
+ * put a patro number beside that count ("6. patro z 7 podlaží") and the top storey
+ * read as one below it.
  *
- * `total_floors` is a PODLAŽÍ count (the ground storey included), so it is spelled out
- * rather than printed as "2/5": under ground = 0 the top storey is total − 1, and the
- * slash form invited reading the 5 as a patro. A null floor renders null, leaving each
- * surface to say what an absent storey looks like on it.
- *
- * Below ground the MAGNITUDE is kept (−2 is "2. podzemní podlaží", not "suterén"):
- * AttrDiffTable diffs the rendered strings, so collapsing every basement to one word
- * would have made −1 and −2 read as agreeing on the one screen asked to show the
- * difference. 109 rows corpus-wide sit below −1. */
+ * Below ground the ordinal counts down from the ground ("2. podzemní podlaží"), the
+ * magnitude kept: AttrDiffTable diffs the rendered strings. A null floor renders null,
+ * leaving each surface to say what an absent storey looks like on it.
+ * `storey_label` in `scraper/floor.py` is its Python face (the PDF sheet); both read
+ * `tests/fixtures/storey_labels.json`. */
 export const fmtFloor = (
   floor: number | null | undefined,
   totalFloors?: number | null,
 ): string | null => {
   if (floor == null) return null;
-  const storey =
-    floor === 0 ? 'přízemí'
-    : floor === -1 ? 'suterén'
-    : floor < 0 ? `${-floor}. podzemní podlaží`
-    : `${floor}. patro`;
-  return totalFloors == null ? storey : `${storey} z ${totalFloors} podlaží`;
+  const storey = floor < 0 ? `${-floor}. podzemní podlaží` : `${floor + 1}. podlaží`;
+  return totalFloors == null ? storey : `${storey} z ${totalFloors}`;
 };
 
-/* The storey as a tag or chip prints it, "2. patro z 5", with fmtFloor's full
- * wording as its tooltip. The scale is ground = 0, so a bare "2/5" would read as
- * the second of five podlaží when it is the third: the ordinal stays spelled and
- * the count stays behind "z". */
-export const fmtFloorTag = (
-  floor: number | null | undefined,
-  totalFloors?: number | null,
-): { text: string; title: string } | null => {
-  const storey = fmtFloor(floor);
-  const full = fmtFloor(floor, totalFloors);
-  if (storey == null || full == null) return null;
-  return { text: totalFloors == null ? storey : `${storey} z ${totalFloors}`, title: full };
-};
+/* The same scale for a typed storey: the ordinal a person enters ("7", "-1") and the
+ * stored ground = 0 value. There is no storey 0 on this scale. */
+export const storeyOrdinal = (floor: number | null | undefined): number | null =>
+  floor == null ? null : floor < 0 ? floor : floor + 1;
+export const storeyFromOrdinal = (ordinal: number | null | undefined): number | null =>
+  ordinal == null || ordinal === 0 ? null : ordinal < 0 ? ordinal : ordinal - 1;
 
 /* Distance from a subject point. Metres under a kilometre — the difference
  * between 80 m and 900 m is the difference between the same street and a

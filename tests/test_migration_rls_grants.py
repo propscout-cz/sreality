@@ -70,7 +70,7 @@ _ROLES = ("anon", "authenticated", "public")
 # what catches default-ACL drift or a blanket `grant ... on all tables`.
 _BROKER_A6_SURFACES = frozenset({
     "brokers_public", "broker_firm_memberships_public",
-    "broker_listings_public", "listing_broker_public",
+    "listing_broker_public",
     "broker_resolution_runs_public",
     # The broker book (migration 692): its view and its table, the API's alone.
     "broker_book", "broker_book_projection",

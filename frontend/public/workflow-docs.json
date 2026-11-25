@@ -846,43 +846,6 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/frontend-build.yml"
     },
     {
-      "filename": "heal_bazos_floor_zero.yml",
-      "name": "Ops: heal bazos/web flats whose floor is 0 but whose text names a storey",
-      "description": "The one-off heal that rides PR #2054 (scraper/floor.py: a stray \"přízemí\" anywhere in the text used to set floor 0). `scripts/heal_bazos_floor_zero.py` selects source in ('bazos','web'), category_main='byt', floor = 0 whose description names an above-ground storey, and writes the fixed parser's reading when it is above 0, otherwise NULL — a column-only compare-and-set on floor = 0 that enqueues `dirty_properties` in the same statement, never snapshots and never touches `last_seen_at` (rules 2 and 20; ledgered in tests/scraper/test_listing_write_census.py).",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "dry_run",
-          "description": "true = report what would change only. false = write (needs confirm=APPLY).",
-          "required": false,
-          "type": "boolean",
-          "default": "true",
-          "options": null
-        },
-        {
-          "name": "confirm",
-          "description": "Type APPLY to arm the real write. Ignored when dry_run=true.",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "heal-bazos-floor-zero",
-      "cancelInProgress": false,
-      "timeoutMinutes": 60,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/heal_bazos_floor_zero.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/heal_bazos_floor_zero.yml"
-    },
-    {
       "filename": "idnes_index_walk.yml",
       "name": "Scraping: iDNES Reality index walk",
       "description": "The fast half of the iDNES cadence split (architectural rule #19, like sreality). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, unseen ids are nominated for a page check (rule #3) once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='idnes'). No detail fetch — the realtime worker's drain lane consumes the queue. Records run_type='index'.",
@@ -1672,7 +1635,7 @@
     {
       "filename": "runner_image.yml",
       "name": "CI: runner image",
-      "description": "Builds the job-runner image, the root Dockerfile with EXTRAS=api,clip,geo (CPU torch, the baked CLIP checkpoint, the geo wheels), on every pull request that changes an image input, before Railway first builds it after the merge (#2025): a failure there would leave main unable to build the runner until a fix lands. The build's own offline RUN is the proof (CPU torch, and the checkpoint loads with the hub offline), so the scraper files it imports are inputs too; the log then shows the image size. A second job builds the API image (EXTRAS=api, the API's and the worker's one build) at the base and with this pull request, fails if it can import torch or transformers or holds the hub cache, and prints both sizes and the package diff (#2032). No secrets; it pushes and deploys nothing. About 10 minutes a run, billed once the repository is private.",
+      "description": "Builds the job-runner image, the root Dockerfile with EXTRAS=api,clip,geo (CPU torch, the baked CLIP checkpoint, the geo wheels), on every pull request that changes an image input, before Railway first builds it after the merge (#2025): a failure there would leave main unable to build the runner until a fix lands. The build's own offline RUN is the proof (CPU torch, and the checkpoint loads with the hub offline), so the scraper files it imports are inputs too; the log then shows the image size. A second job builds the API image (EXTRAS=api) at the base and with this pull request, fails if it can import torch or transformers or holds the hub cache, and prints both sizes and the package diff (#2032). A third builds the WORKER image (EXTRAS=api,browser) and launches chromium inside the finished image with no network: that arm was missing, so the first browser build reached Railway unbuilt and failed there instead (2026-11-16). No secrets; it pushes and deploys nothing. About 10 minutes a run, billed once the repository is private.",
       "manual": false,
       "schedules": [],
       "onPush": false,
@@ -1681,6 +1644,7 @@
         ".dockerignore",
         ".github/workflows/runner_image.yml",
         "Dockerfile",
+        "api/wsdp_client.py",
         "data/clip_taxonomy.json",
         "data/requirements-clip-runner.txt",
         "pyproject.toml",
@@ -2105,45 +2069,20 @@
     {
       "filename": "seed_curated_cities.yml",
       "name": "Data: seed curated cities",
-      "description": "One-shot workflow that geocodes the cities in data/obce_v_datech_2025.csv via Mapy.cz, then writes them into curated_cities + city_index_definitions + city_index_revisions + city_index_values. A new city is bound to the RÚIAN town under its centroid; its population is that town's, loaded by load_obec_population.yml.",
+      "description": "Writes the index definitions and one revision of index values from data/obce_v_datech_2025.csv into city_index_definitions + city_index_revisions + city_index_values, for cities already in curated_cities (matched by name and kraj). A row naming no such city, or an unknown CSV column, refuses the run by name and writes nothing: a new city arrives as a one-line data migration checked against the register. A city's population is its town's, loaded by load_obec_population.yml.",
       "manual": true,
       "schedules": [],
       "onPush": false,
       "onPullRequest": false,
       "paths": null,
-      "inputs": [
-        {
-          "name": "dry_run",
-          "description": "Plan only — geocode, but skip DB writes",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        },
-        {
-          "name": "commit_geocodes",
-          "description": "Commit data/curated_cities_geocoded.json back to the branch",
-          "required": false,
-          "type": "choice",
-          "default": "true",
-          "options": [
-            "true",
-            "false"
-          ]
-        }
-      ],
+      "inputs": [],
       "secrets": [
-        "MAPY2_CZ_API_KEY",
-        "MAPY_CZ_API_KEY",
         "SUPABASE_DB_URL"
       ],
       "concurrencyGroup": null,
       "cancelInProgress": null,
       "timeoutMinutes": 90,
-      "permissions": "contents: write",
+      "permissions": "contents: read",
       "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/seed_curated_cities.yml",
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/seed_curated_cities.yml"
     },

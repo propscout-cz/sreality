@@ -1332,7 +1332,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
   crons), the `location_full_resolve` job, the drain CLI's writing modes (`--dry-run` stays), the
   `realtime_location_resolve_enabled` flag (the interval is the one control), five dead queue reasons,
   the three refetch knobs and the red-line sweep arm (13,224 no-op re-resolves a day, 99.8 % inactive).
-  The refetch lane ticks hourly, a constant.
+  The refetch lane ticks hourly, a constant (every 6 h since #2506).
 - **W7 — RÚIAN loader, full partitions, read levels only — built 2026-11-01, not rolled out** (#2342; migration 718
   NOT applied; rulings Q1, Q10, Q13 and three of 2026-11-01; as built + rollout: `docs/design/location-quality/w7-registry.md`).
   Praha's okres is 9999, read from the pack like every obec's; the loader stages 8 levels (SO, ZSJ, ORP, POU out, 24,225
@@ -1369,25 +1369,44 @@ component is slimmed twice — each wave rewrites one component and slims its st
   Owed: ~20 real Mapy address picks on production before the merge (the 300 m door slack).
 - **W6-c1 — where every point came from — built 2026-11-06** (#2361; rulings Q2 and Q3 of 2026-11-02; migration 733,
   additive; as built: `docs/architecture.md`, the scorecard's red line paragraph). `location_position_mv` (hourly at
-  :07) gives every active ad, and every ad the consumer rule refuses in any status, its point KIND by geometric
+  :07; 4× a day since #2506) gives every active ad, and every ad the consumer rule refuses in any status, its point KIND by geometric
   identity (`location_steps.position_kind_sql`; `unexplained` shown, not judged) and its grain class; a DB-lane replay
   over the mini mirror holds each kind to the resolver's `Position.origin`. The scorecard gains the `position` metric,
   stored on each `{p}/town` cell as `positions` (the street cell's grain mix went: nothing read it); Location Quality
   draws the "Positions" grid (grain heads in `pinPrecisionShort` words), the "By kind" strip, the "No location answer
   · every status" entry and the "Ads" list (`location_position_audit_public`, admin-gated, the list in the URL; a
   cell's list is the reading's cohort, kind rule and live grain). Measured 2026-11-05: 404,687 active ads, 0
-  unexplained, 182,048 (45 %) on their own pin below address grain. **Next:** the operator compares the new section
-  with `/new-dedup/pin-audit`; W6-c2 (destructive) then deletes the old page, `location_pin_audit_mv`, its cron and
-  artifact row.
+  unexplained, 182,048 (45 %) on their own pin below address grain.
+- **W6-c2 — the old pin audit retires — built 2026-11-22** (#2361; operator ruling 2026-11-22 on Q2; migration 765,
+  destructive, applied after the merge with an R2 backup; revert in `migrations/reverts/`). `/new-dedup/pin-audit`, its
+  page and lib, `!AUDIT POLOH`, `location_pin_audit_mv`, its cron `refresh-location-pin-audit` and its
+  `derived_artifacts` row are gone; the "No location answer" entry lists those rows.
 - **The property waterfall — built 2026-11-08** (#2443; spec #2441 Part 2, ruling Q18; no migration; as built:
   `docs/design/location-quality/PROGRAM.md` § W1). `served/town` stores `grains`; Location Quality draws every
   published property once at its location ad's finest level, one table pinning gauge and page. The four unread
   `by_portal` facts on the served cells are deleted. **Next:** the settlement-unit view (#2460) after FILL places them.
+- **A point gives every unit it lies in — resolver v5.11 — built 2026-11-24** (#2642; operator rulings B and Q4
+  2026-11-24; no migration, no contract change). A town-only row placed by a pin the portal declares precise takes the
+  KÚ covering the pin and that KÚ's část by the door rule (≈ 7.4k active ads, 119 in Praha: property 311821 gets
+  Řeporyje). The door rule for a KÚ the WORDS name (Q2) was dropped by the operator (11-24) after its wave shadow (a town flipped, 26 parts
+  against the words, 108 in-scope losses). **Next:** the engine gate on B's movers, the merge and the corpus
+  re-resolve; W5b takes v5.12.
+- **W5c — three precision levels — ruled 2026-11-07/08, not built** (#2474; the precision grill's rulings in
+  `docs/design/location-quality/PROGRAM.md`). One stored value: RÚIAN door, portal-exact (explicit labels only, about
+  27.9k ads) or approximate; one reading in Browse, the map and the detail page; no contract change. **Next:** after W5b
+  (#2339), which waits for the next engine deploy and its designator-veto fix (operator ruling 2026-11-08).
+- **Mapy exit, Stage A — built 2026-11-13** (#2454; spec #2441 Part 6; rulings Q3 a, Q5, 2026-11-07 on `backup_w4`,
+  2026-11-13 on the suggest cache; migration 739, destructive, backup waived; as built: `docs/architecture.md` § rule 17
+  and § the Mapy-powered location search). The geocoder, its `MAPY_GEOCODE_ENABLED` switch and tests, the seed's Mapy
+  block and its workflow's write grant, inputs and Mapy secrets, the 300 s suggest cache, the duplicated
+  containing-obec helper (the MF hand-off reads the resolver's view) and the worker's Mapy key copy (wizard) are gone;
+  739 drops `curated_cities.centroid/source/source_confidence` and `backup_w4` uncopied, `obec_kod` unique. The seed
+  refuses an unknown city or CSV column by name. **Next:** Mapy's latency baseline for #2465 is read from 7 days after
+  the deploy (no cached answers); Stage B (#2455) after the switch-over's soak.
 - **The pick record — built 2026-11-08** (#2445; spec #2441 Part 1, ruling Q10; migration 737, additive; as built:
   `docs/architecture.md` § the pick record). Every place box's resolve carries `pick {text, rank}`; `/maps/resolve`
-  records one row after the answer for a verified non-automation caller; 12-month pg_cron retention. **Next:** the
-  gate's run #2465 (its eval over `picks_between`, #2452, is built); the switch-over DELETE (#2453); Stage B drop
-  (#2455).
+  records one row after the answer for a verified non-automation caller; 12-month pg_cron retention. The switch-over
+  (#2453) stopped the recording. **Next:** the one DELETE after #2453 deploys (operator's OK); Stage B drop (#2455).
 - **Own place search — built 2026-11-08** (#2449; spec #2441 Part 4, rulings Q2 c, Q12 a; migration 738, additive; as
   built: `docs/architecture.md` § own place search). `POST /places/suggest` answers chips (level, code, name, context,
   point) for kraj, okres, obec, část and street: exact, prefix, then fuzzy; within a tier served properties of any
@@ -1420,9 +1439,37 @@ component is slimmed twice — each wave rewrites one component and slims its st
   homonym kept; an okres or a kraj never), so the town, not the served counts, decides which same-named street
   answers; a town that names nothing answers no door; "12a" is the č.o.'s letter. Each reading is one statement, the
   whole text's always last, so a text with no town answers as before ("12a" aside). **Next:** the gate's run #2465
-  weighs the forms not read (a městská část without its register suffix, "Plzeň 2" for "Plzeň 2-Slovany"; a dash; a
-  PSČ); the okres question pending with the operator gains an input (an okres is never the town, so production's
-  "Lhota 25, Kladno" answers no door: its Lhota is an obec of okres Kladno, not inside obec Kladno).
+  weighs the forms not read (a dash; a PSČ; a městská část without its register suffix is read since #2497, below). An
+  okres is never the town, so production's "Lhota 25, Kladno" answers no door: its Lhota is an obec of okres Kladno, not
+  inside obec Kladno.
+- **Town first, a městská část by its number — built 2026-11-13** (#2497; operator rulings 2026-11-13; no migration,
+  no registry reload, no resolver change; as built: `docs/architecture.md` § own place search). On an exact name tie
+  the obec answers before its namesake okres or část ("Jihlava"). A městská část is exact by its number, Arabic or
+  Roman, with or without the register's suffix, in the name read and the address town: "Pardubice 2" answers Pardubice
+  II, "Plzeň 2" Plzeň 2-Slovany, "Nádražní 9, Plzeň 2" its door there; "Praha 1" never makes Praha 10–19 exact, and a
+  numbered část obce ("Kolín III") is not covered. Each new arm is an index condition (production EXPLAIN in the PR).
+  **Next:** the gate's run #2465, then the switch-over #2453, whose rows show each level.
+- **Every unit by its number — built 2026-11-13** (#2499; operator ruling 2026-11-13; no migration). The #2497 rule
+  covers every level: "Kolín 3" answers the část Kolín III, "Liberec 1" Liberec I-Staré Město, "Horka 2" the obec Horka
+  II before its namesake část, "Nádražní 12, Kolín 3" the door in Kolín III. A suffix follows the number after a hyphen
+  or a dot, never a space, so "Jablonné v Podještědí" (a preposition "v") is no numbered name.
+- **The simulated gate run's gaps — built 2026-11-17** (#2548; operator rulings 2026-11-17; no migration; as built:
+  `docs/architecture.md` § own place search). 244 register-written questions scored 86.5 % top-1 and 95.1 % top-5
+  (bars 90 / 97). Fixed: a street or část with its town and no number ("Masarykova, Brno", "Praha 6 Dejvice"); a street
+  exact under every abbreviation spelling ("nám."/"náměstí"); "okres X"; "Praha6"; place-name typos at 0.55; and "town
+  first" narrowed to a town above its own okres and kraj (Praha's Karlín before the village). Re-run: 231 / 242 of 244,
+  posted on #2465. **2026-11-22:** gate parts (2)–(4) on the same simulation (rulings 2026-11-22): speed own p50 206 ms ≤
+  Mapy 309 ms; addresses 26 / 25 of 26 after one strike, so the switch-over takes the "addresses passed" scope; and a
+  town leads its okres or kraj only with one in twenty of its served properties (#2612). **Next:** re-score part (1)
+  after #2612 deploys, then the switch-over #2453 and the operator's OK.
+- **The switch-over — built 2026-11-22** (#2453; spec #2441 Part 4; gate #2465 parts (1)–(4) met on the simulation,
+  rulings 2026-11-17 and 2026-11-22; no migration; as built: `docs/architecture.md` § every place box on own place
+  search). Every place box (Browse, watchdog edit, pipeline, outreach, Datasets, phone sheets, the admin address
+  picker) asks only `POST /places/suggest`; a row is the chip, a městská část adds its quarters, an address its street
+  (no street: no chip, a notice), the map flies by the shared zoom table. Deleted: `api/maps.py` (suggest proxy, key
+  failover, resolve binder), the pick writer and `deps.is_automation`, the SPA's Mapy row type, badge map and Browse's
+  Mapy zoom table. **Next:** after deploy, the place box smoke, then the picks DELETE (operator OK 2026-11-22); Stage
+  B (#2455): keys, Seznam.cz lines, revocation, the table drop.
 - **The gate's eval — built 2026-11-09** (#2452; spec #2441 Part 4 (1)–(4), Q2 c, ruling 2026-11-08; no migration; as
   built: `docs/architecture.md` § the gate's eval). `scripts/place_search_gate_eval.py`, read-only on production:
   picks only through `picks_between`, in one READ ONLY transaction closed before any request; only `POST

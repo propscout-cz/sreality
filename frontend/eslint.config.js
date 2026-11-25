@@ -231,7 +231,7 @@ export default [
   },
   {
     // MapLibre must stay off the first visit (scripts/bundle-budget.mjs): a
-    // static import of maplibre-gl or lib/basemap pulls it into the importer's
+    // static import of maplibre-gl, lib/basemap or lib/usePointMap pulls it into the importer's
     // chunk. Only the map modules (exempted below) import them; everything
     // else reaches a map through lazyChunk(() => import(...)), which this rule
     // does not see. Type imports are erased at build and stay legal. ONE
@@ -255,6 +255,12 @@ export default [
               message:
                 'Reach the map through lazyChunk(() => import(...)); only map modules import maplibre-gl or lib/basemap.',
             },
+            {
+              regex: '(^|/)usePointMap$',
+              allowTypeImports: true,
+              message:
+                'Reach the map through lazyChunk(() => import(...)); only map modules import lib/usePointMap (it imports maplibre-gl).',
+            },
           ],
         },
       ],
@@ -266,10 +272,13 @@ export default [
     // one of these statically; review and the bundle budget catch that.
     files: [
       'src/lib/basemap.ts',
+      'src/lib/basemap.test.ts',
+      'src/lib/usePointMap.ts',
       'src/components/DatasetMap.tsx',
       'src/components/ListingMap.tsx',
       'src/components/estimation/ComparablesMap.tsx',
       'src/components/listing-detail/DetailMap.tsx',
+      'src/components/listing-detail/PropertyMapDialog.tsx',
       'src/components/filter-controls/MapAreaControl.tsx',
       'src/components/phone/PhoneMap.tsx',
     ],

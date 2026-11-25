@@ -101,8 +101,8 @@ def test_a_property_is_served_by_its_location_ad_when_its_canonical_ad_has_no_pl
     assert cur.fetchone() == (unplaced, LABEL)
 
 
-def test_browse_serves_a_property_once_settled_or_past_the_cap_and_its_page_always(cur: Any) -> None:
-    """Rule 16 (operator ruling 2026-10-23): the stamp publishes at once, the cap without one; the property page, by
+def test_browse_serves_a_property_once_stamped_whatever_its_age_and_its_page_always(cur: Any) -> None:
+    """Rule 16 (operator rulings 2026-10-23, 2026-11-17): the stamp publishes, no clock does; the property page, by
     id, never waits. now() is the transaction's, so `first_seen_at = now()` is a property first seen this instant."""
     pid, _, _ = _ring_and_point(cur)
 
@@ -113,9 +113,9 @@ def test_browse_serves_a_property_once_settled_or_past_the_cap_and_its_page_alwa
                     "EXISTS (SELECT 1 FROM properties_public WHERE property_id = %(p)s)", {"p": pid})
         return cur.fetchone()
 
-    assert served("NULL", "now()") == (False, True), "a fresh unsettled property is in Browse, or its page is gone"
-    assert served("now()", "now()") == (True, True), "a settled property waits for the cap"
-    assert served("NULL", f"now() - {CAP_SQL} - interval '1 hour'") == (True, True), "the cap did not publish it"
+    assert served("NULL", "now()") == (False, True), "a fresh unstamped property is in Browse, or its page is gone"
+    assert served("now()", "now()") == (True, True), "a stamped property waits for a clock"
+    assert served("NULL", f"now() - {CAP_SQL} - interval '1 hour'") == (False, True), "a clock published it"
 
 
 def test_city_proximity_is_computed_at_the_location_ads_point(cur: Any) -> None:

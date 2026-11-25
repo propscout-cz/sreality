@@ -164,6 +164,10 @@ def parse_advert(advert: dict[str, Any]) -> ScrapedListing:
     if price.record is not None:
         raw["price_reading"] = price.record
 
+    # `_int` first: 0 is this portal's "not specified" sentinel for every numeric
+    # (it has never emitted one floor=0 row), and under ground=0 a bare 0 would
+    # otherwise read as the ground storey instead of as silence.
+    floor = floor_from_portal(floor_convention(SOURCE), _int(read("floor")))
     return ScrapedListing(
         source=SOURCE,
         source_id_native=native_id,
@@ -186,11 +190,8 @@ def parse_advert(advert: dict[str, Any]) -> ScrapedListing:
         zip=_str_or_none(advert.get("zip")),
         lat=lat,
         lon=lon,
-        # `_int` first: 0 is this portal's "not specified" sentinel for every numeric
-        # (it has never emitted one floor=0 row), and under ground=0 a bare 0 would
-        # otherwise read as the ground storey instead of as silence.
-        floor=floor_from_portal(floor_convention(SOURCE), _int(read("floor"))),
-        total_floors=total_floors_from_portal(_int(advert.get("totalFloors"))),
+        floor=floor,
+        total_floors=total_floors_from_portal(_int(advert.get("totalFloors")), floor=floor),
         has_balcony=has_balcony,
         has_parking=has_parking,
         has_lift=bool(advert["lift"]) if advert.get("lift") is not None else None,

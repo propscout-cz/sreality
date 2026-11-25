@@ -4,8 +4,9 @@ The Railway job runner (`scraper/job_runner.py`, `scraper/job_process.py`; SQL i
 `scraper/jobs.py` entry whose host is `job-runner` (`jobs.runner_jobs()`), each as its own subprocess. Design and
 rulings: `docs/design/actions-exit/PROGRAM.md` § 4.2. Since #2025's move PR it runs `stale_images`, `rent_map` and
 `map_overlays`, since #2032 `clip`, since #2027 the daily `property_sweep` (03:00 UTC) and `broker_sweep` (06:00 UTC)
-and since #2028 `location_intake`, whose workflows those PRs deleted; each later move PR (#2029–#2031, #2033) flips
-more entries' host. On
+and since #2028 `location_intake`, whose workflows those PRs deleted, and since #2604 `ruian_buildings` (13:00 UTC,
+born on the runner; `docs/architecture.md` § Register facts); each later move PR (#2029–#2031, #2033) flips more
+entries' host. On
 Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and 8 GB
 (`.railway/railway.ts` `jobRunner`; settings, drain and image: `docs/architecture.md` § Railway service
 configuration). Its Health cells and the "Jobs: run now" form are #2026's (below).

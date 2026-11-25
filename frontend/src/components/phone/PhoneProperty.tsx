@@ -14,6 +14,8 @@
  * header map (Poloha's own map stands in), Explore area, the comparables map (RunPanel skips it under the
  * phone shell) and the new-estimation / re-run buttons. */
 
+import { RegisterBadge } from '@/components/register/RegisterMark';
+import BuildingCard from '@/components/listing-detail/BuildingCard';
 import { Suspense, useMemo, useState } from 'react';
 
 import Skeleton from '@/components/Skeleton';
@@ -148,7 +150,8 @@ export default function PhoneProperty({
 
   return (
     <article aria-label="Nemovitost" className={`pb-6 ${NO_FOCUS_ZOOM}`}>
-      <PropertyGallery images={images} loading={imagesLoading} isActive={property.is_active} />
+      {/* Keyed: the page stays mounted from one property to the next, and the swiper must open on the new cover. */}
+      <PropertyGallery key={property.id} images={images} loading={imagesLoading} isActive={property.is_active} />
 
       <header className="flex flex-col gap-1 px-4 pb-4 pt-2">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -172,6 +175,7 @@ export default function PhoneProperty({
               {delta}
             </span>
           )}
+          <RegisterBadge propertyId={propertyId} />
         </div>
         {(ppm2 || mf) && (
           <div className="flex items-center gap-2">
@@ -212,6 +216,7 @@ export default function PhoneProperty({
           <PropertyPhotos property_id={propertyId} lang="cs" camera />
         </Suspense>
         <FactsSection property={property} />
+        <BuildingCard propertyId={propertyId} />
         <DescriptionSection text={property.description} />
         <AdsSection
           sources={sources}

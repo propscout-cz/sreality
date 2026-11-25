@@ -112,6 +112,9 @@ _PLOT_NOTE = ("ruling 3: never a plot on a byt; on komerční declined when it e
               "the parcel (scraper.area.stated_plot)")
 
 
+_FACTS = "the page's labelled facts (scraper.text_grammar)"
+
+
 # sreality paints the sale STATUS over the condition / building-type NAME on a reserved or
 # sold advert, and spells "not specified" as a leading dash. Both are absence, not value.
 _SREALITY_UNSET = ("- nezadáno", "- vyber", "Rezervováno", "Prodáno")
@@ -213,7 +216,7 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "area_basis": _cell("derived"),
         "disposition": _cell("structured", "type", "title"),
         "floor": _cell("structured", "floor", convention="ground1"),
-        "total_floors": _cell("structured", "overgroundFloors", "undergroundFloors"),
+        "total_floors": _cell("structured", "overgroundFloors"),
         # R11: balcony OR loggia, from the two top-level booleans the portal actually
         # publishes (2,309 of 10,317 active rows each, 22.4%, with a real `false`). The
         # accessory-name search this replaces matched NOTHING on any live row — 0/0 on
@@ -264,9 +267,11 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "area_basis": _cell("derived"),
         "disposition": _cell("derived", note="the h1 title; the portal ships no "
                              "`dispozice` cell on any page of a 1,000-row census"),
-        # The one HTML portal whose key is `patro`: its "2." IS the storey above the
-        # ground one. Sibling-paired against idnes it lands on 0 (+0.20 mean over 7,453
-        # active byt pairs), so it was already canonical and W8 left its values alone.
+        # The one HTML portal whose key is `patro`, and the scale is the exporting
+        # agency's, not the portal's: of 218 agencies with >= 5 ads paired to sreality,
+        # 168 always count from the ground storey, 47 always one higher, 3 mix (#2552).
+        # The cell declares the majority; the row is ABSENT on a ground-storey flat,
+        # which `ceskereality_parser._storey` reads.
         "floor": _cell("structured", "patro", convention="ground0"),
         "total_floors": _cell("none", gap=None),
         # "Balkóny" is ONE multi-value cell ("Balkon, Lodžie, Terasa"): the union is read
@@ -516,12 +521,12 @@ CONTRACT: dict[str, dict[str, Cell]] = {
         "ad_reference": _cell("none", gap=None, note="private ads: the page prints only its portal id"),
     },
     # --- web: any other site, one pasted advert at a time --------------------
-    # No portal payload exists, so the deterministic parse (JSON-LD, OpenGraph, the shared
-    # grammars over title + description) writes its verdicts at the TOP LEVEL of raw_json and
-    # the five `structured` cells read those keys: the census reads the same top level
-    # (`coalesce(raw->'params', raw)`), so A1 checks them from the first bless. Every fact
-    # only prose states is a `text` cell with a closed gate, which is also what keeps it across
-    # a refetch (R4); the rest the page never states in a form anyone reads.
+    # No portal payload exists, so the deterministic parse (JSON-LD, OpenGraph, the shared text
+    # grammar over the title, the prose and the page's labelled facts) writes its verdicts at the
+    # TOP LEVEL of raw_json and the five `structured` cells read those keys: the census reads
+    # the same top level (`coalesce(raw->'params', raw)`), so A1 checks them from the first
+    # bless. Every other fact is a `text` cell (preserve-if-null, which is also what keeps it
+    # across a refetch, R4); the rest the page never states in a form anyone reads.
     "web": {
         "category_main": _cell("structured", "category_main",
                                note="the title's byt/dům/pozemek/komerční/garáž word (the first "
@@ -530,32 +535,37 @@ CONTRACT: dict[str, dict[str, Cell]] = {
                                note="the title's prodej/pronájem word (the first of JSON-LD name, "
                                     "og:title, h1, <title> that says)"),
         "price_czk": _cell("structured", "price_czk",
-                           note="JSON-LD offer price, else scraper.price_text"),
+                           note="JSON-LD offer price, else scraper.text_grammar (a labelled "
+                                "price, then scraper.price_text over title + description)"),
         "price_unit": _cell("derived"),
         "area_m2": _cell("structured", "area_m2",
-                         note="JSON-LD floorSize, else scraper.area over the title + description"),
+                         note="scraper.text_grammar: the labelled measures and JSON-LD floorSize, "
+                              "else scraper.area over the title + description"),
         "area_basis": _cell("derived"),
         "disposition": _cell("structured", "disposition", note="scraper.vocabulary.disposition"),
-        "floor": _cell("text", note="scraper.floor over the title + description",
+        "floor": _cell("text", note="scraper.text_grammar: a labelled storey, else scraper.floor "
+                                    "over the title + description",
                        convention="word", gate=_UNGATED),
         "total_floors": _cell("text", gate=_UNGATED),
-        "has_balcony": _cell("text", gate=_UNGATED),
-        "has_parking": _cell("text", gate=_UNGATED),
-        "has_lift": _cell("text", gate=_UNGATED),
-        "building_type": _cell("text", gate=_UNGATED),
-        "condition": _cell("text", gate=_UNGATED),
-        "energy_rating": _cell("text", gate=_UNGATED),
-        "estate_area": _cell("none", gap=None),
-        "usable_area": _cell("none", gap=None),
-        "garden_area": _cell("none", gap=None),
+        # A `text` cell the parse fills from the page's labelled facts at ingest; a gated one is
+        # also the lane's once its gate opens, an ungated one the grammar's alone.
+        "has_balcony": _cell("text", note=_FACTS, gate=_UNGATED),
+        "has_parking": _cell("text", note=_FACTS, gate=_UNGATED),
+        "has_lift": _cell("text", note=_FACTS, gate=_UNGATED),
+        "building_type": _cell("text", note=_FACTS, gate=_UNGATED),
+        "condition": _cell("text", note=_FACTS, gate=_UNGATED),
+        "energy_rating": _cell("text", note=_FACTS, gate=_UNGATED),
+        "estate_area": _cell("text", note=_FACTS),
+        "usable_area": _cell("text", note=_FACTS),
+        "garden_area": _cell("text", note=_FACTS),
         "category_sub_cb": _cell("none", gap=None),
         "subtype": _cell("none", gap=None),
-        "furnished": _cell("none", gap=None),
-        "terrace": _cell("none", gap=None),
-        "cellar": _cell("none", gap=None),
-        "garage": _cell("none", gap=None),
+        "furnished": _cell("text", note=_FACTS),
+        "terrace": _cell("text", note=_FACTS),
+        "cellar": _cell("text", note=_FACTS),
+        "garage": _cell("text", note=_FACTS),
         "parking_lots": _cell("none", gap=None),
-        "ownership": _cell("none", gap=None),
+        "ownership": _cell("text", note=_FACTS),
         "ad_reference": _cell("none", gap=None),
     },
 }
@@ -649,6 +659,7 @@ IGNORED: dict[str, dict[str, str]] = {
         "description": "the text lane's substrate", "image": "images phase",
         "images": "images phase", "image_urls": "images phase",
         "totalArea": "no column", "builtUpArea": "no column",
+        "undergroundFloors": "no column",
         "cellarArea": "no column", "nonResidentArea": "no column",
         "rooms": "no column", "placement": "no column", "situation": "no column",
         "hasAuction": "no column", "canBeSubjectOfAuction": "no column",
@@ -751,6 +762,8 @@ IGNORED: dict[str, dict[str, str]] = {
                         "the text cell owns the column",
         "final_url": "where the fetch's redirects ended; evidence, no column (identity is the "
                      "canonical URL)",
+        "facts": "the page's (label, value) pairs the text grammar read, kept as evidence; read "
+                 "by the parse",
     },
 }
 

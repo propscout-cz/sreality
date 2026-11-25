@@ -5,6 +5,66 @@
 Scraper-specific evolution beyond Phase 1's nightly index walk.
 Independent of the analytical, UI, and map tracks.
 
+### A sold or let ad is not on offer — the walk and the page both read it (2026-11-24, #2646)
+- **Found:** remax, realitymix and ceskereality keep a sold/let ad's page up (HTTP 200, "Prodáno" /
+  "Pronajato" in the ad's own price header or badge) and its card in the index. Every walk sighted it and the
+  page read live, so ~1,900 sold ads were served active (remax 1,735 = 18% of its actives; the Slaný house's
+  four siblings closed 14 Aug, its remax ad was still active on 24 Nov).
+- **Done:** a sold/let card is no sighting (`IndexItem.closed` on all three; remax also walks `?sold=on`); a
+  page whose OWN slot says sold/let is a gone verdict (`portal_base.stated_closed`). The six HTML clients' copied
+  gone check is one `BasePortalClient._fetch_detail_page` over two declarations; remax's four dead not-found
+  phrases are gone (it answers 410). Reserved stays active.
+- **Owed:** gate #2647 (actives match the portals' on-offer totals); the one-off `last_seen_at` correction for
+  the closed ads (after the flips; rule pending the operator); sreality's status-less sold ads #2648; side
+  findings #2649 (idnes title leak), #2650 (ceskereality coverage gap).
+
+### ceskereality behind a JS proof-of-work wall — headless-browser fetch (2026-11-16, #2529 / #2479)
+- **Found:** on 2026-10-31 the portal put an Anubis v1.28.2 interstitial (`fast`, difficulty 2) in
+  front of every page. It answers **200 with challenge HTML**, so the `requests` fetch collected the
+  challenge, the parser found zero cards and each page read as EMPTY — an our-stop, so no walk
+  reached the portal's end and nominations stopped (#2479). Pages/walk ~2,400 → ~140 the same day;
+  0 new ads for 16 days; 50,224 ads stuck active. A datacenter IP is refused by nginx *before* the
+  interstitial, so the residential proxy stays mandatory.
+- **Done:** ONE seam — `BasePortalClient._send` (default `requests`), overridden by
+  `CeskerealityClient` to drive `scraper/browser_fetch.py` (Python Playwright, lazy import, the
+  `browser` extra, chromium baked by `EXTRAS=api,browser` and installed in the walk workflow). One
+  context per phase solves the interstitial ONCE and carries its ~7-day cookie on ONE pinned
+  residential exit IP (the gateway rotates per request, which would re-challenge every page);
+  `PortalDefaults.close()` + the walk/probe/drain teardown release it; `detail_workers` 1. A
+  still-challenged page is classified **403 — a failed fetch, never content** — so a difficulty bump
+  reads red (#2376) instead of looking like a page with no ads. Pacing, retry, penalize, gone
+  detection, `walk_reached_end` and nomination are untouched and portal-generic (rule #21); the
+  parser is untouched.
+- **Caught in review, fixed before merge:** Playwright's sync API is thread-AFFINE, not merely
+  thread-unsafe — its dispatcher is a greenlet owned by the starting thread, so a cross-thread call
+  raises `greenlet.error: Cannot switch to a different thread` (reproduced against real chromium).
+  The first cut guarded it with a lock, which does nothing for affinity: the drain builds a NEW pool
+  per claim chunk, so chunk 2 would have failed every claim, and its teardown runs on a third thread,
+  so `close()` raised, was swallowed as best-effort, and leaked a chromium every ~30 s pass. Now
+  every browser call runs on ONE owner thread inside the fetcher (verified: 16 fetches across two
+  pools + a foreign-thread close, no leak). Also from the review: browser errors are raised as a
+  `requests.RequestException` subclass so the shared retry still applies (otherwise one flaky page
+  load ended a walk slice — the very symptom this fixes); the post-solve status is read from the
+  last document response, so a 404 served after the solve is not reported as the challenge's 200;
+  the solve-wait re-raises `stop.StopRequested`; and the browser budget comes from the client's
+  `timeout_s` instead of a fixed 45 s + 45 s.
+- **Deploy ordering:** the worker skips this portal's lanes while playwright is absent
+  (`_skip_for_browser`, symmetrical to `_skip_for_proxy`). Without it, the window between the code
+  deploy and the operator's `.railway/` apply would have burned all five attempts on every queue row.
+- **Measured live 2026-11-16** through the production client: 4 index pages × 20 items parsed, one
+  solve, ~1.3 s / ~30 KB per steady page; a real detail page parsed (price, area, disposition,
+  coordinates). Projection for a ~2,500-page walk: ~73 MB, inside the 150-min budget.
+- **Rejected, with evidence:** a pure-Python proof-of-work solver (no browser). The cookie is
+  coupled to the browser that earned it — a plain-HTTP client reusing one was tar-pitted after a
+  single page — so it is unproven and an arms race.
+- **Next:** the operator's wizard apply for `.railway/` (`EXTRAS=api,browser` on the worker), then
+  the first live walk must collect > 0 and `walk_reached_end` return to near its 96 % baseline — the
+  gate that closes #2479. Optional config tidy: the live `portals.operational_limits` row still says
+  `detail_workers: 4`, which overrides the code default; the owner thread makes that correct, it just
+  leaves three threads queueing on one browser.
+- **Maintenance note:** this is now a cat-and-mouse surface. A difficulty bump or added
+  fingerprinting surfaces as red walks and needs a response.
+
 ### bazos / web floor 0 from a stray 'přízemí' — flat grammar in `floor_from_text` (2026-10-26, PR open)
 - **Found:** `floor_from_text` ended with "any 'přízemí' → 0", so "v šestém podlaží … sklep v přízemí domu"
   read 0; 373 bazos flats (116 active) carried floor 0 while their text names a higher storey
@@ -12,10 +72,10 @@ Independent of the analytical, UI, and map tracks.
 - **Done (in the PR):** a flat (or unknown category) reads bare `N. podlaží` (N−1) and spelled-out
   ordinals up to the tenth; 'přízemí' is 0 only when tied to the flat and no other storey is named
   (both said → None, for the text lane).
-  Every other category keeps the legacy miner. `scripts/heal_bazos_floor_zero.py` (dry run default,
-  `--apply --backup`) re-reads or NULLs the measured rows.
-- **Next:** run the heal after merge (dry run first); then `reparse` `--fields floor` on bazos to fill
-  the NULL flats that now read a `N. podlaží` (5,915 measured, 568 active).
+  Every other category keeps the legacy miner. The one-off heal ran 2026-10-26 and its script is gone
+  (#2552); a number worded only as "patro" is unread since #2552.
+- **Next (#2552):** `reparse` `--fields floor` on ceskereality, then bazos; a data migration blanks the
+  stored floors that came from a patro wording.
 
 ### Condition scoring PARKED — no surface reads the frozen 1–5 levels (2026-10-20, done)
 - **Done:** operator ruling 2026-10-20 ("keep the scoring engine for now, but make sure it does

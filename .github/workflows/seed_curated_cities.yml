@@ -1,53 +1,29 @@
 name: "Data: seed curated cities"
 
-# One-shot workflow that geocodes the cities in
-# data/obce_v_datech_2025.csv via Mapy.cz, then writes them into
-# curated_cities + city_index_definitions + city_index_revisions +
-# city_index_values. A new city is bound to the RÚIAN town under its
-# centroid; its population is that town's, loaded by
-# load_obec_population.yml.
+# Writes the index definitions and one revision of index values from
+# data/obce_v_datech_2025.csv into city_index_definitions +
+# city_index_revisions + city_index_values, for cities already in
+# curated_cities (matched by name and kraj). A row naming no such city, or an
+# unknown CSV column, refuses the run by name and writes nothing: a new city
+# arrives as a one-line data migration checked against the register. A city's
+# population is its town's, loaded by load_obec_population.yml.
 #
-# The geocoded coordinates land in data/curated_cities_geocoded.json
-# and are committed back to the branch so subsequent reruns are
-# offline-deterministic.
+# Safe to re-run: definitions upsert by index_name, every run inserts a fresh
+# city_index_revisions row + matching values batch.
 #
-# Apply migration 078 before running. Safe to re-run: cities upsert
-# by (name, kraj_name), definitions upsert by index_name, every run
-# inserts a fresh city_index_revisions row + matching values batch.
-#
-# Required secrets: SUPABASE_DB_URL, MAPY_CZ_API_KEY (only needed
-# when the geocode cache is empty or being expanded).
+# Required secret: SUPABASE_DB_URL.
 
 on:
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: Plan only — geocode, but skip DB writes
-        required: false
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
-      commit_geocodes:
-        description: Commit data/curated_cities_geocoded.json back to the branch
-        required: false
-        default: "true"
-        type: choice
-        options:
-          - "true"
-          - "false"
 
 jobs:
   seed:
     runs-on: ubuntu-latest
     timeout-minutes: 90   # the full proximity rebuild: ~975k properties at ~3 ms each, in batches
     permissions:
-      contents: write
+      contents: read
     env:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-      MAPY_CZ_API_KEY: ${{ secrets.MAPY_CZ_API_KEY }}
-      MAPY2_CZ_API_KEY: ${{ secrets.MAPY2_CZ_API_KEY }}
     steps:
       - uses: actions/checkout@v6
 
@@ -62,29 +38,10 @@ jobs:
 
       - name: Run seed
         id: seed
-        run: |
-          ARGS=""
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            ARGS="--dry-run"
-          fi
-          python -m scripts.seed_curated_cities $ARGS
-
-      - name: Commit geocode cache
-        if: ${{ inputs.commit_geocodes == 'true' && inputs.dry_run != 'true' }}
-        run: |
-          if git diff --quiet data/curated_cities_geocoded.json; then
-            echo "No geocode cache changes to commit"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/curated_cities_geocoded.json
-          git commit -m "data: refresh curated_cities geocode cache"
-          git push
+        run: python -m scripts.seed_curated_cities
 
       # A new index revision shifts the near_{jobs,youth,overall} maxes of every property; the hourly
-      # pg_cron run (migration 674) only fills properties not yet computed. Runs even when the geocode
-      # push failed: the seed's writes have already landed.
+      # pg_cron run (migration 674) only fills properties not yet computed.
       - name: Rebuild city proximity (full)
-        if: ${{ !cancelled() && steps.seed.outcome == 'success' && inputs.dry_run != 'true' }}
+        if: ${{ !cancelled() && steps.seed.outcome == 'success' }}
         run: python -m scripts.recompute_city_proximity --full
