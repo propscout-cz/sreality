@@ -725,21 +725,23 @@ def _fresh_connection() -> psycopg.Connection:
     return db.connect(attempts=1, connect_timeout=10)
 
 
-def _release_hold(conn: psycopg.Connection, hold: Hold, outcome: str, error: str | None) -> bool:
+def _release_hold(conn: psycopg.Connection, hold: Hold, outcome: str, error: str | None,
+                  exit_code: int | None = None) -> bool:
     """False: no row was this holder's any more (released already, or another holder took the lane)."""
     if isinstance(hold, Lease):
-        return release(conn, hold, outcome, error=error)
+        return release(conn, hold, outcome, error=error, exit_code=exit_code)
     with _bounded(conn) as cur:
         cur.execute(_RELEASE_RUN_SQL, _release_params(hold, outcome, due=None, error=error))
         return cur.fetchone() is not None
 
 
 def _release_with_fallback(conn: psycopg.Connection, hold: Hold, outcome: str, error: str | None,
-                           original: BaseException | None, connect: Callable[[], psycopg.Connection]) -> None:
+                           original: BaseException | None, connect: Callable[[], psycopg.Connection],
+                           exit_code: int | None = None) -> None:
     """Releases on the holding connection, else once on a fresh one. Never replaces `original`: a failure is noted on
     it and the lease expires by itself; with no `original`, the release's own failure is the error."""
     try:
-        if not _release_hold(conn, hold, outcome, error):
+        if not _release_hold(conn, hold, outcome, error, exit_code):
             LOG.warning("LEASE gone job=%s holder=%s at the release: another holder took it, so outcome %s is not "
                         "written", hold.job_name, hold.holder, outcome)
         return
@@ -748,7 +750,7 @@ def _release_with_fallback(conn: psycopg.Connection, hold: Hold, outcome: str, e
     fresh = None
     try:
         fresh = connect()
-        released = _release_hold(fresh, hold, outcome, error)
+        released = _release_hold(fresh, hold, outcome, error, exit_code)
     except Exception as exc:
         if original is None:
             raise exc from first
@@ -871,11 +873,12 @@ def _holding(conn: psycopg.Connection, job_name: str, take: Callable[[], Hold | 
         LOG.info("LEASE busy job=%s", job_name)
         yield None
         return
-    outcome, error, original = "ok", None, None
+    outcome, error, original, code = "ok", None, None, None
     try:
         yield hold
-        if ran is not None and ran.exit_code:
-            outcome, error = "failed", f"exit {ran.exit_code}"
+        code = ran.exit_code if ran is not None else None
+        if code:
+            outcome, error = "failed", f"exit {code}"
     except Exception as exc:  # noqa: BLE001 - the lease must be released either way
         outcome, error, original = "failed", str(exc), exc
         raise
@@ -883,4 +886,4 @@ def _holding(conn: psycopg.Connection, job_name: str, take: Callable[[], Hold | 
         outcome, original = "interrupted", exc
         raise
     finally:
-        _release_with_fallback(conn, hold, outcome, error, original, connect)
+        _release_with_fallback(conn, hold, outcome, error, original, connect, code)

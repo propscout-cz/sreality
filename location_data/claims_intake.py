@@ -1506,7 +1506,7 @@ def drain_unmined_bodies(
     """
     # A PASS THAT COULD NEVER RUN IS A PASS THAT REACHED ITS END: `bodies_pass_complete`
     # is otherwise only set inside the loop, so leaving it False here would report a backlog
-    # nothing can read (no store, or no page-capable portal). The chain reads that field.
+    # nothing can read (no store, or no page-capable portal). `more_remains` (exit 75) reads it.
     if store is None or not page_sources:
         stats["bodies_pass_complete"] = True
         return

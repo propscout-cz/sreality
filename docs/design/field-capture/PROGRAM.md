@@ -750,7 +750,7 @@ loses a figure that added nothing; idnes dum carries 1,668 active echoes and no 
   W18-b is what makes it safe: @4 declares every @3 type plus one, so the per-CLAIM-TYPE version rail keeps each
   existing type on its @3 claims until re-mined, and a type with no claim at any version contributes nothing.
   **The fill is not automatic** — the bodies-half hash gate re-arms PAGE entries and bezrealitky has none, so the
-  corpus-wide mine needs one dispatched `location_claims_intake.yml` at `mode=full source=bezrealitky`.
+  corpus-wide mine needs one `job_runner request location_intake -- --mode full --source bezrealitky`.
 - ✅ **Branch protection on `main`** enabled 2026-09-22 (PR + the CI checks required, no review) — the closing
   step, announced first because it changed how every parallel session merges.
 

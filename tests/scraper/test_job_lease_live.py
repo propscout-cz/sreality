@@ -663,6 +663,8 @@ def test_a_held_job_that_exits_non_zero_closes_its_run_failed(cur: Any, monkeypa
         None, "failed", None, 1)
     cur.execute("SELECT last_error FROM scheduled_jobs WHERE job_name = %s", (load.name,))
     assert cur.fetchone() == ("exit 1",)
+    cur.execute("SELECT exit_code FROM job_runs WHERE job_name = %s", (load.name,))
+    assert cur.fetchall() == [(1,)], "the run records the code its process returns, as a runner child's does"
 
 
 def test_under_the_runner_a_held_job_is_the_runner_s_claim(cur: Any, monkeypatch: pytest.MonkeyPatch) -> None:

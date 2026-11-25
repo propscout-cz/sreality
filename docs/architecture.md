@@ -6067,7 +6067,7 @@ non-zero closes its run `failed` (`HeldRun.exit_code`), and a run its host dropp
 by the runner's reaper. A new heavy lane joins the resource. On 2026-08-10
 four concurrent lanes dropped backends across
 the fleet, degraded the live Browse rebuild to multi-minute DataFileReads and wedged two lanes with
-no error at all. **The resolve DRAIN is outside the group** (operator decision, 2026-09-10): it is
+no error at all. **The resolve DRAIN is outside the resource** (operator decision, 2026-09-10): it is
 the one member that is latency-bound rather than instance-bound — a handful of small indexed reads
 and one answer-row write per listing, no COPY, no corpus scan, no detoast — and it READS the claim
 spine the intake WRITES, so it never carried a must-never-overlap constraint, while at 0.7 listings/s

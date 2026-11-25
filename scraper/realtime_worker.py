@@ -64,8 +64,8 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
 - location_intake_fast: every `LOCATION_INTAKE_FAST_INTERVAL_S` (default 60),
              ONE bounded pass of THE claim lane's incremental listing scan
              (location_data.claims_intake.run, the same code the job
-             runner's hourly location_intake runs) — payload half only, no bodies
-             pass, a SHORT `LOCATION_INTAKE_FAST_LAG_S` (default 120) snapshot
+             runner's hourly location_intake runs) — the payload half, then bodies
+             in what is left, a SHORT `LOCATION_INTAKE_FAST_LAG_S` (default 120) snapshot
              lag and a `LOCATION_INTAKE_FAST_BUDGET_S` (default 45) budget,
              under its own `claims_intake.FAST_LANE` cursor. LIVE by default
              (`LOCATION_INTAKE_FAST_ENABLED=0` idles it). One lane, two
@@ -1826,7 +1826,7 @@ def _intake_fast_pass(conn: Any) -> dict[str, Any]:
         bodies_first=False,
         bodies_cap=_read_location_intake_fast_bodies_cap(),
         bodies_budget_share=1.0,
-        # The run-end backlog `count(*)` is the hourly chain's signal. At a 60 s cadence
+        # The run-end backlog `count(*)` is the hourly job's readout. At a 60 s cadence
         # it would cost more than the drain it measures.
         backlog_readout=False,
         readings=False,  # the full readings half is hourly (5 s gate); text_extract mines its own
