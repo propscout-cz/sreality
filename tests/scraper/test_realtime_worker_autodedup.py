@@ -145,6 +145,7 @@ def _summary(**over: Any) -> dict[str, Any]:
         "timings": {"refresh_s": 61.2, "retrieve_s": 9.4, "score_s": 3.1, "cluster_s": 0.2,
                     "rail_s": 0.1, "total_s": 74.0},
         "feeds": {"new": 9, "changed": 3},
+        "sql": {"RT_PAIRS_TOUCHING_SQL": [1, 41.2, 90000]},
         "memo_entries": {"text_facts": 812, "body_align": 64, "shingles": 30, "tokens": 2048},
         "claim_cap": {"cap": 500, "reason": "rt_seed", "limit_mb": 8192.0},
         "predecessor_released": None,
@@ -324,6 +325,7 @@ def test_the_lane_hands_the_engine_its_connection_and_nothing_else(
         "timings": {"refresh_s": 61.2, "retrieve_s": 9.4, "score_s": 3.1, "cluster_s": 0.2,
                     "rail_s": 0.1, "total_s": 74.0},
         "feeds": {"new": 9, "changed": 3},
+        "sql": {"RT_PAIRS_TOUCHING_SQL": [1, 41.2, 90000]},
         # E952: the claims the pass made, each one's wanted pair set and the last's, no refusal
         "attempts": 1, "wanted_pairs": 52, "wanted_by_attempt": [52], "aborted": None,
         # E943: what the budget counted (the last claim's and each claim's), the wanted pairs

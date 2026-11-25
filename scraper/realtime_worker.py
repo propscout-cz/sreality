@@ -2228,6 +2228,8 @@ def _autodedup_outcome(
             # adverts each feed gave it: seconds per advert is refresh + retrieve over the claim.
             timings=summary.get("timings"),
             feeds=summary.get("feeds"),
+            # The pass's slowest statements: name -> [calls, seconds, rows].
+            sql=summary.get("sql"),
             # E952: the claims the pass made (each the pair budget refused re-claims a quarter
             # of the claim made, E75), each one's wanted pair set and the last's, and why the
             # pass stopped (None: committed).
