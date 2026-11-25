@@ -26,7 +26,8 @@ export const HOLD_VALUES: readonly string[] = HOLD_OPTIONS.map((o) => o.value);
 
 const REASON_TEXT: Record<string, string> = {
   carries_legacy_merged_listing:
-    'Nesloučeno: některá z nemovitostí obsahuje inzeráty, které k ní přidal starý engine.',
+    'Nesloučeno: některá z nemovitostí obsahuje inzeráty, které k ní přidal starý engine. ' +
+    'Vaše „Stejné“ na této skupině ji uvolní a engine ji sloučí.',
   category_type_mix: 'Nesloučeno: skupina míchá prodej a pronájem.',
   category_main_incompatible: 'Nesloučeno: skupina míchá druhy nemovitostí, které se neslučují.',
   member_out_of_scope: 'Nesloučeno: některý inzerát leží mimo oblast, kde engine slučuje.',
