@@ -809,10 +809,16 @@ def recheck_group(
     if inactive:
         reasons.append(SKIP_INACTIVE_PROPERTY)
         detail["inactive_property_ids"] = inactive
-    hit_reasons, hit_detail = Negatives.read(conn, now, [group.cluster_key]).hits(
-        now, group.cluster_key)
+    negatives = Negatives.read(conn, now, [group.cluster_key])
+    hit_reasons, hit_detail = negatives.hits(now, group.cluster_key)
     reasons += hit_reasons
     detail.update(hit_detail)
+    # E992: a hold the operator's `same` released stays released only while that ruling is
+    # still the newest word on the set; withdrawn since the plan, the hold is back.
+    released = group.detail.get("legacy_released_by_ruling")
+    if released and frozenset(group.member_ids) not in negatives.same_sets:
+        reasons.append(SKIP_CARRIES_LEGACY)
+        detail["legacy_merged_listings"] = released
     set_reasons, set_detail = _set_reasons(
         now, {m.listing_id: m for m in rows}, list(locked.values()))
     reasons += set_reasons
