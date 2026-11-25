@@ -377,9 +377,12 @@ def test_a_maisonette_range_is_placed_whole() -> None:
     assert subject_floors("Mezonetový byt se nachází ve 2.-3. NP domu.", True) == {2, 3}
 
 
-def test_an_idnes_headline_figure_is_not_the_units_stated_area() -> None:
+def test_an_idnes_headline_figure_never_stands_alone_as_the_stated_area() -> None:
+    # Beside a figure the body prints, the headline's label is one more reading.
     text = "Prodej bytu 3+1 79 m², Pardubice Prostorný, světlý byt o výměře 78,6 m² v klidné ulici."
-    assert stated_areas(text, 78.6, "idnes") == {78.6}
+    assert stated_areas(text, 78.6, "idnes") == {78.6, 79.0}
+    text = "Prodej bytu 1+1 44 m² Ateliér má plochu 40 m², k tomu patří sklep."
+    assert stated_areas(text, 44.0, "idnes") == {40.0, 44.0}
     assert stated_areas("Prodej bytu 3+kk 96 m² Mezi Mosty, Pardubice Prostorný byt.", 75.0, "idnes") == set()
 
 
@@ -387,9 +390,8 @@ def test_an_idnes_headline_with_no_figure_leaves_the_bodys_first_figure_standing
     text = ("Prodej pozemku vodní tok, Babice Nabízíme k prodeji pozemek o výměře 452 m² "
             "v obci Babice.")
     assert stated_areas(text, 452.0, "idnes") == {452.0}
-    # The headline's own figure still goes when the body opens after it.
     text = "Prodej bytu 3+1 79 m², Pardubice Nabízíme k prodeji byt o výměře 78,6 m²."
-    assert stated_areas(text, 78.6, "idnes") == {78.6}
+    assert stated_areas(text, 78.6, "idnes") == {78.6, 79.0}
 
 
 def test_the_same_words_opening_another_portals_body_keep_their_figure() -> None:

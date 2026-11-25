@@ -1015,19 +1015,24 @@ def _stated_areas(
         match.span() for match in _BUILDING_TOTAL.finditer(folded)
     ]
     opening = folded[: mentions[0][0]]
-    if headline and _HEADLINE.match(opening) and not _BODY_OPENS.search(opening):
-        skip.append(mentions[0][:2])
+    label = (mentions[0][:2] if headline and _HEADLINE.match(opening)
+             and not _BODY_OPENS.search(opening) else None)
     low, high = STATED_AREA_MIN_M2, STATED_AREA_MAX_M2
     if stored_area_m2 is not None and stored_area_m2 > 0.0:
         low = max(low, stored_area_m2 / STATED_AREA_STORED_RATIO)
         high = min(high, stored_area_m2 * STATED_AREA_STORED_RATIO)
     out: set[float] = set()
+    body: set[float] = set()
     for start, end, value in mentions:
         if any(span[0] <= start and end <= span[1] for span in skip):
             continue
         if low <= value <= high:
             out.add(value)
-    return frozenset(out)
+            if (start, end) != label:
+                body.add(value)
+    # The headline's label never stands ALONE as the advert's stated area; beside a figure the
+    # body prints it is one more reading (`44 m²` over a body that says `40 m²` plus a cellar).
+    return frozenset(out if body or label is None else ())
 
 
 # A price the advert states as a STARTING price — "ceny od 5 499 000 Kč", "již od 2 750 000".
