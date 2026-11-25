@@ -180,7 +180,7 @@ def test_a_walks_host_is_the_cutoffs() -> None:
     assert walk_host_problems(jobs.declared(), _portal_classes()) == []
     hosts = {j.name: j.host for j in jobs.declared() if j.name.startswith(jobs.WALK_PREFIX)}
     assert {n for n, h in hosts.items() if h == jobs.RUNNER} == {"walk_web", "walk_maxima", "walk_bezrealitky"}, \
-        "batch 1 (#2029); remax waits for batch 2 (#2030) while its sold/let gate #2647 runs"
+        "batch 1 (#2029); remax waits for a later batch while its sold/let gate #2647 runs"
 
 
 def test_the_walk_host_census_fires() -> None:

@@ -190,7 +190,7 @@ of a sibling on its resource seen since its clock started. The worst condition w
   1 CPU). The rest wait on their GitHub workflows (`github-actions-until-moved`).
   A batch raises the cutoff and deletes the workflows it takes over, and names no portal (rule 21); the registry
   census `test_a_walks_host_is_the_cutoffs` refuses a per-portal host value (one would need a ruling). remax is held
-  out of batch 1 while its sold/let gate #2647 runs (to 2026-11-29); it moves with batch 2 (#2030).
+  out of batch 1 while its sold/let gate #2647 runs (to 2026-11-29); it moves with a later batch.
 - **One budget:** the argv is `scraper.<source>_main --index-only` with no `--max-seconds`; the runner's SIGTERM at
   `timeout_s` is the walk's deadline (`stop` → `portal.deadline_reached`). A deploy's SIGTERM ends it 143,
   `interrupted`, re-claimed at once and resumed inside its cycle (a cut group nominates nothing; only the fragment
