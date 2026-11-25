@@ -2,10 +2,10 @@
 --
 -- WHY (#2654, docs/design/broker-board.md § The inventory by property; operator ruling 4, 2026-11-24). The broker
 -- page's table reads the book, one row per property (toolkit.brokers.broker_properties: broker_book joined to
--- browse_list). broker_listings_public (189; 224, 358, 396, 503, 508, 517) served only the per-ad table it
+-- browse_list). broker_listings_public (189; 224, 358, 503; last defined by 508) served only the per-ad table it
 -- replaces: GET /brokers/{id}/listings through toolkit.brokers.broker_listings, both deleted by this PR.
 --
--- NO BACKUP: a view holds no data, and its definition is 517's text.
+-- NO BACKUP: a view holds no data, and its last definition is 508's text (migrations/508, section 1g).
 -- DEPENDENTS (production, 2026-11-24): none in pg_depend, no function body names it; service_role and postgres
 -- alone held a grant (A6, 299).
 -- APPLY ORDER: after the PR that moved the page off the view (#2656) is live on the API and the SPA; the API
@@ -13,7 +13,7 @@
 -- error from this apply until this PR's rollout removes the route. Apply BEFORE this PR merges (its tests expect
 -- the view gone) or right after: no code in this PR reads it.
 -- The comment on listing_price_history names its readers, so it is re-issued without the inventory.
--- Re-runnable. ROLLBACK: forward only (rule 1); 517 holds the view's text.
+-- Re-runnable. ROLLBACK: forward only (rule 1); 508 (section 1g) holds the view's last text.
 -- Verify:
 --   select to_regclass('public.broker_listings_public');   -- NULL
 
