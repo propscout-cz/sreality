@@ -55,8 +55,8 @@ INDEX_PAGE_SIZE = 100
 # conditional on something the API says (an empty page, a positive declared
 # count) or on a knob the scheduled lane may not pass (--max-seconds,
 # --max-pages), so a degraded resolver that serves rows while declaring
-# `totalCount: 0` would page forever until the job timeout SIGKILLs the run
-# (no scrape_runs row, no drain). 4,000 pages is ~400,000 adverts, two orders
+# `totalCount: 0` would page until the job timeout cut every cycle short, so
+# no cycle would ever reach its end. 4,000 pages is ~400,000 adverts, two orders
 # of magnitude above bezrealitky's largest category, and it stops as `page_cap`
 # — a stop of OURS, so hitting it can never nominate.
 INDEX_PAGE_CEILING = 4_000

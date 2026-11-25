@@ -205,8 +205,8 @@ of a sibling on its resource seen since its clock started. The worst condition w
   probe) already uses on these portals; none of the three is proxied (`USE_PROXY`), so no proxy budget moves.
 - **Run one now:** "Jobs: run now" with `walk_<source>`; args append (`--max-pages 2` on maxima or bezrealitky stops
   each category short of its end, so it nominates nothing). A walk writes its `scrape_runs` row (`run_type='index'`)
-  as on GitHub, and the runner its `job_runs` row. Slots (UTC, then every 6 h): bezrealitky 00:40, maxima 02:40,
-  web 05:20.
+  as on GitHub, and the runner its `job_runs` row. Slots: `_walks()` spreads one cadence's walks evenly, so a new
+  portal moves them (`scheduled_jobs.offset_s`).
 
 ## Jobs: run now, click by click
 
