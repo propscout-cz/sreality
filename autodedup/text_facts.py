@@ -30,6 +30,12 @@ if TYPE_CHECKING:  # pragma: no cover
 # number rather than an order key: it collides across objects and cannot certify anything.
 MIN_CODE_LEN: int = 5
 MAX_CODE_POPULATION: int = 8
+# The advertiser's own offer number as the portal states it (`listings.ad_reference`, migration
+# 667), spelled as the review queue spells it (`ui_sql._order_code`, built from these prefixes):
+# idnes and realitymix print sreality's `1166` as `IDNES-1166`. Shorter than this — a 1-3 digit
+# number among them — is a per-broker sequence, not a code (operator ruling 2026-11-23).
+STRUCTURED_CODE_PREFIXES: tuple[str, ...] = ("IDNES", "REALITYMIX")
+MIN_STRUCTURED_CODE_LEN: int = 4
 
 # The cluster invariant asks the same advert's facts once per PAIR, so a 256-member group would
 # re-scan one body 255 times. Keyed on the body text, which is what the readers actually parse.
@@ -94,6 +100,17 @@ _UNIT_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"oznacen\w{0,3}\s+([a-z]\d{1,3})\b"),
     re.compile(r"apartman\w*\s*c\.?\s*([a-z]?\d{1,4})\b"),
 )
+# E982: a designator that runs on into another bare number is the head of a list. Šestajovice's
+# notice `byty č. 1, 5, 9, 11` read as unit 1 against `byty č. 2, 6, 8, 10 a 11` as unit 2.
+# A disposition (`, 2+kk`, `, 1kk`), an area (`, 115 m2`) or a storey (`, 1. np`, `, 3np`) is
+# not a list.
+# What follows the number may still say it is no list: `, 2 + kk`, `, 3 pokoje`, `, 4 990 000 Kč`
+# and `a 2 sklepy` count something else and leave `byt č. 5` a designator.
+_UNIT_LIST_TAIL = re.compile(
+    r"(?:\s*,\s*|\s+a\s+|\s+i\s+)\d{1,4}"
+    r"(?![\d+.]|,\d|\s*\+\s*(?:kk|\d)|(?:\s\d{3}){1,2}\s*(?:kc\b|,-|czk)"
+    r"|\s*(?:kk|np\b|m(?:2|\b)|kc\b|pokoj|sklep|garaz|parkov"
+    r"|balkon|lodzi|teras|koupel|mistnost|loznic))")
 
 # --- printed floor areas ------------------------------------------------------------------
 # A body text names the balcony, the plot and the cellar too; anything outside this window is
@@ -115,7 +132,7 @@ MENU_MIN_RUN: int = 3
 # ceskereality 412654) — the same thousands truncation the portal parsers carry. Fixed HERE and
 # not in `normalize`, whose `m2` slot feeds scored features that this wave must not move.
 _AREA_NUMBER = r"(\d{1,3}(?:[  .]\d{3})+|\d+(?:[.,]\d+)?)"
-_M2_MENTION = re.compile(_AREA_NUMBER + r"\s*m2\b")
+_M2_MENTION = re.compile(_AREA_NUMBER + r"\s*m2(?![0-9])")
 # `od 55 m2 do 900 m2`, `55 m2 az 900 m2`, `55 - 900 m2`: a RANGE of what is available.
 _AREA_RANGE = re.compile(
     r"\bod\s+" + _AREA_NUMBER + r"\s*(?:m2)?\s*(?:do|az|-|–)\s*" + _AREA_NUMBER + r"\s*m2"
@@ -124,6 +141,23 @@ _AREA_RANGE = re.compile(
 # The building's own size, named as such: `budova o velikosti 10.500 m2`, `objekt disponuje
 # celkovou plochou cca 10 500 m2`. Adjacency is strict on purpose — `cihlové budovy. s užitnou
 # plochou 80 m2` (listing 464483) names the UNIT, and a looser window would eat it.
+# idnes prints the ADVERTISER's headline as the first words of the description (`<h2>` of
+# `div.b-desc`): `Prodej bytu 3+1 79 m², Pardubice Prostorný, světlý byt …`. Its figure is a
+# rounded label (79 for 78,6; 96 for a 75 m² flat with its terrace), not a statement the body
+# makes. Gated per SOURCE: on every other portal the same words open the BODY, and there the
+# figure is the advert's own (8 towns: 505 adverts of other portals would lose their only one).
+HEADLINE_SOURCES = frozenset({"idnes"})
+_HEADLINE = re.compile(r"(?:prodej|pronajem|drazba)\b[^.!?]{0,90}$")
+# A headline that prints no figure runs straight into the body, and the first figure is then
+# the BODY's own (`Prodej pozemku Babice Nabízíme k prodeji pozemek o výměře 452 m²`): the
+# body's opening words say the headline is over.
+_BODY_OPENS = re.compile(r"\b(?:nabizim\w*|nabidce|k\s+prodeji|k\s+pronajmu|prodam|pronajmu)\b")
+# The body may also open on its own area (`Prodej bytu 2+kk, Brno - Židenice Byt o výměře 55 m²`),
+# but a headline says the same words of ITS figure (`Prodej bytu 1+kk o ploše 28,6 m2`). The
+# headline names its locality after a comma, so the words open the body only behind one.
+_BODY_OPENS_ON_AREA = re.compile(
+    r",.*\b(?:nabizi\w*|o\s+(?:celkove\s+)?(?:vymere|plose|velikosti|rozloze)"
+    r"|s\s+(?:uzitnou|obytnou|podlahovou|celkovou)\s+plochou)\b")
 _BUILDING_TOTAL = re.compile(
     r"(?:budov|objekt|areal|komplex)\w*\s+(?:o\s+)?(?:celkov\w+\s+)?"
     r"(?:velikosti|rozloze|ploche|plochou|vymere|vymera)\s+(?:cca\s+)?" + _AREA_NUMBER + r"\s*m2"
@@ -159,6 +193,27 @@ def reference_codes(text: str | None) -> set[str]:
     return out
 
 
+_STRUCTURED_PREFIX = re.compile(r"^(?:" + "|".join(STRUCTURED_CODE_PREFIXES) + r")-",
+                                re.IGNORECASE)
+_STRUCTURED_ID = re.compile(r"^ID\s+", re.IGNORECASE)
+
+
+def structured_code(value: str | None) -> str | None:
+    """`listings.ad_reference` as one comparable code — portal prefix, `ID ` and whitespace
+    dropped, upper-cased as `reference_codes` spells a body's — or None when it is no code."""
+    if not value:
+        return None
+    code = _STRUCTURED_ID.sub("", _STRUCTURED_PREFIX.sub("", value.strip()))
+    code = re.sub(r"\s", "", code).upper()
+    # A name (`SaleMaso`, `Beroun`) is no number at all, and `00003` is the broker's third
+    # order: its zeros are padding, and 6.7 % of such codes sit on two firms' adverts in one
+    # block against 0.6 % of the rest (nine blocks, 2026-11-25).
+    significant = re.sub(r"[^A-Z0-9]", "", code).lstrip("0")
+    if not any(ch.isdigit() for ch in code) or len(significant) < MIN_STRUCTURED_CODE_LEN:
+        return None
+    return code
+
+
 def mask_codes(text: str | None) -> str | None:
     r"""Every agency order code this module can find, replaced by one token.
 
@@ -175,15 +230,18 @@ def mask_codes(text: str | None) -> str | None:
 
 
 def unit_designators(text: str | None) -> set[str]:
-    """Unit designators the body text names: `byt (č.3)`, `jednotka č. 12`, `označením B36`."""
+    """Unit designators the body text names: `byt (č.3)`, `jednotka č. 12`, `označením B36`.
+    A body that lists units by number (E982) is a price list and names none."""
     if not text:
         return set()
     folded = fold(text)
-    return {
-        match.group(1).upper()
-        for pattern in _UNIT_PATTERNS
-        for match in pattern.finditer(folded)
-    }
+    out: set[str] = set()
+    for pattern in _UNIT_PATTERNS:
+        for match in pattern.finditer(folded):
+            if _UNIT_LIST_TAIL.match(folded, match.end()):
+                return set()
+            out.add(match.group(1).upper())
+    return out
 
 
 # --- the printed unit CODE, read whole and in the bare form (E161) --------------------------
@@ -939,7 +997,9 @@ def _menu_spans(folded: str, mentions: list[tuple[int, int, float]]) -> list[tup
     return spans
 
 
-def stated_areas(text: str | None, stored_area_m2: float | None = None) -> set[float]:
+def stated_areas(
+    text: str | None, stored_area_m2: float | None = None, source: str | None = None
+) -> set[float]:
     """Every floor area the BODY prints AS THIS UNIT'S, in m².
 
     Deliberately not `listings.area_m2`: that column is a per-portal parse, and one flat can
@@ -951,11 +1011,15 @@ def stated_areas(text: str | None, stored_area_m2: float | None = None) -> set[f
     available (`od 55 m² do 900 m²`, `10 m², 20 m², 30 m², …`). Neither is a statement about the
     advertised unit, and comparing one side's building with the other side's unit mislabelled
     three same-unit cross-broker pairs as different (W7 benchmark, root cause AREA SCOPE)."""
-    return set(_stated_areas(text, stored_area_m2)) if text else set()
+    if not text:
+        return set()
+    return set(_stated_areas(text, stored_area_m2, source in HEADLINE_SOURCES))
 
 
 @body_cached
-def _stated_areas(text: str, stored_area_m2: float | None) -> frozenset[float]:
+def _stated_areas(
+    text: str, stored_area_m2: float | None, headline: bool = False
+) -> frozenset[float]:
     folded = fact_text(text)
     mentions: list[tuple[int, int, float]] = []
     for match in _M2_MENTION.finditer(folded):
@@ -967,17 +1031,26 @@ def _stated_areas(text: str, stored_area_m2: float | None) -> frozenset[float]:
     skip = _menu_spans(folded, mentions) + [
         match.span() for match in _BUILDING_TOTAL.finditer(folded)
     ]
+    opening = folded[: mentions[0][0]]
+    label = (mentions[0][:2] if headline and _HEADLINE.match(opening)
+             and not _BODY_OPENS.search(opening)
+             and not _BODY_OPENS_ON_AREA.search(opening) else None)
     low, high = STATED_AREA_MIN_M2, STATED_AREA_MAX_M2
     if stored_area_m2 is not None and stored_area_m2 > 0.0:
         low = max(low, stored_area_m2 / STATED_AREA_STORED_RATIO)
         high = min(high, stored_area_m2 * STATED_AREA_STORED_RATIO)
     out: set[float] = set()
+    body: set[float] = set()
     for start, end, value in mentions:
         if any(span[0] <= start and end <= span[1] for span in skip):
             continue
         if low <= value <= high:
             out.add(value)
-    return frozenset(out)
+            if (start, end) != label:
+                body.add(value)
+    # The headline's label never stands ALONE as the advert's stated area; beside a figure the
+    # body prints it is one more reading (`44 m²` over a body that says `40 m²` plus a cellar).
+    return frozenset(out if body or label is None else ())
 
 
 # A price the advert states as a STARTING price — "ceny od 5 499 000 Kč", "již od 2 750 000".
@@ -1199,6 +1272,29 @@ def address_block_key(listing: "Listing") -> str:
     if loc.lat is not None and loc.lon is not None:
         return f"pin:{obec}:{loc.lat:.3f}:{loc.lon:.3f}"
     return f"obec:{obec}"
+
+
+def one_block(a: "Listing", b: "Listing") -> bool:
+    """E981: one address block, read at the COARSER side's grain on one street of one obec.
+
+    `address_block_key` is the finest key a side carries, so a door on Mukařovského and an
+    advert the resolver left at Mukařovského got two keys, and `bytů č. 905` against `byt č.
+    1005` read as two blocks (W5b g45: the door arrived on one side only and the two flats
+    merged). A street side meets anything on its street; two house numbers meet on the č.p.
+    when either lacks the č.o., else whole; two doors keep their own keys, as before."""
+    if address_block_key(a) == address_block_key(b):
+        return True
+    la, lb = a.location, b.location
+    if not (la.street_key and la.street_key == lb.street_key
+            and la.obec_kod is not None and la.obec_kod == lb.obec_kod):
+        return False
+    if la.ruian_adm_kod and lb.ruian_adm_kod:
+        return False
+    if not la.house_number or not lb.house_number:
+        return True
+    if "/" in la.house_number and "/" in lb.house_number:
+        return la.house_number == lb.house_number
+    return la.house_number.split("/")[0] == lb.house_number.split("/")[0]
 
 
 # --- what the advert says the tenant pays BESIDES the rent (E203) ---------------------------

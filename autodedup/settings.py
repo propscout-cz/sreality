@@ -21,6 +21,17 @@ from autodedup.features import DEFAULT_VOCABULARY_ATTR_KEYS
 # lower.
 CONTEXT_RULE_MIN_IMAGES_FLOOR: float = 4.0
 
+# C4b: the category_main vocabulary `area_veto_gallery_exempt` is keyed by (and
+# `ref_code_structured_categories` names): the census's own
+# `CATEGORY_MAIN`, restated because importing the census would widen the decision closure.
+CATEGORY_MAIN: tuple[str, ...] = ("byt", "dum", "pozemek", "komercni", "ostatni")
+# The portals `area_veto_basis_floor_exempt` is keyed by: the census's `SOURCES`, restated for
+# the same reason.
+SOURCES: tuple[str, ...] = (
+    "sreality", "bazos", "bezrealitky", "idnes", "mmreality", "remax", "ceskereality",
+    "realitymix", "maxima",
+)
+
 # E84: one minute, the floor under K-B's window separation. No scrape cadence in this program
 # re-lists an advert within a minute of its last sighting, so the bar can only catch two adverts
 # the same index walk saw for the first and only time.
@@ -32,6 +43,17 @@ class Settings:
     area_band_tol: float = 0.20
     area_reject_pct: float = 0.08
     area_band_pct: float = 0.03
+    # C4b (operator ruling 2026-11-01): the pair veto's area clause yields, up to the mapped gap,
+    # where BOTH sides state that category_main and at least 20 m2 (`guards.area_gallery_bar`)
+    # and the two adverts show one gallery at one price (`guards.identical_gallery`); every
+    # other pair keeps `area_reject_pct`. Only the veto reads it: `area_relation`, D43's area
+    # limbs and the cluster spread keep their own bars. Empty = w31.
+    area_veto_gallery_exempt: dict[str, float] = field(default_factory=dict)
+    # The pair veto's area clause yields, up to the mapped gap, when a side of that portal states
+    # `area_basis = 'floor'` (`guards.area_basis_exempt`): realitymix prints "celková podlahová
+    # plocha", which may hold the cellar, balcony or terrace a partner leaves out. The area stays
+    # a scoring feature. Empty = w31.
+    area_veto_basis_floor_exempt: dict[str, float] = field(default_factory=dict)
     catalog_df: int = 8
     # E83 (W10): E9's population test cannot tell a marketing catalogue from a broker re-posting
     # ONE advert nine times, so a frame is stock only when its carriers are several PARTIES.
@@ -85,6 +107,12 @@ class Settings:
     # ON by default — 0 operator and 0 gold false merges on g5, and it is the only certificate
     # resting on a fact the broker states rather than on a resemblance.
     certificate_kr_enabled: bool = True
+    # K-R reads the advertiser's own offer number too (`listings.ad_reference`; operator ruling
+    # 2026-11-23, measured on operator truth the engine did not merge: byt 297 same / 1
+    # different, dum 131 / 0, pozemek 79 / 0, komerční 38 / 13 — one building's offices share
+    # one code). It certifies a pair only when BOTH sides are of these category_main values and
+    # one deal type; a body-printed code keeps certifying as before. Empty = w31.
+    ref_code_structured_categories: tuple[str, ...] = ()
     # E65 (W9): K-B may not certify a pair whose photographs the engine never compared. The
     # floor is read on both SIDES (`n_images_min`, E9-subtracted, so an all-catalogue gallery
     # counts as zero) and on the MATCHED set (`phash_loose_matches`); an absent match count
@@ -1046,6 +1074,14 @@ class Settings:
     # cities, which does not probe the town key, gets the same key at its quarter (`quarter`,
     # added last), so it still has an attribute path when both its home keys explode.
     attr_probe_town_grain: bool = False
+    # B (research experiments/absent_attribution.md section 4, V4): the text and phash posting
+    # keys carry the ad's town (`blocking.content_town`). Calibrated over the live scope, 2,548
+    # keys held over `max_block_size` postings on 2026-10-25, 79 % of them location-free text or
+    # phash keys, and an exploded key retrieves nothing: 95 of the 119 operator-SAME pairs in
+    # reach were lost that way. Town-scoped, 30 of them fall back under the limit, against at
+    # most 3-7 DIFFERENT pairs. A cross-town content match is lost (worth 0 in-scope SAME pairs).
+    # Moves the posting keys: switching it is a fresh `rt_seed`.
+    content_key_town_grain: bool = False
     # E301: floor and total_floors both stated on both sides and shifted by the SAME offset of
     # one are one storey-counting camp, not two facts. E301b (prepared, awaiting a ruling): the
     # opposite-sign shape too (floor +1, total -1: the ground floor counted in one number on
@@ -1076,10 +1112,18 @@ class Settings:
         }
         self.floor_camps = {str(key): int(value)
                             for key, value in dict(self.floor_camps).items()}
+        self.area_veto_gallery_exempt = {
+            str(key): float(value)
+            for key, value in dict(self.area_veto_gallery_exempt).items()}
+        self.area_veto_basis_floor_exempt = {
+            str(key): float(value)
+            for key, value in dict(self.area_veto_basis_floor_exempt).items()}
         self.merge_policy = {str(key): str(value)
                              for key, value in dict(self.merge_policy).items()}
         self.d43_rental_colive_cross_portal_limbs = tuple(
             str(name) for name in self.d43_rental_colive_cross_portal_limbs)
+        self.ref_code_structured_categories = tuple(
+            str(name) for name in self.ref_code_structured_categories)
         self.validate()
 
     def validate(self) -> None:
@@ -1091,6 +1135,28 @@ class Settings:
                 f"area_band_pct must be in [0, area_reject_pct]: {self.area_band_pct} "
                 f"> {self.area_reject_pct}"
             )
+        for key, value in self.area_veto_gallery_exempt.items():
+            if key not in CATEGORY_MAIN:
+                raise ValueError(
+                    f"area_veto_gallery_exempt key must be a category_main "
+                    f"({', '.join(CATEGORY_MAIN)}): {key}")
+            if not self.area_reject_pct < value < 1.0:
+                raise ValueError(
+                    f"area_veto_gallery_exempt[{key}] must be in (area_reject_pct, 1): {value}")
+        unknown_categories = sorted(set(self.ref_code_structured_categories) - set(CATEGORY_MAIN))
+        if unknown_categories:
+            raise ValueError(
+                f"ref_code_structured_categories must be category_main values "
+                f"({', '.join(CATEGORY_MAIN)}): {unknown_categories}")
+        for key, value in self.area_veto_basis_floor_exempt.items():
+            if key not in SOURCES:
+                raise ValueError(
+                    f"area_veto_basis_floor_exempt key must be a portal "
+                    f"({', '.join(SOURCES)}): {key}")
+            if not self.area_reject_pct < value < 1.0:
+                raise ValueError(
+                    f"area_veto_basis_floor_exempt[{key}] must be in (area_reject_pct, 1): "
+                    f"{value}")
         if not 0.0 <= self.t_lo <= self.t_hi <= 1.0:
             raise ValueError(f"thresholds must satisfy 0 <= t_lo <= t_hi <= 1: "
                              f"t_lo={self.t_lo} t_hi={self.t_hi}")
