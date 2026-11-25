@@ -383,6 +383,15 @@ def test_an_idnes_headline_figure_is_not_the_units_stated_area() -> None:
     assert stated_areas("Prodej bytu 3+kk 96 m² Mezi Mosty, Pardubice Prostorný byt.", 75.0, "idnes") == set()
 
 
+def test_an_idnes_headline_with_no_figure_leaves_the_bodys_first_figure_standing() -> None:
+    text = ("Prodej pozemku vodní tok, Babice Nabízíme k prodeji pozemek o výměře 452 m² "
+            "v obci Babice.")
+    assert stated_areas(text, 452.0, "idnes") == {452.0}
+    # The headline's own figure still goes when the body opens after it.
+    text = "Prodej bytu 3+1 79 m², Pardubice Nabízíme k prodeji byt o výměře 78,6 m²."
+    assert stated_areas(text, 78.6, "idnes") == {78.6}
+
+
 def test_the_same_words_opening_another_portals_body_keep_their_figure() -> None:
     text = "Prodej bytu 1+kk o ploše 28,6 m2."
     assert stated_areas(text, 28.6, "sreality") == {28.6}

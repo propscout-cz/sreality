@@ -143,6 +143,10 @@ _AREA_RANGE = re.compile(
 # figure is the advert's own (8 towns: 505 adverts of other portals would lose their only one).
 HEADLINE_SOURCES = frozenset({"idnes"})
 _HEADLINE = re.compile(r"(?:prodej|pronajem|drazba)\b[^.!?]{0,90}$")
+# A headline that prints no figure runs straight into the body, and the first figure is then
+# the BODY's own (`Prodej pozemku Babice Nabízíme k prodeji pozemek o výměře 452 m²`): the
+# body's opening words say the headline is over.
+_BODY_OPENS = re.compile(r"\b(?:nabizim\w*|nabidce|k\s+prodeji|k\s+pronajmu|prodam|pronajmu)\b")
 _BUILDING_TOTAL = re.compile(
     r"(?:budov|objekt|areal|komplex)\w*\s+(?:o\s+)?(?:celkov\w+\s+)?"
     r"(?:velikosti|rozloze|ploche|plochou|vymere|vymera)\s+(?:cca\s+)?" + _AREA_NUMBER + r"\s*m2"
@@ -1010,7 +1014,8 @@ def _stated_areas(
     skip = _menu_spans(folded, mentions) + [
         match.span() for match in _BUILDING_TOTAL.finditer(folded)
     ]
-    if headline and _HEADLINE.match(folded[: mentions[0][0]]):
+    opening = folded[: mentions[0][0]]
+    if headline and _HEADLINE.match(opening) and not _BODY_OPENS.search(opening):
         skip.append(mentions[0][:2])
     low, high = STATED_AREA_MIN_M2, STATED_AREA_MAX_M2
     if stored_area_m2 is not None and stored_area_m2 > 0.0:
