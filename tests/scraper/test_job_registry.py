@@ -32,7 +32,7 @@ from scraper.portal import _LIMIT_COERCERS, PortalConfig, PortalLimits
 from scraper.portal_factory import PORTAL_CLASSES
 from tests.migration_defs import MIGRATIONS, latest_definition
 
-FIXED = 10
+FIXED = 11
 ROOT = Path(__file__).resolve().parents[2]
 API_MAIN = ROOT / "api" / "main.py"
 
