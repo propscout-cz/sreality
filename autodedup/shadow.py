@@ -726,10 +726,11 @@ def main(argv: list[str] | None = None) -> int:
     ads = sum(sizes[block] for block in chunk)
     needed = groups_needed(sizes, args.max_blocks, args.max_ads) if sizes else 0
     print(f"[shadow] {len(sizes)} blocks kept, {sum(sizes.values())} ads; group {index}/{count}: "
-          f"{len(chunk)} blocks, {ads} ads; groups needed under the caps: "
-          f"{needed if needed is not None else 'none'}",
+          f"{len(chunk)} blocks, {ads} ads; groups needed under the caps "
+          f"({args.max_blocks} blocks, {args.max_ads} ads): {needed if needed is not None else 'none'}",
           flush=True)
     record = {"group": f"{index}/{count}", "blocks": chunk, "ads": ads,
+              "max_blocks": args.max_blocks, "max_ads": args.max_ads,
               "all_blocks": len(sizes), "all_ads": sum(sizes.values()),
               "blocks_skipped_no_ruling": no_ruling, "unjudgeable": sorted(blind),
               "rulings_filter": ruled is not None, "started_at": started_at}

@@ -84,6 +84,11 @@ on:
         required: false
         default: ""
         type: string
+      max_ads:
+        description: "Step 2's per-group ad cap (autodedup.shadow.MAX_ADS = 20000); raise it only on the engine owner's word"
+        required: false
+        default: 20000
+        type: number
 
 concurrency:
   # One shadow per wave label: the database step (~20 min, READ ONLY) is short, the harness (~85 min) reads no database.
@@ -165,8 +170,9 @@ jobs:
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
           GROUP: ${{ inputs.group }}
+          MAX_ADS: ${{ inputs.max_ads }}
           ALL_BLOCKS: ${{ inputs.all_blocks && '--all-blocks' || '' }}
-        run: python -m autodedup.shadow shadow --block-group "${GROUP:-1/1}" $ALL_BLOCKS
+        run: python -m autodedup.shadow shadow --block-group "${GROUP:-1/1}" --max-ads "${MAX_ADS:-20000}" $ALL_BLOCKS
 
       # Step 2 exports nothing when no mover's blocks hold a ruling (nothing could fail): no gate.
       - name: "3: the gate (harness shadow, no database)"

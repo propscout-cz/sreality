@@ -166,7 +166,7 @@ def test_an_oversized_shadow_is_refused_before_anything_is_exported(monkeypatch,
     assert shadow.main([str(tmp_path), "--all-blocks"]) == 2
     printed = capsys.readouterr()
     assert f"town:{BEROUN} 15000 ads" in printed.out
-    assert "groups needed under the caps: 2" in printed.out
+    assert "groups needed under the caps (40 blocks, 20000 ads): 2" in printed.out
     assert "dispatch --block-group i/2 for i in 1..2" in printed.err
     assert shadow.main([str(tmp_path), "--all-blocks", "--max-ads", "1000000",
                         "--max-blocks", "1"]) == 2
@@ -202,6 +202,7 @@ def test_a_group_exports_only_its_chunk_and_records_it(monkeypatch, tmp_path: Pa
     assert exported == [["town:2"]]
     group = json.loads((tmp_path / shadow.GROUP_FILE).read_text(encoding="utf-8"))
     assert (group["group"], group["blocks"], group["all_blocks"]) == ("2/4", ["town:2"], 4)
+    assert (group["max_blocks"], group["max_ads"]) == (40, 50000)
 
 
 def _movers_three_blocks(tmp_path: Path, monkeypatch: Any) -> list[list[str]]:
