@@ -1,6 +1,6 @@
 """The API's one outbound JSON call: `requests`, an explicit timeout, no retry. A failure is an
 `HttpJsonError` naming the host and the HTTP status only: requests' own exceptions carry the full URL,
-query string included, so Mapy's `apikey` used to reach the log through them; they are never chained."""
+query string included, so a key in a query string would reach the log through them; they are never chained."""
 
 from __future__ import annotations
 

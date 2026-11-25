@@ -38,10 +38,10 @@ const api = (name: string) => project(name, { resources: [service("sreality", {
             drainingSeconds: API_DRAINING_SECONDS, limitOverride: LIMITS },
   domains: [{ domain: "api.propscout.cz", port: 8080 }],   // dashboard-owned: IaC cannot register a domain
   env: { EXTRAS: "api", ...kept(
-    "ANTHROPIC_API_KEY", "CORS_ALLOW_ORIGINS", "CUZK_LOGIN_KEY", "GEMINI_API_KEY", "GH_DISPATCH_TOKEN", "MAPY2_CZ_API_KEY",
-    "MAPY_CZ_API_KEY", "OPENAI_API_KEY", "QWEN_API_KEY", "R2_ACCESS_KEY_ID", "R2_ACCOUNT_ID", "R2_BUCKET_NAME",
-    "R2_SECRET_ACCESS_KEY", "RESEND_API_KEY", "RUNPOD_API_KEY", "SUPABASE_DB_SESSION_URL", "SUPABASE_DB_URL", "SUPABASE_URL",
-    "TENANT_POOL_DB_URL", "VALUO_API_TOKEN", "VALUO_SANDBOX_API_TOKEN", "VAPID_PRIVATE_KEY") },
+    "ANTHROPIC_API_KEY", "CORS_ALLOW_ORIGINS", "CUZK_LOGIN_KEY", "GEMINI_API_KEY", "GH_DISPATCH_TOKEN", "OPENAI_API_KEY",
+    "QWEN_API_KEY", "R2_ACCESS_KEY_ID", "R2_ACCOUNT_ID", "R2_BUCKET_NAME", "R2_SECRET_ACCESS_KEY", "RESEND_API_KEY",
+    "RUNPOD_API_KEY", "SUPABASE_DB_SESSION_URL", "SUPABASE_DB_URL", "SUPABASE_URL", "TENANT_POOL_DB_URL", "VALUO_API_TOKEN",
+    "VALUO_SANDBOX_API_TOKEN", "VAPID_PRIVATE_KEY") },
 })] });
 
 const jobRunner = (sreality: ReturnType<typeof service>) => service("job-runner", {
@@ -70,7 +70,6 @@ const worker = (name: string) => {
   start: WORKER_START,
   replicas: { [REGION]: 1 },
   deploy: { restartPolicyType: "ALWAYS", drainingSeconds: WORKER_DRAINING_SECONDS, limitOverride: LIMITS },
-  // No Mapy key: nothing in the worker calls Mapy, #2454.
   // `browser`: the worker drains ceskereality, whose pages sit behind a JS proof-of-work
   // interstitial, so this image bakes chromium (#2529). The API's EXTRAS stays "api".
   env: { EXTRAS: "api,browser", ...kept(

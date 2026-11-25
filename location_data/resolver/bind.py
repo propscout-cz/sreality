@@ -7,7 +7,7 @@ and re-rank. A town name is bound by THE TOWN RULE (v5.5, `bind_towns`): looked 
 obec, a část obce and a katastrální území, each match climbed to its obec, kept when that obec
 carries the listing's PSČ, else when it is an obec within `TOWN_PIN_REACH_M` of the pin, and
 only then narrowed by the okres/kraj claims and the pin (the geocode of an ambiguous town name
-IS the town centroid, which is how Krásný Les went 100 km wrong — a Mapy geocode is never a
+IS the town centroid, which is how Krásný Les went 100 km wrong — an outside geocode is never a
 claim). Its regression tests are in `tests/location_data/test_resolver_bind.py`, whose
 docstring carries why BIND returns ONE `Binding` (the losers are ranked, never stored) and why
 ambiguity is a CONFIDENCE (`low`, served), never a queue.

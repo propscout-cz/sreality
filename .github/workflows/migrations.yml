@@ -370,23 +370,6 @@ jobs:
           DB_RAILS_REQUIRED: "1"
         run: pytest tests/test_waitlist_live.py -q
 
-      # Place picks (migration 737, ruling Q10), unwritten since #2453: closed to the browser, read back through the
-      # one reader, and the ICU-pinned CHECK refuses a digit this image's libc default would let through — only a
-      # real schema can answer these.
-      - name: The place picks table stays closed and readable until Stage B (migration 737)
-        env:
-          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
-          DB_RAILS_REQUIRED: "1"
-        run: pytest tests/api/test_place_picks_live.py -q
-
-      # The gate's eval (#2452; goes at Stage B, #2455): picks resolve wrote over a seeded mirror, read back through
-      # Part 1's reader and scored against own search — only a real schema holds the picks and the registry it reads.
-      - name: The gate's eval scores own search on recorded picks (#2452)
-        env:
-          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
-          DB_RAILS_REQUIRED: "1"
-        run: pytest tests/api/test_place_search_gate_eval_live.py -q
-
       # Own place search's read models (migration 738): place_served_counts reads browse_list through a function, so
       # the hourly rebuild still drops and renames the table under it and the next refresh counts the new rows (a matview
       # naming browse_list would refuse the DROP and freeze Browse); place_facts copies the current polygon points and

@@ -21,9 +21,7 @@ NAMES = re.compile(r"api\.mapy\.(cz|com)|MAPY2?_CZ_API_KEY|MAPY_(GEOCODE|STATIC_
                    r"|(?i:static[-_]?maps?)(?![a-zA-Z])")
 _SELF = "tests/test_mapy_retirement_census.py"
 # Every code file that names Mapy today. A retiring PR removes its entries first (the census goes red), then the code.
-LEDGER: frozenset[str] = frozenset({
-    ".railway/railway.ts",                                  # the API's keys (#2455)
-})
+LEDGER: frozenset[str] = frozenset()                       # Stage B (#2455) took the last entry: no Mapy call is kept
 
 
 def mapy_names(root: Path) -> dict[str, list[int]]:
