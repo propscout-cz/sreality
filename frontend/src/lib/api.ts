@@ -4841,6 +4841,9 @@ export interface AutodedupVerdictInput {
    * say which pass is a ruling about nothing; the SERVER then resolves the
    * member set for that (generation, cluster_key) and stamps it on the row. */
   generation?: string | null;
+  /* The adverts the card SHOWED at the click (a group ruling only). The server
+   * still stamps its own read, and answers 409 when the group has changed. */
+  seen_member_ids?: number[];
   note?: string | null;
   /* Reason CODES, never labels: the label is the registry's rendering of the
    * code and changing one must not change what a past verdict recorded. */

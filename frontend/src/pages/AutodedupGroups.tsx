@@ -377,6 +377,7 @@ export default function AutodedupGroups() {
                    * names a different set of adverts in every generation, and
                    * the server refuses a cluster verdict that does not say. */
                   generation: group.generation,
+                  ...seenMembers(group),
                   verdict: value,
                   ...annotation,
                 })
@@ -386,6 +387,7 @@ export default function AutodedupGroups() {
                   kind: 'cluster',
                   cluster_key: group.cluster_key,
                   generation: group.generation,
+                  ...seenMembers(group),
                   verdict: stored.verdict,
                   ...annotationInput(
                     notes.annotationOf(String(group.cluster_key), stored),
@@ -417,6 +419,14 @@ export default function AutodedupGroups() {
       )}
     </div>
   );
+}
+
+/* What the card showed, sent with a group ruling so the server can refuse one
+ * taken on a group that changed since. A card that does not hold every member
+ * sends nothing: a partial list would read as a change. */
+function seenMembers(group: AutodedupGroup): { seen_member_ids?: number[] } {
+  if (group.members.length !== group.size) return {};
+  return { seen_member_ids: group.members.map((m) => m.listing_id) };
 }
 
 function GroupCard({

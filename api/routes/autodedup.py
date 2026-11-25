@@ -2181,6 +2181,10 @@ class VerdictIn(BaseModel):
     # so a ruling that does not say which pass it was taken on is a ruling about nothing. The
     # SERVER then resolves the member set for that (generation, cluster_key) and stamps it.
     generation: str | None = Field(default=None, max_length=40)
+    # The adverts the CARD SHOWED when the operator clicked (cluster verdicts only). Never
+    # stamped: the server stamps its own read, and answers 409 when the two differ, so a ruling
+    # cannot land on an advert the group gained after the page rendered it (E992).
+    seen_member_ids: list[int] | None = Field(default=None, max_length=5000)
     note: str | None = Field(default=None, max_length=2000)
     # WHY the operator ruled this way (migration 533), validated against the registry.
     reasons: list[str] = Field(default_factory=list,
@@ -2297,6 +2301,12 @@ def verdict(
             # server reads.
             cluster_key, generation = body.cluster_key, body.generation
             ids: list[int] | None = _cluster_member_ids(conn, body.cluster_key, body.generation)
+            if body.seen_member_ids is not None and sorted(set(body.seen_member_ids)) != ids:
+                raise HTTPException(
+                    status_code=409,
+                    detail="this group's adverts changed since the page loaded it: reload and "
+                           "decide on the group as it is now",
+                )
         try:
             with conn.transaction():
                 if body.supersedes is not None:

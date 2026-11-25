@@ -486,6 +486,7 @@ describe('<AutodedupGroups>', () => {
       cluster_key: 7,
       // WHICH PASS the ruling was taken on (E58) — the server refuses one without it.
       generation: 'g1',
+      seen_member_ids: [101, 202],
       verdict: 'same',
       reasons: [],
       note: 'stejný dům',
@@ -618,6 +619,9 @@ describe('<AutodedupGroups>', () => {
       kind: 'cluster',
       cluster_key: 7,
       generation: 'g1',
+      /* The adverts the card showed: the server refuses a ruling on a group
+       * that changed since. */
+      seen_member_ids: [101, 202],
       verdict: 'same',
       /* The annotation rides with every verdict — empty when the operator gave
         * none, never absent, so the stored row is the click's whole statement. */
