@@ -28,6 +28,9 @@ import re
 import pytest
 import yaml
 
+from scraper import jobs
+from tests._railway_iac import iac_entry
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 
@@ -68,10 +71,22 @@ def _visible_env(doc: dict, job: dict, step: dict) -> set[str]:
     return names
 
 
+def _runner_env() -> set[str]:
+    """The names the job runner's service declares (`.railway/railway.ts`; the runner hands its env to every child)."""
+    env = re.search(r"\benv: \{ (.*?) \},", iac_entry("jobRunner"), re.S)
+    assert env, "the runner declares its variables inline"
+    return set(re.findall(r"(\w+): ", env.group(1)))
+
+
 @pytest.mark.parametrize("module", sorted(_portal_entrypoints()))
 def test_page_fetching_lane_carries_r2_credentials(module: str) -> None:
+    """RED by: a walk moved to the runner (W4, #2029) whose service lost an R2_* variable."""
     steps = _steps_running(module)
-    assert steps, f"{module} is invoked by no workflow — stale entrypoint or renamed lane"
+    on_runner = module in {job.argv[0] for job in jobs.runner_jobs()}
+    assert steps or on_runner, f"{module} is invoked by no workflow and no runner job — stale entrypoint or renamed lane"
+    if on_runner:
+        missing = [v for v in R2_VARS if v not in _runner_env()]
+        assert not missing, f"the job runner runs {module} without {', '.join(missing)}: it would archive nothing"
     for path, doc, ctx in steps:
         visible = _visible_env(doc, ctx["job"], ctx["step"])
         missing = [v for v in R2_VARS if v not in visible]
