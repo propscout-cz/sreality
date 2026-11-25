@@ -551,7 +551,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
     `MAPY_CZ_API_KEY` injections in seven scrape/drain workflows; `scraper/geocoding.py`'s CLI.
     **No data migration**: W4-c drops every column the UPDATE would have nulled, so purge = drop.
     Kept: `scraper/geocoding.py`'s key helpers + `geocode()` (`api/maps.py`, the on-demand URL
-    parse, `scripts/seed_curated_cities.py` — none of them stores a result; all gone since, #2454 and #2455). **+328 / −3,454
+    parse, `scripts/seed_curated_cities.py` — none of them stores a result; all gone since, #2453 and #2454). **+328 / −3,454
     overall; +84 / −1,854 outside tests and docs.** The golden claim sets were re-blessed and the
     diff is deletions only — no fixture's claims changed, which is the measurement that the veto
     was never what licensed a pin. Suites: pytest 7265 passed / 219 skipped.
@@ -1403,8 +1403,8 @@ component is slimmed twice — each wave rewrites one component and slims its st
   739 drops `curated_cities.centroid/source/source_confidence` and `backup_w4` uncopied, `obec_kod` unique. The seed
   refuses an unknown city or CSV column by name. **Next:** Mapy's latency baseline for #2465 is read from 7 days after
   the deploy (no cached answers); Stage B (#2455) after the switch-over's soak. Done: Stage B, below.
-- **The pick record — built 2026-11-08** (#2445; spec #2441 Part 1, ruling Q10; migration 737, additive; as built:
-  `docs/architecture.md` § the pick record). Every place box's resolve carries `pick {text, rank}`; `/maps/resolve`
+- **The pick record — built 2026-11-08** (#2445; spec #2441 Part 1, ruling Q10; migration 737, additive; its
+  architecture section left with it at Stage B). Every place box's resolve carries `pick {text, rank}`; `/maps/resolve`
   records one row after the answer for a verified non-automation caller; 12-month pg_cron retention. The switch-over
   (#2453) stopped the recording; one DELETE emptied it 2026-11-23 and Stage B (#2455) dropped it (migration 773).
 - **Own place search — built 2026-11-08** (#2449; spec #2441 Part 4, rulings Q2 c, Q12 a; migration 738, additive; as

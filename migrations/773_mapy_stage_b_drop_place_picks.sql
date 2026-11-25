@@ -12,7 +12,8 @@
 --
 -- DESTRUCTIVE, backup waived (spec #2441 Part 6 / #2455: "Drop the emptied table without backup (approved waiver:
 -- deletion is the promise)"). Applied by apply_migration.yml while its PR is open, after the operator's OK on the PR
--- and a row count taken in the same minute, then the PR merges. Every statement is idempotent: a re-run is a no-op.
+-- and a row count taken in the same minute, then the PR merges. One transaction, so the empty-table check and the DROP
+-- see the same table; a lock_timeout trip rolls it all back, rerun as is (a re-run after it landed is a no-op).
 -- APPLY AS postgres, the job's owner: pg_cron shows a role only its own jobs, so under another role the guard skips
 -- the unschedule and the post-check passes anyway (765).
 -- VERIFY:
@@ -20,8 +21,9 @@
 --   select count(*) from cron.job where jobname = 'place-picks-retention';        -- 0
 -- ROLLBACK: forward only (rule 1). 737's own statements rebuild the empty table and its job (each is idempotent).
 
-set lock_timeout = '5s';
-set statement_timeout = '60s';
+begin;
+set local lock_timeout = '5s';
+set local statement_timeout = '60s';
 
 do $pre$
 declare
@@ -64,5 +66,4 @@ begin
 end
 $post$;
 
-reset statement_timeout;
-reset lock_timeout;
+commit;

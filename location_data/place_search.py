@@ -12,8 +12,7 @@ or none. It answers kraj, okres, obec, část obce and street, never a cadastral
 quarters' chips, the register's `momc_cast_obce` pairs at the index's version, and it ranks by the sum of their served
 properties; with no pair at that version it answers nothing. Any unit is also an exact match by its number, typed
 in Arabic or Roman numerals, with or without the register's suffix: "Pardubice 2" is Pardubice II, "Plzeň 2" is Plzeň
-2-Slovany and "Kolín 3" is Kolín III, while "Praha 1" never makes Praha 10 exact (#2497, #2499). Never reads the place
-picks (migration 737): they are its holdout.
+2-Slovany and "Kolín 3" is Kolín III, while "Praha 1" never makes Praha 10 exact (#2497, #2499).
 
 A street and a house number, or a village and its č.p., also answer RÚIAN doors (#2451; stories 44, 53): level
 `adresni_misto`, kód ADM, the one door label (which names no number for a streetless door, and for a č.ev. door only
