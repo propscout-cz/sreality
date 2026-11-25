@@ -348,7 +348,6 @@ _NON_ADMIN_CALLS = [
     ("GET", "/brokers/search", "/brokers/search?q=a", None),
     ("GET", "/brokers/firm-options", "/brokers/firm-options", None),
     ("GET", "/brokers/{broker_id}", "/brokers/1", None),
-    ("GET", "/brokers/{broker_id}/listings", "/brokers/1/listings", None),
     ("GET", "/brokers/{broker_id}/properties", "/brokers/1/properties", None),
     ("GET", "/brokers/{broker_id}/property-ids", "/brokers/1/property-ids", None),
 ]
@@ -359,8 +358,8 @@ _UNMASKED_CALLS = [
     ("POST", "/brokers/by-listings", "/brokers/by-listings", {"listing_ids": [1]}),
 ]
 
-_TOOLKIT_READS = ("search", "firm_options", "listing_brokers", "get_broker", "broker_listings",
-                  "broker_properties", "broker_property_ids")
+_TOOLKIT_READS = ("search", "firm_options", "listing_brokers", "get_broker", "broker_properties",
+                  "broker_property_ids")
 
 
 def _stub_every_toolkit_read(monkeypatch) -> None:

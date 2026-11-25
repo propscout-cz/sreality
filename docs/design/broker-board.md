@@ -145,7 +145,7 @@ Browse serves (the rows this read returns; the Nemovitosti and Změna ceny tiles
 **Known edge.** The book's pair is the history of the broker's most-repriced ad on the property, so with two ads
 of theirs at different prices the row shows that ad's last price.
 
-**Deleted after the rollout** (its own PR): `GET /brokers/{id}/listings`, `toolkit.brokers.broker_listings` and its
+**Deleted** (migration 772, after the rollout): `GET /brokers/{id}/listings`, `toolkit.brokers.broker_listings` and its
 per-row `listing_price_history` read, the view `broker_listings_public`.
 
 ## W3b as prepared

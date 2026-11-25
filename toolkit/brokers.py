@@ -1,4 +1,4 @@
-"""Read-only broker intelligence queries (detail, contacts, listings, Browse's broker scope).
+"""Read-only broker intelligence queries (detail, contacts, inventory, Browse's broker scope).
 
 The server side of the browser read layer (frontend/src/lib/brokers.ts): the
 /brokers/* routes (api/routes/brokers.py), the property download and an agent's
@@ -114,8 +114,8 @@ def _mask(value: Any) -> Any:
     """Swap every contact column for a has_* flag, recursing into the dossier.
 
     Matched on the column NAME, not a fixed list of today's columns: these queries
-    are `select *` over views a migration can widen (broker_listings_public has
-    already grown twice), so a denylist would leak a new *_email the day it lands.
+    are `select *` over views a migration can widen (listing_broker_public gained
+    its contact pair in 419), so a denylist would leak a new *_email the day it lands.
     The dossier's contact list carries its PII in a generic `value` column no name
     rule can catch, so it is dropped whole — /brokers/{id}/contacts is admin-only.
     `has_email` / `has_phone` mean "a current primary contact is on file", i.e. the
@@ -226,31 +226,6 @@ def get_broker(conn: Any, broker_id: int) -> dict[str, Any] | None:
     data = {"broker": broker, "memberships": memberships, "region_shares": region_shares,
             "categories": categories, "contacts": contacts, "price_change": prices}
     return _envelope("broker_detail", data, {"broker_id": broker_id}, 1, broker.get("last_seen_at"))
-
-
-# Each ad with its own price history (migrations 768, 770), bounded to the broker's ads: the percent from the first
-# price of its oldest same-portal predecessor to its last (none for an ad nothing ever changed on, as on a property),
-# and the steps between them. The page is cut before the history is read, so only the rows returned pay for one.
-_BROKER_LISTINGS_SQL = """
-    SELECT v.*, h.change_pct::float8 AS price_change_pct, h.changes AS price_change_count
-    FROM (SELECT * FROM broker_listings_public WHERE broker_id = %s
-          ORDER BY is_active DESC, last_seen_at DESC NULLS LAST LIMIT %s) v
-    CROSS JOIN LATERAL listing_price_history(v.listing_id, v.broker_id) h
-    ORDER BY v.is_active DESC, v.last_seen_at DESC NULLS LAST
-"""
-
-
-def broker_listings(conn: Any, broker_id: int, *, limit: int = 500) -> dict[str, Any]:
-    """A broker's listings (active first), via broker_listings_public, each with its price change."""
-    limit = max(1, min(int(limit), 2000))
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(_BROKER_LISTINGS_SQL, (broker_id, limit))
-        rows = cur.fetchall()
-    fresh = max((r["last_seen_at"] for r in rows if r.get("last_seen_at")), default=None)
-    for r in rows:
-        r["last_seen_at"] = _iso(r.get("last_seen_at"))
-    return _envelope("broker_listings", rows, {"broker_id": broker_id, "limit": limit},
-                     len(rows), _iso(fresh))
 
 
 # The broker's inventory, one row per property of the book that Browse serves (the footprint's join): the property's

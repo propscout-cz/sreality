@@ -1279,8 +1279,7 @@ correctness resting on an invisible setting. Verified empirically against prod
   1,000. Live-verified: 60k ask → exactly 50k; map single-shot unaffected.
 - Reported, not fixed: prefilter id-lists ride back on GET `.in()` (~1–2k-id
   URL ceiling, fails loud, server-side predicate is the strategic fix when
-  cohorts grow); `fetchBrokerListings` shows ≤500 of a 20k-listing mega-broker
-  (brokers rebuild owns it).
+  cohorts grow).
 
 ### Broker explore map (done, 2026-09-05)
 "Explore this broker's listings" on `/brokers/:id`. NOT a new map component — a
@@ -1304,7 +1303,6 @@ unmonitored for watchdogs.
   pipeline, so the ~1–2k-id URL ceiling above applies — the largest real broker
   (~1.9k active properties, more listings) can trip it, loudly (map error, not a
   silent subset); the server-side predicate is the strategic fix for all of them.
-  `broker_listings()` ≤500/2000 truncation behind the Inventory table (see U-CAP);
   a shared `PointsMap` primitive (ListingMap + ComparablesMap + DatasetMap still
   duplicate the layer setup); a Watchdog broker dimension; Stats-tab parity (the
   modal hides Stats instead, mirroring the portal filter's accepted gap). WebGL
