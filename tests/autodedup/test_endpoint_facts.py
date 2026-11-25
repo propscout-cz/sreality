@@ -127,7 +127,7 @@ def _rows_are_the_facts(db: FakePg, ds: Dataset, settings: Settings) -> None:
         listing, images = facts[listing_id]
         assert row["fp_digest"] == fp_digest(build_fingerprint(listing, images, settings),
                                              images), listing_id
-        assert row["dd"] == decision_digest(listing, images), listing_id
+        assert row["dd"] == decision_digest(listing, images, settings), listing_id
 
 
 def _lockstep(full: _Engine, narrow: _Engine, ds: Dataset, settings: Settings,
@@ -252,10 +252,11 @@ def _worlds() -> list[tuple[Dataset, Settings]]:
         edges.listings[listing_id].price = (None if step % 4 == 0
                                             else 1_000_000.0 * (1 + step) ** 3)
     return [(_mixed_dataset(), _settings()), (quarter_grain_dataset(), QUARTER_GRAIN),
-            (edges, _settings()), (_dataset(), replace(_settings(), anchor_images=1))]
+            (edges, _settings()), (_dataset(), replace(_settings(), anchor_images=1)),
+            (_mixed_dataset(), replace(_settings(), content_key_town_grain=True))]
 
 
-@pytest.mark.parametrize("index", range(4))
+@pytest.mark.parametrize("index", range(5))
 def test_a_listing_s_posted_keys_give_back_its_probe_keys(index: int) -> None:
     """Every probe in `probe_keys`' own order, `phash` too when one anchor posted it; over two
     anchors or more the same bands, in another order."""
@@ -269,7 +270,7 @@ def test_a_listing_s_posted_keys_give_back_its_probe_keys(index: int) -> None:
         for probe in keyer.index.probes:
             want = list(dict.fromkeys(token for name, token in truth if name == probe))
             have = [token for name, token in got if name == probe]
-            bands = {token.partition("\x1f")[0] for token in have}
+            bands = {incremental.band_of(token) for token in have} if probe == "phash" else ()
             if probe != "phash" or len(bands) == len(have):
                 assert have == want, (fp.listing_id, probe)
             else:
@@ -807,11 +808,11 @@ def test_a_change_no_feed_claims_is_seen_when_its_advert_is_claimed(
     assert not {pair for pair in seen if target in pair} - {
         pair for pair in seen if trigger in pair}, "only the claim's pairs are decided"
     assert narrow.db.rt_fp[(GEN, target)]["dd"] != decision_digest(
-        ds.listings[target], ds.images(target)), "its row is as the lane last read it"
+        ds.listings[target], ds.images(target), settings), "its row is as the lane last read it"
     seen.clear()
     ds.listings[trigger].price = (ds.listings[trigger].price or 0) + 10_000
     narrow.run(ds, settings, calibration, monkeypatch, [trigger, target])
     redecided = {pair for pair in seen if target in pair and trigger not in pair}
     assert redecided & ledgered, "claimed, its rejects are re-decided"
     assert narrow.db.rt_fp[(GEN, target)]["dd"] == decision_digest(
-        ds.listings[target], ds.images(target))
+        ds.listings[target], ds.images(target), settings)

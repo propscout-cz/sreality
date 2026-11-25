@@ -39,6 +39,8 @@ export const mergedAdvertsKeys = {
     ['merged-adverts', 'plan', propertyId, letters, choices] as const,
   /* MS12's counts before a merge, over the statement (`lettersParam`). */
   mergePreview: (statement: string) => ['merged-adverts', 'merge-preview', statement] as const,
+  /* Every ad of the properties a merge names, for its confirmation. */
+  ofProperties: (ids: readonly number[]) => ['merged-adverts', 'of-properties', ids] as const,
 };
 
 /* The property page's own reads, keyed on the property id. */

@@ -243,8 +243,5 @@ SHARED_STEP_KEYS: tuple[str, ...] = (
     "located_town", "located_foreign", "located_no_town",
 )
 
-# The audit list's two states (`location_pin_audit_mv.state`): the page's filter names, no chain step.
-LIST_STATE_KEYS: tuple[str, ...] = ("hidden_unresolved", "hidden_pending")
-
 # Every key a surface names; frontend/src/lib/locationSteps.ts must word all of them.
-STEP_KEYS: tuple[str, ...] = (*RUN_STEPS, *LIST_STATE_KEYS)
+STEP_KEYS: tuple[str, ...] = tuple(RUN_STEPS)

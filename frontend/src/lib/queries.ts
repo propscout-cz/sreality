@@ -1239,6 +1239,24 @@ export const fetchListingsForListingIds = async (
   return out;
 };
 
+/* Every ad of the given properties, the inactive ones included: what a merge
+ * of those properties puts on one property (the merge confirmation reads it). */
+export const fetchListingsForPropertyIds = async (
+  propertyIds: ReadonlyArray<number>,
+  { signal }: PgReadOptions = {},
+): Promise<ListingPublic[]> => {
+  if (propertyIds.length === 0) return [];
+  const { data } = await pgRead<ListingPublic[] | null>(
+    supabase
+      .from('listings_public')
+      .select(DETAIL_COLS)
+      .in('property_id', propertyIds as number[])
+      .order('id'),
+    { signal },
+  );
+  return data ?? [];
+};
+
 /* The storey of each visible card. browse_list carries no floor column (and the
  * card read model is not widened for one attribute), so the property rows are read
  * here from properties_public, keyed on the canonical ad id the card holds, three

@@ -30,7 +30,9 @@ from autodedup.demonstrate import (
 )
 from autodedup.features import Feats, evidence_families, parse_ts, window_end_stamp
 from autodedup.fingerprint import Fingerprint
-from autodedup.guards import UNIT_DESIGNATOR_VETO, pair_veto, unit_designator_conflict
+from autodedup.guards import (
+    UNIT_DESIGNATOR_VETO, identical_gallery, pair_veto, unit_designator_conflict,
+)
 from autodedup.hazard_context import ContextIndex, PairContext, fungible_catalogue
 from autodedup.indistinguishable import (
     GATE,
@@ -231,7 +233,9 @@ def certificate_r(feats: Feats) -> bool:
     An order number is the agency's key for ONE order, and one order is one unit: it travels
     onto every portal the order is syndicated to and onto the re-post when the advert expires.
     `features.index_reference_codes` has already thrown out the codes a crowd carries and the
-    codes whose carriers disagree about the unit, so what reaches here certifies.
+    codes whose carriers disagree about the unit, so what reaches here certifies. The code may
+    also be the advertiser's own `ad_reference` column, between two adverts of one deal type of
+    the categories `Settings.ref_code_structured_categories` names (E990).
 
     A DIFFERING code certifies nothing in either direction — W6b built the conflict rule and W7
     refuted it on 395722 x 486034 and 395722 x 496635, one flat carrying N115815 on
@@ -704,7 +708,7 @@ def _decide_layers(
     lo, hi = (fa.listing_id, fb.listing_id) if fa.listing_id < fb.listing_id else (
         fb.listing_id, fa.listing_id
     )
-    veto = pair_veto(fa, fb, settings)
+    veto = pair_veto(fa, fb, settings, lambda: identical_gallery(fa, fb, settings))
     if veto is not None:
         return Decision(lo, hi, "veto", 0.0, set(), None, veto, f"guard:{veto}")
 

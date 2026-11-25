@@ -30,3 +30,16 @@ def physical_memory_mb() -> float:
 def memory_ceiling_mb(root: str = CGROUP_ROOT) -> float:
     """What this process may use: its cgroup's limit, capped at the machine's memory (no limit: the machine's)."""
     return min(memory_limit_mb(root) or float("inf"), physical_memory_mb())
+
+
+def pids(root: str = CGROUP_ROOT) -> tuple[int | None, int | None]:
+    """The container's process-and-thread count and its limit (cgroup v2 `pids.current` /
+    `pids.max`); None for a value this host does not publish or does not cap."""
+    out: list[int | None] = []
+    for name in ("pids.current", "pids.max"):
+        try:
+            with open(os.path.join(root, name), encoding="utf-8") as fh:
+                out.append(int(fh.read().strip()))
+        except (OSError, ValueError):
+            out.append(None)
+    return out[0], out[1]

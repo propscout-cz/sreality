@@ -2,7 +2,7 @@
 --
 -- WHY. Location data quality programme, wave W5b (ticket #2338, ruling Q8 (a); docs/design/location-quality/w5b-pin-door.md).
 -- The operator retired the radius on 2026-11-01 (W6 becomes deletion only), so the pin sample that fed it (pin_error_m,
--- radius_cover) has no reader. And since resolver v5.11 a pin names doors, so that sample's truth (address grain) would
+-- radius_cover) has no reader. And since resolver v5.12 a pin names doors, so that sample's truth (address grain) would
 -- count a door against the pin that named it. Supersedes 736, never applied and left unused: 749 restated the view after
 -- it, so this file restates 749's text, the view's latest definition.
 --

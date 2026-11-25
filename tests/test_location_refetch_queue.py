@@ -79,7 +79,7 @@ def test_candidates_are_the_active_ads_rule_25_calls_town_less() -> None:
     # kraj claim, or with no answer row at all, is as town-less as one with no claims.
     assert " ".join(location_steps.town_missing_sql().split()) in sql
     assert "FROM listings l LEFT JOIN listing_location ll ON ll.listing_id = l.id" in sql
-    assert "WHERE l.is_active" in sql and "location_pin_audit_mv" not in sql
+    assert "WHERE l.is_active" in sql
     assert len(conn.executed) == 1
     assert params == {"min_age": 21600.0, "cap": 500, "throttle": 86400.0}
     assert out == [{

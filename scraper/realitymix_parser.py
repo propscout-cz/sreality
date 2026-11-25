@@ -41,6 +41,7 @@ from scraper import street, vocabulary
 from scraper.area import PortalAreas, derive_headline_area, parse_area_text
 from scraper.attribute_contract import floor_convention, source_value, source_values
 from scraper.floor import floor_from_portal, total_floors_from_portal
+from scraper.portal_base import states_closed
 from scraper.portal_identity import native_id
 from scraper.price_reading import PriceReading, read_price_text, resolve
 from scraper.scraped_listing import ScrapedListing
@@ -122,6 +123,7 @@ class IndexItem:
     title: str | None = None
     price_text: str | None = None
     locality_text: str | None = None
+    closed: bool = False  # the card says sold/let: collected, never a sighting (rule #3)
 
 
 @dataclass(frozen=True)
@@ -377,20 +379,22 @@ def parse_index(html: str) -> IndexPage:
         if not source_id or not href or source_id in seen:
             continue
         seen.add(source_id)
+        price_text = _card_price(card)
         items.append(
             IndexItem(
                 source_id_native=source_id,
                 detail_path=href,
                 title=_text(card.css_first("h2")),
-                price_text=_card_price(card),
+                price_text=price_text,
                 locality_text=_text(card.css_first("p.text-body-light")),
+                closed=states_closed(price_text),
             )
         )
     return IndexPage(total=total, items=items)
 
 
 def _card_price(card: Node) -> str | None:
-    """An index card's price text with its unit, or its no-price phrase (read_price reads it)."""
+    """An index card's price text with its unit, or its no-price / sold-let phrase (read_price reads it)."""
     # Tailwind classes aren't stable selectors: the first span (then div) reading as a Kč or €
     # run. Its unit ("(za m²/měsíc)") is the NEXT SIBLING span, appended: the amount alone read
     # a rate as a total (#2355).
@@ -403,7 +407,7 @@ def _card_price(card: Node) -> str | None:
             if ("kc" in low.replace(" ", "") or "€" in txt) and _PRICE_RUN_RE.search(txt):
                 unit = _sibling_span_text(node)
                 return f"{txt} {unit}" if unit else txt
-            if any(k in low for k in ("vyzadani", "dohodou", "rezerv", "info v rk")):
+            if states_closed(txt) or any(k in low for k in ("vyzadani", "dohodou", "rezerv", "info v rk")):
                 return txt
     return None
 

@@ -14,6 +14,7 @@ import logging
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -67,6 +68,56 @@ def current_version(conn: psycopg.Connection) -> Version:
     if row is None:
         raise loader_db.LoadAborted("no current registry version: the address mirror must load first")
     return Version(int(row[0]), row[1])
+
+
+def registry_load_in_flight(conn: psycopg.Connection, version: Version) -> int | None:
+    """The id of a registry version newer than the served one that has not published, else None.
+
+    The registry load (the 1st of a month, a GitHub workflow the runner's `location-heavy` cannot exclude) merges
+    into `ruian_address_points` in place for hours before it publishes, and this load writes the same rows. Its
+    merge also re-stamps every obec's `last_version_id` in one statement, after which nothing is pending for the
+    served version anyway; this check covers the hours before that. A newer row that never published counts for
+    two days: an aborted load is marked, retried or superseded well inside that."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            select v.id from registry_versions v
+             where v.id > %s and not v.is_current and v.loaded_at > now() - interval '2 days'
+               and not exists (select 1 from registry_load_discrepancies d
+                                where d.registry_version_id = v.id and d.discrepancy = 'load_aborted')
+             order by v.id desc limit 1
+            """,
+            (version.id,),
+        )
+        row = cur.fetchone()
+    return int(row[0]) if row else None
+
+
+@dataclass(frozen=True)
+class Clock:
+    """When a run may START an obec, in UTC. `window`: (first, last) minute of the day, the run does nothing outside
+    it, so a run restarted by a deploy keeps the hours its schedule was given (its seconds budget starts afresh, the
+    window's end does not move).
+    `quiet`: minutes of each hour to wait out (the Browse rebuild)."""
+
+    window: tuple[int, int] | None = None
+    quiet: tuple[int, int] | None = None
+
+    def open(self, now: datetime.datetime) -> bool:
+        if self.window is None:
+            return True
+        minute = now.hour * 60 + now.minute
+        return self.window[0] <= minute < self.window[1]
+
+    def quiet_for(self, now: datetime.datetime) -> float:
+        """Seconds until the quiet minutes pass; 0 outside them."""
+        if self.quiet is None or not self.quiet[0] <= now.minute < self.quiet[1]:
+            return 0.0
+        return (self.quiet[1] - now.minute) * 60 - now.second
+
+
+def _utc_now() -> datetime.datetime:
+    return datetime.datetime.now(datetime.UTC)
 
 
 def pending_obce(conn: psycopg.Connection, version: Version) -> list[tuple[int, int]]:
@@ -294,7 +345,11 @@ _ANALYZE_EVERY = 500  # obce; the doors' building column goes from all-NULL to f
 
 
 def run(*, max_seconds: int | None, only: list[int] | None, work_dir: Path,
-        accept_shrink: frozenset[int] = frozenset()) -> int:
+        accept_shrink: frozenset[int] = frozenset(), clock: Clock = Clock(),
+        now: Callable[[], datetime.datetime] = _utc_now, sleep: Callable[[float], None] = time.sleep) -> int:
+    if not clock.open(now()):
+        LOG.info("BUILDINGS not started: %s UTC is outside the run's hours", now().strftime("%H:%M"))
+        return 0
     started = time.monotonic()
     conn = loader_db.open_loader_connection()
     # A hand run on named obce reports every statement; a full run would log ~44,000 lines.
@@ -306,8 +361,20 @@ def run(*, max_seconds: int | None, only: list[int] | None, work_dir: Path,
         sess = requests.Session()
         sess.headers["User-Agent"] = contact.USER_AGENT
         done = failed = refused = buildings = links = missing_run = 0
+        unpublished = False
         for obec_unit_id, obec_kod in todo:
             if max_seconds is not None and time.monotonic() - started > max_seconds:
+                break
+            if (wait := clock.quiet_for(now())) > 0:
+                sleep(wait)
+            if not clock.open(now()):
+                LOG.info("BUILDINGS stopping: %s UTC is the end of the run's hours", now().strftime("%H:%M"))
+                break
+            # Asked before every obec, the first too: the registry load is a GitHub workflow that can start at any
+            # minute of this run.
+            if only is None and (merging := registry_load_in_flight(conn, version)) is not None:
+                LOG.warning("BUILDINGS stopping: registry version %d is being merged over served version %d",
+                            merging, version.id)
                 break
             began = time.monotonic()
             try:
@@ -325,6 +392,7 @@ def run(*, max_seconds: int | None, only: list[int] | None, work_dir: Path,
                 if missing_run >= _MISSING_STOP:
                     LOG.error("BUILDINGS stopped: %d files in a row answered 404; vintage %s is not published "
                               "as per-obec state files", missing_run, version.source_date)
+                    unpublished = True
                     break
                 time.sleep(_PAUSE_S)
                 continue
@@ -334,15 +402,39 @@ def run(*, max_seconds: int | None, only: list[int] | None, work_dir: Path,
                 LOG.info("BUILDINGS progress obce=%d/%d buildings=%d links=%d last_obec=%d last_seconds=%.1f",
                          done, len(todo), buildings, links, obec_kod, time.monotonic() - began)
             if done % _ANALYZE_EVERY == 0:
-                with conn.cursor() as cur:
-                    cur.execute("analyze ruian_address_points (stavebni_objekt_code)")
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute("analyze ruian_address_points (stavebni_objekt_code)")
+                except psycopg.Error as exc:  # statistics only: a lock wait here must not end the day's run
+                    LOG.warning("BUILDINGS analyze skipped: %s", type(exc).__name__)
             time.sleep(_PAUSE_S)
         LOG.info("BUILDINGS done obce=%d failed=%d refused=%d remaining=%d buildings=%d links=%d seconds=%d",
                  done, failed, refused, len(todo) - done - failed - refused, buildings, links,
                  int(time.monotonic() - started))
     finally:
         conn.close()
-    return 0
+    # A run that tried obce and loaded none made no progress: it must not settle as an ok run.
+    return 1 if unpublished or (done == 0 and failed + refused > 0) else 0
+
+
+def _minutes_span(text: str) -> tuple[int, int]:
+    try:
+        first, last = (int(h) * 60 + int(m) for h, m in (part.split(":") for part in text.split("-")))
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected HH:MM-HH:MM") from None
+    if not 0 <= first < last <= 24 * 60:
+        raise argparse.ArgumentTypeError("the window must start before it ends, within one UTC day")
+    return first, last
+
+
+def _minute_span(text: str) -> tuple[int, int]:
+    try:
+        first, last = (int(part) for part in text.split("-"))
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected MM-MM") from None
+    if not 0 <= first < last <= 60:
+        raise argparse.ArgumentTypeError("minutes of one hour, the first before the last")
+    return first, last
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -350,13 +442,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-seconds", type=int, default=None, help="stop starting new obce after this long")
     parser.add_argument("--obec", type=int, action="append", help="only this obec code (repeatable)")
     parser.add_argument("--accept-shrink", type=int, action="append", default=[],
-                        help="hand runs only: apply this obec's file although it closes most of its buildings")
+                        help="hand runs only: apply this obec's file with BOTH shrink floors off (a file with few "
+                             "buildings, and a file that closes most of the obec's buildings)")
+    parser.add_argument("--window-utc", type=_minutes_span, default=None, metavar="HH:MM-HH:MM",
+                        help="start obce only between these UTC times; outside them the run does nothing")
+    parser.add_argument("--quiet-minutes", type=_minute_span, default=None, metavar="MM-MM",
+                        help="minutes of each hour in which no obec is started (waited out)")
     parser.add_argument("--work-dir", default=None, help="where each zip is downloaded before it is read")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     with tempfile.TemporaryDirectory() as tmp:
         return run(max_seconds=args.max_seconds, only=args.obec, work_dir=Path(args.work_dir or tmp),
-                   accept_shrink=frozenset(args.accept_shrink))
+                   accept_shrink=frozenset(args.accept_shrink),
+                   clock=Clock(window=args.window_utc, quiet=args.quiet_minutes))
 
 
 if __name__ == "__main__":

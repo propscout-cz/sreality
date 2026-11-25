@@ -34,11 +34,13 @@ def _listing(**kw) -> ScrapedListing:
     return ScrapedListing(**base)
 
 
-def _index_html(total: int | None, ids: list[str]) -> str:
+def _index_html(total: int | None, ids: list[str], closed: frozenset[str] = frozenset()) -> str:
+    # A sold card's price slot reads "Prodáno" (live markup, 2026-11-24).
     cards = "".join(
         f'<div class="w-full advert-item">'
         f'<a href="https://realitymix.cz/detail/x/y-{i}.html"></a>'
-        f'<div class="text-xl font-extrabold"><span>1 000 000 Kč</span></div></div>'
+        f'<div class="text-xl font-extrabold"><span>{"Prodáno" if i in closed else "1 000 000 Kč"}</span>'
+        f'</div></div>'
         for i in ids
     )
     head = f'<div>z celkem {total} nalezených</div>' if total is not None else ""
@@ -108,6 +110,29 @@ def test_a_walk_one_row_short_of_the_declared_total_still_reached_the_end(monkey
     end_line = [r.getMessage() for r in caplog.records if "walk end" in r.msg]
     assert end_line and "stop=declared_total_reached" in end_line[-1]
     assert "coverage=incomplete" in end_line[-1]   # measured, logged, never gating
+
+
+def test_a_sold_card_is_collected_but_never_seen(monkeypatch):
+    # Unseen, its active row is nominated by the reached-end walk and its page closes it.
+    p1 = [str(1000 + i) for i in range(20)]
+    p2 = [str(2000 + i) for i in range(5)]
+    fake, (seen, _counts, _total, _pages, reached_end) = _walk(
+        monkeypatch, {1: [_index_html(25, p1, frozenset({"1003"}))], 2: [_index_html(25, p2)]}
+    )
+    assert "1003" not in seen and len(seen) == 24
+    assert reached_end is True
+
+
+def test_a_page_of_only_sold_cards_is_no_stall(monkeypatch):
+    # The page loop counts every card, so an all-closed page below the last one still
+    # advances the walk instead of reading as a pager that did not move.
+    pages = {n: [_index_html(60, [str(n * 1000 + i) for i in range(20)])] for n in (1, 3)}
+    p2 = [str(2000 + i) for i in range(20)]
+    pages[2] = [_index_html(60, p2, frozenset(p2))]
+    fake, (seen, _counts, _total, _pages, reached_end) = _walk(monkeypatch, pages)
+    assert fake.requested == [1, 2, 3]
+    assert len(seen) == 40 and not seen & set(p2)
+    assert reached_end is True
 
 
 def test_walk_retries_a_barren_page_before_concluding_end(monkeypatch):

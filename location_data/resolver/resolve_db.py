@@ -127,7 +127,8 @@ _SOURCES_BULK_SQL = "SELECT id, source, category_main FROM listings WHERE id = A
 # THE KÚ OF A POINT (PR-B): the katastrální území whose `pip` piece covers it at the view's
 # registry version — one GiST probe on `ruian_aug_pip_gist`, the same shape as
 # `containing_obec` (0.4 ms/point warm, measured over 639 sampled address points). It is asked
-# of REGISTRY points only (an address point, a door), never of a portal pin. `ORDER BY code`
+# of a door, and since v5.11 of a pin the portal declares precise on a row the words bound to
+# its town only (operator ruling B, 2026-11-24). `ORDER BY code`
 # only makes a door that sits exactly ON a shared border replay to the same KÚ every time, and
 # the `OFFSET 0` fence is what keeps the probe the DRIVING side: with a bare `ORDER BY u.code
 # LIMIT 1` the planner walked all 13,074 KÚ in code order against the probe — 16 ms a point.
@@ -162,6 +163,28 @@ SELECT k.code
     ON a.unit_id = k.id AND a.registry_version_id = %s AND a.purpose = 'authoritative'
  WHERE ST_Covers(a.geom, (SELECT ST_Collect(d.geom) FROM {doors} d))"""
 
+
+_KATASTR_AT_SQL = f"""
+SELECT k.code FROM ({_katastr_covering("ST_SetSRID(ST_MakePoint(%s, %s), 4326)")}) k"""
+
+# THE DOOR RULE, KÚ -> ČÁST (v5.11, operator ruling B 2026-11-24): a precise pin's KÚ is in a
+# část of a town when every valid door of the KÚ inside that town stands in it — asked of a
+# point only; a KÚ the words NAME keeps the část its name spells (`composite.part_of`). The
+# `OFFSET 0` fence keeps the GiST on the doors the driving side: unfenced, the
+# planner walked every door of the town by `obec_unit_id` (Praha: 134,757 for Stodůlky's 3,220,
+# 278 ms) where the fence reads the KÚ's own (Žižkov: 5,756 doors, 27 ms warm).
+_KATASTR_PARTS_SQL = """
+SELECT DISTINCT q.code
+  FROM (SELECT ap.cast_obce_unit_id, ap.obec_kod
+          FROM ruian_admin_units k
+          JOIN ruian_admin_unit_geometries a
+            ON a.unit_id = k.id AND a.registry_version_id = %s AND a.purpose = 'authoritative'
+          JOIN ruian_address_points ap ON ST_Covers(a.geom, ap.geom)
+         WHERE k.level = 'katastralni_uzemi' AND k.code = %s AND ap.valid_to IS NULL
+        OFFSET 0) d
+  LEFT JOIN ruian_admin_units q ON q.id = d.cast_obce_unit_id
+ WHERE d.obec_kod = %s
+"""
 
 _ADDRESS_POINT_COLUMNS = """
        ap.kod_adm, ap.obec_unit_id, ap.obec_kod, ap.psc,
@@ -385,14 +408,13 @@ SELECT DISTINCT obec_kod FROM ruian_address_points
 _PT = "ST_SetSRID(ST_MakePoint(p.lon, p.lat), 4326)"
 _POINTS = "unnest(%s::int[], %s::double precision[], %s::double precision[]) AS p(idx, lat, lon)"
 
-# THE ONE CONTAINING-OBEC STATEMENT. `api/maps.py` runs this same text for a Mapy pick and
-# for an estimation subject that has no stored location, so a chip, a listing and an
-# estimation can never disagree about which town a point is in.
+# THE ONE CONTAINING-OBEC STATEMENT, so a listing and an estimation can never disagree
+# about which town a point is in.
 #
 # `purpose = 'pip'` is what lets `ruian_aug_pip_gist (geom) WHERE purpose = 'pip'` serve it:
 # the subdivided pieces are small, so ST_Covers never detoasts a raw obec polygon (194 ms and
 # 1,225 buffers when an IN-list forced exactly that). Measured: 0.24 ms/point. The
-# authoritative fallback branch it used to carry (and the copy in `api/maps.py`) is gone: it
+# authoritative fallback branch it used to carry is gone: it
 # was reachable only for a version loaded with `--allow-missing-pip`, and pip = authoritative
 # for every unit of every loaded version (checked 2026-09-26). A pin ON a shared border replays to
 # the lowest code; the `OFFSET 0` fence keeps the GiST probe driving, as in `_katastr_covering`.
@@ -766,6 +788,17 @@ class SqlRegistryView:
     def obec_codes_for_psc(self, psc: str) -> list[int]:
         return [int(r[0]) for r in self._rows("obec_codes_for_psc", _PSC_OBEC_SQL, (psc,))]
 
+    def katastr_at(self, lat: float, lon: float) -> int | None:
+        rows = self._rows("katastr_at", _KATASTR_AT_SQL, (self._version, lon, lat))
+        return int(rows[0][0]) if rows else None
+
+    def katastr_parts(self, katastr_kod: int, obec_kod: int) -> list[int | None]:
+        return [
+            None if r[0] is None else int(r[0])
+            for r in self._rows(
+                "katastr_parts", _KATASTR_PARTS_SQL, (self._version, katastr_kod, obec_kod))
+        ]
+
     # ---- the three point-keyed questions: ONE array-shaped statement, called here with one
     # point and by `warm_points` with the whole slice. `_bulk` returns {idx: answer}.
 
@@ -1017,6 +1050,15 @@ class CachedRegistryView:
         return self._cache.get(
             ("obec_codes_for_psc", psc), lambda: tuple(self._inner.obec_codes_for_psc(psc))
         )
+
+    def katastr_at(self, lat: float, lon: float) -> int | None:
+        return self._cache.get(
+            ("katastr_at", lat, lon), lambda: self._inner.katastr_at(lat, lon))
+
+    def katastr_parts(self, katastr_kod: int, obec_kod: int) -> Sequence[int | None]:
+        return self._cache.get(
+            ("katastr_parts", katastr_kod, obec_kod),
+            lambda: tuple(self._inner.katastr_parts(katastr_kod, obec_kod)))
 
     def containing_obec(self, lat: float, lon: float) -> AdminUnit | None:
         return self._cache.get(

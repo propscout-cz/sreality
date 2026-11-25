@@ -178,7 +178,7 @@ def _cross_account_read(scene: Scene) -> Obeyed:
 
 
 def _visuals_flood(scene: Scene) -> Obeyed:
-    wanted = [scene.pid, *range(1_000, 1_010)]
+    wanted = [scene.pid, *range(scene.pid + 1_000, scene.pid + 1_010)]  # never the scene's own id, whatever the sequence gave it
     return Obeyed((runs._ask(*wanted), *[runs._assessed() for _ in range(10)], _clean_answer(scene)),
                   ((VISUALS, "refused"),), paid_visuals=10)
 

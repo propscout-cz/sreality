@@ -7,12 +7,12 @@ from scraper.mmreality_client import MmRealityClient
 from scraper.portal_base import ListingGoneError
 
 
-def _client(monkeypatch, body: str) -> MmRealityClient:
+def _client(monkeypatch, body: str, final_url: str | None = None) -> MmRealityClient:
     monkeypatch.delenv(MmRealityClient.PROXY_ENV, raising=False)
     client = MmRealityClient()
     monkeypatch.setattr(
         client, "_request",
-        lambda url, **kw: SimpleNamespace(url=url, text=body, status_code=200))
+        lambda url, **kw: SimpleNamespace(url=final_url or url, text=body, status_code=200))
     return client
 
 
@@ -30,3 +30,13 @@ def test_fetch_detail_returns_a_live_page(monkeypatch):
     body = '<h1>Pronájem garáže, 17 m²</h1><script>{"id":956315,"active":true}</script>'
     text, status = _client(monkeypatch, body).fetch_detail("956315")
     assert (text, status) == (body, 200)
+
+
+@pytest.mark.parametrize("final_url", [
+    "https://www.mmreality.cz/nemovitosti/",
+    "https://www.mmreality.cz/nemovitosti",
+    "https://www.mmreality.cz/",
+])
+def test_a_redirect_off_the_listing_is_gone(monkeypatch, final_url):
+    with pytest.raises(ListingGoneError):
+        _client(monkeypatch, "<h1>Nemovitosti</h1>", final_url).fetch_detail("956315")

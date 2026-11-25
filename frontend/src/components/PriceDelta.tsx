@@ -10,10 +10,11 @@
  * (`pct > 0 → brick, pct < 0 → sage`) since the price-history block landed.
  *
  * FOUR STATES, NOT THREE. `properties.total_price_change_pct` is NULL when the
- * property has fewer than two observed prices, which is NOT the same as "the
- * price hasn't moved" — roughly 60% of pipeline cards are in that state today,
- * having been seen exactly once. Rendering a flat arrow for them would assert
- * stability we have not observed. So:
+ * property has fewer than two priced SNAPSHOTS. A snapshot is written only when
+ * an ad's content changes (rule 2), so that is an ad nothing ever changed on,
+ * however long it was watched (84 % of such rows had been watched for over a
+ * week, 2026-11-23), not an ad seen once, and every surface shows nothing for
+ * it (`listing_price_history.change_pct`, migration 770, the one rule). So:
  *
  *   pct == null            → render NOTHING (absence is honest)
  *   pct === 0, changes 0   → flat arrow, muted: observed twice, never moved

@@ -1,4 +1,4 @@
-"""W16: ONE step vocabulary for the candidates funnel and the audit list's states.
+"""W16: ONE step vocabulary for the candidates funnel.
 
 The operator, 2026-09-14: the candidates page's funnel and the location audit page's
 waterfall "must use ONE terminology and, where possible, ONE waterfall". They did not.
@@ -28,7 +28,8 @@ Four properties, each one a way the vocabulary could quietly fork again:
     everywhere, in both languages, at once.
 4.  The candidates funnel does no arithmetic, because the client sums are what let the two drift.
 
-W1 (migration 719, ruling W1-c) dropped the audit waterfall, its second producer.
+W1 (migration 719, ruling W1-c) dropped the audit waterfall, its second producer; W6-c2
+(migration 765) the audit list, whose two states were its last other keys.
 """
 
 from __future__ import annotations
@@ -44,7 +45,6 @@ FRONTEND = REPO / "frontend" / "src"
 STEPS_PY = REPO / "location_data" / "location_steps.py"
 STEPS_TS = FRONTEND / "lib" / "locationSteps.ts"
 FUNNEL = FRONTEND / "components" / "new-dedup" / "CandidateFunnel.tsx"
-AUDIT_PAGE = FRONTEND / "pages" / "LocationPinAudit.tsx"
 CANDIDATES_PAGE = FRONTEND / "pages" / "NewDedupCandidates.tsx"
 
 _LINE_COMMENT = re.compile(r"--.*$", re.MULTILINE)
@@ -188,23 +188,7 @@ def test_no_surface_spells_a_step_name_of_its_own() -> None:
 
 def test_both_readouts_read_the_wording_module() -> None:
     assert "@/lib/locationSteps" in FUNNEL.read_text(encoding="utf-8")
-    assert "@/lib/locationSteps" in AUDIT_PAGE.read_text(encoding="utf-8")
     assert "@/lib/locationSteps" in CANDIDATES_PAGE.read_text(encoding="utf-8")
-
-
-_JS_COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
-
-
-def test_the_two_hidden_states_have_one_czech_name_on_the_audit_page() -> None:
-    """The hidden set's two states name the listing list's filter pill. They were briefly
-    reading two different Czech names ("nevyřešeno" in the split, "zpracováno, nerozhodnuto" in
-    the list), which is the same fault as two names for one step, one level down. RED by: a
-    state name typed back into the page instead of read from the module."""
-    code = _JS_COMMENT.sub("", AUDIT_PAGE.read_text(encoding="utf-8"))
-    ts = _ts_steps()
-    for key in ("hidden_pending", "hidden_unresolved"):
-        assert f"stepLabel('{key}', 'cs')" in code, f"{key} is not read from the module"
-        assert ts[key]["cs"] not in code, f"the page re-types {key}'s Czech name"
 
 
 # --------------------------------------------------------- 4. no client arithmetic

@@ -15,9 +15,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Protocol, Sequence
 
-from autodedup.dataset import Listing
+from autodedup.dataset import Listing, hamming64
 from autodedup.settings import Settings
-from autodedup.text_facts import address_block_key, unit_designators
+from autodedup.text_facts import one_block, unit_designators
 from toolkit.room_taxonomy import category_main_compatible
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -38,6 +38,24 @@ class GuardSide(Protocol):
     area_m2: float | None
     disposition: str | None
     floor: int | None
+    source: str | None
+    area_basis: str | None
+
+
+FLOOR_AREA_BASIS: str = "floor"
+
+# C4b (operator ruling 2026-11-01): what lets an area gap past `area_reject_pct` reach the
+# category's `area_veto_gallery_exempt` bar.
+GALLERY_EXEMPT_MIN_AREA_M2: float = 20.0
+GALLERY_EXEMPT_MIN_PHOTOS: int = 3
+GALLERY_EXEMPT_MIN_COVERAGE: float = 0.80
+GALLERY_EXEMPT_PRICE_TOL: float = 0.02
+# C4c (2026-11-01): the share of the fan-out cap a candidate only an area exemption admits may
+# take (`exemption_window_quota`). It is seated after every base candidate and only in a slot
+# none took, so it can never displace one: on the 11-01 replay of eight towns the C4b window,
+# filling slots in posting order, pushed 147 merge-zone pairs out of repost series (146 read
+# SAME), and the realitymix basis exemption the last 3 (Hradec).
+EXEMPTION_WINDOW_CAP_SHARE: float = 0.5
 
 
 def area_rel_diff(a: float | None, b: float | None) -> float | None:
@@ -61,18 +79,96 @@ def area_relation(
     return "support"
 
 
-def pair_veto(a: GuardSide, b: GuardSide, settings: Settings | None = None) -> str | None:
+def area_gallery_bar(a: GuardSide, b: GuardSide, cfg: Settings) -> float | None:
+    """C4b: the widest area gap one gallery may excuse, or None: both sides state one category
+    the dial lists and at least `GALLERY_EXEMPT_MIN_AREA_M2`."""
+    category = a.category_main
+    if category is None or category != b.category_main:
+        return None
+    bar = cfg.area_veto_gallery_exempt.get(category)
+    if (bar is None or a.area_m2 is None or b.area_m2 is None
+            or min(a.area_m2, b.area_m2) < GALLERY_EXEMPT_MIN_AREA_M2):
+        return None
+    return bar
+
+
+def in_exemption_window(a: GuardSide, b: GuardSide, cfg: Settings) -> bool:
+    """C4c: whether only an exemption lets the pair's area gap through the veto: past
+    `area_reject_pct`, but basis-exempt (`area_basis_exempt`) or within `area_gallery_bar`
+    (C4b). Read of a pair `pair_veto` passed, to seat it after the base candidates."""
+    gap = area_rel_diff(a.area_m2, b.area_m2)
+    if gap is None or gap <= cfg.area_reject_pct:
+        return False
+    if area_basis_exempt(a, b, gap, cfg):
+        return True
+    bar = area_gallery_bar(a, b, cfg)
+    return bar is not None and gap <= bar
+
+
+def exemption_window_quota(cap: int) -> int:
+    """C4c: the most exemption-window candidates one listing's retrieval seats."""
+    return int(cap * EXEMPTION_WINDOW_CAP_SHARE)
+
+
+def gallery_coverage(a: set[int], b: set[int], tight: int) -> float:
+    """The share of the smaller gallery's frames with a twin within `tight` bits in the other
+    (the lower of the two shares when both hold as many)."""
+    def share(small: set[int], large: set[int]) -> float:
+        hits = sum(1 for frame in small if any(hamming64(frame, other) <= tight for other in large))
+        return hits / len(small)
+
+    if not a or not b:
+        return 0.0
+    if len(a) == len(b):
+        return min(share(a, b), share(b, a))
+    return share(a, b) if len(a) < len(b) else share(b, a)
+
+
+def identical_gallery(a: "Fingerprint", b: "Fingerprint", cfg: Settings) -> bool:
+    """C4b: one asking price (within `GALLERY_EXEMPT_PRICE_TOL`) and one gallery (each side
+    `GALLERY_EXEMPT_MIN_PHOTOS` hashed photos, `GALLERY_EXEMPT_MIN_COVERAGE` of the smaller
+    one shared at `phash_tight`)."""
+    if a.price is None or b.price is None or a.price <= 0.0 or b.price <= 0.0:
+        return False
+    if abs(a.price - b.price) / max(a.price, b.price) > GALLERY_EXEMPT_PRICE_TOL:
+        return False
+    if min(len(a.all_hashes), len(b.all_hashes)) < GALLERY_EXEMPT_MIN_PHOTOS:
+        return False
+    return (gallery_coverage(a.all_hashes, b.all_hashes, cfg.phash_tight)
+            >= GALLERY_EXEMPT_MIN_COVERAGE)
+
+
+def area_basis_exempt(a: GuardSide, b: GuardSide, gap: float, cfg: Settings) -> bool:
+    """Whether a side's portal prints its area as the total floor area (`area_basis='floor'`)
+    and the gap is within that portal's `area_veto_basis_floor_exempt` cap."""
+    for side, other in ((a, b), (b, a)):
+        cap = cfg.area_veto_basis_floor_exempt.get(side.source or "")
+        # Two rows on one basis measure the same thing, whatever their portals: their gap is a gap.
+        if (cap is not None and side.area_basis == FLOOR_AREA_BASIS and gap <= cap
+                and other.area_basis != side.area_basis):
+            return True
+    return False
+
+
+def pair_veto(a: GuardSide, b: GuardSide, settings: Settings | None = None,
+              same_gallery: Callable[[], bool] | None = None) -> str | None:
     """The name of the first hard guard the pair breaks (E2-E5), or None when it passes.
 
-    Missing data is never a mismatch (E12): every clause needs BOTH sides known."""
+    Missing data is never a mismatch (E12): every clause needs BOTH sides known. A caller
+    holding both galleries passes `same_gallery` (C4b); without it a gap inside
+    `area_gallery_bar` passes, and the decision settles it."""
     cfg = settings or Settings()
     if (a.category_type is not None and b.category_type is not None
             and a.category_type != b.category_type):
         return "category_type"
     if not category_main_compatible(a.category_main, b.category_main):
         return "category_main"
-    if area_relation(a.area_m2, b.area_m2, cfg) == "reject":
-        return "area"
+    gap = area_rel_diff(a.area_m2, b.area_m2)
+    if (gap is not None and gap > cfg.area_reject_pct
+            and not area_basis_exempt(a, b, gap, cfg)):
+        bar = area_gallery_bar(a, b, cfg)
+        if bar is None or gap > bar or (same_gallery is not None and not same_gallery()):
+            return "area"
     is_land = LAND_CATEGORY in (a.category_main, b.category_main)
     if (not is_land and a.disposition is not None and b.disposition is not None
             and a.disposition != b.disposition):
@@ -98,7 +194,8 @@ def unit_designator_conflict(
     Exactly one designator per side is required. A body listing several (`jednotky č. 3, 5 a 7`)
     is a project's price list, not this advert's identity, and two such lists overlapping proves
     nothing either way. The block must match too: two buildings number their flats independently,
-    so `byt č. 3` in one house and `byt č. 5` in another is not a conflict.
+    so `byt č. 3` in one house and `byt č. 5` in another is not a conflict. The block is read at
+    the coarser side's grain (E981, `one_block`): a door and a street side of one street are one.
 
     Honest about its evidence: this fires on 3 distinct (block, unit-pair) facts in ONE Zizkov
     building in the g5 cohort (ruian:21778370, units 1/3/5). It is a rule with a sound mechanism
@@ -110,7 +207,7 @@ def unit_designator_conflict(
     # only thing a stub side (`evaluate._SimSide`, everything None) can honestly answer.
     if len(left) != 1 or len(right) != 1 or left == right:
         return None
-    if address_block_key(a) != address_block_key(b):
+    if not one_block(a, b):
         return None
     return next(iter(left)), next(iter(right))
 

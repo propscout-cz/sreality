@@ -17,6 +17,7 @@ import pytest
 from scraper.portal import PortalConfig
 from scraper import remax_main
 from scraper.remax_main import RemaxPortal
+from scraper.remax_parser import IndexItem
 
 pytestmark = pytest.mark.usefixtures("no_sighted_rearm")
 
@@ -43,11 +44,11 @@ class _Limiter:
     def penalize(self) -> None: ...
 
 
-def _items(*specs: tuple[str, str]) -> list[Any]:
+def _items(*specs: tuple[str, str], closed: frozenset[str] = frozenset()) -> list[Any]:
     base = "https://www.remax-czech.cz/reality/detail/"
     return [
-        SimpleNamespace(source_id_native=n, detail_path=f"{base}{n}/",
-                        price_text="5 000 000 Kč", title=t)
+        IndexItem(source_id_native=n, detail_path=f"{base}{n}/",
+                  price_text="Prodáno" if n in closed else "5 000 000 Kč", title=t, closed=n in closed)
         for n, t in specs
     ]
 
@@ -135,6 +136,18 @@ def test_nomination_is_agenda_grain(monkeypatch: pytest.MonkeyPatch) -> None:
     assert union == set(portal._agenda_cache[1].native_ids) == {"r1", "r2", "r3"}
 
 
+def test_a_sold_card_is_collected_but_never_seen(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`sold=on` keeps sold cards out of the index; were remax to ignore it, the card rule
+    still leaves them unsighted, so their rows are nominated and their pages close them."""
+    portal = _portal()
+    page = SimpleNamespace(total=2, next_offset=None, items=_items(
+        ("r1", "Prodej bytu"), ("r2", "Prodej bytu"), closed=frozenset({"r2"})))
+    _walk_sale_agenda(monkeypatch, portal, {(1, 1): [page]})
+    seen = portal.walk_category(_CATEGORIES[0], object(), False, _Limiter())[0]
+    assert "r2" not in seen and "r1" in seen
+    assert portal._agenda_cache[1].reached_end is True
+
+
 def test_reaching_the_portals_own_count_is_the_end(monkeypatch: pytest.MonkeyPatch) -> None:
     portal = _portal()
     _walk_sale_agenda(monkeypatch, portal, {(1, 1): [_page(2, ("r1", "Prodej bytu"), ("r2", "Prodej bytu"))]})
@@ -150,14 +163,14 @@ def test_walk_priceless_card_is_unchanged_not_changed(monkeypatch: pytest.Monkey
     portal = _portal()
     base = "https://www.remax-czech.cz/reality/detail/"
     items = [
-        SimpleNamespace(source_id_native="r1", detail_path=f"{base}r1/",
-                        price_text="5 000 000 Kč", title="Prodej bytu 2+kk"),   # price match
-        SimpleNamespace(source_id_native="r2", detail_path=f"{base}r2/",
-                        price_text="Dohodou", title="Prodej bytu 1+1"),         # no card price
-        SimpleNamespace(source_id_native="r3", detail_path=f"{base}r3/",
-                        price_text="6 000 000 Kč", title="Prodej bytu 3+kk"),   # price changed
-        SimpleNamespace(source_id_native="r4", detail_path=f"{base}r4/",
-                        price_text="4 000 000 Kč", title="Prodej bytu 2+1"),    # brand new
+        IndexItem(source_id_native="r1", detail_path=f"{base}r1/",
+                  price_text="5 000 000 Kč", title="Prodej bytu 2+kk"),   # price match
+        IndexItem(source_id_native="r2", detail_path=f"{base}r2/",
+                  price_text="Dohodou", title="Prodej bytu 1+1"),         # no card price
+        IndexItem(source_id_native="r3", detail_path=f"{base}r3/",
+                  price_text="6 000 000 Kč", title="Prodej bytu 3+kk"),   # price changed
+        IndexItem(source_id_native="r4", detail_path=f"{base}r4/",
+                  price_text="4 000 000 Kč", title="Prodej bytu 2+1"),    # brand new
     ]
     index = _Index({(1, 1): [SimpleNamespace(total=4, next_offset=None, items=items)]})
     index.install(monkeypatch)

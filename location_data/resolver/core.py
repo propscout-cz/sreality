@@ -82,13 +82,15 @@ def resolve(
             and normalized[c.id].rejections == ("town_as_street",)), None),
     )
     # ONE containment read, three readers: `pin_door` refines only inside the town the words bound
-    # (v5.11), `place()` lets a pin place the row only there (v5.10), CHECK records that it disagreed.
+    # (v5.12), `place()` lets a pin place the row only there (v5.10), CHECK records that it disagreed.
     pin_inside_obec = step_bind.pin_inside_bound_obec(binding, pin_claim, ctx.registry)
     binding = step_bind.pin_door(
         binding, constraints, pin_claim, stored=ordered, ad_type=ad_type, declared=declared,
         pin_inside_bound_obec=pin_inside_obec, registry=ctx.registry)
     position = step_bind.place(
         binding, pin_claim, declared=declared, pin_inside_bound_obec=pin_inside_obec)
+    binding = step_bind.pin_part(
+        binding, position, pin_is_precise=pin_is_precise, registry=ctx.registry)
 
     # ---- 2. FILL. It answers the hierarchy AND the position the hierarchy implies: a row
     # the claims could not place is placed at the finest bound unit's own registry point, so

@@ -742,3 +742,27 @@ def test_a_flat_never_carries_a_plot_so_the_b1_control_loses_its_64() -> None:
     assert (listing.area_m2, listing.area_basis, listing.usable_area) == (59.0, "usable", 59.0)
     assert parse_area_text(listing.raw["params"]["plocha pozemku"]) == 64.0
     assert listing.estate_area is None
+
+
+def _card(badges: str) -> str:
+    # The live card markup (2026-11-24): the status rides in the image badges.
+    return ('<article class="i-estate --dev-project"><aside class="i-estate__image">'
+            '<a href="/prodej/byty/byty-4-kk/ceske-budejovice/prodej-bytu-4-kk-96-m2-bohumila-bohma-3953841.html"'
+            ' class="i-estate__image-link u-img-hover "></a>'
+            f'<div class="i-estate__image-badges">{badges}</div></aside></article>')
+
+
+def _badge(title: str) -> str:
+    return f'<div class="badge --gray"> <span class="badge__title">{title}</span> </div>'
+
+
+def test_a_card_badged_sold_or_let_is_closed():
+    for title in ("Prodáno", "Pronajato"):
+        page = parse_index(f"<html>{_card(_badge('Developerský projekt') + _badge(title))}</html>")
+        assert [i.closed for i in page.items] == [True]
+
+
+def test_a_reserved_or_plain_card_is_not_closed():
+    for badges in ("", _badge("Rezervováno"), _badge("Developerský projekt")):
+        page = parse_index(f"<html>{_card(badges)}</html>")
+        assert [i.closed for i in page.items] == [False]

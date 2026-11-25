@@ -12,7 +12,7 @@ import { MemoryRouter } from 'react-router-dom';
 
 import Outreach from './Outreach';
 import * as api from '@/lib/api';
-import * as maps from '@/lib/maps';
+import * as places from '@/lib/places';
 import { ROUTES } from '@/lib/routes';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
@@ -20,10 +20,9 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   listOutreachCampaigns: vi.fn(),
   createOutreachCampaign: vi.fn(),
 }));
-vi.mock('@/lib/maps', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/maps')>()),
-  fetchSuggest: vi.fn(),
-  resolveSuggestion: vi.fn(),
+vi.mock('@/lib/places', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/places')>()),
+  fetchPlaces: vi.fn(),
 }));
 
 function campaign(id: number, name: string) {
@@ -90,10 +89,9 @@ describe('<Outreach> the campaign target', () => {
 
   it('posts the picked chips in the target, Create enabled throughout', async () => {
     vi.mocked(api.createOutreachCampaign).mockResolvedValue({ id: 5 } as api.OutreachCampaign);
-    vi.mocked(maps.fetchSuggest).mockResolvedValue([
-      { name: STREET.name, label: '', type: 'regional.street', position: { lon: 15.77, lat: 50.03 } },
+    vi.mocked(places.fetchPlaces).mockResolvedValue([
+      { level: 'ulice', id: STREET.id, name: STREET.name, context: STREET.context, point: { lat: 50.03, lng: 15.77 } },
     ]);
-    vi.mocked(maps.resolveSuggestion).mockResolvedValue(STREET);
     renderPage();
     const user = userEvent.setup();
     await user.type(screen.getByPlaceholderText('Off-market byty Praha'), 'Kampaň');

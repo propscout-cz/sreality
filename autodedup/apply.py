@@ -21,10 +21,11 @@ THE SCOPE ROW IS THE ONE ROLLOUT CONTROL (E904). A dry run is the default and wr
 deal types and its area; a row that is absent or names no area merges nothing. It is re-read
 before EVERY group (E39), so emptying its area on /settings stops a run between two groups, and
 a run's own arguments can narrow it and never widen it. A group is inside the area only when
-EVERY advert its merge would move (the members and every other advert on the involved
-properties) is LOCATED in one of its blocks by its live `listing_location` row (`town:` =
+every MEMBER is LOCATED in one of its blocks by its live `listing_location` row (`town:` =
 obec_kod, `quarter:` = cast_obce_kod, `district:` = okres_kod) — never by the engine's own
-blocking key, which names a quarter or nothing where the scope names the town.
+blocking key, which names a quarter or nothing where the scope names the town. The other
+adverts on the involved properties ride along and are not asked (E989): the scope, a
+`listing_ids` scope included, bounds which GROUPS merge, not which adverts a merge moves.
 
 D7 holds: nothing here reads `property_merge_events`, and only `toolkit.property_identity` writes
 it (the chokepoint's merge rows, `source='autodedup'` saying who merged; a detach's undone stamps;
@@ -122,9 +123,8 @@ SKIP_PAIR_VERDICT = "operator_pair_verdict"
 SKIP_MUST_NOT_LINK = "must_not_link"
 SKIP_CATEGORY_TYPE = "category_type_mix"
 SKIP_CATEGORY_MAIN = "category_main_incompatible"
-SKIP_CARRIES_OUT_OF_SCOPE = "carries_out_of_scope_listings"
-SKIP_SPANS_GROUPS = "property_spans_groups"
-SKIP_CARRIES_UNGROUPED = "carries_ungrouped_listings"
+SKIP_MEMBER_OUT_OF_SCOPE = "member_out_of_scope"
+SKIP_CARRIES_LEGACY = "carries_legacy_merged_listing"
 SKIP_REFUSED_BEFORE = "refused_at_chokepoint_before"
 # Re-checked inside the group's own transaction, just before the merge (E903).
 SKIP_CHANGED_SINCE_PLAN = "changed_since_plan"
@@ -310,6 +310,9 @@ class Negatives:
     pairs: dict[int, list[int]] = field(default_factory=dict)
     sets: dict[int, list[frozenset[int]]] = field(default_factory=dict)
     setless_keys: set[int] = field(default_factory=set)
+    # The member sets whose NEWEST group ruling is `same` (E992): the operator saw exactly these
+    # adverts and called them one property.
+    same_sets: set[frozenset[int]] = field(default_factory=set)
 
     @classmethod
     def read(cls, conn: Any, listing_ids: Iterable[int], cluster_keys: Iterable[int]
@@ -351,6 +354,8 @@ class Negatives:
             bucket = out.sets.setdefault(min(ruled), [])
             if verdict in NEGATIVE_VERDICTS and ruled not in bucket:
                 bucket.append(ruled)
+            if verdict == "same":
+                out.same_sets.add(ruled)
         return out
 
     def hits(self, listings: set[int], cluster_key: int) -> tuple[list[str], dict[str, Any]]:
@@ -415,10 +420,9 @@ def _set_reasons(
     listings: set[int],
     listing_of: Mapping[int, Member],
     props: Sequence[Mapping[str, Any]],
-    scope: Scope,
 ) -> tuple[list[str], dict[str, Any]]:
-    """What the merge would build, checked as the chokepoint would plus the run's scope: at
-    plan time and again, over locked rows, just before it merges."""
+    """What the merge would build, checked as the chokepoint would: at plan time and again,
+    over locked rows, just before it merges."""
     reasons: list[str] = []
     detail: dict[str, Any] = {}
     facts = [listing_of.get(lid) or Member(lid, None, None, None) for lid in sorted(listings)]
@@ -433,37 +437,7 @@ def _set_reasons(
             sorted(mains, key=lambda x: (x is None, x or "")), 2)):
         reasons.append(SKIP_CATEGORY_MAIN)
         detail["category_mains"] = sorted(m for m in mains if m is not None)
-    # The scope admitted the members; everything the merge puts on the survivor must be inside
-    # it too (located in its blocks included) — and still be, when it is re-read just before
-    # the merge.
-    outside = [f.listing_id for f in facts if scope.outside(f)]
-    if outside:
-        reasons.append(SKIP_CARRIES_OUT_OF_SCOPE)
-        detail["out_of_scope_listings"] = outside[:20]
     return reasons, detail
-
-
-def _engine_vouched(
-    members: set[int], extended: set[int], prop_of: Mapping[int, int],
-    merges: Sequence[EngineMerge],
-) -> set[int]:
-    """The listings of `extended` this engine already merged onto the property they share
-    with a grouped member — closed transitively over live engine merges. Nothing else may
-    ride along: an older merge (the removed legacy engine's included) is not the engine's
-    word, and D7 forbids reading who else made it."""
-    vouched = set(members)
-    changed = True
-    while changed:
-        changed = False
-        for merge in merges:
-            anchors = {prop_of.get(lid) for lid in merge.member_ids & vouched} - {None}
-            if not anchors:
-                continue
-            for lid in (merge.member_ids & extended) - vouched:
-                if prop_of.get(lid) in anchors:
-                    vouched.add(lid)
-                    changed = True
-    return vouched
 
 
 def _cluster_rows(conn: Any, generation: str) -> list[dict[str, Any]]:
@@ -493,18 +467,16 @@ def plan_apply(conn: Any, generation: str, scope: Scope) -> Plan:
 def plan_groups(
     conn: Any, generation: str, cluster_rows: Sequence[Mapping[str, Any]],
     members_by: Mapping[int, list[Member]], scope: Scope, *,
-    group_of: Callable[[set[int]], Mapping[int, int]] | None = None, cap: bool = True,
+    cap: bool = True,
 ) -> Plan:
     """The plan for the groups handed in — `plan_apply`'s for a whole batch generation, and the
     real-time lane's reconcile (A9) for the groups a pass re-clustered or swept. ONE set of
     refusals for both (E903): the reconcile is this function under the lane's lease.
 
-    `group_of` answers which group of the generation holds a listing, for the carried adverts
-    E37 reads at property grain; by default the groups handed in are the whole generation.
-    `cap=False` leaves the run cap to the caller (the reconcile is bounded by its time)."""
-    listing_group: dict[int, int] = {m.listing_id: key for key, ms in members_by.items()
-                                     for m in ms}
-
+    A decided pair between two properties merges the WHOLE properties (operator ruling
+    2026-11-23): what else sits on them rides along, whatever group, block or activity it has.
+    Only an operator negative, a deal-type or category clash over the whole set, or a set the
+    chokepoint refused before stops it. `cap=False` leaves the run cap to the caller (the reconcile is bounded by its time)."""
     counts: Counter[str] = Counter(clusters=len(cluster_rows))
     out_of_scope: Counter[str] = Counter()
     candidates: list[tuple[dict[str, Any], list[Member]]] = []
@@ -532,7 +504,6 @@ def plan_groups(
     all_props = {m.property_id for _c, ms in everyone for m in ms if m.property_id is not None}
     props: dict[int, dict[str, Any]] = {}
     children: dict[int, set[int]] = {}
-    prop_of: dict[int, int] = {}
     listing_of: dict[int, Member] = {}
     for chunk in _chunks(all_props):
         for pid, status, ctype, cmain, first in _rows(
@@ -543,7 +514,6 @@ def plan_groups(
         for row in _rows(conn, S.PROPERTY_LISTINGS_SQL, {"property_ids": chunk}):
             listing, pid = Member.read(row), int(row[1])
             children.setdefault(pid, set()).add(listing.listing_id)
-            prop_of[listing.listing_id] = pid
             listing_of[listing.listing_id] = listing
     for _c, ms in everyone:
         for m in ms:
@@ -552,14 +522,8 @@ def plan_groups(
     every_listing: set[int] = {m.listing_id for _c, ms in everyone for m in ms}
     for pid in all_props:
         every_listing |= children.get(pid, set())
-    if group_of is not None:
-        listing_group = {**dict(group_of(every_listing)), **listing_group}
     negatives = Negatives.read(conn, every_listing,
                                [int(c["cluster_key"]) for c, _m in everyone])
-    held: set[int] = set()
-    if generation == GENERATION:
-        held = {int(lid) for (lid,) in _rows(conn, S.RT_FINGERPRINTED_SQL, {
-            "generation": generation, "listing_ids": sorted(every_listing)})}
     # A chokepoint refusal is remembered by the MEMBER SET it refused, not by the key it was
     # filed under: a real-time generation's keys move as its groups do (A9), and a batch
     # generation's key names exactly one member set, so the two readings agree there.
@@ -598,11 +562,10 @@ def plan_groups(
         for pid in {m.property_id for m in members if m.property_id is not None}:
             extended |= children.get(pid, set())
         extended_of[int(cluster["cluster_key"])] = extended
-    # Only the engine merges a group below consults: those naming a listing a candidate's merge
-    # would put on its survivor, or a member of a group ruled different after it merged.
+    # The engine merges behind a group ruled different after it merged.
     merges_by_listing: dict[int, list[EngineMerge]] = {}
     for merge in _engine_merges(conn, set().union(
-            *extended_of.values(), *(group.member_ids for group, _pid in ruled))):
+            *(group.member_ids for group, _pid in ruled))):
         for lid in merge.member_ids:
             merges_by_listing.setdefault(lid, []).append(merge)
     for group, pid in ruled:
@@ -610,6 +573,24 @@ def plan_groups(
                          if mg.survivor_id == pid},
                         key=lambda mg: (mg.generation, mg.cluster_key))
         group.detail["engine_merges"] = [mg.to_json() for mg in behind]
+
+    # A property the removed engine built is carried into no merge of this one (operator
+    # 2026-11-24): nobody decided what ties its adverts together. property_merge_events names
+    # only the MOVED advert, so the old survivor's own adverts have no row: asked is every
+    # advert of each property that contributes a carried one, member or not. `retire_legacy`
+    # undoes the placement; until then the group waits for the operator's `same` on exactly its
+    # adverts (E992). A group that carries nothing, or whose
+    # old property the engine decided advert by advert (all members), reads nothing.
+    carrying_of: dict[int, list[int]] = {}
+    for cluster, members in candidates:
+        member_ids = {m.listing_id for m in members}
+        carrying_of[int(cluster["cluster_key"])] = sorted(
+            pid for pid in {m.property_id for m in members if m.property_id is not None}
+            if children.get(pid, set()) - member_ids)
+    legacy: set[int] = set()
+    for chunk in _chunks(set().union(*(
+            children.get(pid, set()) for pids in carrying_of.values() for pid in pids))):
+        legacy |= legacy_retire.legacy_placed(conn, chunk)
 
     for cluster, members in candidates:
         key = int(cluster["cluster_key"])
@@ -626,35 +607,25 @@ def plan_groups(
             reasons.append(SKIP_INACTIVE_PROPERTY)
             detail["inactive_property_ids"] = inactive
         extended = extended_of[key]
-        carried = extended - member_set
 
         hit_reasons, hit_detail = negatives.hits(extended, key)
         reasons += hit_reasons
         detail.update(hit_detail)
 
         set_reasons, set_detail = _set_reasons(
-            extended, listing_of, [props[pid] for pid in property_ids if pid in props], scope)
+            extended, listing_of, [props[pid] for pid in property_ids if pid in props])
         reasons += set_reasons
         detail.update(set_detail)
 
-        # E37 at property grain: a property whose OTHER children the engine grouped elsewhere
-        # would fuse two of its groups through a link the engine never made.
-        foreign = sorted(lid for lid in carried if listing_group.get(lid) not in (None, key))
-        if foreign:
-            reasons.append(SKIP_SPANS_GROUPS)
-            detail["listings_in_other_groups"] = foreign[:20]
-        # The engine vouched for its members only. A child no group holds may ride along only
-        # where THIS engine already merged it onto its property together with a grouped member
-        # — and, under the real-time generation, only one it does not fingerprint (E965): one
-        # it read and grouped with no one (D43 refused it, cluster.py drops the singleton) is
-        # its present word, which no earlier merge outranks.
-        touching = {mg for lid in extended for mg in merges_by_listing.get(lid, ())}
-        vouched = _engine_vouched(member_set, extended - held, prop_of,
-                                  sorted(touching, key=lambda mg: mg.merge_group_id))
-        ungrouped = sorted(lid for lid in carried - vouched if lid not in listing_group)
-        if ungrouped:
-            reasons.append(SKIP_CARRIES_UNGROUPED)
-            detail["ungrouped_listings"] = ungrouped[:20]
+        legacy_here = sorted(legacy & set().union(
+            *(children.get(pid, set()) for pid in carrying_of[key])))
+        # E992: the operator's own `same` on exactly this group's adverts is the decision the
+        # refusal waits for, so it lifts it; a ruling on another set of adverts lifts nothing.
+        if legacy_here and frozenset(member_set) in negatives.same_sets:
+            detail["legacy_released_by_ruling"] = legacy_here[:20]
+        elif legacy_here:
+            reasons.append(SKIP_CARRIES_LEGACY)
+            detail["legacy_merged_listings"] = legacy_here[:20]
 
         # The engine's own ledger (never property_merge_events, D7) refuses only a member set
         # the chokepoint refused before (E41). An undo of an engine merge, by anyone, bans
@@ -807,7 +778,8 @@ def recheck_group(
     """The plan's word, re-read inside the group's own transaction just before it merges, over
     rows it LOCKS (the properties FOR UPDATE, their listings FOR SHARE) so nothing re-points or
     re-categorises them before the merge commits: the listings must be the ones planned, every
-    property still active, the deal types, categories and scope still clean, and no operator
+    property still active, the deal types and categories still clean, the MEMBERS still inside
+    the scope (E39; the adverts they carry are not asked, E989), and no operator
     negative may have landed on them since the plan read the negatives (E903). The locked
     placement is recorded on the group, for its ledger row's plan and for `unapply` (E905)."""
     # The notification-events lock before the first row lock: the merge this transaction runs takes
@@ -837,14 +809,25 @@ def recheck_group(
     if inactive:
         reasons.append(SKIP_INACTIVE_PROPERTY)
         detail["inactive_property_ids"] = inactive
-    hit_reasons, hit_detail = Negatives.read(conn, now, [group.cluster_key]).hits(
-        now, group.cluster_key)
+    negatives = Negatives.read(conn, now, [group.cluster_key])
+    hit_reasons, hit_detail = negatives.hits(now, group.cluster_key)
     reasons += hit_reasons
     detail.update(hit_detail)
+    # E992: a hold the operator's `same` released stays released only while that ruling is
+    # still the newest word on the set; withdrawn since the plan, the hold is back.
+    released = group.detail.get("legacy_released_by_ruling")
+    if released and frozenset(group.member_ids) not in negatives.same_sets:
+        reasons.append(SKIP_CARRIES_LEGACY)
+        detail["legacy_merged_listings"] = released
     set_reasons, set_detail = _set_reasons(
-        now, {m.listing_id: m for m in rows}, list(locked.values()), scope)
+        now, {m.listing_id: m for m in rows}, list(locked.values()))
     reasons += set_reasons
     detail.update(set_detail)
+    members = set(group.member_ids)
+    why_out = scope.group_outside([m for m in rows if m.listing_id in members])
+    if why_out:
+        reasons.append(SKIP_MEMBER_OUT_OF_SCOPE)
+        detail["out_of_scope"] = why_out
     return reasons, detail
 
 

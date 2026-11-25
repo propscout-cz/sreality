@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
 from autodedup.dataset import Dataset, Image, Listing, cosine_norm, hamming64, live_end_stamp
 from autodedup.normalize import canonical_attr
 from autodedup.stock import PLAIN as STOCK_PLAIN, StockIndex
-from autodedup.text_facts import MAX_CODE_POPULATION, reference_codes
+from autodedup.text_facts import MAX_CODE_POPULATION, reference_codes, structured_code
 from toolkit.room_taxonomy import ROOM_FAMILIES, category_main_compatible
 
 if TYPE_CHECKING:  # the sibling modules are imported for their types only, never at runtime
@@ -809,6 +809,9 @@ class FeatureContext:
     tfidf_corpus: dict[int, dict[str, float]] = field(default_factory=dict)
     rare: dict[int, set[str]] = field(default_factory=dict)
     codes: dict[int, frozenset[str]] = field(default_factory=dict)
+    # The codes a listing carries in its body OR its `ad_reference` column, judged over the
+    # carriers of both (`index_reference_codes`); empty unless the settings read the column.
+    union_codes: dict[int, frozenset[str]] = field(default_factory=dict)
     pin_pop: dict[str, int] = field(default_factory=dict)
     dataset: Dataset | None = None
     stock: "StockIndex" = field(default_factory=lambda: STOCK_PLAIN)
@@ -873,35 +876,48 @@ class FeatureContext:
         project's code rather than one order's, and certifies nothing. The census found no such
         code certifying two different units in this cohort; the rail is here because that is the
         one failure mode which would be fatal, and it costs a code that could not be trusted
-        anyway."""
+        anyway.
+
+        The structured column (`Listing.ad_reference`, read once the settings name a category in
+        `ref_code_structured_categories`) fills `union_codes`: body and column codes together,
+        each judged by the same two rails over ALL its carriers, either kind and any category.
+        A body code's own verdict over its body carriers is never re-judged."""
         carriers: dict[str, list[int]] = {}
+        union: dict[str, list[int]] = {}
+        read_column = bool(self.settings.ref_code_structured_categories)
         for listing_id, listing in listings.items():
             found = reference_codes(listing.description)
             if found:
                 self.codes[listing_id] = frozenset(found)
             for code in found:
                 carriers.setdefault(code, []).append(listing_id)
-        certifying: dict[str, bool] = {}
-        for code, members in carriers.items():
-            if len(members) > MAX_CODE_POPULATION:
-                certifying[code] = False
-                continue
-            dispositions = {listings[i].disposition for i in members
-                            if listings[i].disposition is not None}
-            areas = [listings[i].area_m2 for i in members
-                     if listings[i].area_m2 is not None and listings[i].area_m2 > 0.0]
-            spread = (max(areas) - min(areas)) / max(areas) if areas else 0.0
-            certifying[code] = len(dispositions) <= 1 and spread <= CODE_AREA_TOL
-        for listing_id, found in list(self.codes.items()):
-            kept = frozenset(code for code in found if certifying.get(code))
-            if kept:
-                self.codes[listing_id] = kept
-            else:
-                del self.codes[listing_id]
+            if read_column:
+                column = structured_code(listing.ad_reference)
+                both = found | {column} if column else found
+                if both:
+                    self.union_codes[listing_id] = frozenset(both)
+                for code in both:
+                    union.setdefault(code, []).append(listing_id)
+        for kept_by, verdicts in ((self.codes, _code_verdicts(carriers, listings)),
+                                  (self.union_codes, _code_verdicts(union, listings))):
+            for listing_id, found in list(kept_by.items()):
+                kept = frozenset(code for code in found if verdicts.get(code))
+                if kept:
+                    kept_by[listing_id] = kept
+                else:
+                    del kept_by[listing_id]
 
-    def shared_codes(self, lo: int, hi: int) -> list[str]:
-        """The certifying codes BOTH listings print — E60's evidence, as strings."""
-        return sorted(self.codes.get(lo, frozenset()) & self.codes.get(hi, frozenset()))
+    def shared_codes(self, la: Listing, lb: Listing) -> list[str]:
+        """The certifying codes BOTH listings carry — E60's evidence, as strings. A code read off
+        the `ad_reference` column counts only between two adverts of one deal type whose
+        category_main both lie in `ref_code_structured_categories`."""
+        shared = self.codes.get(la.id, frozenset()) & self.codes.get(lb.id, frozenset())
+        categories = self.settings.ref_code_structured_categories
+        if (la.category_type is not None and la.category_type == lb.category_type
+                and la.category_main in categories and lb.category_main in categories):
+            shared |= (self.union_codes.get(la.id, frozenset())
+                       & self.union_codes.get(lb.id, frozenset()))
+        return sorted(shared)
 
     def attr_rarity(self, block: str, key: str, value: str) -> float:
         """Self-information of an attribute value inside its block: rare agreements score more."""
@@ -1047,12 +1063,31 @@ class FeatureContext:
         """Drop everything this context derived of these listings (E950), the galleries and
         their CLIP vectors included: a pass gives it back once it decides none of their pairs."""
         ids = set(listing_ids)
-        for derived in (self.tfidf, self.tfidf_corpus, self.rare, self.codes, self._events):
+        for derived in (self.tfidf, self.tfidf_corpus, self.rare, self.codes, self.union_codes,
+                        self._events):
             for listing_id in ids:
                 derived.pop(listing_id, None)
         for cache in (self._clip, self._phash, self._live, self._tags):
             for key in [key for key in cache if key[0] in ids]:
                 del cache[key]
+
+
+def _code_verdicts(carriers: Mapping[str, list[int]],
+                   listings: Mapping[int, Listing]) -> dict[str, bool]:
+    """E60's two rails over each code's carriers: RARE (at most `MAX_CODE_POPULATION`) and PURE
+    (one disposition, stored areas within `CODE_AREA_TOL`)."""
+    certifying: dict[str, bool] = {}
+    for code, members in carriers.items():
+        if len(members) > MAX_CODE_POPULATION:
+            certifying[code] = False
+            continue
+        dispositions = {listings[i].disposition for i in members
+                        if listings[i].disposition is not None}
+        areas = [listings[i].area_m2 for i in members
+                 if listings[i].area_m2 is not None and listings[i].area_m2 > 0.0]
+        spread = (max(areas) - min(areas)) / max(areas) if areas else 0.0
+        certifying[code] = len(dispositions) <= 1 and spread <= CODE_AREA_TOL
+    return certifying
 
 
 def _block_of(fp: "Fingerprint") -> str:
@@ -1539,7 +1574,7 @@ def pair_features(
     # ceskereality and N118731 on sreality, identical text, identical 7 974 910 Kc), so this
     # slot is PRESENT only when it has something to say.
     feats["ref_code_shared"] = (
-        (1.0, True) if ctx.shared_codes(la.id, lb.id) else ABSENT
+        (1.0, True) if ctx.shared_codes(la, lb) else ABSENT
     )
     numerals_a = fa.numerals or set()
     numerals_b = fb.numerals or set()

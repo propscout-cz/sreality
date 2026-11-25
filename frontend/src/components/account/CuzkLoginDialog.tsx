@@ -11,6 +11,8 @@ import { fmtShortDate } from '@/lib/format';
 
 const KEY = ['account', 'cuzk-login'] as const;
 const NONE: CuzkLoginState = { set: false, username: null, checked_at: null };
+/* What a card may offer depends on the stored login (Prodeje v domě): a save or a removal refreshes it. */
+const USES_THE_LOGIN = ['property-building-prices'] as const;
 const INPUT =
   'w-full rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-inset)] px-2 py-1.5 text-sm text-[var(--color-ink)]';
 
@@ -25,6 +27,7 @@ export default function CuzkLoginDialog({ onClose }: { onClose: () => void }) {
     mutationFn: saveCuzkLogin,
     onSuccess: (saved) => {
       queryClient.setQueryData<CuzkLoginState>(KEY, saved);
+      void queryClient.invalidateQueries({ queryKey: USES_THE_LOGIN });
       setUsername(null);
       setPassword('');
     },
@@ -33,6 +36,7 @@ export default function CuzkLoginDialog({ onClose }: { onClose: () => void }) {
     mutationFn: removeCuzkLogin,
     onSuccess: () => {
       queryClient.setQueryData<CuzkLoginState>(KEY, NONE);
+      void queryClient.invalidateQueries({ queryKey: USES_THE_LOGIN });
       setUsername(null);
       setPassword('');
     },
@@ -59,7 +63,13 @@ export default function CuzkLoginDialog({ onClose }: { onClose: () => void }) {
     body = (
       <form onSubmit={submit} className="space-y-3">
         <p className="text-sm text-[var(--color-ink-2)]">
-          {state.set ? (
+          {state.set && state.refused ? (
+            <span role="status">
+              ČÚZK refused the login stored for <span className="font-mono">{state.username}</span> when it was last
+              used. Nothing more is sent on it, so that further attempts cannot lock your ČÚZK account. Enter it
+              again below.
+            </span>
+          ) : state.set ? (
             <>Stored for <span className="font-mono">{state.username}</span>, accepted by ČÚZK on {fmtShortDate(state.checked_at)}.</>
           ) : (
             'No login stored.'

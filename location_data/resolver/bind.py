@@ -29,6 +29,7 @@ from location_data.resolver.composite import (
     MATCH_LEVELS,
     CompositeBind,
     StreetBind,
+    katastr_part,
     match_streets,
     obec_of,
     part_of,
@@ -613,10 +614,14 @@ def bind(
     # agreements, since it is one claim. A unit named by several sources is ONE candidate. A
     # part claim matches like a town name: a KÚ binds the část it spells, a MOMC none (W5).
     said: list[_Part] = []
+    named_a_part = False   # a část or KÚ of the town the words name, bound or not (`pin_part`)
     for key in constraints.cast_obce_keys if constraining_obec_kods else ():
         for unit in registry.admin_units_by_name(key, levels=PART_NAME_LEVELS):
             town = town_code(unit, registry)
-            if town in constraining_obec_kods and (claimed := part_of(unit, town, registry)):
+            if town not in constraining_obec_kods:
+                continue
+            named_a_part = named_a_part or unit.level != "momc"
+            if claimed := part_of(unit, town, registry):
                 said.append(_Part(claimed, _ids(constraints, "cast_obce_name"),
                                   ("obec_constrained",)))
     part_claim_unmatched = bool(constraints.cast_obce_keys) and not said
@@ -844,7 +849,8 @@ def bind(
             lon=top.lon if street_point is None else street_point.lon,
             cast_obce_unit_id=part_unit_id,
             street_extent_m=None if street_point is None else street_point.extent_m,
-            street_katastr_kod=None if street_point is None else street_point.katastr_kod,
+            katastr_kod=None if street_point is None else street_point.katastr_kod,
+            words_name_a_part=bool(named_a_part or said or found or any(towns.climbed.values())),
             agreed=top.agreed,
             relaxations=top.relaxations,
             ambiguous=ambiguous,
@@ -1138,7 +1144,7 @@ def pin_door(
         binding, target_kind="address_point", rung=PIN_DOOR_RUNG,
         ruian_adm_kod=door.kod_adm, ulice_kod=door.ulice_kod, street_name=door.street_name,
         cast_obce_unit_id=door.cast_obce_unit_id, lat=None, lon=None,
-        street_extent_m=None, street_katastr_kod=None,
+        street_extent_m=None, katastr_kod=None,
         source_claim_ids=tuple(sorted({*binding.source_claim_ids, pin_claim.id})),
     )
 
@@ -1189,3 +1195,29 @@ def place(
             source_claim_ids=(pin_claim.id,),  # type: ignore[union-attr]
         )
     return Position(lat=None, lon=None, origin="none")
+
+
+def pin_part(
+    binding: Binding, position: Position, *, pin_is_precise: bool, registry: RegistryView
+) -> Binding:
+    """v5.11 (operator ruling B, 2026-11-24): a point gives every unit it lies in. Where the row
+    is bound to its town only (by words that name no část, or by the pin itself, R7/R8) and a pin
+    the portal declares precise placed it, the row takes the KÚ covering the pin and that KÚ's
+    část (`katastr_part`: the one část all its doors in the town stand in). The town stays as
+    bound; a street, a door or a část the words name, bound or failed closed, leaves the row as
+    it is, and so does a KÚ with no door in the town (a pin on the town's border)."""
+    if (position.origin != "portal_pin" or not pin_is_precise or binding.words_name_a_part
+            or binding.target_kind != "admin_unit" or binding.admin_unit_id is None
+            or binding.obec_kod is None or binding.cast_obce_unit_id is not None
+            or position.lat is None or position.lon is None):
+        return binding
+    # A část the words bound is an `admin_unit` bind as well; only the town itself is refined.
+    bound = registry.admin_chain(binding.admin_unit_id)
+    if not bound or bound[0].level != "obec":
+        return binding
+    katastr = registry.katastr_at(position.lat, position.lon)
+    if katastr is None or not registry.katastr_parts(katastr, binding.obec_kod):
+        return binding
+    part = katastr_part(katastr, binding.obec_kod, registry)
+    return replace(binding, katastr_kod=katastr,
+                   cast_obce_unit_id=None if part is None else part.unit_id)

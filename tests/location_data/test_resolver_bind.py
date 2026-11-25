@@ -691,7 +691,7 @@ def test_one_truth_a_pin_abroad_never_places_a_row_the_words_bound():
     assert ask(replace(binding, rung="R7"), berlin, mm.default_mirror()) is None
 
 
-# ------------------------------------- v5.11: what is certain gets a door (ruling Q8 (a), W5b)
+# ------------------------------------- v5.12: what is certain gets a door (ruling Q8 (a), W5b)
 
 _VOKOVICE_DOOR = 21690278
 _ON_DOOR = (50.101004, 14.348004)              # 0.5 m from that door, 13 m from the next

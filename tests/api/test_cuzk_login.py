@@ -46,8 +46,8 @@ def _is(verb: str) -> Any:
 @pytest.fixture()
 def service(monkeypatch: pytest.MonkeyPatch) -> _Opener:
     opener = _Opener(ScriptConn([
-        (_is("select"), [("firma01", _WHEN)]),
-        (_is("insert"), [("firma01", _WHEN)]),
+        (_is("select"), [("firma01", _WHEN, None)]),
+        (_is("insert"), [("firma01", _WHEN, None)]),
     ]))
     monkeypatch.setattr(deps, "open_background_conn", opener)
     return opener
@@ -60,6 +60,29 @@ def ledger(monkeypatch: pytest.MonkeyPatch) -> dict[str, list]:
     seen: dict[str, list] = {"admitted": [], "settled": []}
     monkeypatch.setattr(cuzk_login, "admit_check", lambda c, a, u: seen["admitted"].append((a, u)) or 7)
     monkeypatch.setattr(cuzk_login, "settle_check", lambda c, i, o: seen["settled"].append((i, o)))
+    return seen
+
+
+@pytest.fixture(autouse=True)
+def lease(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """The login lease, scripted: free unless a test says `held`. Its semantics run on the real schema in
+    tests/test_cadastre_prices_live.py."""
+    seen: dict[str, Any] = {"held": False, "taken": 0, "released": 0}
+
+    def take(conn: Any, account: Any, token: Any) -> Any:
+        if seen["held"]:
+            raise cuzk_login.LeaseHeld(str(account))
+        seen["taken"] += 1
+        return ("firma01", "x", _WHEN, None)
+
+    def remove(conn: Any, account: Any) -> None:
+        if seen["held"]:
+            raise cuzk_login.LeaseHeld(str(account))
+        conn.cursor().execute("delete from account_cuzk_logins where account_id = %s", (account,))
+
+    monkeypatch.setattr(cuzk_login, "take_lease", take)
+    monkeypatch.setattr(cuzk_login, "release", lambda c, a, t: seen.__setitem__("released", seen["released"] + 1))
+    monkeypatch.setattr(cuzk_login, "remove", remove)
     return seen
 
 
@@ -101,7 +124,7 @@ def _writes(opener: _Opener) -> list[tuple[str, Any]]:
 def test_the_state_names_the_username_and_never_the_password(client: Any, service: _Opener) -> None:
     resp = client.get(URL)
     assert resp.status_code == 200
-    assert resp.json() == {"set": True, "username": "firma01", "checked_at": _WHEN.isoformat()}
+    assert resp.json() == {"set": True, "username": "firma01", "checked_at": _WHEN.isoformat(), "refused": False}
     assert service.conn.executed[0][1] == (_ME,)
 
 
@@ -173,7 +196,7 @@ def test_a_login_is_never_acted_for(client: Any, service: _Opener, checks: list,
 
 def test_the_store_round_trips_and_a_changed_key_is_unreadable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(cuzk_login.KEY_ENV, _KEY)
-    conn = ScriptConn([(_is("insert"), [("firma01", _WHEN)])])
+    conn = ScriptConn([(_is("insert"), [("firma01", _WHEN, None)])])
     cuzk_login.save(conn, _ME, "firma01", PASSWORD, _WHEN)
     token = conn.executed[0][1][2]
     reader = ScriptConn([(_is("select"), [("firma01", token)])])
@@ -181,11 +204,6 @@ def test_the_store_round_trips_and_a_changed_key_is_unreadable(monkeypatch: pyte
     monkeypatch.setenv(cuzk_login.KEY_ENV, Fernet.generate_key().decode())
     with pytest.raises(cuzk_login.Unreadable):
         cuzk_login.login_of(ScriptConn([(_is("select"), [("firma01", token)])]), _ME)
-
-
-class _Resp:
-    def __init__(self, status: int, body: str) -> None:
-        self.status_code, self.content = status, body.encode()
 
 
 def test_the_client_reads_an_accepted_and_a_refused_login(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -196,16 +214,15 @@ def test_the_client_reads_an_accepted_and_a_refused_login(monkeypatch: pytest.Mo
     bad = ('<e:Envelope xmlns:e="http://schemas.xmlsoap.org/soap/envelope/"><e:Body><e:Fault><faultcode>'
            "wsse:FailedAuthentication</faultcode></e:Fault></e:Body></e:Envelope>")
 
-    def post(url: str, **kw: Any) -> _Resp:
-        sent.update(url=url, **kw)
-        return _Resp(200, ok) if b"good" in kw["data"] else _Resp(500, bad)
+    def transport(url: str, data: bytes, headers: dict, given: Any) -> tuple[int, bytes]:
+        sent.update(url=url, data=data)
+        return (200, ok.encode()) if b"good" in data else (500, bad.encode())
 
     monkeypatch.delenv(wsdp_client.BASE_ENV, raising=False)
-    monkeypatch.setattr(wsdp_client.requests, "post", post)
+    monkeypatch.setattr(wsdp_client, "_transport", transport)
     assert wsdp_client.check_login("firma01", "good<&>") == "firma01"
     assert sent["url"] == "https://katastr.cuzk.gov.cz/ws/wsdp/3.1/vyhledat"
-    assert b"good&lt;&amp;&gt;" in sent["data"] and sent["timeout"] == wsdp_client.TIMEOUT
-    assert sent["allow_redirects"] is False
+    assert b"good&lt;&amp;&gt;" in sent["data"]
     with pytest.raises(wsdp_client.WsdpError) as refused:
         wsdp_client.check_login("firma01", PASSWORD)
     assert refused.value.reason == "refused" and PASSWORD not in str(refused.value)
@@ -213,7 +230,7 @@ def test_the_client_reads_an_accepted_and_a_refused_login(monkeypatch: pytest.Mo
 
 def test_a_redirect_is_no_answer_and_is_never_followed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(wsdp_client.BASE_ENV, raising=False)
-    monkeypatch.setattr(wsdp_client.requests, "post", lambda url, **kw: _Resp(307, ""))
+    monkeypatch.setattr(wsdp_client, "_transport", lambda url, data, headers, given: (307, b""))
     with pytest.raises(wsdp_client.WsdpError) as moved:
         wsdp_client.check_login("firma01", PASSWORD)
     assert (moved.value.reason, moved.value.status) == ("status", 307)
@@ -226,7 +243,7 @@ def test_a_redirect_is_no_answer_and_is_never_followed(monkeypatch: pytest.Monke
 def test_a_login_is_sent_only_to_cuzk_over_https(monkeypatch: pytest.MonkeyPatch, base: str) -> None:
     sent: list[str] = []
     monkeypatch.setenv(wsdp_client.BASE_ENV, base)
-    monkeypatch.setattr(wsdp_client.requests, "post", lambda url, **kw: sent.append(url))
+    monkeypatch.setattr(wsdp_client, "_transport", lambda url, data, headers, given: sent.append(url))
     with pytest.raises(wsdp_client.WsdpError) as refused:
         wsdp_client.check_login("firma01", PASSWORD)
     assert refused.value.reason == "misconfigured" and sent == []
@@ -270,7 +287,7 @@ def test_a_throttled_save_says_how_long_to_wait_and_names_no_username(client: An
     assert "firma01" not in resp.text and "firma01" not in caplog.text
 
 
-def test_the_released_account_helper_has_one_caller() -> None:
+def test_the_released_account_helper_has_three_callers() -> None:
     """`own_account_id_released` takes a route out of both route censuses, so who calls it is pinned here."""
     import ast
     from pathlib import Path
@@ -282,7 +299,8 @@ def test_the_released_account_helper_has_one_caller() -> None:
             if isinstance(fn, ast.FunctionDef) and any(
                     isinstance(n, ast.Attribute) and n.attr == "own_account_id_released" for n in ast.walk(fn)):
                 callers.add(f"{path.relative_to(root.parent).as_posix()}::{fn.name}")
-    assert callers == {"api/routes/cuzk_login.py::put_cuzk_login"}
+    assert callers == {"api/routes/cuzk_login.py::put_cuzk_login", "api/routes/cadastre_prices.py::post_building_prices",
+                       "api/routes/cadastre_prices.py::post_building_unit"}
 
 
 def test_a_misconfigured_address_sends_nothing_and_spends_nothing(client: Any, ledger: dict, checks: list,
@@ -290,3 +308,42 @@ def test_a_misconfigured_address_sends_nothing_and_spends_nothing(client: Any, l
     monkeypatch.setenv(wsdp_client.BASE_ENV, "http://example.com/")
     assert client.put(URL, json={"username": "firma01", "password": PASSWORD}).status_code == 502
     assert ledger == {"admitted": [], "settled": []} and checks == []
+
+
+def test_a_login_cuzk_refused_in_use_reads_refused_until_it_is_saved_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(cuzk_login.KEY_ENV, _KEY)
+    held = ScriptConn([(_is("select"), [("firma01", _WHEN, _WHEN)])])
+    assert cuzk_login.state(held, _ME)["refused"] is True
+    saved = ScriptConn([(_is("insert"), [("firma01", _WHEN, None)])])
+    assert cuzk_login.save(saved, _ME, "firma01", PASSWORD, _WHEN)["refused"] is False
+    assert "refused_at = null" in saved.executed[0][0]
+
+
+@pytest.mark.parametrize("method", ["put", "delete"])
+def test_the_login_is_not_saved_or_removed_beside_a_request_that_is_using_it(client: Any, service: _Opener,
+                                                                            checks: list, ledger: dict, lease: dict,
+                                                                            method: str) -> None:
+    """The lease lives on the login's row: a save would send a check beside a purchase run, and a removal would
+    drop the lease under it."""
+    lease["held"] = True
+    kwargs = {"json": {"username": "firma01", "password": PASSWORD}} if method == "put" else {}
+    resp = getattr(client, method)(URL, **kwargs)
+    assert resp.status_code == 409 and "nothing was sent" in resp.json()["detail"]
+    assert checks == [] and ledger == {"admitted": [], "settled": []} and _writes(service) == []
+
+
+@pytest.mark.parametrize("outcome", ["accepted", "refused", "throttled"])
+def test_a_save_gives_the_lease_back_however_it_ends(client: Any, monkeypatch: pytest.MonkeyPatch, lease: dict,
+                                                     outcome: str) -> None:
+    if outcome == "refused":
+        def refuse(u: str, p: str) -> str:
+            raise wsdp_client.WsdpError("refused", 500)
+        monkeypatch.setattr(wsdp_client, "check_login", refuse)
+    else:
+        monkeypatch.setattr(wsdp_client, "check_login", lambda u, p: u)
+    if outcome == "throttled":
+        def spent(conn: Any, account: Any, username: str) -> int:
+            raise cuzk_login.Throttled("username", 3600)
+        monkeypatch.setattr(cuzk_login, "admit_check", spent)
+    client.put(URL, json={"username": "firma01", "password": PASSWORD})
+    assert (lease["taken"], lease["released"]) == (1, 1)

@@ -16,6 +16,7 @@ import {
   buildAmenities,
   FactsList,
   AmenityChips,
+  type RegisterMarkOf,
 } from '@/lib/listingFacts';
 import Expandable from '@/components/Expandable';
 import Panel, { PanelEmpty } from '@/components/Panel';
@@ -73,8 +74,14 @@ export function PropertyIdentity({
   showStatus = true,
   statusHref,
   addressAction,
+  registerMark,
+  badge,
 }: {
   listing: ListingPublic;
+  /* Slots the property page fills from the register: the mark for a fact the register states too (after the
+   * storey, a fact, an amenity), and a badge after the status. */
+  registerMark?: RegisterMarkOf;
+  badge?: React.ReactNode;
   /* Rendered under the headline price, or in its place when the listing states
    * none. Estimation Detail leaves it empty. */
   priceNote?: PriceNote;
@@ -121,12 +128,14 @@ export function PropertyIdentity({
             <>
               <span className="mx-2 text-[var(--color-ink-4)]">·</span>
               <span className="text-[var(--color-ink)]">{floor}</span>
+              {registerMark?.('floors')}
             </>
           )}
         </p>
         {showStatus && (
           <StatusPill isActive={listing.is_active} lastSeenAt={listing.last_seen_at} href={statusHref} />
         )}
+        {badge}
       </div>
       <h1
         className={[
@@ -170,7 +179,7 @@ export function PropertyIdentity({
           )}
         </p>
       )}
-      <KeyFactsBlock listing={listing} />
+      <KeyFactsBlock listing={listing} registerMark={registerMark} />
     </div>
   );
 }
@@ -359,7 +368,7 @@ export function DescriptionBody({
  * label·value pairs on one wrapping line, with the amenity chips below. Rendered
  * inside the header's left column, under the price, so it fills the space beside
  * the map instead of pushing the description down. */
-function KeyFactsBlock({ listing }: { listing: ListingPublic }) {
+function KeyFactsBlock({ listing, registerMark }: { listing: ListingPublic; registerMark?: RegisterMarkOf }) {
   const facts = buildFacts(listing);
   const amenities = buildAmenities(listing);
   if (facts.length === 0 && amenities.length === 0) {
@@ -367,8 +376,8 @@ function KeyFactsBlock({ listing }: { listing: ListingPublic }) {
   }
   return (
     <div className="mt-5 space-y-3">
-      <FactsList facts={facts} />
-      <AmenityChips amenities={amenities} />
+      <FactsList facts={facts} mark={registerMark} />
+      <AmenityChips amenities={amenities} mark={registerMark} />
     </div>
   );
 }

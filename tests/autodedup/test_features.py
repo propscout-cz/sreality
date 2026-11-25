@@ -40,6 +40,7 @@ class StubSettings:
     rare_token_df: int = 2
     vocabulary_attr_keys: tuple[str, ...] = ("price_unit", "area_basis")
     numeral_conflict_units: tuple[str, ...] = ("floor", "rooms", "unit")
+    ref_code_structured_categories: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)

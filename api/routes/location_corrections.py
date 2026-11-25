@@ -1,7 +1,7 @@
 """The address picker's write (location W3b, ruling Q5): `POST /location/corrections`.
 
 Admin-gated at the router. The property page's pencil sends ONE register entity — an
-address point, a street or an obec, bound by `/maps/resolve` — or `pick: null`, and
+address point, a street or an obec, an own place search row — or `pick: null`, and
 `operator_corrections.submit_pick` writes it as operator claims on every ad of the
 property, then resolves the location ad, so the response already carries the refreshed
 label and `held` (whether the row binds the picked code) — 05 5.5.5 read-your-writes. A

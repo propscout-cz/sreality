@@ -445,6 +445,7 @@ def build_listing_record(
         "price": _jsonable(row.get("price_czk")),
         "attrs": attrs,
         "description": scrub_description(row.get("description")),
+        "ad_reference": row.get("ad_reference"),
         "first_seen_at": _jsonable(row.get("first_seen_at")),
         "last_seen_at": _jsonable(row.get("last_seen_at")),
         "inactive_at": _jsonable(row.get("inactive_at")),

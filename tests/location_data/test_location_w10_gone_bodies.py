@@ -170,7 +170,8 @@ def test_every_payload_predicate_skips_a_gone_body(name: str, fragment: str):
 
 
 # (module, client class, a ref whose built URL is on the portal's detail path,
-#  a body carrying one of that portal's own removed-listing markers)
+#  a body carrying one of that portal's own gone signals: a removed-listing
+#  marker, or the ad's own status slot reading sold/let)
 _PORTALS = [
     (
         bazos_client,
@@ -191,7 +192,7 @@ _PORTALS = [
         "/detail/byt-1.html",
         "Nabídka již neexistuje",
     ),
-    (remax_client, remax_client.RemaxClient, "1", "Tato nemovitost již není v nabídce"),
+    (remax_client, remax_client.RemaxClient, "1", '<h2 class="pd-header__price"> Prodáno <div>'),
     (
         idnes_client,
         idnes_client.IdnesClient,

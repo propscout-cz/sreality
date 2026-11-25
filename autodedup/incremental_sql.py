@@ -47,6 +47,15 @@ select to_regclass('autodedup.fp_key')         is not null
                 where attrelid = to_regclass('autodedup.rt_fp')
                   and attname = 'dd' and not attisdropped)
    and exists (select 1 from pg_attribute
+                where attrelid = to_regclass('autodedup.rt_fp')
+                  and attname = 'area_basis' and not attisdropped)
+   and exists (select 1 from pg_attribute
+                where attrelid = to_regclass('autodedup.rt_fp')
+                  and attname = 'block_key' and not attisdropped)
+   and exists (select 1 from pg_attribute
+                where attrelid = to_regclass('autodedup.rt_fp')
+                  and attname = 'ref_codes' and not attisdropped)
+   and exists (select 1 from pg_attribute
                 where attrelid = to_regclass('autodedup.rt_calibration')
                   and attname = 'payload_zlib' and not attisdropped) as present
 """
@@ -277,6 +286,32 @@ select coalesce(max(f.listing_id), %(after_id)s::bigint) as slice_max,
              or ll.okres_kod = any(%(okres)s::bigint[]))
 """
 
+# E991: the rescore sweep, the revive sweep's shape. After a seed switched the generation's
+# settings in place (`rt_seed recut=true rescore=true`), each in-scope row no pass refreshed since
+# the switch is owed one re-read: `rt_fp.updated_at` moves only on a refresh (`RT_FP_DD_SQL`
+# leaves it), and `since` is the seed's own transaction stamp, the database's clock. The sweep
+# reads the live rows first (`active`), then the rest, as a build does (E976).
+RT_RESCORE_SQL = """
+select coalesce(max(f.listing_id), %(after_id)s::bigint) as slice_max,
+       count(*)                                          as slice_size,
+       coalesce(array_agg(f.listing_id order by f.listing_id)
+                filter (where f.updated_at < %(since)s::timestamptz
+                          and (%(all_scope)s::boolean or ll.listing_id is not null)),
+                '{}'::bigint[])                          as owed
+  from (select listing_id, updated_at
+          from autodedup.rt_fp
+         where generation = %(generation)s::text
+           and is_active = %(active)s::boolean
+           and listing_id > %(after_id)s::bigint
+         order by listing_id
+         limit %(limit)s) f
+  left join public.listing_location ll
+         on ll.listing_id = f.listing_id
+        and (ll.obec_kod = any(%(obec)s::bigint[])
+             or ll.cast_obce_kod = any(%(cast_obce)s::bigint[])
+             or ll.okres_kod = any(%(okres)s::bigint[]))
+"""
+
 # The FIFTH feed, and the one the scope owes (E79): a listing the operator's geocoder MOVES —
 # an obec correction, a resolved část — leaves the scope without touching any cursor the other
 # four page over. The sweep is the revive sweep's twin: a bounded round-robin slice of THIS
@@ -285,13 +320,31 @@ select coalesce(max(f.listing_id), %(after_id)s::bigint) as slice_max,
 # half-indexed — a listing whose postings are stale is a listing every neighbour retrieves
 # wrongly. Under a scope the store is small enough that one slice covers it whole; the cursor
 # wraps when the slice runs short, exactly as the revive sweep's does.
+#
+# A (research experiments/absent_attribution.md M3, V3): a geocoder move INSIDE the scope is the
+# same stale posting, and no other feed sees it — an inactive advert appends no snapshot, so it
+# kept the block keys of its first claim (3,105 rows on 2026-10-25). The same slice returns the
+# in-scope rows whose stored `block_key` is not today's (`fingerprint.block_key_of` over
+# `listing_location`), for a re-claim. The KEY is compared, never `resolved_at`: a re-resolution
+# that lands on the same block moves nothing, and a row written before migration 769 (no key)
+# is never returned. Under `all` the scope arm of the join holds every location, which leaves
+# `departed` empty as before.
 RT_SCOPE_DRIFT_SQL = """
 select coalesce(max(f.listing_id), %(after_id)s::bigint) as slice_max,
        count(*)                                          as slice_size,
        coalesce(array_agg(f.listing_id order by f.listing_id)
                 filter (where not %(all_scope)s::boolean and ll.listing_id is null),
-                '{}'::bigint[])                          as departed
-  from (select listing_id
+                '{}'::bigint[])                          as departed,
+       coalesce(array_agg(f.listing_id order by f.listing_id)
+                filter (where ll.listing_id is not null
+                          and f.block_key is not null
+                          and f.block_key <> case
+                                when ll.cast_obce_kod is not null
+                                  then 'c' || ll.cast_obce_kod::text
+                                when ll.obec_kod is not null then 'o' || ll.obec_kod::text
+                                else '' end),
+                '{}'::bigint[])                          as relocated
+  from (select listing_id, block_key
           from autodedup.rt_fp
          where generation = %(generation)s::text
            and listing_id > %(after_id)s::bigint
@@ -299,7 +352,8 @@ select coalesce(max(f.listing_id), %(after_id)s::bigint) as slice_max,
          limit %(limit)s) f
   left join public.listing_location ll
          on ll.listing_id = f.listing_id
-        and (ll.obec_kod = any(%(obec)s::bigint[])
+        and (%(all_scope)s::boolean
+             or ll.obec_kod = any(%(obec)s::bigint[])
              or ll.cast_obce_kod = any(%(cast_obce)s::bigint[])
              or ll.okres_kod = any(%(okres)s::bigint[]))
 """
@@ -777,6 +831,19 @@ on conflict (key) do update set
 returning value ->> 'since'
 """
 
+# E991: the in-place rescore's record, stamped by the DATABASE's clock inside the seed's
+# transaction: the instant `RT_RESCORE_SQL` reads every refresh against.
+RT_RESCORE_WRITE_SQL = """
+insert into autodedup.settings (key, value, updated_at, updated_by)
+values (%(key)s::text, %(value)s::jsonb || jsonb_build_object('since', now()), now(),
+        %(updated_by)s::text)
+on conflict (key) do update set
+    value      = excluded.value,
+    updated_at = now(),
+    updated_by = excluded.updated_by
+returning value ->> 'since'
+"""
+
 # The growth readout's own watermark. An OBSERVATION row rather than a knob: the lane writes
 # it, nothing reads it but the next pass's summary, and it lives in `autodedup.settings`
 # because a new key there needs no migration (528).
@@ -901,7 +968,7 @@ on conflict (generation, probe, key_token, listing_id) do nothing
 # `autodedup.rt_fp`, NOT migration 528's `listing_fp`: that table is keyed on `listing_id`
 # alone so it cannot hold two generations, and nothing has ever written it. This one is
 # generation-scoped like every other row of this lane and carries exactly what the lane reads
-# without a fact fetch — the five guard columns (E17's rule floor), the re-score digest, the
+# without a fact fetch — the guard columns (E17's rule floor), the re-score digest, the
 # census cell the listing is counted in (so a MOVE unbumps the cell it left, not the one it
 # arrived in) and the activity flag the revive sweep anti-joins.
 # `first_decided_at` is COALESCED, never overwritten (E92, migration 540): the evidence
@@ -913,13 +980,14 @@ RT_FP_UPSERT_SQL = """
 insert into autodedup.rt_fp (
     generation, listing_id, category_main, category_type, area_m2, disposition, floor,
     fp_digest, cell_key, cell_group, is_active, ev_images, ev_phash, ev_clip, ev_tags,
-    ev_complete, dd, first_decided_at, updated_at
+    ev_complete, dd, source, area_basis, block_key, ref_codes, first_decided_at, updated_at
 ) values (
     %(generation)s::text, %(listing_id)s::bigint, %(category_main)s::text,
     %(category_type)s::text, %(area_m2)s::double precision, %(disposition)s::text,
     %(floor)s::integer, %(fp_digest)s::text, %(cell_key)s::text, %(cell_group)s::text,
     %(is_active)s::boolean, %(ev_images)s::integer, %(ev_phash)s::integer,
     %(ev_clip)s::integer, %(ev_tags)s::integer, %(ev_complete)s::boolean, %(dd)s::text,
+    %(source)s::text, %(area_basis)s::text, %(block_key)s::text, %(ref_codes)s::text[],
     now(), now()
 )
 on conflict (generation, listing_id) do update set
@@ -938,6 +1006,10 @@ on conflict (generation, listing_id) do update set
     ev_tags          = excluded.ev_tags,
     ev_complete      = excluded.ev_complete,
     dd               = excluded.dd,
+    source           = excluded.source,
+    area_basis       = excluded.area_basis,
+    block_key        = excluded.block_key,
+    ref_codes        = excluded.ref_codes,
     first_decided_at = coalesce(autodedup.rt_fp.first_decided_at,
                                 excluded.first_decided_at),
     updated_at       = now()
@@ -984,12 +1056,28 @@ delete from autodedup.rt_fp
    and listing_id = any(%(ids)s::bigint[])
 """
 
+# The carriers of each order code as the lane last read them (finding 2 of the #2056 review),
+# at most `cap` per code: one past `MAX_CODE_POPULATION` is already a crowd. Served by the GIN
+# index on `rt_fp.ref_codes` (migration 769): partial, so the statement states `is not null`
+# itself (without it the planner scans the table: 35 s on 560k rows against 3 ms).
+RT_CODE_CARRIERS_SQL = """
+select c.code, f.disposition, f.area_m2
+  from unnest(%(codes)s::text[]) as c(code)
+ cross join lateral (
+       select f.listing_id, f.disposition, f.area_m2
+         from autodedup.rt_fp f
+        where f.generation = %(generation)s::text
+          and f.ref_codes is not null
+          and f.ref_codes @> array[c.code]
+        limit %(cap)s::integer) f
+"""
+
 RT_FP_READ_SQL = """
 select f.listing_id, f.category_main, f.category_type, f.area_m2, f.disposition, f.floor,
        f.fp_digest, f.cell_key, f.cell_group, f.is_active,
        f.ev_images, f.ev_phash, f.ev_clip, f.ev_tags,
        extract(epoch from f.first_decided_at)::double precision as first_decided_epoch,
-       f.dd
+       f.dd, f.source, f.area_basis, f.block_key
   from autodedup.rt_fp f
  where f.generation = %(generation)s::text
    and f.listing_id = any(%(ids)s::bigint[])

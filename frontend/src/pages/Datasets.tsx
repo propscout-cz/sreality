@@ -255,7 +255,7 @@ export default function Datasets() {
   }, [obecTreeQ.data]);
   // obec_id → its okres id + kraj id (STABLE admin ids), via the picker tree's
   // parent_id walk — the lookup behind the location filter. These are the same
-  // RÚIAN codes `/maps/resolve` returns for a chip, so a kraj/okres chip
+  // RÚIAN codes own place search gives a chip, so a kraj/okres chip
   // matches an obec's ancestor exactly (no name collisions).
   const adminIdsByObec = useMemo(() => {
     const nodes = obecTreeQ.data ?? [];

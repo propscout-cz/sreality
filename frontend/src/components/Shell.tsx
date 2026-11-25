@@ -45,8 +45,8 @@ type MenuGroup = { label: string; items: ReadonlyArray<MenuItem> };
 // was to stop spending the row on surfaces the operator does not use hourly:
 // the three admin dropdowns collapse into ONE "Admin" trigger with a section
 // per program, and the three admin-only links (Broker Review, Datasets, the
-// paused Outreach) move inside it. The top row is now the daily surfaces only
-// (the audit queue joined the menu by ruling P33), with room to spare at 1280.
+// paused Outreach) move inside it. The top row is now the daily surfaces only,
+// with room to spare at 1280.
 //
 // Grouped under the "Settings" section of that menu — all admin-only, so the
 // whole group renders (or not) with the trigger.
@@ -99,13 +99,7 @@ const autodedupItems: ReadonlyArray<MenuItem> = [
 // than vanishing — a surface that exists and is switched off is a different
 // fact from one that was removed.
 const adminItems: ReadonlyArray<MenuItem> = [
-  /* First, and shouting on purpose. These are the listings W5 hides from
-   * customers until their location is resolved (migration 514), a WORK QUEUE,
-   * not a one-off review. It led the top row until ruling P33 (2026-10-27) put
-   * it here; its count left the Admin trigger with W1 (the location gauge's
-   * stored cells on Health are the one count). */
-  { to: ROUTES.newDedupPinAudit.build(), label: '!AUDIT POLOH' },
-  // Next: where the operator starts when something is wrong, and the one place
+  // First: where the operator starts when something is wrong, and the one place
   // system alerts are told (the bell shows none since ruling R2b, 2026-10-21).
   { to: ROUTES.health.build(), label: 'Health' },
   // The propscout.cz waitlist: who signed up from the landing page, and from which ad.

@@ -96,7 +96,6 @@ _ADMIN_ONLY_RELATIONS: list[str] = list(ADMIN_ONLY_RELATIONS)
 _BROKER_PII_RELATIONS: list[str] = [
     "brokers_public",
     "broker_firm_memberships_public",
-    "broker_listings_public",
     "listing_broker_public",
     "broker_resolution_runs_public",
     "broker_book",

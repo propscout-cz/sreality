@@ -2224,6 +2224,12 @@ def _autodedup_outcome(
             chunks=counts.get("chunks"),
             chunk_rss_mb=summary.get("chunk_rss_mb"),
             chunk_vectored=summary.get("chunk_vectored"),
+            # Where the pass's seconds went (refresh, retrieve, score, cluster, rail) and the
+            # adverts each feed gave it: seconds per advert is refresh + retrieve over the claim.
+            timings=summary.get("timings"),
+            feeds=summary.get("feeds"),
+            # The pass's slowest statements: name -> [calls, seconds, rows].
+            sql=summary.get("sql"),
             # E952: the claims the pass made (each the pair budget refused re-claims a quarter
             # of the claim made, E75), each one's wanted pair set and the last's, and why the
             # pass stopped (None: committed).
@@ -2329,8 +2335,9 @@ def _autodedup_run(started: float) -> dict[str, Any]:
             if not _AUTODEDUP_STORE_WARNED:
                 _AUTODEDUP_STORE_WARNED = True
                 LOG.warning(
-                    "AUTODEDUP: the autodedup real-time store (migrations 539/540/596/604/616) is "
-                    "absent on this database; the lane skips every tick")
+                    "AUTODEDUP: the autodedup real-time store (migrations "
+                    "539/540/596/604/616/769) is absent on this database; the lane skips every "
+                    "tick")
             return _autodedup_outcome(started, skipped="store_absent")
         _AUTODEDUP_STORE_WARNED = False
         # Read every pass (E948b): a resize that reaches a running process is seen by its

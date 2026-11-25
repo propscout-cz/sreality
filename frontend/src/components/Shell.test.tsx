@@ -61,7 +61,7 @@ function renderShellWith(element: React.ReactNode, at = '/browse') {
           <Route element={<Shell />}>
             <Route path="/browse" element={element} />
             <Route path="/property/:propertyId" element={element} />
-            <Route path="/new-dedup/pin-audit" element={element} />
+            <Route path="/new-dedup/candidates" element={element} />
           </Route>
         </Routes>
       </MemoryRouter>
@@ -166,37 +166,19 @@ describe('<Shell> Browse entry', () => {
   });
 });
 
-/* The hidden set is the Admin menu's first item (ruling P33, 2026-10-27). Its
- * count left the Admin trigger with W1 (ruling Q7): the location gauge's stored
- * cells on Health are the one location count, so the trigger is its name alone. */
-describe('<Shell> !AUDIT POLOH', () => {
-  it('lives in the Admin menu, not the row, and the trigger carries no count', async () => {
+/* A page inside the menu lights the trigger and only its own row (Dashboard's
+ * `end` keeps /new-dedup from prefix-matching). */
+describe('<Shell> a page inside the Admin menu', () => {
+  it('lights the Admin trigger and only its own row', async () => {
     const user = userEvent.setup();
-    renderShellWith(<p>page content</p>);
-    const nav = screen.getByRole('navigation');
-    const trigger = within(nav).getByRole('button', { name: /^Admin/ });
-    expect(trigger).toHaveAccessibleName('Admin');
-    expect(within(nav).queryByRole('link', { name: /AUDIT POLOH/ })).toBeNull();
-    await user.click(trigger);
-    const first = within(within(nav).getByRole('menu')).getAllByRole('menuitem')[0];
-    expect(first).toHaveAccessibleName('!AUDIT POLOH');
-    expect(first).toHaveAttribute('href', '/new-dedup/pin-audit');
-  });
-
-  /* Before the move the row entry lit on its own page and the trigger did not
-   * (Dashboard's `end` keeps /new-dedup from prefix-matching). Now the page is
-   * inside the menu, so the trigger lights there and only the audit row is
-   * current. */
-  it('lights the Admin trigger and only its own row on the audit page', async () => {
-    const user = userEvent.setup();
-    renderShellWith(<p>page content</p>, '/new-dedup/pin-audit');
+    renderShellWith(<p>page content</p>, '/new-dedup/candidates');
     const nav = screen.getByRole('navigation');
     const trigger = within(nav).getByRole('button', { name: /^Admin/ });
     const classes = trigger.className.split(/\s+/);
     expect(classes).toContain('text-[var(--color-chrome-ink)]');
     expect(classes).not.toContain('text-[var(--color-chrome-ink-2)]');
     await user.click(trigger);
-    expect(within(nav).getByRole('menuitem', { name: '!AUDIT POLOH' })).toHaveAttribute(
+    expect(within(nav).getByRole('menuitem', { name: 'Candidates' })).toHaveAttribute(
       'aria-current',
       'page',
     );
@@ -227,7 +209,7 @@ describe('<Shell> admin menu', () => {
     await user.click(trigger);
     /* Every section that used to be its own trigger, still reachable — and the
      * three admin-only links that used to spend a slot in the row. */
-    for (const label of ['!AUDIT POLOH', 'Broker Review', 'Datasets', 'Groups', 'Residual', 'Soudce', 'Health']) {
+    for (const label of ['Broker Review', 'Datasets', 'Groups', 'Residual', 'Soudce', 'Health']) {
       expect(within(nav).getByRole('menuitem', { name: label })).toBeInTheDocument();
     }
     /* Paused, not removed: a surface switched off is a different fact from one
@@ -253,18 +235,16 @@ describe('<Shell> admin menu', () => {
     }
   });
 
-  /* The audit queue leads the menu (ruling P33), then Health: where the operator
-   * starts when something is wrong, and where the bell's system alerts open. */
-  it('opens with the audit queue, then Health', async () => {
+  /* Health leads the menu: where the operator starts when something is wrong, and
+   * where the bell's system alerts open. */
+  it('opens with Health', async () => {
     const user = userEvent.setup();
     renderShellWith(<p>page content</p>);
     const nav = screen.getByRole('navigation');
     await user.click(within(nav).getByRole('button', { name: /^Admin/ }));
-    const [first, second] = within(within(nav).getByRole('menu')).getAllByRole('menuitem');
-    expect(first).toHaveAccessibleName('!AUDIT POLOH');
-    expect(first).toHaveAttribute('href', '/new-dedup/pin-audit');
-    expect(second).toHaveAccessibleName('Health');
-    expect(second).toHaveAttribute('href', '/health');
+    const [first] = within(within(nav).getByRole('menu')).getAllByRole('menuitem');
+    expect(first).toHaveAccessibleName('Health');
+    expect(first).toHaveAttribute('href', '/health');
   });
 
   it('keeps the daily surfaces in the row itself', () => {
