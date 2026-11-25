@@ -328,7 +328,8 @@ order after it (realitymix before bazos) are not one cutoff, and ceskereality ne
 lacks: later batches need a ruling on their order or the image. GitHub's throttled cron fired these walks
 about twice a day (14 runs each in those 7 days), the runner's grid four times, so the gate reads nominations per day
 beside per cycle (#2029's gate ticket).
-**Gate per walk (7 days):** pages, reached-end and nominations per cycle ± 10 %; 403/429 share from
+**Gate per walk (7 days):** pages and reached-end per cycle, nominations per day (a moved walk keeps its declared
+cadence), ± 10 %; 403/429 share from
 Railway ≤ the GitHub baseline; 0 `ended_at NULL` after ≥ 5 mid-walk deploys; proxy GB/day within its band;
 delisting and coverage cells unchanged; aggregate peak ≤ 70 % of a replica.
 
