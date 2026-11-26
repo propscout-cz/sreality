@@ -215,11 +215,9 @@ the two gaps found while adding property list are closed in the same PR that add
   (`frontend/src/lib/locationSteps.ts`, the run step keys in `location_data/location_steps.py`) and every test
   of them. The data stays: migration 492's three tables and `simulation_runs` (5 lane runs, 58,279 pairs) are read
   by nothing and are dropped in their own destructive ticket. The nine L0 knobs leave the settings registry
-  (no override row held any of them). **If path C resumes,** restore from the commit before the deletion:
-  `sha=$(git log -1 --diff-filter=D --format=%h -- toolkit/dedup_candidates.py)`, then
-  `git checkout "$sha^" -- toolkit/dedup_candidates.py toolkit/dedup_candidates_sql.py scripts/dedup_candidates_generate.py .github/workflows/new_dedup_candidates.yml api/routes/new_dedup_candidates.py frontend/src/pages/NewDedupCandidates.tsx`
-  plus the L0 entries of `toolkit/dedup_sim_settings.py` from the same commit, and re-check each against the
-  schema of that day.
+  (no override row held any of them). **If path C resumes,** find the deletion commit with
+  `sha=$(git log -1 --diff-filter=D --format=%h -- toolkit/dedup_candidates.py)`, restore every file it removed
+  or changed (`git show --stat "$sha"`) from `"$sha^"`, and re-check each against the schema of that day.
 
 - 2026-10-31 — **The DINOv3 bake-off manifest is deleted (Actions exit R6a, #2018); Set 2 stays unrun.** The
   operator approved deleting `scripts/dinov3_bakeoff_manifest.py`, its dispatch-only workflow and its test: no

@@ -101,8 +101,7 @@ REGISTRY: dict[str, SettingDef] = {
             explanation=(
                 "Wave 1's gate: how many operator-confirmed training images "
                 "each active tag needs before the labeling program is "
-                "considered done and the program can move to Wave 2 "
-                "(candidate selection)."
+                "considered done."
             ),
         ),
         SettingDef(

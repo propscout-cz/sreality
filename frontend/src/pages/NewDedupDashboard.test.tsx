@@ -7,7 +7,7 @@
  *     says "not yet" — never a zero — wherever nothing has been measured or the
  *     registry has no such knob. A zero would read as "we ran it and it was
  *     free", which is the one wrong answer here;
- *   * the wave strip names the wave being built.
+ *   * the wave strip marks W2, whose lane was deleted, as deleted.
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
@@ -93,11 +93,11 @@ describe('<NewDedupDashboard>', () => {
     await waitFor(() => expect(within(gpuRow).getAllByText('not yet')).toHaveLength(3));
   });
 
-  it('names the wave being built', async () => {
+  it('marks the deleted wave as deleted', async () => {
     renderPage();
     await screen.findByText('Where the program is');
     const wave2 = screen.getByText('W2').closest('li')!;
-    expect(wave2).toHaveTextContent('being built');
+    expect(wave2).toHaveTextContent('deleted');
     expect(wave2).toHaveTextContent('Level 0 — candidate selection');
   });
 });

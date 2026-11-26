@@ -156,7 +156,7 @@ job (`scripts/clip_tag_backfill.py`, every 15 min: zero-shot CLIP room/plot tags
 `image_clip_embeddings`, then in the same run a re-tag from STORED vectors when the taxonomy changes, per
 `app_settings.clip_taxonomy_retag_after`). Newest and
 **dispatch-only**: `dinov3_embed_backfill.yml` (GPU, inert until the encoder config is complete),
-`tagging_bakeoff.yml` (GPU, the encoder EXPERIMENT, `dedup_sim` only), `tag_model.yml` (CPU, ONE
+`tagging_bakeoff.yml` (GPU, the encoder EXPERIMENT, `dedup_sim` only) and `tag_model.yml` (CPU, ONE
 versioned tag model, mig 490 — the tag is the argmax head). **Read the matching `references/*-lane.md` before touching.**
 
 **There is NO scheduled dedup job any more** — the whole automatic decision layer was

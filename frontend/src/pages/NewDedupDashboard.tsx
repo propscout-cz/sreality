@@ -1,12 +1,9 @@
 /* NEW DEDUP · Dashboard — the program's front page.
  *
  * TWO THINGS, IN THE ORDER SOMEONE ARRIVING WANTS THEM:
- *   1. WHERE THE PROGRAM IS — the waves, and which one is being built.
+ *   1. WHERE THE PROGRAM IS — the waves, and the state of each.
  *   2. WHAT IT WILL COST — the two spend knobs that are set, beside the actual
  *      spend, which does not exist yet and therefore says "not yet".
- *
- * The candidate funnel that stood between them went with the Level 0 candidate
- * lane (#2681, operator decision 2026-11-26).
  *
  * "NOT YET" IS A REAL ANSWER HERE. Levels 3 and 4 have not run, so there is no
  * spend to report. The cell says so in words rather than showing a zero, which
@@ -35,18 +32,19 @@ const NOT_YET = 'not yet';
 
 /* ------------------------------------------------------------- wave strip */
 
-type WaveState = 'done' | 'building' | 'ahead';
+type WaveState = 'done' | 'stopped' | 'ahead';
 
 /* The program's own wave list, mirrored from docs/design/new-dedup/PROGRAM.md
  * § Waves. The design doc is the source of truth and is named on the page, so a
  * reader who suspects this strip is stale knows exactly what to check. Only two
  * states here are claims: W0/W1 done (Gate 1 CLOSED on 2026-09-09, recorded in
- * the ledger of 2026-09-10 (a)) and W2 building (that ledger entry opens it).
+ * the ledger of 2026-09-10 (a)) and W2 stopped (its lane deleted by operator
+ * decision, ledger of 2026-11-26).
  * Nothing here is a percentage or a date — those would be invented. */
 const WAVES: { code: string; title: string; state: WaveState }[] = [
   { code: 'W0', title: 'Backup, teardown, scaffolding', state: 'done' },
   { code: 'W1', title: 'Shared prerequisites + labeling', state: 'done' },
-  { code: 'W2', title: 'Level 0 — candidate selection', state: 'building' },
+  { code: 'W2', title: 'Level 0 — candidate selection', state: 'stopped' },
   { code: 'W3', title: 'Linear probe, full retag, path B', state: 'ahead' },
   { code: 'W4', title: 'Level 2 — perceptual hash', state: 'ahead' },
   { code: 'W5', title: 'Level 3 — embeddings', state: 'ahead' },
@@ -57,13 +55,13 @@ const WAVES: { code: string; title: string; state: WaveState }[] = [
 
 const WAVE_STATE_LABEL: Record<WaveState, string> = {
   done: 'closed',
-  building: 'being built',
+  stopped: 'deleted',
   ahead: 'not started',
 };
 
 const WAVE_STATE_CLASS: Record<WaveState, string> = {
   done: 'border-[var(--color-sage)] bg-[var(--color-sage-soft)] text-[var(--color-sage)]',
-  building: 'border-[var(--color-copper)] bg-[var(--color-copper-soft)] text-[var(--color-copper-2)]',
+  stopped: 'border-[var(--color-ochre)] bg-[var(--color-ochre-soft)] text-[var(--color-ochre)]',
   ahead: 'border-[var(--color-rule)] bg-[var(--color-paper)] text-[var(--color-ink-3)]',
 };
 

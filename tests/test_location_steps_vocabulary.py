@@ -1,10 +1,8 @@
 """W16: the location chain's predicates are spelled once, in `location_data/location_steps.py`.
 
-The readouts this rail first held together (the candidates funnel and the location audit
-waterfall) are gone: the waterfall in W1 (migration 719), the funnel with the candidate lane
-(#2681). What it still holds is the spelling every remaining reader carries: the town-missing
-fragment that scraper.db and the scorecard view copy VERBATIM, the consumer rule imported and
-never retyped, and the town floor applied by rank.
+This rail holds the spellings its readers carry: the town-missing fragment that scraper.db and
+the scorecard view copy VERBATIM, the consumer rule imported and never retyped, and the town
+floor applied by rank.
 """
 
 from __future__ import annotations

@@ -1,9 +1,5 @@
-"""W16 — the ONE place the location chain's predicates are spelled (operator ruling 2026-09-14).
-
-The NEW DEDUP candidates funnel and the location audit waterfall once asked the same first
-questions in different words; both readouts are gone (the waterfall in W1, migration 719; the
-funnel with the candidate lane, #2681). What outlives them is one definition per predicate,
-rendered into every reader.
+"""The ONE place the location chain's predicates are spelled (W16, operator ruling 2026-09-14):
+one definition per predicate, rendered into every reader.
 
 * `step_flags_sql()` — the four booleans a location chain is cut with. `located` is the consumer
   rule imported from `claims_common` and never retyped; `has_town` carries the obec rank floor,
