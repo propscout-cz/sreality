@@ -162,7 +162,7 @@ export function CollapsibleSection({
   eyebrow?: string;
   /* Ledger-style folio number ("01", "02", …) — pass for a page's own
    * top-level sections; omit where the title already carries its own
-   * ordinal (NEW DEDUP's "L0 · …" category labels), so the header never
+   * ordinal (NEW DEDUP's "L1 · …" category labels), so the header never
    * shows two competing numbering systems. */
   index?: number;
   /* Plain-text twin of `description`, for the InfoHint tooltip. Only

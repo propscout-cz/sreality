@@ -601,7 +601,8 @@ expandable to path A (a second `PathDef`).
       rows (sreality 44,237, idnes 5,292, bezrealitky 2,654) the headline area they never had —
       rows path C could not compare at all before.
 - [x] **DELETED 2026-11-26 (#2681, operator decision D3)** — the lane (`new_dedup_candidates.yml`, its
-      script and SQL), the audit page `/new-dedup/candidates`, the dashboard funnel and their tests. The
+      script and SQL), the audit page `/new-dedup/candidates`, the dashboard funnel, the nine L0 settings
+      knobs and their tests. The
       full-corpus generate and Gate 2 never ran (waiting since 09-10; last run 09-15). Migration 492's
       store and `simulation_runs` keep their rows, read by nothing; dropping them is its own destructive
       ticket. Restore recipe: PROGRAM.md ledger 2026-11-26.
