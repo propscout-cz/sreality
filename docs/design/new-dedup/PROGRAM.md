@@ -208,6 +208,18 @@ the two gaps found while adding property list are closed in the same PR that add
 
 ## Progress ledger (update every session, newest first)
 
+- 2026-11-26 — **The Level 0 candidate lane is deleted (operator decision D3, #2681); Gate 2 never ran.** The
+  full-corpus generate had waited on the operator since 09-10 and the attended tool last ran 09-15. Gone: the
+  dispatch-only workflow, `scripts/dedup_candidates_generate.py`, the rule and its SQL under `toolkit/`, the
+  `/new-dedup/candidates` route and page, the dashboard's funnel panel, the funnel-only step vocabulary
+  (`frontend/src/lib/locationSteps.ts`, the run step keys in `location_data/location_steps.py`) and every test
+  of them. The data stays: migration 492's three tables and `simulation_runs` (5 lane runs, 58,279 pairs) are read
+  by nothing and are dropped in their own destructive ticket. The nine L0 knobs stay in the settings registry,
+  steering nothing. **If path C resumes,** restore from the commit before the deletion:
+  `sha=$(git log -1 --diff-filter=D --format=%h -- toolkit/dedup_candidates.py)`, then
+  `git checkout "$sha^" -- toolkit/dedup_candidates.py toolkit/dedup_candidates_sql.py scripts/dedup_candidates_generate.py .github/workflows/new_dedup_candidates.yml api/routes/new_dedup_candidates.py frontend/src/pages/NewDedupCandidates.tsx`
+  and re-check each against the schema of that day.
+
 - 2026-10-31 — **The DINOv3 bake-off manifest is deleted (Actions exit R6a, #2018); Set 2 stays unrun.** The
   operator approved deleting `scripts/dinov3_bakeoff_manifest.py`, its dispatch-only workflow and its test: no
   run in the Actions exit audit's 14 days, and #1300's Set 2 was never run. This parks the bake-off, it does not

@@ -25,9 +25,9 @@ non-negotiables" for the full rationale.
 🟢 **W0 DONE — Gate 0 closed 2026-09-05** (Wave 0 — backup + teardown + scaffolding),
 🟢 **W1 DONE — Gate 1 closed 2026-09-09** (Wave 1 — shared prerequisites + labeling program;
 operator confirmation: training set finalized, tag model v1 live — the accuracy iteration
-continues as a parallel track), **W2 in progress** (Wave 2 — Level 0 candidate selection,
-**path C first**, ruled 2026-09-10). See PROGRAM.md's progress ledger for session-by-session
-detail; this file tracks only the phase-to-phase status.
+continues as a parallel track), **W2's candidate lane DELETED 2026-11-26** (Wave 2 — Level 0
+candidate selection, path C; operator decision D3, #2681). See PROGRAM.md's progress ledger for
+session-by-session detail; this file tracks only the phase-to-phase status.
 
 W0 was recorded done on 2026-08-25 and was not. Migration 432 dropped only the two funnel/cost
 matviews; every other CUTOFF §4 object, the whole publication gate (§3 step 2) and the
@@ -66,8 +66,8 @@ W1 (shared prerequisites + labeling program):
 - [x] Settings API (`api/routes/new_dedup.py`, admin-gated) + the real NEW DEDUP Settings page
       (`frontend/src/pages/NewDedupSettings.tsx`, replaces PR-2's placeholder) — operator can now
       review/tune every decided default ahead of any wave consuming it.
-- [ ] Dashboard skeleton (funnel + cost table) — **carried into W2** (2026-09-10), not built yet: the
-      funnel top ships with the Candidate audit page (W2 PR 3), the first moment there is a count to show.
+- [x] Dashboard skeleton (funnel + cost table) — shipped with W2 PR 3; the funnel went with the
+      candidate lane (2026-11-26, #2681), the cost table stays.
 - [x] Labeling page, tri-state rework (docs/design/tag-annotation-matrix.md, 2026-08-26) — the
       taxonomy and the confirmed ground truth are now PERMANENT tables outside `dedup_sim`:
       `tag_taxonomy` + `image_tag_labels` (migration 442, one positive/negative/excluded row per
@@ -600,16 +600,11 @@ expandable to path A (a second `PathDef`).
       parser side of the same PR + `scripts/backfill_land_headline_area.py` give 52,183 land
       rows (sreality 44,237, idnes 5,292, bezrealitky 2,654) the headline area they never had —
       rows path C could not compare at all before.
-- [ ] **The full-corpus generate**, then Gate 2. **Awaiting the operator**: ~56.5 M rows is on the
-      order of 10 GB in `dedup_sim`, which is real storage cost on the Supabase plan.
-- [ ] **Gate 2** (RULED 2026-09-10: it closes on path C alone): the operator, reading the audit
-      page over a real generation, is satisfied that path C loses no rightful candidates to data
-      quality. Path B's first output is reviewed at Gate 3, where that clause already stood.
-
-**All six questions of the 2026-09-10 (a) entry are ANSWERED** (entry (d)): the four definitions
-approved; scope = everything ever seen; the big cities split by city district AND C1 given a ±20 %
-area check; migration 492 applied; Gate 2 closes on path C alone; eleven tag heads correct for now.
-Nothing is waiting on the operator until the estimate has run under the new rule.
+- [x] **DELETED 2026-11-26 (#2681, operator decision D3)** — the lane (`new_dedup_candidates.yml`, its
+      script and SQL), the audit page `/new-dedup/candidates`, the dashboard funnel and their tests. The
+      full-corpus generate and Gate 2 never ran (waiting since 09-10; last run 09-15). Migration 492's
+      store and `simulation_runs` keep their rows, read by nothing; dropping them is its own destructive
+      ticket. Restore recipe: PROGRAM.md ledger 2026-11-26.
 
 Waves W3-W8 (retag + path B through production wiring) are not started; see PROGRAM.md.
 

@@ -157,8 +157,7 @@ job (`scripts/clip_tag_backfill.py`, every 15 min: zero-shot CLIP room/plot tags
 `app_settings.clip_taxonomy_retag_after`). Newest and
 **dispatch-only**: `dinov3_embed_backfill.yml` (GPU, inert until the encoder config is complete),
 `tagging_bakeoff.yml` (GPU, the encoder EXPERIMENT, `dedup_sim` only), `tag_model.yml` (CPU, ONE
-versioned tag model, mig 490 — the tag is the argmax head) and `new_dedup_candidates.yml` (CPU, Level 0
-path C = same town + disposition/area; `estimate`/`verify` read only). **Read the matching `references/*-lane.md` before touching.**
+versioned tag model, mig 490 — the tag is the argmax head). **Read the matching `references/*-lane.md` before touching.**
 
 **There is NO scheduled dedup job any more** — the whole automatic decision layer was
 removed wholesale in the 2026-08 NEW DEDUP cutoff (architectural rule #15; `docs/design/new-dedup/CUTOFF.md`)
