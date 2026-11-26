@@ -1354,6 +1354,7 @@ on conflict (generation, listing_lo, listing_hi) do update set
     dd_lo      = excluded.dd_lo,
     dd_hi      = excluded.dd_hi,
     decided_at = now()
+returning listing_lo
 """
 
 # A pair the lane STORES leaves the ledger: `pairs` and the ledger never hold the same pair.

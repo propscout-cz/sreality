@@ -1004,7 +1004,8 @@ class SqlStore:
     def _ledger(self, evicted: Sequence[PairRow], kept: Sequence[PairRow]) -> None:
         """E943: every pair deleted for its score goes into the reject ledger and every pair
         stored leaves it — inside the pass's transaction, so a pass that rolls back ledgers
-        nothing."""
+        nothing there. What it remembers here is what `salvage` writes after a deadline's
+        rollback (E997)."""
         self._rejects.update({(row.lo, row.hi): (row.dd_lo, row.dd_hi) for row in evicted})
         for row in kept:
             self._rejects.pop((row.lo, row.hi), None)
@@ -1023,20 +1024,24 @@ class SqlStore:
     def salvage(self) -> int:
         """E997: a decided reject survives its pass. Called once the pass's transaction has
         ROLLED BACK at its deadline, in a transaction of its own: the rejects it decided between
-        two adverts it did not refresh are ledgered, and nothing else is written. Such a row is
-        what the next pass would decide again on the same facts; the store, the clusters and the
-        cursors are what the rollback left, so no merge can rest on it. A side the pass
-        refreshed is left out: its refresh rolled back with the pass."""
+        two adverts it did not refresh are ledgered, and nothing else is written. Each row is
+        the row the pass would have written had it committed (the same pair, the same two
+        stored digests); that the decision also read a third advert the pass refreshed changes
+        nothing, since a third advert never re-decides a reject, by design. The store, the
+        clusters and the cursors are what the rollback left, so no merge can rest on it. A side
+        the pass refreshed is left out: its refresh rolled back with the pass. Returns the rows
+        written: the statement skips a pair that holds a stored row."""
         keys = sorted((lo, hi, dds[0], dds[1]) for (lo, hi), dds in self._rejects.items()
                       if lo not in self._touched and hi not in self._touched
                       and dds[0] and dds[1])
+        written = 0
         for start in range(0, len(keys), LEDGER_CHUNK):
             chunk = keys[start:start + LEDGER_CHUNK]
-            self._run(RT_REJECT_LEDGER_SALVAGE_SQL, {
+            written += len(self._query(RT_REJECT_LEDGER_SALVAGE_SQL, {
                 "generation": self.generation,
                 "los": [key[0] for key in chunk], "his": [key[1] for key in chunk],
-                "dd_los": [key[2] for key in chunk], "dd_his": [key[3] for key in chunk]})
-        return len(keys)
+                "dd_los": [key[2] for key in chunk], "dd_his": [key[3] for key in chunk]}))
+        return written
 
     def rejected(self, keys: Sequence[tuple[int, int, str, str]]) -> set[tuple[int, int]]:
         out: set[tuple[int, int]] = set()
@@ -3314,20 +3319,23 @@ def _measure_rate(claimed: int, elapsed_s: float, previous: float,
     return round(blended, 6), False
 
 
-def _salvage(conn: Any, store: "SqlStore", holder: str) -> int:
+def _salvage(conn: Any, store: "SqlStore", holder: str) -> tuple[int, str | None]:
     """E997: ledger the rejects of a pass its deadline stopped, in one transaction after its
-    rollback, fenced by the lease like every lane transaction. Best effort: a lost lease or a
-    failed statement rolls it back and the next pass decides those pairs again, as before.
-    Bounded by the connection's statement timeout a chunk, at most `max_pairs / LEDGER_CHUNK`
-    chunks."""
+    rollback, fenced by the lease like every lane transaction: the rows written, and why none
+    were when it failed. Best effort: a lost lease or a failed statement rolls it back and the
+    next pass decides those pairs again, as before. Bounded by the connection's statement
+    timeout a chunk, at most `max_pairs / LEDGER_CHUNK` chunks."""
+    started = time.perf_counter()
     try:
         with _transaction(conn):
             written = store.salvage()
             rt_lease.hold(conn, holder)
-        return written
     except Exception as exc:  # noqa: BLE001
         LOG.warning("AUTODEDUP: the stopped pass's rejects were not ledgered: %s", exc)
-        return 0
+        return 0, str(exc)[:300]
+    LOG.info("AUTODEDUP: the stopped pass ledgered %d rejects in %.1f s", written,
+             time.perf_counter() - started)
+    return written, None
 
 
 def _engine_since(conn: Any, generation: str, recorded: Any, digest: str) -> str:
@@ -3848,8 +3856,10 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         elif stopped and not shutting_down():
             # E913: the next pass claims half as much (the half E941 wrote ahead, named).
             _write_rate(conn, generation, rate_per_s / 2.0, "halved")
-        salvaged = (_salvage(conn, store, holder)
-                    if stopped == "deadline" and not shutting_down() else 0)
+        # E997: None while no salvage ran; the rows written, and the error when it failed.
+        salvaged, salvage_error = (_salvage(conn, store, holder)
+                                   if stopped == "deadline" and not shutting_down()
+                                   else (None, None))
         if stale_claims and not shutting_down():
             # E973: the pass that carried the re-claims ended on its own terms — it committed,
             # the pair budget refused them or its deadline cut it (a raise stamps on its own
@@ -3869,6 +3879,7 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                                    else {"counts": {}, "aborted": stopped})
         summary["aborted"] = stopped
         summary["ledger_salvaged"] = salvaged
+        summary["ledger_salvage_error"] = salvage_error
         # A9: the reconcile, after the pass committed and under the same lease. Off after a pass
         # that rolled back, and off over a generation no seed of this design built (the 09-21
         # `rt` predates F2: its groups are not the ones this build would draw). ON during a

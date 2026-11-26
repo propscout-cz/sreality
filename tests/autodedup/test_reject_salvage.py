@@ -131,7 +131,7 @@ def test_the_salvage_leaves_out_a_refreshed_side_a_stored_pair_and_a_pair_stored
     store._ledger([], [_row(7, 8, "band", 0.4)])
     db.reject_ledger.clear()
     before = len(db.statements)
-    assert store.salvage() == 2
+    assert store.salvage() == 1, "the rows WRITTEN: two were sent, the statement kept 5-6 out"
     assert db.statements[before:] == [S.RT_REJECT_LEDGER_SALVAGE_SQL]
     assert sorted(db.reject_ledger) == [(GEN, 3, 4)], (
         "1-2 has a refreshed side, 5-6 holds a stored row, 7-8 was stored later in the pass")
@@ -144,6 +144,7 @@ def test_the_salvage_statement_can_write_nothing_but_ledger_rows() -> None:
     sql = " ".join(S.RT_REJECT_LEDGER_SALVAGE_SQL.lower().split())
     assert sql.startswith("insert into autodedup.rt_reject_ledger (")
     assert sql.count("insert into") == 1 and "update autodedup" not in sql
+    assert sql.endswith("returning listing_lo")
     assert "delete" not in sql and ";" not in sql
     assert "where not exists ( select 1 from autodedup.pairs p" in sql
     tree = ast.parse(Path(incremental_lane.__file__).read_text(encoding="utf-8"))
@@ -162,6 +163,9 @@ def test_only_a_deadline_stop_salvages_and_the_summary_says_how_many(
     world = _seeded_reject_world(tmp_path)
     calls: list[int] = []
     monkeypatch.setattr(SqlStore, "salvage", lambda self: calls.append(1) or 7)
+    logged: list[str] = []
+    monkeypatch.setattr(incremental_lane.LOG, "info",
+                        lambda message, *args: logged.append(message % args))
     original = incremental_lane.run_pass_bounded
 
     def stop(*args: Any, **kwargs: Any) -> Any:
@@ -181,7 +185,12 @@ def test_only_a_deadline_stop_salvages_and_the_summary_says_how_many(
                                            stopping=lambda: False)
     assert len(calls) == (1 if how == "deadline" else 0)
     if how == "deadline":
-        assert out["aborted"] == "deadline" and out["ledger_salvaged"] == 7
+        assert out["aborted"] == "deadline"
+        assert (out["ledger_salvaged"], out["ledger_salvage_error"]) == (7, None)
+        assert [line for line in logged if "ledgered 7 rejects in" in line]
+    elif how == "refused":
+        assert (out["ledger_salvaged"], out["ledger_salvage_error"]) == (None, None), (
+            "None: no salvage ran, which 0 rows written is not")
 
 
 def test_a_salvage_that_fails_writes_nothing_and_the_pass_still_reports(
@@ -203,4 +212,56 @@ def test_a_salvage_that_fails_writes_nothing_and_the_pass_still_reports(
     out = incremental_lane.run_incremental(lambda: world, holder="worker:1:1",
                                            stopping=lambda: False)
     assert out["aborted"] == "deadline" and out["ledger_salvaged"] == 0
+    assert "statement timeout" in out["ledger_salvage_error"]
     assert not world.reject_ledger, "its transaction rolled back"
+
+
+def test_the_lane_salvages_a_deadline_stopped_pass_and_the_next_pass_is_answered(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Through `run_incremental`, the real salvage: a committed store whose rejects hold no
+    ledger row, one advert re-priced, the pass stopped at its deadline after it decided."""
+    from scraper import realtime_worker as rw
+
+    world = _seeded_reject_world(tmp_path)
+    assert not incremental_lane.run_incremental(lambda: world, holder="worker:1:1",
+                                                stopping=lambda: False)["aborted"]
+    # The evidence sweep re-claims every advert of this world (no photograph is processed),
+    # which would leave no reject between two adverts the pass did not refresh.
+    work = incremental_lane.SqlWork.__init__
+    monkeypatch.setattr(incremental_lane.SqlWork, "__init__", lambda self, *args, **kwargs: work(
+        self, *args, **{**kwargs, "evidence_slice": 0}))
+    rejects = set(world.reject_ledger)
+    assert rejects
+    world.reject_ledger.clear()
+    world.now += timedelta(hours=1)
+    world.listings[4001]["price_czk"] += 10_000
+    world.snapshots.append({"id": max(row["id"] for row in world.snapshots) + 1,
+                            "listing_id": 4001, "scraped_at": world.now - timedelta(minutes=30),
+                            "price_czk": world.listings[4001]["price_czk"]})
+    original = incremental_lane.run_pass_bounded
+
+    def stop(*args: Any, **kwargs: Any) -> Any:
+        result = original(*args, **kwargs)
+        assert result.claimed == [4001] and result.pairs_scored > 0
+        raise PassDeadline("the pass ran past its deadline")
+
+    kept = {name: _state(world, name) for name in TABLES}
+    with monkeypatch.context() as patch:
+        patch.setattr(incremental_lane, "run_pass_bounded", stop)
+        out = incremental_lane.run_incremental(lambda: world, holder="worker:1:1",
+                                               stopping=lambda: False)
+    assert out["aborted"] == "deadline" and out["ledger_salvage_error"] is None
+    assert out["ledger_salvaged"] == len(world.reject_ledger) > 0
+    assert {name: _state(world, name) for name in TABLES} == kept, "ledger rows, nothing else"
+    assert set(world.reject_ledger) <= rejects
+    assert not [key for key in world.reject_ledger if 4001 in key[1:]]
+    last = rw._autodedup_outcome(0.0, summary=out)
+    assert (last["ledger_salvaged"], last["ledger_salvage_error"]) == (
+        out["ledger_salvaged"], None), "the heartbeat carries it"
+
+    world.now += timedelta(minutes=20)
+    after = incremental_lane.run_incremental(lambda: world, holder="worker:1:1",
+                                             stopping=lambda: False)
+    assert not after["aborted"] and after["ledger_salvaged"] is None
+    assert after["counts"]["ledger_skipped"] == out["ledger_salvaged"]
+    assert set(world.reject_ledger) == rejects
