@@ -3283,8 +3283,8 @@ renumber.** Navigate by area:
     watchdog's cohort once per step). `inactive` waits out 24 h gone, and
     `reactivated` reads ONE fact for every producer, `properties.back_on_market_at`, which migration 754's trigger stamps only
     on a return after 24 h or more away (`left_market_at`, stamped on leaving), a merge that brings a live property
-    into one long gone included (migration 777); a collection and a watchdog with no slice read it through `_reactivated_sql` (a collection only if it held
-    a property off the market: a membership a merge moved onto it from one on the market, which the retired row's frozen `left_market_at` IS NULL says, is skipped, `_HELD_AT_THE_RETURN`), a watchdog
+    into one long gone included (migration 778); a collection and a watchdog with no slice read it through `_reactivated_sql` (a collection only if it held
+    a property off the market: a membership a merge moved onto it is told only if a row of it came from a property off the market, `property_merge_carries.from_on_market` (migration 777), `_HELD_AT_THE_RETURN`), a watchdog
     telling `new` as the property re-enters its slice, under the slice's merge and split exemptions (a
     portal blink sends neither Left the market nor Back on the market). Every row writes `event_ref` (the discriminator within
     source, kind and property: snapshot id, inactive epoch, for `reactivated` the epoch of the

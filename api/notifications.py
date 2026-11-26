@@ -1244,17 +1244,21 @@ class _Source:
 _MEMBERS_ONLY = " AND {pid} IN (SELECT property_id FROM members)"
 
 # A return is told to a collection that held a property OFF the market. A merge returns a property
-# long gone by bringing a live one in; a membership a merge moved onto it at or after the return (the
-# carry record: written in the merge's transaction, so never before the stamp it causes) is told
-# unless it came from a property on the market as that merge saw it, which never left: the retired
-# row's `left_market_at` IS NULL, frozen by `property_identity._RETIRE_SQL`. Undone or not: an
-# undone carry whose row went back names no member, one the operator kept is still that membership.
+# long gone by bringing a live one in, and a collection's membership reaches the survivor by that
+# merge's carry record (written in the merge's transaction, so never before the stamp it causes):
+# one row moved, the rest folded onto it. A collection whose membership was MOVED there at or after
+# the return did not hold the survivor; it is told only if one of those rows came from a property
+# off the market as the merge saw it (`from_on_market`, kept on the append-only record, migration
+# 777; NULL on an older row = unknown, not told). Undone or not: an undone carry whose row went
+# back names no member, one the operator kept is still that membership.
+_CARRIED_SINCE_THE_RETURN = (
+    "EXISTS (SELECT 1 FROM property_merge_carries c WHERE c.to_property_id = e.property_id "
+    "AND c.table_name = 'collection_properties' AND c.row_key = m.source_id "
+    "AND c.created_at >= e.back_on_market_at AND {which})"
+)
 _HELD_AT_THE_RETURN = (
-    " AND NOT EXISTS (SELECT 1 FROM property_merge_carries c "
-    "JOIN properties r ON r.id = c.from_property_id AND r.left_market_at IS NULL "
-    "WHERE c.to_property_id = e.property_id "
-    "AND c.table_name = 'collection_properties' AND c.row_key = m.source_id AND c.kind = 'moved' "
-    "AND c.created_at >= e.back_on_market_at)"
+    f" AND (NOT {_CARRIED_SINCE_THE_RETURN.format(which="c.kind = 'moved'")}"
+    f" OR {_CARRIED_SINCE_THE_RETURN.format(which='c.from_on_market IS FALSE')})"
 )
 
 # A collection with monitoring_enabled tells each property it holds the kinds it is set to

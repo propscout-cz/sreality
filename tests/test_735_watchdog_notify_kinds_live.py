@@ -218,7 +218,7 @@ def test_a_member_is_told_a_price_drop_after_it_entered(cur: Any) -> None:
 
 @pytest.mark.parametrize("published", [True, False])
 def test_a_merge_that_brings_a_live_property_into_one_long_gone_is_its_return(cur: Any, published: bool) -> None:
-    """#2583 (migration 777): a survivor long off the market flips active when a live property is merged into it,
+    """#2583 (migration 778): a survivor long off the market flips active when a live property is merged into it,
     published or not: the trigger stamps the return, and who is told is decided per follower in the producers."""
     survivor, retired = _property(cur), _property(cur)
     cur.execute("UPDATE properties SET is_active = false WHERE id = %s", (survivor,))
@@ -340,7 +340,7 @@ def test_a_merge_survivor_of_a_member_takes_its_place_silently(cur: Any) -> None
     cur.execute("UPDATE properties SET status = 'merged_away', merged_into = %s, merged_at = now(), "
                 "is_active = false WHERE id = %s", (survivor, retired))
     _recompute(cur, survivor)
-    # The survivor was long gone and the merge is its return (migration 777): still silent, the member was told.
+    # The survivor was long gone and the merge is its return (migration 778): still silent, the member was told.
     cur.execute("UPDATE properties SET settled_at = now() - interval '20 days', back_on_market_at = now() "
                 "WHERE id = %s", (survivor,))
     _later_pass(cur, sid)

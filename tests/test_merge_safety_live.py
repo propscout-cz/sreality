@@ -196,7 +196,7 @@ def test_merging_then_detaching_every_advert_restores_every_original_property(cu
 
 def test_a_real_merge_of_a_live_property_into_one_long_gone_is_its_return_told_to_who_held_it(cur):
     """#2583, through the one chokepoint: the survivor is the older record (months off the market) and flips
-    active when a live, published property is merged into it: its return (migration 777). The collection that
+    active when a live, published property is merged into it: its return (migration 778). The collection that
     held it is told Back on the market; the one whose membership the merge moved from the live record is not."""
     survivor, live = _property(cur), _property(cur)
     _advert(cur, survivor, source="sreality", active=False)
@@ -248,24 +248,31 @@ def _gone(cur, pid, days):
                 "WHERE id = %s", (days, pid))
 
 
-def test_a_membership_moved_from_a_property_itself_off_the_market_is_told_the_return(cur):
-    """Review of #2669, (b): one merge of {oldest, a year gone; one 60 days gone; one live}. The live one makes it
-    a return; the collection holding the 60-days-gone record held a property off the market, so it is told, as
-    it would be had the two merges run apart. The retired rows say which was on the market (`_RETIRE_SQL`)."""
-    oldest, gone, live = _property(cur), _property(cur), _property(cur)
+@pytest.mark.parametrize("gone_first", [True, False])
+def test_a_membership_carried_from_a_property_itself_off_the_market_is_told_the_return(cur, gone_first):
+    """Reviews of #2669: one merge of {oldest, a year gone; one 60 days gone; one live}. The live one makes it a
+    return. A collection holding the 60-days-gone record held a property off the market and is told, also one
+    holding it AND the live record, whichever of the two retires first (one row is moved, the other folded:
+    the carry record says of each whether it came off the market); the live record's own collection is not."""
+    oldest = _property(cur)
+    first, second = _property(cur), _property(cur)
+    gone, live = (first, second) if gone_first else (second, first)
     _advert(cur, oldest, source="sreality", active=False)
     _advert(cur, gone, source="remax", active=False)
     _advert(cur, live, source="idnes")
     for pid in (oldest, gone, live):
         _recompute(cur, pid)
     _gone(cur, oldest, 365)
-    cur.execute("UPDATE properties SET left_market_at = NULL WHERE id = %s", (gone,))  # left before 754 kept the time
-    held_gone, held_live = watched = _watched_collections(cur, [[gone], [live]])
+    _gone(cur, gone, 60)
+    held_gone, held_live, held_two = watched = _watched_collections(cur, [[gone], [live], [gone, live]])
 
     assert _merge(cur, [live, gone, oldest])["survivor_id"] == oldest
-    cur.execute("SELECT id, left_market_at::text FROM properties WHERE id = ANY(%s) ORDER BY id", ([gone, live],))
-    assert cur.fetchall() == [(gone, "-infinity"), (live, None)]
-    assert _returns_told(cur, watched) == [(held_gone, oldest)]
+    cur.execute("SELECT row_key, from_property_id, kind, from_on_market FROM property_merge_carries "
+                "WHERE to_property_id = %s AND table_name = 'collection_properties' ORDER BY row_key, id", (oldest,))
+    assert cur.fetchall() == [
+        (held_gone, gone, "moved", False), (held_live, live, "moved", True),
+        (held_two, first, "moved", first == live), (held_two, second, "folded", second == live)]
+    assert _returns_told(cur, watched) == [(held_gone, oldest), (held_two, oldest)]
 
 
 def test_a_return_before_the_merge_is_told_to_a_membership_moved_from_a_property_off_the_market(cur):

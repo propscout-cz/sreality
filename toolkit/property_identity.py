@@ -140,12 +140,15 @@ WHERE l.property_id = %(retired)s
 
 _REPOINT_SQL = "UPDATE listings SET property_id = %s WHERE property_id = %s"
 
-# One carry record row per curation row a step moved or folded (migration 589, MS14).
+# One carry record row per curation row a step moved or folded (migration 589, MS14). It keeps
+# whether the property the row came from was on the market as this merge saw it (migration 777):
+# written before the retire, so `is_active` is still that property's own rollup.
 _CARRY_SQL = """
 INSERT INTO property_merge_carries (merge_group_id, table_name, row_key, row_at, account_id,
-    from_property_id, to_property_id, kind, snapshot)
+    from_property_id, to_property_id, kind, snapshot, from_on_market)
 VALUES (%(group)s, %(table)s, %(row_key)s, %(row_at)s, %(account_id)s, %(from_property)s,
-        %(survivor)s, %(kind)s, %(snapshot)s)
+        %(survivor)s, %(kind)s, %(snapshot)s,
+        (SELECT p.is_active FROM properties p WHERE p.id = %(from_property)s))
 """
 
 # Publication never regresses on a merge or a split (migrations 668/747): a published retired
@@ -157,15 +160,11 @@ _CARRY_SETTLED_SQL = (
 )
 
 # One statement touching `status` and `is_active` together: a retired property is never left
-# active between two writes; the last write of a pair. It freezes whether the property was on the
-# market as this merge saw it (`is_active` is still its own rollup here): `left_market_at` NULL = it
-# was, else since when ('-infinity': before migration 754 kept the time). No trigger fires on a
-# retirement, so the row keeps it; `api/notifications._HELD_AT_THE_RETURN` reads it.
+# active between two writes; the last write of a pair.
 _RETIRE_SQL = """
 UPDATE properties
 SET status = 'merged_away', merged_into = %s,
-    merged_at = now(), is_active = false,
-    left_market_at = CASE WHEN is_active THEN NULL ELSE coalesce(left_market_at, '-infinity') END
+    merged_at = now(), is_active = false
 WHERE id = %s
 """
 
