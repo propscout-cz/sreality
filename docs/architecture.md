@@ -1152,7 +1152,8 @@ rules. Identify which one a task belongs to before you start.
   not fly. A 503 shows "Place search is unavailable right now" under the box, which stays enabled (the next
   keystroke asks again) while the chips keep filtering; nothing is ever asked of Mapy. The address picker saves a
   door, street or obec row as it is (`{adresni_misto, kód ADM}`, `{ulice, code}`, `{obec, code}`); any other level
-  offers no save. The Mapy proxy and its resolve binder are gone; Stage B (#2455) took the keys, the privacy page's
+  offers no save. The Mapy proxy and its resolve binder are gone; Stage B (#2455) took the keys (its wizard window
+  removed them from the API before the merge), the privacy page's
   Seznam.cz line and the pick record (`place_picks`, the holdout the gate #2465 scored own search on, emptied
   2026-11-23, dropped by migration 773 with its eval). No code calls Mapy: `tests/test_mapy_retirement_census.py`
   keeps an empty ledger.

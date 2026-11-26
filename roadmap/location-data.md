@@ -1475,9 +1475,10 @@ component is slimmed twice — each wave rewrites one component and slims its st
   API's two Mapy keys leave `.railway/railway.ts` and `.env.example`; the picks reader, the gate's eval and both
   DB-lane tests go, and 773 drops `place_picks` and its pg_cron job; the privacy page (CZ + EN) drops the Mapy.cz
   search sentence, the picks section and Seznam.cz (Valuo stays). The census ledger is empty: no code calls Mapy.
-  **Next (operator):** the wizard apply after the merge (it removes the API's keys and any worker copy, #2454), delete
-  the two GitHub secrets, revoke both keys at Mapy, clear them from the local `.env`, clear the `automation` marker
-  on the two smoke users; then the landing copy deck is rebuilt.
+  The worker holds no Mapy key (read 2026-11-26), so #2454's last item is done. **Next (operator):** the merge is the
+  wizard's `window API 0 2 sreality` on the merge coordinator's light: it removes the API's two keys from Railway, then
+  merges the draft PR at once. Then delete the two GitHub secrets, revoke both keys at Mapy, clear them from the local
+  `.env`, clear the `automation` marker on the two smoke users; then the landing copy deck is rebuilt.
 - **The gate's eval — built 2026-11-09** (#2452; spec #2441 Part 4 (1)–(4), Q2 c, ruling 2026-11-08; no migration; the
   architecture section left with it at Stage B). `scripts/place_search_gate_eval.py`, read-only on production:
   picks only through `picks_between`, in one READ ONLY transaction closed before any request; only `POST
