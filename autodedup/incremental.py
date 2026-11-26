@@ -670,7 +670,6 @@ class Store(Protocol):
     def upsert_pairs(self, rows: Sequence[PairRow]) -> int: ...
     def delete_pairs(self, keys: Sequence[tuple[int, int]]) -> None: ...
     def rejected(self, keys: Sequence[tuple[int, int, str, str]]) -> set[tuple[int, int]]: ...
-    def ledger_keyed(self) -> bool: ...
     def clusters_touching(self, members: Iterable[int]) -> dict[int, list[int]]: ...
     def write_clusters(self, drop_keys: Sequence[int], rows: Sequence[dict[str, Any]],
                        conflicts: Sequence[dict[str, Any]]) -> None: ...
@@ -1105,8 +1104,8 @@ def decision_digest(listing: Listing, images: Sequence[Image], settings: Setting
 # The modules a below-floor decision is computed by (E943): the import closure, inside
 # `autodedup`, of `decide`, `features`, `fingerprint`, `guards`, `model`, `store_score` and
 # `dataset` (a test holds it to this list), plus this module, whose `context_for` builds the
-# features' context. A deploy that changes any of them moves `engine_digest`, so the reject
-# ledger re-decides every wanted reject once rather than standing in for code that is gone.
+# features' context. A deploy that changes any of them moves `engine_digest`, so a merge
+# rests only on adverts refreshed since (E960); no stored decision is voided by it.
 DECISION_MODULES: tuple[str, ...] = (
     "body_align", "d43", "dataset", "decide", "demonstrate", "development", "family",
     "features", "fingerprint", "floor_convention", "guards", "hazard_context", "incremental",
@@ -1628,22 +1627,11 @@ def run_pass(
                 or lo in changed or hi in changed):
             decide.add((lo, hi))
     # E943: a pair decided below `store_floor` is not stored, so it reaches here with no row. The
-    # ledger answers it while both sides' decision digests and the store's calibration, feature
-    # version and engine digest all still match, which is exactly when a re-score would decide
-    # it the same. A refreshed side is never answered: its pairs are re-decided whatever its
-    # digest says. A side whose row predates its digest (migration 604) is read for it.
+    # ledger answers it by a stored pair's own rule: both sides' decision digests match and
+    # neither side was refreshed since it was decided. A side refreshed in this pass is never
+    # asked: its pairs are re-decided whatever its digest says.
     asked = [(lo, hi) for lo, hi in sorted(decide)
              if (lo, hi) not in stored and lo not in changed and hi not in changed]
-    # Read only while the ledger holds a row under this store's key: right after a deploy that
-    # moved the engine digest (the one that ships 604) none matches, and the sides are read
-    # once their pairs are decided instead.
-    blank = sorted({i for pair in asked for i in pair if not dds[i]})
-    if blank and store.ledger_keyed():
-        working.ensure(blank, reason="digest")
-        for listing_id in blank:
-            if listing_id in working.listings:
-                stamps[listing_id] = dds[listing_id] = decision_digest(
-                    working.listings[listing_id], working.images.get(listing_id, ()), settings)
     skipped = store.rejected([(lo, hi, dds[lo], dds[hi]) for lo, hi in asked
                               if dds[lo] and dds[hi]])
     decide -= skipped

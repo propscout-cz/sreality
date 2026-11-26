@@ -14,20 +14,21 @@ import ast
 import copy
 import json
 import random
+import re
 import shutil
 import sys
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
 import pytest
 
-from autodedup import harness, incremental, incremental_lane, incremental_store, rt_lease
+from autodedup import harness, incremental, incremental_lane, rt_lease
 from autodedup import incremental_sql as S
 from autodedup.dataset import Dataset, Image, Location, Meta
 from autodedup.decide import Decision
 from autodedup.export import encode_clip
-from autodedup.features import FEATURE_VERSION
 from autodedup.incremental import (
     Calibration,
     Limits,
@@ -114,22 +115,18 @@ class _Engine:
             twin_work: Any = None, limits: Limits | None = None) -> PassResult:
         caps = limits or Limits(max_listings=CLAIM, max_pairs=10 ** 9)
         settings = _settings()
-        key = {"calibration_digest": calibration.digest(),
-               "engine_digest": engine_digest(settings, self.model)}
-        store = self.store_cls(self.db, GEN, store_floor=settings.store_floor, **key)
+        store = self.store_cls(self.db, GEN, store_floor=settings.store_floor,
+                               calibration_digest=calibration.digest())
         result = run_pass(store, CohortFacts(ds), work or self.work, settings, self.model,
                           calibration, limits=caps, generation=GEN)
-        self.twin.calibration_digest = key["calibration_digest"]
-        self.twin.engine_digest = key["engine_digest"]
         run_pass(self.twin, CohortFacts(ds), twin_work or self.twin_work, settings, self.model,
                  calibration, limits=caps, generation=GEN)
         return result
 
 
 def _key(calibration: Calibration) -> dict[str, str]:
-    """The ledger key `run_incremental` builds its store with."""
-    return {"calibration_digest": calibration.digest(),
-            "engine_digest": engine_digest(_settings(), MODEL)}
+    """What `run_incremental` builds its store with."""
+    return {"calibration_digest": calibration.digest()}
 
 
 def _db_state(db: FakePg) -> dict[str, Any]:
@@ -282,25 +279,23 @@ def test_the_ledger_engine_reaches_todays_state_after_every_pass(
     for target, mutate in ((randoms[3], body), (randoms[5], broker), (randoms[7], tags)):
         assert_exactly_the_affected(target, *disturb_and_pass(target, mutate))
 
-    # A calibration re-cut: the ledger's rows are inert, so every wanted reject is re-scored —
-    # one full-price pass — and the next pass skips again under the new digest.
+    # A calibration re-cut refreshes no advert, so it voids no reject: the rule a stored pair
+    # stands by. The next pass still skips.
     calibration = replace(calibration, corpus_docs=calibration.corpus_docs + 1)
-    ref_scored, led_scored, _stored, out = disturb_and_pass(None, None)
-    assert (out.ledger_skipped, led_scored) == (0, ref_scored)
     assert disturb_and_pass(None, None)[3].ledger_skipped > 0
 
-    # A feature-version bump, the same.
-    for module in (incremental_lane, incremental_store):
-        monkeypatch.setattr(module, "FEATURE_VERSION", FEATURE_VERSION + 1)
-    ref_scored, led_scored, _stored, out = disturb_and_pass(None, None)
-    assert (out.ledger_skipped, led_scored) == (0, ref_scored)
-    assert {row["feature_version"] for row in ledger.db.reject_ledger.values()} >= {
-        FEATURE_VERSION + 1}
-    assert disturb_and_pass(None, None)[3].ledger_skipped > 0
 
-    # A deploy of the decision code that bumps no version: every reject now scores 0.05, above
-    # the floor. The sources moved, so the engine digest did, and every wanted reject is decided
-    # under the new code — stored now — exactly as today's engine decides it.
+def test_a_deploy_voids_no_reject_and_the_sweep_carries_it(
+        scored: list[tuple[int, int]], monkeypatch: pytest.MonkeyPatch) -> None:
+    """A deploy of the decision code (every reject now scores 0.05, above the floor) moves the
+    engine digest and voids nothing at once: a neighbour's rejects are still answered. The
+    sweep's re-claim of an advert re-decides every reject of it under the new code."""
+    ds = _mixed_dataset()
+    db, calibration = _drained(ds)
+    target = next(lo for _g, lo, _hi in sorted(db.reject_ledger) if lo >= 7000)
+    ledgered = {key[1:] for key in db.reject_ledger if target in key[1:]}
+    others = {key[1:] for key in db.reject_ledger} - ledgered
+    assert ledgered and others
     real = incremental.decide_pair
 
     def deployed(*args: Any, **kwargs: Any) -> Decision:
@@ -311,10 +306,17 @@ def test_the_ledger_engine_reaches_todays_state_after_every_pass(
 
     monkeypatch.setattr(incremental, "decide_pair", deployed)
     monkeypatch.setattr(incremental, "DECISION_SOURCE_DIGEST", "deployed")
-    ref_scored, led_scored, _stored, out = disturb_and_pass(None, None, twin_is_sql=False)
-    assert (out.ledger_skipped, led_scored) == (0, ref_scored)
-    assert {key[1:] for key in ledger.db.pairs} >= _touching(ref_scored, set(randoms)), (
-        "the deployed code stores what the old one rejected")
+    db.now += timedelta(minutes=5)
+    scored.clear()
+    out = run_pass(SqlStore(db, GEN, store_floor=FLOOR, **_key(calibration)),
+                   CohortFacts(ds), Schedule([target], redecide=True), _settings(), MODEL,
+                   calibration, limits=Limits(max_listings=CLAIM, max_pairs=10 ** 9),
+                   generation=GEN)
+    assert ledgered <= set(scored), "the swept advert's rejects are decided again"
+    assert ledgered <= {key[1:] for key in db.pairs}, "and stored under the deployed code"
+    assert out.ledger_skipped > 0 and not others & set(scored), (
+        "no other reject was voided by the deploy")
+    assert others <= {key[1:] for key in db.reject_ledger}
 
 
 def _vector(seed: int) -> str:
@@ -453,44 +455,89 @@ def _row(lo: int, hi: int, zone: str, score: float, dd: tuple[str, str] = ("a", 
                    dd_lo=dd[0], dd_hi=dd[1])
 
 
-def _keyed(kind: str) -> Any:
-    """A store of `kind` at a given ledger key, over ONE ledger: the key is the store's own."""
-    db, twin = FakePg(), MemoryStore(store_floor=FLOOR)
+def _read(store: Any, *ids: int) -> None:
+    """Refresh `ids` now, as `RT_FP_UPSERT_SQL` / `MemoryStore.put_listing` stamp a refresh."""
+    for listing_id in ids:
+        if isinstance(store, MemoryStore):
+            store.refreshes += 1
+            store.fp[listing_id] = store.fp.get(listing_id) or object()  # type: ignore[assignment]
+            store.refreshed[listing_id] = store.refreshes
+        else:
+            store.conn.rt_fp[(GEN, listing_id)] = {"updated_at": store.conn.now}
 
-    def at(calibration_digest: str = "cal", engine_digest: str = "eng") -> Any:
-        if kind == "sql":
-            return SqlStore(db, GEN, store_floor=FLOOR, calibration_digest=calibration_digest,
-                            engine_digest=engine_digest)
-        twin.calibration_digest, twin.engine_digest = calibration_digest, engine_digest
-        return twin
 
-    return at
+def _store(kind: str) -> Any:
+    return (SqlStore(FakePg(), GEN, store_floor=FLOOR, calibration_digest="cal")
+            if kind == "sql" else MemoryStore(store_floor=FLOOR))
 
 
 @pytest.mark.parametrize("kind", ["sql", "twin"])
-def test_a_pair_is_answered_only_when_all_five_keys_match(
-        kind: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    at = _keyed(kind)
-    assert at().upsert_pairs([_row(1, 2, "reject", 0.001)]) == 1
-    assert at().rejected([(1, 2, "a", "b")]) == {(1, 2)}
-    assert at().rejected([(1, 2, "x", "b")]) == set(), "dd_lo"
-    assert at().rejected([(1, 2, "a", "x")]) == set(), "dd_hi"
-    assert at().rejected([(1, 3, "a", "b")]) == set(), "another pair"
-    assert at(calibration_digest="recut").rejected([(1, 2, "a", "b")]) == set(), "a re-cut"
-    assert at(engine_digest="deployed").rejected([(1, 2, "a", "b")]) == set(), "a deploy"
-    for module in (incremental_lane, incremental_store):
-        monkeypatch.setattr(module, "FEATURE_VERSION", FEATURE_VERSION + 1)
-    assert at().rejected([(1, 2, "a", "b")]) == set(), "a feature-version bump"
+def test_a_pair_is_answered_while_its_digests_match_and_neither_side_was_read_since(
+        kind: str) -> None:
+    store = _store(kind)
+    _read(store, 1, 2, 3)
+    # The pass's own rows: decided at the instant its sides were refreshed, hence `>=`.
+    assert store.upsert_pairs([_row(1, 2, "reject", 0.001)]) == 1
+    assert store.rejected([(1, 2, "a", "b")]) == {(1, 2)}
+    assert store.rejected([(1, 2, "x", "b")]) == set(), "dd_lo"
+    assert store.rejected([(1, 2, "a", "x")]) == set(), "dd_hi"
+    assert store.rejected([(1, 3, "a", "b")]) == set(), "another pair"
+    # A later instant: an advert the pair does not hold is read, and the row stands.
+    if kind == "sql":
+        store.conn.now += timedelta(seconds=1)
+    _read(store, 3)
+    assert store.rejected([(1, 2, "a", "b")]) == {(1, 2)}
+    # One side is read again and the pair is not decided with it: the row answers nothing.
+    _read(store, 2)
+    assert store.rejected([(1, 2, "a", "b")]) == set(), "a side read since"
+    # Decided again in that pass: it answers.
+    store.upsert_pairs([_row(1, 2, "reject", 0.001)])
+    assert store.rejected([(1, 2, "a", "b")]) == {(1, 2)}
 
 
-def test_the_lookup_statement_names_all_five_keys() -> None:
-    sql = " ".join(S.RT_REJECT_LEDGER_LOOKUP_SQL.split())
-    for clause in ("l.dd_lo = k.dd_lo", "l.dd_hi = k.dd_hi",
-                   "l.calibration_digest = %(calibration_digest)s::text",
-                   "l.feature_version = %(feature_version)s::smallint",
-                   "l.engine_digest = %(engine_digest)s::text",
-                   "l.generation = %(generation)s::text"):
-        assert clause in sql, clause
+@pytest.mark.parametrize("kind", ["sql", "twin"])
+def test_a_pair_whose_side_holds_no_row_is_not_answered(kind: str) -> None:
+    store = _store(kind)
+    _read(store, 1)
+    store.upsert_pairs([_row(1, 2, "reject", 0.001)])
+    assert store.rejected([(1, 2, "a", "b")]) == set()
+
+
+def _statements() -> dict[str, str]:
+    """Every SQL statement the engine holds as a module constant, by `module.NAME`."""
+    root = Path(incremental.__file__).resolve().parent
+    out: dict[str, str] = {}
+    for path in sorted(root.glob("*.py")):
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+                    and isinstance(node.value.value, str)):
+                out[f"{path.stem}.{node.targets[0].id}"] = " ".join(  # type: ignore[attr-defined]
+                    node.value.value.lower().split())
+    return out
+
+
+def test_the_ledger_is_keyed_by_no_version_and_one_statement_stamps_a_refresh() -> None:
+    """The rail of the one rule: the lookup names the two digests and the refresh instants and
+    nothing else, no statement names a version column of the ledger, and `rt_fp.updated_at`,
+    the instant a reject is measured against, has one writer."""
+    lookup = " ".join(S.RT_REJECT_LEDGER_LOOKUP_SQL.split())
+    for clause in ("l.dd_lo = k.dd_lo", "l.dd_hi = k.dd_hi", "l.generation = %(generation)s::text",
+                   "l.decided_at >= greatest(a.updated_at, b.updated_at)"):
+        assert clause in lookup, clause
+    statements = _statements()
+    for name, sql in statements.items():
+        if "rt_reject_ledger" in sql:
+            for column in ("calibration_digest", "feature_version", "engine_digest"):
+                assert column not in sql, f"{name} names the ledger's {column}"
+    writers = sorted(name for name, sql in statements.items()
+                     if re.search(r"(insert into|update) autodedup\.rt_fp\b", sql)
+                     and "updated_at" in sql)
+    assert writers == ["incremental_sql.RT_FP_UPSERT_SQL"], writers
+    migrations = Path(incremental.__file__).resolve().parents[1] / "migrations"
+    for path in sorted(migrations.glob("*.sql")):
+        text = " ".join(path.read_text(encoding="utf-8").lower().split())
+        assert not re.search(r"update autodedup\.rt_fp\b[^;]*updated_at\s*=", text), path.name
+        assert not re.search(r"trigger[^;]*on autodedup\.rt_fp\b", text), path.name
 
 
 def _imports(root: Path, name: str) -> set[str]:
@@ -553,7 +600,7 @@ def test_a_database_without_596_is_store_absent(tmp_path) -> None:
 
 def test_a_below_floor_deletion_issues_one_ledger_upsert_and_a_store_deletes_the_row() -> None:
     db = FakePg()
-    store = SqlStore(db, GEN, store_floor=FLOOR, calibration_digest="cal", engine_digest="eng")
+    store = SqlStore(db, GEN, store_floor=FLOOR, calibration_digest="cal")
     before = len(db.statements)
     written = store.upsert_pairs([_row(1, 2, "reject", 0.001), _row(3, 4, "reject", 0.01),
                                   _row(5, 6, "band", 0.4), _row(7, 8, "reject", 0.5),
@@ -563,9 +610,7 @@ def test_a_below_floor_deletion_issues_one_ledger_upsert_and_a_store_deletes_the
     assert issued.count(S.RT_REJECT_LEDGER_UPSERT_SQL) == 1
     assert issued.count(S.RT_REJECT_LEDGER_DELETE_SQL) == 1
     assert sorted(db.reject_ledger) == [(GEN, 1, 2), (GEN, 3, 4)]
-    assert db.reject_ledger[(GEN, 1, 2)] | {"decided_at": None} == {
-        "dd_lo": "a", "dd_hi": "b", "calibration_digest": "cal",
-        "feature_version": FEATURE_VERSION, "engine_digest": "eng", "decided_at": None}
+    assert db.reject_ledger[(GEN, 1, 2)] == {"dd_lo": "a", "dd_hi": "b", "decided_at": db.now}
     assert sorted(key[1:] for key in db.pairs) == [(5, 6), (7, 8), (9, 10)]
     # Re-decided above the floor: stored, and its ledger row goes (never both).
     store.upsert_pairs([_row(1, 2, "band", 0.3)])
@@ -576,7 +621,7 @@ def test_a_below_floor_deletion_issues_one_ledger_upsert_and_a_store_deletes_the
 
 
 def test_the_twin_ledgers_as_the_store_does_and_still_keeps_every_pair() -> None:
-    twin = MemoryStore(store_floor=FLOOR, calibration_digest="cal", engine_digest="eng")
+    twin = MemoryStore(store_floor=FLOOR)
     assert twin.upsert_pairs([_row(1, 2, "reject", 0.001), _row(5, 6, "band", 0.4)]) == 1
     assert set(twin.pairs) == {(1, 2), (5, 6)} and set(twin.ledger) == {(1, 2)}
     twin.upsert_pairs([_row(1, 2, "band", 0.3)])
@@ -589,7 +634,8 @@ def test_each_ledger_verb_costs_one_statement_a_chunk(monkeypatch: pytest.Monkey
     assert LEDGER_CHUNK == 20_000
     monkeypatch.setattr(incremental_lane, "LEDGER_CHUNK", 2)
     db = FakePg()
-    store = SqlStore(db, GEN, store_floor=FLOOR, calibration_digest="cal", engine_digest="eng")
+    store = SqlStore(db, GEN, store_floor=FLOOR, calibration_digest="cal")
+    _read(store, *range(1, 11))
     store.upsert_pairs([_row(i, i + 1, "reject", 0.001) for i in range(1, 10, 2)])
     assert db.statements.count(S.RT_REJECT_LEDGER_UPSERT_SQL) == 3
     keys = [(i, i + 1, "a", "b") for i in range(1, 10, 2)]
@@ -705,10 +751,6 @@ def test_a_committed_pass_ledgers_and_reports_it(tmp_path) -> None:
     assert not out["aborted"]
     assert out["counts"]["ledger_written"] == len(world.reject_ledger) > 0
     assert out["counts"]["ledger_skipped"] == 0 and out["counts"]["pairs_to_decide"] > 0
-    assert {row["calibration_digest"] for row in world.reject_ledger.values()} == {
-        world.calibration["rt"]["digest"]}
-    assert {row["engine_digest"] for row in world.reject_ledger.values()} == {
-        out["engine_digest"]}
 
 
 @pytest.mark.parametrize("how", ["refused", "deadline", "stopped", "lease_lost"])

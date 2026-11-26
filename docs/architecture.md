@@ -2861,7 +2861,7 @@ renumber.** Navigate by area:
     claim cap a death halves (E948), on its first attempt, each group at most once in 6 h
     (stamped once the pass carrying it commits, is refused, hits its deadline or raises; a
     shutdown, a lost lease or a kill stamps nothing, E973), and none while the apply scope is
-    closed or the reject ledger is inert. It
+    closed. It
     reconciles only a generation a
     seed of this version built (`rt_seed_version:rt` = `incremental.SEED_VERSION`) — through its
     build phase too (E964): a group waits only while an advert its merge would move (a member, or

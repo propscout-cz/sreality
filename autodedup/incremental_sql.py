@@ -1298,7 +1298,12 @@ delete from autodedup.pairs
 """
 
 # E943, the reject ledger (migration 596): which of these not-stored pairs were decided below
-# `store_floor` on the SAME inputs and code. All five must match; one primary-key probe a pair.
+# `store_floor` on the SAME inputs. A row answers while both sides' decision digests match and
+# it was decided no earlier than either side's last refresh (`rt_fp.updated_at`, which only
+# `RT_FP_UPSERT_SQL` moves): the rule a stored pair stands by. No version keys it, so a deploy,
+# a re-cut or a settings switch voids nothing at once; the sweep that re-reads an advert under
+# the new engine voids that advert's older rows as it goes. A pass's own rows carry its one
+# `now()` on both columns, hence `>=`.
 RT_REJECT_LEDGER_LOOKUP_SQL = """
 select l.listing_lo, l.listing_hi
   from unnest(%(los)s::bigint[], %(his)s::bigint[], %(dd_los)s::text[], %(dd_his)s::text[])
@@ -1307,41 +1312,27 @@ select l.listing_lo, l.listing_hi
     on l.generation = %(generation)s::text
    and l.listing_lo = k.lo
    and l.listing_hi = k.hi
+  join autodedup.rt_fp a
+    on a.generation = %(generation)s::text and a.listing_id = k.lo
+  join autodedup.rt_fp b
+    on b.generation = %(generation)s::text and b.listing_id = k.hi
  where l.dd_lo = k.dd_lo
    and l.dd_hi = k.dd_hi
-   and l.calibration_digest = %(calibration_digest)s::text
-   and l.feature_version = %(feature_version)s::smallint
-   and l.engine_digest = %(engine_digest)s::text
+   and l.decided_at >= greatest(a.updated_at, b.updated_at)
 """
 
 # At most one row a pair: a re-decision overwrites it, so nothing ever prunes the table.
-# E960: does any row carry the store's key? A row with no decision digest is read for one only
-# then: after a deploy that moved the key, no lookup can match.
-RT_REJECT_LEDGER_KEYED_SQL = """
-select exists (
-    select 1 from autodedup.rt_reject_ledger l
-     where l.generation = %(generation)s::text
-       and l.calibration_digest = %(calibration_digest)s::text
-       and l.feature_version = %(feature_version)s::smallint
-       and l.engine_digest = %(engine_digest)s::text)
-"""
-
 RT_REJECT_LEDGER_UPSERT_SQL = """
 insert into autodedup.rt_reject_ledger (
-    generation, listing_lo, listing_hi, dd_lo, dd_hi, calibration_digest, feature_version,
-    engine_digest, decided_at
+    generation, listing_lo, listing_hi, dd_lo, dd_hi, decided_at
 )
-select %(generation)s::text, k.lo, k.hi, k.dd_lo, k.dd_hi, %(calibration_digest)s::text,
-       %(feature_version)s::smallint, %(engine_digest)s::text, now()
+select %(generation)s::text, k.lo, k.hi, k.dd_lo, k.dd_hi, now()
   from unnest(%(los)s::bigint[], %(his)s::bigint[], %(dd_los)s::text[], %(dd_his)s::text[])
        as k(lo, hi, dd_lo, dd_hi)
 on conflict (generation, listing_lo, listing_hi) do update set
-    dd_lo              = excluded.dd_lo,
-    dd_hi              = excluded.dd_hi,
-    calibration_digest = excluded.calibration_digest,
-    feature_version    = excluded.feature_version,
-    engine_digest      = excluded.engine_digest,
-    decided_at         = now()
+    dd_lo      = excluded.dd_lo,
+    dd_hi      = excluded.dd_hi,
+    decided_at = now()
 """
 
 # A pair the lane STORES leaves the ledger: `pairs` and the ledger never hold the same pair.
