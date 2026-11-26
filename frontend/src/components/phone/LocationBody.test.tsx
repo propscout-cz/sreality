@@ -150,8 +150,8 @@ describe('<LocationBody>', () => {
       type: 'geojson',
       data: { geometry: { type: 'Point', coordinates: [14.5, 50.105123] } },
     });
-    expect(fakeMaps[0].layers.map((l) => l.id)).toEqual(['relief', 'contours', 'aerial', 'pin']);
-    expect(fakeMaps[0].layers[3]).toMatchObject({ type: 'circle', source: 'pin' });
+    expect(fakeMaps[0].layers.map((l) => l.id)).toEqual(['relief', 'contours', 'cadastre', 'cadastre-photo', 'aerial', 'pin']);
+    expect(fakeMaps[0].layers.at(-1)).toMatchObject({ type: 'circle', source: 'pin' });
   }, 15_000);
 
   /* Ortofoto ČR (CC BY 4.0): hidden, MapLibre fetches none of its tiles. */
@@ -217,13 +217,36 @@ describe('<LocationBody>', () => {
     expect(map.layout.get('relief')).toEqual({ visibility: 'visible' });
     expect(map.layout.get('contours')).toEqual({ visibility: 'visible' });
     expect(map.layout.get('aerial')).toEqual({ visibility: 'none' });
-    expect(map.getLayersOrder()).toEqual(['relief', 'contours', 'aerial', 'pin']);
+    expect(map.getLayersOrder()).toEqual(['relief', 'contours', 'cadastre', 'cadastre-photo', 'aerial', 'pin']);
 
     await userEvent.click(within(bar()).getByRole('button', { name: 'Letecká' }));
     expect(map.layout.get('aerial')).toEqual({ visibility: 'visible' });
-    expect(map.getLayersOrder()).toEqual(['aerial', 'relief', 'contours', 'pin']);
+    expect(map.getLayersOrder()).toEqual(['aerial', 'relief', 'contours', 'cadastre', 'cadastre-photo', 'pin']);
     await userEvent.click(within(bar()).getByRole('button', { name: 'Mapa' }));
-    expect(map.getLayersOrder()).toEqual(['relief', 'contours', 'aerial', 'pin']);
+    expect(map.getLayersOrder()).toEqual(['relief', 'contours', 'cadastre', 'cadastre-photo', 'aerial', 'pin']);
+    expect(fakeCreateMap).toHaveBeenCalledTimes(1);
+  }, 15_000);
+
+  /* ČÚZK's cadastral map (KN WMTS): black lines on the map, its yellow ones on the photo. */
+  it('lays ČÚZK’s cadastral map hidden, and shows its black or its yellow lines by the base', async () => {
+    wrap(<LocationBody propertyId={7} />);
+    await waitFor(() => expect(fakeMaps).toHaveLength(1), LOADED);
+    const map = fakeMaps[0];
+    act(() => map.fire('load'));
+    expect(map.sources.get('cadastre')).toMatchObject({ type: 'raster', tileSize: 256, minzoom: 17 });
+    const [black] = (map.sources.get('cadastre') as { tiles: string[] }).tiles;
+    const [yellow] = (map.sources.get('cadastre-photo') as { tiles: string[] }).tiles;
+    expect(black).toBe('https://services.cuzk.cz/wmts/local-km-wmts-google/rest/WMTS/default/KN/{z}/{y}/{x}');
+    expect(yellow).toBe('https://services.cuzk.cz/wmts/local-km-wmts-google/rest/WMTS/Yellow/KN/{z}/{y}/{x}');
+    for (const id of ['cadastre', 'cadastre-photo']) expect(map.layout.get(id)).toEqual({ visibility: 'none' });
+
+    await openLayers();
+    await userEvent.click(within(sheet()).getByRole('checkbox', { name: 'Katastrální mapa' }));
+    expect(map.layout.get('cadastre')).toEqual({ visibility: 'visible' });
+    expect(map.layout.get('cadastre-photo')).toEqual({ visibility: 'none' });
+    await userEvent.click(within(bar()).getByRole('button', { name: 'Letecká' }));
+    expect(map.layout.get('cadastre')).toEqual({ visibility: 'none' });
+    expect(map.layout.get('cadastre-photo')).toEqual({ visibility: 'visible' });
     expect(fakeCreateMap).toHaveBeenCalledTimes(1);
   }, 15_000);
 

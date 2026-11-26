@@ -43,7 +43,7 @@ describe('<DetailMap>', () => {
       scaleControl: false,
     });
     act(() => fakeMaps[0].fire('load'));
-    expect(fakeMaps[0].getLayersOrder()).toEqual(['relief', 'contours', 'aerial', 'pin']);
+    expect(fakeMaps[0].getLayersOrder()).toEqual(['relief', 'contours', 'cadastre', 'cadastre-photo', 'aerial', 'pin']);
     expect(screen.getByRole('button', { name: 'Vrstvy (větší mapa)' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Přiblížit' })).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();

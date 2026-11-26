@@ -4,7 +4,7 @@
  * style layers, the hook and the popup — is lib/mapOverlayDraw.ts, imported
  * only by the lazily loaded maps, so neither it nor maplibre-gl reaches the
  * first-visit bundle (scripts/bundle-budget.mjs). Nothing here names a layer
- * but the basemap's own three and the legacy URL keys it still reads: adding
+ * but the basemap's own four and the legacy URL keys it still reads: adding
  * one is a registry row and an ingest run. */
 
 import { useSyncExternalStore } from 'react';
@@ -142,27 +142,36 @@ export const canonicalLayers = (s: string | null | undefined): string =>
 
 /* ------------------------------------------------------------ basemap picks */
 
-/* ČÚZK's aerial photo, shaded relief and contour lines (lib/basemap): raster images
- * from ČÚZK's own servers, not registry layers, but spelled in the same selection, so
- * one `layers` knob, one memory and one URL key carry every pick a map offers. The
- * photo is the base (Podklad: Mapa | Letecká); relief and contours draw over either. */
+/* ČÚZK's aerial photo, shaded relief, contour lines and cadastral map (lib/basemap):
+ * raster images from ČÚZK's own servers, not registry layers, but spelled in the same
+ * selection, so one `layers` knob, one memory and one URL key carry every pick a map
+ * offers. The photo is the base (Podklad: Mapa | Letecká); the rest draw over either. */
 export interface BasemapPicks {
   aerial: boolean;
   relief: boolean;
   contours: boolean;
+  cadastre: boolean;
 }
 
-export const BASEMAP_KEYS: readonly (keyof BasemapPicks)[] = ['aerial', 'relief', 'contours'];
+export const BASEMAP_KEYS: readonly (keyof BasemapPicks)[] = ['aerial', 'relief', 'contours', 'cadastre'];
 
 /* ZABAGED draws its contours only at 1:10 000 or closer: zoom 16 for a 256 px tile. */
 export const CONTOURS_MINZOOM = 16;
+
+/* ČÚZK serves the cadastral map from 1:4 265 (zoom 17) in; parcel numbers from zoom 19. */
+export const CADASTRE_MINZOOM = 17;
 
 const isBasemapKey = (key: string): key is keyof BasemapPicks =>
   (BASEMAP_KEYS as readonly string[]).includes(key);
 
 export function basemapPicks(selection: string): BasemapPicks {
   const sel = parseLayers(selection);
-  return { aerial: sel.has('aerial'), relief: sel.has('relief'), contours: sel.has('contours') };
+  return {
+    aerial: sel.has('aerial'),
+    relief: sel.has('relief'),
+    contours: sel.has('contours'),
+    cadastre: sel.has('cadastre'),
+  };
 }
 
 /* The selection with the basemap picks in `patch` switched; every other key kept. */
@@ -187,10 +196,15 @@ export function registrySectionsOn(selection: string, registry: MapOverlayRegist
 }
 
 /* A map's Vrstvy badge: each registry section drawn, the photo, the terrain (one
- * group for its two layers, as in the panel). */
+ * group for its two layers, as in the panel), the cadastral map. */
 export function layerGroupsOn(selection: string, registry: MapOverlayRegistry | undefined): number {
-  const { aerial, relief, contours } = basemapPicks(selection);
-  return registrySectionsOn(selection, registry) + (aerial ? 1 : 0) + (relief || contours ? 1 : 0);
+  const { aerial, relief, contours, cadastre } = basemapPicks(selection);
+  return (
+    registrySectionsOn(selection, registry) +
+    (aerial ? 1 : 0) +
+    (relief || contours ? 1 : 0) +
+    (cadastre ? 1 : 0)
+  );
 }
 
 /* The part of a selection a map can draw: the basemap picks, then the registry's

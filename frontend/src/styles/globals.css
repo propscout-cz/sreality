@@ -123,6 +123,12 @@
     min-width: 180px;
     max-width: 240px;
   }
+  /* An overlay area's card and the parcel's share one popup (lib/cadastre). */
+  .lp + .lp {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--color-rule);
+  }
   .lp-row {
     display: flex;
     align-items: baseline;
