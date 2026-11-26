@@ -351,15 +351,18 @@ def test_no_two_db_heavy_jobs_share_an_hour() -> None:
     assert db_heavy_problems(jobs.declared()) == []
 
 
-def test_a_job_waits_for_its_resource_as_long_as_a_sibling_can_hold_it() -> None:
-    """The registry load, on GitHub until #2033, claims location-heavy itself and waits out its longest sibling's run:
-    the building load's, not the intake's."""
-    load = jobs.entry("ruian_load")
-    assert load == _entry("ruian_load")
-    siblings = [_entry("location_intake"), _entry("ruian_buildings")]
-    assert {s.resource for s in siblings} == {load.resource}
-    assert jobs.resource_wait_s(load) == max(s.timeout_s for s in siblings) + jobs.STUCK_RUN_GRACE_S
-    assert jobs.resource_wait_s(_entry("clip")) == 0, "no resource, no sibling to wait for"
+def test_the_registry_load_runs_every_day_so_a_new_vintage_never_ages_past_the_health_line() -> None:
+    """ČÚZK publishes a month-end vintage on the 1st (~08:00 UTC). A 30-day epoch grid drifts off the 1st and, once a
+    slot falls before publication, skips a whole month (the 2027-07-31 slot would have: #2666 review). A daily slot
+    loads it within a day of publication (a late one the next day); every other day the vintage is already current
+    and the run only finishes (~20 s, 2026-11-13). Worst case: a 31-day month, a day's wait, the 6 h load."""
+    from scripts import verify_pipeline
+
+    load = _entry("ruian_load")
+    assert load.host == jobs.RUNNER and load.every_s == jobs.DAY
+    assert load.offset_s >= 9 * jobs.HOUR, "the slot lands after ČÚZK's ~08:00 UTC publication"
+    worst_age_days = 31 + (load.every_s + load.timeout_s) / jobs.DAY
+    assert worst_age_days < verify_pipeline.THRESHOLDS["location_registry_max_age_days"]
 
 
 def test_the_db_heavy_census_fires() -> None:
@@ -570,11 +573,11 @@ def test_every_job_has_exactly_one_host() -> None:
     assert pairing_problems(jobs.declared(), _repo_workflows()) == []
 
 
-# Each move PR's job and the workflow it deleted: W2 (#2025), W5 (#2032), W3 (#2027, #2028), W4 batch 1 (#2029).
+# Each move PR's job and the workflow it deleted: W2 (#2025), W5 (#2032, #2033), W3 (#2027, #2028), W4 batch 1 (#2029).
 MOVED = (("stale_images", "refresh_stale_images.yml"), ("rent_map", "fetch_rent_map.yml"),
          ("map_overlays", "ingest_map_overlays.yml"), ("clip", "clip_tag.yml"),
          ("property_sweep", "recompute_property_stats.yml"), ("broker_sweep", "resolve_brokers_full.yml"),
-         ("location_intake", "location_claims_intake.yml"),
+         ("location_intake", "location_claims_intake.yml"), ("ruian_load", "location_registry_load.yml"),
          ("walk_web", "web_index_walk.yml"), ("walk_maxima", "scrape_maxima.yml"),
          ("walk_bezrealitky", "scrape_bezrealitky.yml"))
 
@@ -594,9 +597,9 @@ def test_a_move_is_a_host_flip_plus_its_workflows_deletion(name: str, file: str)
 
 def test_the_pairing_census_fires() -> None:
     workflows = _repo_workflows()
-    load = workflows["location_registry_load.yml"]
-    silent = replace(load, invocations=tuple(c for c in load.invocations if c.module != "location_data.ruian_load"))
-    assert pairing_problems(jobs.declared(), {**workflows, "location_registry_load.yml": silent})
+    walk = workflows["bazos_index_walk.yml"]
+    silent = replace(walk, invocations=tuple(c for c in walk.invocations if c.module != "scraper.bazos_main"))
+    assert pairing_problems(jobs.declared(), {**workflows, "bazos_index_walk.yml": silent})
     stray = Workflow("stray.yml", True, 600, (Invocation("scripts.stray_job", frozenset()),))
     assert pairing_problems(jobs.declared(), {**workflows, "stray.yml": stray})
     # #2033's tick hosts price_stats only once read_workflows reads the `once` form; until then B3 is red.

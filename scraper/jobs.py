@@ -24,8 +24,8 @@ REPLICA_MEMORY_MB, CO_TENANCY_SHARE = 7629, 0.81
 # walk by it, and the DB-heavy hour census counts it (tests/scraper/test_job_registry.py).
 STUCK_RUN_GRACE_S = 600
 # The claim intake and the RÚIAN address and building loads never overlap (2026-08-10: four heavy location lanes at
-# once dropped backends across the instance). It replaced GitHub's `location-batch` group (#2028); the address load,
-# on GitHub until #2033, claims it with job_lease.held_job.
+# once dropped backends across the instance). It replaced GitHub's `location-batch` group (#2028); the runner claims it
+# for all three since the address load moved too (#2033).
 LOCATION_HEAVY = "location-heavy"
 WALK_PREFIX = "walk_"
 WALK_MEMORY_MB, WALK_CPUS = 512, 1
@@ -82,12 +82,15 @@ _FIXED: tuple[Job, ...] = (
     Job("clip", ("scripts.clip_tag_backfill", "--max-seconds", "1500", "--limit", "5000", "--workers", "16",
                  "--chunk", "64"),
         15 * 60, 5 * 60, 55 * 60, 3072, 4, RUNNER),
-    Job("ruian_load", ("location_data.ruian_load",), 30 * DAY, 10 * HOUR, 6 * HOUR, 2048, 1, UNTIL_MOVED,
+    # Daily at 10:00 UTC, not on a 30-day grid that drifts off the 1st (#2666 review): the day ČÚZK publishes a month-end
+    # vintage (~08:00 UTC) it loads it, every other day the vintage is current and it only finishes (~20 s). A cut run
+    # resumes from its R2 archive. A dry run of the 2026-11 vintage peaked at 342 MB and wrote 918 MB (#2033).
+    Job("ruian_load", ("location_data.ruian_load",), DAY, 10 * HOUR, 6 * HOUR, 2048, 1, RUNNER,
         LOCATION_HEAVY, db_heavy=True),
     # The register's building facts (#2604): a month's ~6,250 obec files, resumed daily until none is pending, then
     # a no-op until the next vintage. It starts obce only 13:00-17:00 UTC (a run restarted by a deploy keeps those
     # hours) and none in :40-:50, so the largest obec (Praha, 65 s) is written before the :45 Browse rebuild. The
-    # registry load claims location-heavy too (#2028); the loader still asks before every obec, for a cut load.
+    # registry load holds location-heavy too; the loader still asks before every obec, for a load the runner cut.
     Job("ruian_buildings",
         ("location_data.ruian_buildings", "--max-seconds", "10800", "--window-utc", "13:00-17:00",
          "--quiet-minutes", "40-50"),
@@ -131,14 +134,3 @@ def runner_jobs() -> tuple[Job, ...]:
 def host_of(name: str) -> Host | None:
     """The declared host of a name, for a refusal's message; never an entry: a scheduler reads runner_jobs()."""
     return next((j.host for j in declared() if j.name == name), None)
-
-
-def entry(name: str) -> Job:
-    """One job's own entry, for its own process to claim its run on whichever host starts it (job_lease.held_job)."""
-    return next(j for j in declared() if j.name == name)
-
-
-def resource_wait_s(job: Job) -> int:
-    """The longest a sibling on the job's resource can hold it: the sibling's timeout plus the runner's kill grace."""
-    return max((s.timeout_s + STUCK_RUN_GRACE_S for s in declared()
-                if job.resource is not None and s.resource == job.resource and s.name != job.name), default=0)

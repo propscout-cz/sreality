@@ -478,7 +478,7 @@ def test_a_shortcut_question_with_no_quarter_pair_stops_the_run_before_any_quest
     code, out = _run(conn, capsys, _Route(client), "--no-latency", size=2)
     assert out[-1].startswith("momc questions with no quarter pair at the current version: 1 (pairs there: 1);"
                               " first confirm with a SELECT that no registry_versions row is newer than version ")
-    assert "gh workflow run location_registry_load.yml -f vintage=20261101;" in out[-1]
+    assert "python -m scraper.job_runner request ruian_load -- --vintage 20261101;" in out[-1]
     assert code == 2
 
 

@@ -5,8 +5,8 @@ The Railway job runner (`scraper/job_runner.py`, `scraper/job_process.py`; SQL i
 rulings: `docs/design/actions-exit/PROGRAM.md` § 4.2. Since #2025's move PR it runs `stale_images`, `rent_map` and
 `map_overlays`, since #2032 `clip`, since #2027 the daily `property_sweep` (03:00 UTC) and `broker_sweep` (06:00 UTC)
 and since #2028 `location_intake`, whose workflows those PRs deleted, since #2604 `ruian_buildings` (13:00 UTC, born
-on the runner; `docs/architecture.md` § Register facts), and since #2029 the walks of web, maxima and bezrealitky
-(below); each later move PR (#2030, #2031, #2033) flips more entries' host. On
+on the runner; `docs/architecture.md` § Register facts), since #2029 the walks of web, maxima and bezrealitky, and
+since #2033 the daily `ruian_load` (below); each later move PR (#2030, #2031) flips more entries' host. On
 Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and 8 GB
 (`.railway/railway.ts` `jobRunner`; settings, drain and image: `docs/architecture.md` § Railway service
 configuration). Its Health cells and the "Jobs: run now" form are #2026's (below).
@@ -68,16 +68,15 @@ Recipes:
   re-walk is `request location_intake -- --mode full` (`--source X` for one portal). Its 75 re-dues the registry's
   unscoped incremental argv, which carries any stopped full walk on, a one-portal one included, once it has emptied
   the change log.
-- **`location-heavy` off the runner:** the RÚIAN load runs on GitHub until #2033 and claims the resource in its own
-  main (`job_lease.held_job`: its `scheduled_jobs` row, runner `github_actions`, and an open `job_runs` row), waiting
-  `jobs.resource_wait_s` (its longest sibling's timeout + 10 min) and exiting 1 with nothing loaded if it never got it; a
-  load that returns non-zero hands its code to the `HeldRun` it was given, which closes the run `failed`. While
-  it holds, the intake is not due-listed and its cell reads `waiting for ruian_load`. A cancel in the Actions UI
-  reaches the load (its step `exec`s it) and releases the run `interrupted`. A hard kill (a lost runner, a SIGKILL)
-  releases nothing: the resource stays held until the lease's ceiling (what is left of `timeout_s` after the wait,
-  up to ~6 h, with no intake and no building load), and then the reaper closes the run `lost`; a re-dispatch meanwhile
-  waits and exits 1. A run's exit code reaches `job_runs`. Under the runner
-  (`JOB_NAME` = the job) `held_job` is the runner's own claim.
+- **The RÚIAN registry load (`ruian_load`, #2033):** daily at 10:00 UTC, 6 h, on `location-heavy` with the intake
+  and the building load, so while it runs the intake's cell reads `waiting for ruian_load`. Daily, not monthly: an
+  epoch-anchored 30-day grid drifts off the 1st and, once a slot falls before ČÚZK's publication (~08:00 UTC on the
+  1st), skips a month. The day a new month-end vintage is out it loads it (a late one the next day); every other day
+  the vintage is already current and the run only finishes (quarter pairs and two matview refreshes, ~20 s). A test
+  holds the worst-case registry age under Health's 40-day line. A run a deploy cut resumes from its R2 archive on the
+  next one (the module docstring). By hand:
+  `python -m scraper.job_runner request ruian_load -- --vintage YYYYMMDD` (add `--dry-run` to download, parse and
+  assert with no database).
 
 ## Log lines (Railway logs)
 

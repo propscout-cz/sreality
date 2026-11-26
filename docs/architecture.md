@@ -1663,9 +1663,10 @@ on 2026-12-01, and until then a file of that name would override the applied set
   and the re-tag campaign, one unsharded run every 15 min; `fleet/photo_tags` judges its 45-min line), and of the
   daily `property_sweep` (03:00 UTC) and `broker_sweep` (06:00 UTC) since #2027, which never run beside each other
   or any other DB-heavy job (`job_lease`'s heavy turn), of the hourly claim intake `location_intake` since #2028
-  (§ Location data), and of the walks whose `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (30 min: web, maxima
-  and bezrealitky since #2029, each `walk_<source>` every 6 h with no `--max-seconds`, the runner's SIGTERM at the
-  timeout its one budget; the longer walks wait on their workflows):
+  and the RÚIAN registry load `ruian_load` since #2033, daily (§ Location data), and of the walks whose
+  `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (30 min: web, maxima and bezrealitky since #2029, each
+  `walk_<source>` every 6 h with no `--max-seconds`, the runner's SIGTERM at the timeout its one budget; the longer
+  walks wait on their workflows):
   - two replicas in the worker's region, each 4 vCPU and 8 GB, restart policy ALWAYS, `checkSuites: false`. Railway
     counts decimal bytes, so 8e9 B is 7,629 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
     line and every beat carry `memory_limit_mb` and `cpus` as the replica's cgroup reads them;
@@ -6064,12 +6065,9 @@ test); the `location_town_coverage` gauge's `registry` cell reads Problem when t
 
 **OPS RULES THE INCIDENTS WROTE.** The heavy lanes — registry load, claim intake, building load — share the job
 runner's `location-heavy` resource (`scraper/jobs.py`; GitHub's `location-batch` group until #2028) so
-**at most one runs at a time**: the runner claims the intake through it, and the load, on GitHub until
-#2033, claims it in its own main (`job_lease.held_job`: its row and an open `job_runs` row, waiting
-as long as a sibling can hold it), so the intake's Health cell reads `waiting for ruian_load`
-during a load, never red; a load that never got it exits 1 with nothing loaded, one that returns
-non-zero closes its run `failed` (`HeldRun.exit_code`), and a run its host dropped is closed `lost`
-by the runner's reaper. A new heavy lane joins the resource. On 2026-08-10
+**at most one runs at a time**: the runner claims each of the three through it (the registry load since #2033), so
+the intake's Health cell reads `waiting for ruian_load` during a load, never red. A new heavy lane joins the
+resource. On 2026-08-10
 four concurrent lanes dropped backends across
 the fleet, degraded the live Browse rebuild to multi-minute DataFileReads and wedged two lanes with
 no error at all. **The resolve DRAIN is outside the resource** (operator decision, 2026-09-10): it is

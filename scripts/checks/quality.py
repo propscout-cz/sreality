@@ -1094,7 +1094,7 @@ def _registry_cell(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     row = fetchone(conn, _REGISTRY_LIVENESS_SQL)
     if row is None:
         return cell("registry", "fail", "no current RÚIAN registry version: no town code is "
-                    "current — run location_registry_load", unit="d", facts={"current": None})
+                    "current — request ruian_load (Jobs: run now)", unit="d", facts={"current": None})
     label, age_days, staged, staged_hours = row
     age = int(age_days)
     hours = None if staged_hours is None else round(float(staged_hours), 1)
@@ -1103,12 +1103,12 @@ def _registry_cell(conn: Any, thresholds: dict[str, Any]) -> dict[str, Any]:
     conditions = []
     if age > max_age:
         conditions.append(("fail", f"the current registry {label} is {age} d old (Problem past "
-                                   f"{max_age} d): the monthly load has not landed — re-dispatch "
-                                   "location_registry_load"))
+                                   f"{max_age} d): the monthly load has not landed — request "
+                                   "ruian_load"))
     if hours is not None and hours > max_staged:
         conditions.append(("fail", f"{staged} has sat staged {hours:.0f} h without becoming "
-                                   f"current (Problem past {max_staged:g} h): a superseded run is "
-                                   "cancelled, not failed — re-dispatch location_registry_load"))
+                                   f"current (Problem past {max_staged:g} h): a cut run resumes from "
+                                   "its checkpoint — request ruian_load"))
     ok = (f"the current registry {label} is {age} d old"
           + (f"; {staged} staged {hours:.0f} h ago" if staged else ", nothing staged"))
     return judged("registry", conditions, ok, value=age, unit="d",
