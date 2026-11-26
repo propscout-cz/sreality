@@ -8,13 +8,16 @@ missing SUPABASE_DB_URL, a bug) still fails fast.
 
 from __future__ import annotations
 
+import importlib.util
+import pathlib
+import re
 import time
 from typing import Any
 
 import psycopg
 import pytest
 
-from scraper import db
+from scraper import db, jobs
 
 
 def _flaky_connect(fail_times: int, result: Any):
@@ -115,3 +118,84 @@ def test_connect_session_retries_transient_then_succeeds(monkeypatch):
     assert fake.state["calls"] == 2
     # Session pooler: auto-prepare stays ON (no prepare_threshold override).
     assert "prepare_threshold" not in fake.last_kwargs
+
+
+# --- #2660 (ruling C): a runner job outwaits a database restart ------------------------------------------------------
+
+
+class _Conn:
+    """A connection the pooler handed out; `answers` False is a pooler that cannot reach the database yet."""
+
+    def __init__(self, answers: bool) -> None:
+        self.answers, self.closed, self.probes = answers, False, 0
+
+    def execute(self, sql: str) -> "_Conn":
+        self.probes += 1
+        if not self.answers:
+            raise psycopg.errors.ConnectionFailure("Failed to connect to database: {:error, :timeout}")
+        return self
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _pooler(*answers: bool):
+    conns = [_Conn(a) for a in answers]
+    handed = iter(conns)
+    return conns, lambda url, **kwargs: next(handed)
+
+
+def test_a_job_connect_counts_only_once_the_database_answers(monkeypatch):
+    """2026-11-11: broker_sweep's reconnect reached a pooler that could not reach the restarting database, and its next
+    statement failed. A job's connect probes; a probe that fails is a failed attempt, retried a minute later."""
+    conns, fake = _pooler(False, True)
+    sleeps: list[float] = []
+    monkeypatch.setattr(psycopg, "connect", fake)
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    monkeypatch.setenv("SUPABASE_DB_URL", "postgres://pooler:6543/db")
+
+    assert db.connect(**db.JOB_PATIENCE) is conns[1]
+    assert conns[0].closed and not conns[1].closed
+    assert sleeps == [db.JOB_PATIENCE["retry_delay"]]
+
+
+def test_a_job_waits_three_minutes_for_the_database_then_fails(monkeypatch):
+    """Ruling C: 3 × 60 s inside the job, the scheduler unchanged; a database down longer is a real incident."""
+    conns, fake = _pooler(*[False] * db.JOB_PATIENCE["attempts"])
+    sleeps: list[float] = []
+    monkeypatch.setattr(psycopg, "connect", fake)
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    monkeypatch.setenv("SUPABASE_DB_SESSION_URL", "postgres://session:5432/db")
+
+    with pytest.raises(psycopg.errors.ConnectionFailure):
+        db.connect_session(**db.JOB_PATIENCE)
+    assert sleeps == [60.0, 60.0, 60.0]
+    assert all(c.closed for c in conns)
+
+
+def test_a_plain_connect_does_not_probe(monkeypatch):
+    conns, fake = _pooler(False)
+    monkeypatch.setattr(psycopg, "connect", fake)
+    monkeypatch.setenv("SUPABASE_DB_URL", "postgres://pooler:6543/db")
+
+    assert db.connect() is conns[0]
+    assert conns[0].probes == 0
+
+
+# db.connect(...), connect(...) or connect_session(...), never psycopg.connect or a comment's mention.
+_CONNECT_CALL = re.compile(r"(?<![.\w])(?:db\.)?connect(?:_session)?\(([^()]*)\)")
+
+
+def _unpatient_connects(module: str) -> list[str]:
+    lines = pathlib.Path(importlib.util.find_spec(module).origin).read_text().splitlines()
+    code = "\n".join(line.split("#", 1)[0] for line in lines)
+    return [m.group(0) for m in _CONNECT_CALL.finditer(code) if "JOB_PATIENCE" not in m.group(1)]
+
+
+def test_every_db_heavy_runner_job_connects_with_the_jobs_patience():
+    """#2660: a DB-heavy job's failure retries a day later (its own hour), so each one's first connect and every
+    reconnect outwait a restart: db.JOB_PATIENCE, or loader_db.open_loader_connection, which passes it."""
+    heavy = sorted({j.argv[0] for j in jobs.runner_jobs() if j.db_heavy})
+    assert heavy, "no DB-heavy runner job: the census reads nothing"
+    assert {m: _unpatient_connects(m) for m in heavy} == {m: [] for m in heavy}
+    assert _unpatient_connects("location_data.loader_db") == []
