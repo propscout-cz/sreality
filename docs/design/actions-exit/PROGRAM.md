@@ -322,7 +322,22 @@ realitymix, ceskereality, bazos, idnes last. Walk argv drops `--max-seconds`; th
 walk timeout is the one budget (this is #2029's "budget derived from the timeout"; the registry's argv census
 refuses a walk `--max-seconds`). A batch flips its walks' host without a portal name in `jobs.py`; a
 per-portal host attribute would be a third code-only per-portal value and needs a ruling.
-**Gate per walk (7 days):** pages, reached-end and nominations per cycle ± 10 %; 403/429 share from
+**As built (#2029), batch 1: web, maxima, bezrealitky.** One cutoff, `jobs.RUNNER_WALK_TIMEOUT_S` (30 min): a walk whose
+`walk_timeout_s` fits it is generated on `job-runner`, the rest stay `github-actions-until-moved`, so a batch raises one
+constant and names no portal; `test_a_walks_host_is_the_cutoffs` refuses a per-portal host value. `web_index_walk.yml`,
+`scrape_maxima.yml` and `scrape_bezrealitky.yml` and their groups (`web-index-walk`, `maxima-scrape`, `bezrealitky-scrape`)
+are deleted; their dispatch inputs (`--max-pages`, `--max-seconds`) are request args now. Timeouts stay the workflows'
+(15, 30, 30 min) against a GitHub p95 of 3, 40 and 137 s (7 days to 11-25). None of the three is proxied and the runner
+already carries `SUPABASE_DB_URL` and the R2 set (#2032): no `.railway/` change, no migration. **remax is held to a later
+batch:** its sold/let measurement gate #2647 reads remax until 2026-11-29, and a new host, cadence and egress would
+confound it. A cutoff moves walks in `walk_timeout_s` order (sreality 40; remax, mmreality 60; bazos 130; realitymix,
+ceskereality 180; idnes 240), so 60 min takes sreality with remax and mmreality; #2030's listed set and this section's
+order after it (realitymix before bazos) are not one cutoff, and ceskereality needs the `browser` extra the runner image
+lacks: later batches need a ruling on their order or the image. GitHub's throttled cron fired these walks
+about twice a day (14 runs each in those 7 days), the runner's grid four times, so the gate reads nominations per day
+beside per cycle (#2029's gate ticket).
+**Gate per walk (7 days):** pages and reached-end per cycle, nominations per day (a moved walk keeps its declared
+cadence), ± 10 %; 403/429 share from
 Railway ≤ the GitHub baseline; 0 `ended_at NULL` after ≥ 5 mid-walk deploys; proxy GB/day within its band;
 delisting and coverage cells unchanged; aggregate peak ≤ 70 % of a replica.
 

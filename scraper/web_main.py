@@ -14,8 +14,8 @@ Its two honest differences are declared seams, not branches:
     `complete`); its one unit has no labels, so no nomination scope, and every active `web`
     row is an orphan the runner nominates without a seen set (it refuses an empty one for
     every other portal): no live queue row, no completion within
-    `delist_policy.RECHECK_THROTTLE`, oldest sighting first. `web_index_walk.yml` (every
-    6 h, so the 24 h throttle and not the cron sets the cadence: each ad is checked every
+    `delist_policy.RECHECK_THROTTLE`, oldest sighting first. The job runner's `walk_web` (every
+    6 h, so the 24 h throttle and not the slot sets the cadence: each ad is checked every
     24–30 h) is that nomination; the drain fetches each page and the page decides (rule 3).
     `delist_flip_cap` never throttles
     a portal under its 2,000-row floor, and the gone-rate breaker needs 20 ingest fetches in
@@ -179,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # Omitting both flags runs the nominating walk then the drain in one job. In production
-    # the walk runs from web_index_walk.yml and the worker's drain lane fetches.
+    # the walk is the job runner's walk_web and the worker's drain lane fetches.
     rc = 0
     if not args.drain_only:
         rc = portal_runner.run_phase(

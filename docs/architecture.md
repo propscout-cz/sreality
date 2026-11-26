@@ -218,7 +218,7 @@ in Czechia (W4: a `not_property` advert keeps its TOWN alone, and the prompt cou
 and the register decides whether a name is a place.
 
 **Data source (bezrealitky.cz).** A scheduled scraper (`scraper/bezrealitky_client.py`,
-`bezrealitky_parser.py`, `bezrealitky_main.py`, workflow `scrape_bezrealitky.yml` — pilot,
+`bezrealitky_parser.py`, `bezrealitky_main.py`, the job runner's `walk_bezrealitky` since #2029 — pilot,
 every 6h) tagged `source='bezrealitky'`. Bezrealitky is a JSON-API portal like sreality
 (not an HTML crawler): it reads the public GraphQL API at `api.bezrealitky.cz/graphql/`
 (`listAdverts` for the index — offset/limit paging, `totalCount` for completeness,
@@ -535,8 +535,8 @@ email, else the phone. The text lane is the
 portal's only reader of prose: its one call returns the location block from `web.yaml`. Every
 deterministic reading sits at the TOP LEVEL of `raw_json` (the field census reads
 `coalesce(raw->'params', raw)`). **Delisting:** `web` has no index, so it declares `indexless`
-(rule 3): `web_index_walk.yml` (every 6 h — the 24 h throttle, not the cron, sets the cadence;
-a daily cron would skip each ad one day in two) nominates every active web ad not checked in the
+(rule 3): the job runner's `walk_web` (every 6 h, #2029 — the 24 h throttle, not the slot, sets the cadence;
+a daily slot would skip each ad one day in two) nominates every active web ad not checked in the
 last 24 h, the drain fetches it, and a dead ad closes after two gone verdicts ≥ 24 h apart
 (checked every 24–30 h, so 24–60 h after it dies).
 `delist_flip_cap` never throttles it (under the 2,000-row floor) and the gone-rate breaker never
@@ -1662,8 +1662,10 @@ on 2026-12-01, and until then a file of that name would override the applied set
   `stale_images`, `rent_map` and `map_overlays` since #2025's move PR, of `clip` since #2032 (CLIP tags, vectors
   and the re-tag campaign, one unsharded run every 15 min; `fleet/photo_tags` judges its 45-min line), and of the
   daily `property_sweep` (03:00 UTC) and `broker_sweep` (06:00 UTC) since #2027, which never run beside each other
-  or any other DB-heavy job (`job_lease`'s heavy turn), and of the hourly claim intake `location_intake` since #2028
-  (§ Location data):
+  or any other DB-heavy job (`job_lease`'s heavy turn), of the hourly claim intake `location_intake` since #2028
+  and the monthly RÚIAN registry load `ruian_load` since #2033 (§ Location data), and of the walks whose `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (30 min: web, maxima
+  and bezrealitky since #2029, each `walk_<source>` every 6 h with no `--max-seconds`, the runner's SIGTERM at the
+  timeout its one budget; the longer walks wait on their workflows):
   - two replicas in the worker's region, each 4 vCPU and 8 GB, restart policy ALWAYS, `checkSuites: false`. Railway
     counts decimal bytes, so 8e9 B is 7,629 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
     line and every beat carry `memory_limit_mb` and `cpus` as the replica's cgroup reads them;
@@ -1690,9 +1692,11 @@ on 2026-12-01, and until then a file of that name would override the applied set
   `IMAGE_INPUTS`, the same list, which includes the scraper files the proof imports, held to its imports by a test).
 - **The runner's CLIP vector stack is pinned (#2032):** `data/requirements-clip-runner.txt` (transformers, Pillow,
   numpy at `==`) installs in its own layer after the weights, and the offline proof asserts every version in it and
-  torch's. Pillow decodes and resizes the pixels the model reads, so a resolver drift would move every new vector
-  under a green build. pyproject keeps its ranges (`Pillow>=10`, `transformers>=4.56,<5`), so RunPod's path is
-  untouched. **A bump** (a Pillow security fix included): edit the file (torch: the Dockerfile's model layer), let
+  torch's. It also asserts that `Tagger.model_input` gives the processor's own output to the bit: it resizes a photo
+  the processor's way before the processor sees it, so a chunk holds model inputs, never frames (#2478). Pillow
+  decodes and resizes the pixels the model reads, so a resolver drift would move every new vector under a green build.
+  pyproject keeps its ranges (`Pillow>=10`, `transformers>=4.56,<5`), so RunPod's path is untouched. **A bump** (a
+  Pillow security fix included): edit the file (torch: the Dockerfile's model layer), let
   `CI: runner image` build it, pause `clip` (`runner-pause`) before the merge deploys, merge, then file
   `request clip -- --verify-reembed` on the new image (`scripts/clip_reembed.py`: 100 frozen images re-embedded
   within fp32 tolerance, read-only) and lift the pause on a pass, so no vector of the new stack lands unproven.
@@ -1869,7 +1873,8 @@ renumber.** Navigate by area:
    sighted since it); the partition only decides how much a resumed run re-walks. Health dates the
    end entry, and so the orphans and the portal's every-unit walk, at the cycle's anchor
    (`scripts/checks/scraping.py`). On GitHub the next scheduled walk lies past the timeout and starts
-   afresh, as before; the job runner re-runs an interrupted job at once, inside the cycle.
+   afresh, as before; the job runner re-runs an interrupted job at once, inside the cycle (the runner's
+   walks since #2029).
 
    **2026-09-08 — the nomination gate became STRUCTURAL; the count stopped voting.** Until this
    date the 5th element of `walk_category` was arithmetic: `walk_is_complete(collected,
