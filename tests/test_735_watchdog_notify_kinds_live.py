@@ -216,11 +216,10 @@ def test_a_member_is_told_a_price_drop_after_it_entered(cur: Any) -> None:
     assert _told(cur, pid) == [(sid, "price_drop", str(down))]
 
 
-@pytest.mark.parametrize(("published", "returned"), [(True, False), (False, True)])
-def test_a_merge_bringing_in_a_published_property_is_no_return(cur: Any, published: bool, returned: bool) -> None:
-    """Review of #2580: a survivor long off the market flips active when a live property is merged into it. If
-    that property was published, the unit never left the market in our records (whoever follows it was told
-    there), so nothing is stamped; an ad the engine merged before it was ever published IS the unit's return."""
+@pytest.mark.parametrize("published", [True, False])
+def test_a_merge_that_brings_a_live_property_into_one_long_gone_is_its_return(cur: Any, published: bool) -> None:
+    """#2583 (migration 777): a survivor long off the market flips active when a live property is merged into it,
+    published or not: the trigger stamps the return, and who is told is decided per follower in the producers."""
     survivor, retired = _property(cur), _property(cur)
     cur.execute("UPDATE properties SET is_active = false WHERE id = %s", (survivor,))
     cur.execute("UPDATE properties SET left_market_at = now() - interval '90 days' WHERE id = %s", (survivor,))
@@ -228,8 +227,8 @@ def test_a_merge_bringing_in_a_published_property_is_no_return(cur: Any, publish
                 "settled_at = CASE WHEN %s THEN now() - interval '3 days' END WHERE id = %s",
                 (survivor, published, retired))
     cur.execute("UPDATE properties SET is_active = true WHERE id = %s "
-                "RETURNING back_on_market_at IS NOT NULL, left_market_at", (survivor,))
-    assert cur.fetchone() == (returned, None)
+                "RETURNING back_on_market_at = now(), left_market_at", (survivor,))
+    assert cur.fetchone() == (True, None)
 
 
 def test_a_property_born_off_the_market_is_stamped_as_left(cur: Any) -> None:
@@ -341,11 +340,14 @@ def test_a_merge_survivor_of_a_member_takes_its_place_silently(cur: Any) -> None
     cur.execute("UPDATE properties SET status = 'merged_away', merged_into = %s, merged_at = now(), "
                 "is_active = false WHERE id = %s", (survivor, retired))
     _recompute(cur, survivor)
-    cur.execute("UPDATE properties SET settled_at = now() - interval '20 days' WHERE id = %s", (survivor,))
+    # The survivor was long gone and the merge is its return (migration 777): still silent, the member was told.
+    cur.execute("UPDATE properties SET settled_at = now() - interval '20 days', back_on_market_at = now() "
+                "WHERE id = %s", (survivor,))
     _later_pass(cur, sid)
     nf.match_once(cur.connection)
     assert _members(cur, sid, retired, survivor) == {retired: False, survivor: True}
     assert _new_matches(cur, sid, retired, survivor) == []
+    assert _told(cur, survivor) == _told(cur, retired) == []
 
 
 def test_a_price_bouncing_across_the_cap_inside_the_day_sends_nothing(cur: Any) -> None:

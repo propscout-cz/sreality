@@ -194,10 +194,13 @@ def test_merging_then_detaching_every_advert_restores_every_original_property(cu
     assert cur.fetchone()[0] == 0
 
 
-def test_a_real_merge_of_a_live_published_property_into_one_long_gone_is_no_return(cur):
-    """Migration 754, through the one chokepoint: the survivor (the older record, months off the market) flips
-    active when a live, published property is merged into it, in the merge's own transaction, so the trigger
-    sees the retired record and stamps no return; the unit was on the market in our records all along."""
+def test_a_real_merge_of_a_live_property_into_one_long_gone_is_its_return_told_to_who_held_it(cur):
+    """#2583, through the one chokepoint: the survivor is the older record (months off the market) and flips
+    active when a live, published property is merged into it: its return (migration 777). The collection that
+    held it is told Back on the market; the one whose membership the merge moved from the live record is not."""
+    from api import notifications as nf
+    from tests._live_property import _account, _collection
+
     survivor, live = _property(cur), _property(cur)
     _advert(cur, survivor, source="sreality", active=False)
     _advert(cur, live, source="idnes")
@@ -206,10 +209,28 @@ def test_a_real_merge_of_a_live_published_property_into_one_long_gone_is_no_retu
     cur.execute("UPDATE properties SET left_market_at = now() - interval '90 days', back_on_market_at = NULL "
                 "WHERE id = %s", (survivor,))
     cur.execute("UPDATE properties SET settled_at = now() - interval '3 days' WHERE id = %s", (live,))
-    _merge(cur, [survivor, live])
-    cur.execute("SELECT status, is_active, back_on_market_at, left_market_at FROM properties WHERE id = %s",
+    acc = _account(cur)
+    held_gone, held_live, held_both = (_collection(cur, acc) for _ in range(3))
+    watched = [held_gone, held_live, held_both]
+    cur.execute("UPDATE collections SET monitoring_enabled = true, notify_kinds = '{reactivated}' WHERE id = ANY(%s)",
+                (watched,))
+    # Its own statement: an edit of the kinds restarts the watching (migration 735's trigger).
+    cur.execute("UPDATE collections SET monitoring_enabled_at = now() - interval '30 days' WHERE id = ANY(%s)",
+                (watched,))
+    cur.executemany(
+        "INSERT INTO collection_properties (collection_id, property_id, added_at) "
+        "VALUES (%s, %s, now() - interval '30 days')",
+        [(held_gone, survivor), (held_live, live), (held_both, survivor), (held_both, live)])
+
+    assert _merge(cur, [live, survivor])["survivor_id"] == survivor
+    cur.execute("SELECT status, is_active, back_on_market_at = now(), left_market_at FROM properties WHERE id = %s",
                 (survivor,))
-    assert cur.fetchone() == ("active", True, None, None)
+    assert cur.fetchone() == ("active", True, True, None)
+    nf.match_lifecycle_once(cur.connection)
+    nf.match_lifecycle_once(cur.connection)
+    cur.execute("SELECT collection_id, change_kind, property_id FROM notification_dispatches "
+                "WHERE collection_id = ANY(%s) ORDER BY collection_id", (watched,))
+    assert cur.fetchall() == [(held_gone, "reactivated", survivor), (held_both, "reactivated", survivor)]
 
 
 def test_an_advert_named_new_is_born_a_record_and_a_merge_back_is_undone_to_it(cur):

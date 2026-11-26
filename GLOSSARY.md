@@ -464,7 +464,8 @@ _Avoid_: delisted, withdrawn, sold, removed
 
 **Back on the market** (UI: "Znovu na trhu"):
 A property event: a property off the market for a day or more has an active ad again, by a revival
-or a re-list. A watchdog and a watched collection tell it alike, each when set to.
+or a re-list, also one a merge joins to it later. A watchdog and a watched collection tell it alike,
+each when set to; a collection only when it held the property that was off the market.
 _Avoid_: relisted, reactivated
 
 **New portal** (UI: "Nový portál"):

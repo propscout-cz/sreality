@@ -619,8 +619,8 @@ def merge_property_set(
                     "cluster_key": key, "generation": gen, "member_ids": members,
                     "verdict": "same", "note": f"operator merge {group}", "reasons": [],
                     "decided_by": str(decided_by)} for key, gen, members in sets])
-        # Inside this transaction on purpose: the return stamp (migration 754's trigger) tells a merge
-        # from a return by the retired record's `merged_at = now()`, this transaction's start.
+        # Inside this transaction on purpose: a return this merge makes is stamped at the instant its
+        # carry rows are (`api/notifications._HELD_AT_THE_RETURN` tells the two memberships apart by it).
         properties_changed(conn, [survivor, *retired])
 
     return {
