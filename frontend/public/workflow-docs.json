@@ -1587,7 +1587,7 @@
     {
       "filename": "runner_image.yml",
       "name": "CI: runner image",
-      "description": "Builds the job-runner image, the root Dockerfile with EXTRAS=api,clip,geo (CPU torch, the baked CLIP checkpoint, the geo wheels), on every pull request that changes an image input, before Railway first builds it after the merge (#2025): a failure there would leave main unable to build the runner until a fix lands. The build's own offline RUN is the proof (CPU torch, and the checkpoint loads with the hub offline), so the scraper files it imports are inputs too; the log then shows the image size. A second job builds the API image (EXTRAS=api) at the base and with this pull request, fails if it can import torch or transformers or holds the hub cache, and prints both sizes and the package diff (#2032). A third builds the WORKER image (EXTRAS=api,browser) and launches chromium inside the finished image with no network: that arm was missing, so the first browser build reached Railway unbuilt and failed there instead (2026-11-16). No secrets; it pushes and deploys nothing. About 10 minutes a run, billed once the repository is private.",
+      "description": "Builds the job-runner image, the root Dockerfile with EXTRAS=api,browser,clip,geo (CPU torch, the baked CLIP checkpoint, the geo wheels, chromium since #2031), on every pull request that changes an image input, before Railway first builds it after the merge (#2025): a failure there would leave main unable to build the runner until a fix lands. The build's own offline RUN is the CLIP proof (CPU torch, and the checkpoint loads with the hub offline), so the scraper files it imports are inputs too; the log then shows the image size. A second job builds the API image (EXTRAS=api) at the base and with this pull request, fails if it can import torch or transformers or holds the hub cache, and prints both sizes and the package diff (#2032). A third builds the WORKER image (EXTRAS=api,browser). Each browser image then runs scripts/browser_image_check.py in the FINISHED image with no network: chromium launches, serves a page and closes through the repo's own helper (scraper/browser_fetch.py), so those files are inputs too. That arm was missing for the worker, so its first browser build reached Railway unbuilt and failed there instead (2026-11-16). No secrets; it pushes and deploys nothing. About 10 minutes a run, billed once the repository is private.",
       "manual": false,
       "schedules": [],
       "onPush": false,
@@ -1601,9 +1601,13 @@
         "data/requirements-clip-runner.txt",
         "pyproject.toml",
         "scraper/__init__.py",
+        "scraper/browser_fetch.py",
+        "scraper/cgroup.py",
         "scraper/clip_tagger.py",
         "scraper/cpus.py",
-        "scripts/bake_clip_weights.py"
+        "scraper/stop.py",
+        "scripts/bake_clip_weights.py",
+        "scripts/browser_image_check.py"
       ],
       "inputs": [],
       "secrets": [],

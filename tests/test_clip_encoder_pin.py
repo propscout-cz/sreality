@@ -27,7 +27,7 @@ _WORKFLOWS = _ROOT / ".github" / "workflows"
 _IMAGE_WORKFLOWS = ("runner_image.yml",)
 _PIP_CLIP = re.compile(r"\.\[[\w,]*\bclip\b[\w,]*\]")
 _EXTRAS_CLIP = re.compile(r"EXTRAS=[\w,]*\bclip\b")
-_RUNNER_EXTRAS = 'EXTRAS: "api,clip,geo"'
+_RUNNER_EXTRAS = 'EXTRAS: "api,browser,clip,geo"'
 
 
 def _from_pretrained_calls(tree: ast.AST) -> list[ast.Call]:

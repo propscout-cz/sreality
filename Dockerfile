@@ -17,8 +17,8 @@ ENV PIP_NO_CACHE_DIR=1 \
     PYTHONUNBUFFERED=1
 
 # EXTRAS: the pyproject extras this image installs. A Railway service variable of the same name reaches this ARG at
-# build time (.railway/railway.ts: the API and the worker set `api`, the job runner `api,clip,geo`); unset, it is
-# `api`. The echo shows in the build log.
+# build time (.railway/railway.ts: the API sets `api`, the worker `api,browser`, the job runner `api,browser,clip,geo`);
+# unset, it is `api`. The echo shows in the build log.
 ARG EXTRAS
 
 # The job runner's model layer (EXTRAS names clip; a no-op for the API and the worker), before the source so a
@@ -76,9 +76,10 @@ COPY skills/ ./skills/
 RUN echo "EXTRAS=${EXTRAS:-unset}" && pip install --upgrade pip && pip install ".[${EXTRAS:-api}]"
 # ONE portal is fetched through a real browser (ceskereality: a JS proof-of-work
 # interstitial since 2026-10-31, #2529), so the image that runs the scrapers bakes
-# chromium and its system libraries. Only the service whose EXTRAS names `browser` pays
-# the weight — the API never scrapes. Baked at build time on purpose: a runtime download
-# would make the first walled fetch of a fresh container fail.
+# chromium and its system libraries. Only the services whose EXTRAS name `browser` (the
+# worker and the job runner, #2031) pay the weight — the API never scrapes. Baked at build
+# time on purpose: a runtime download would make the first walled fetch of a fresh
+# container fail.
 # libatomic1 first, by hand: `--with-deps` installs chromium's system libraries, but it is
 # itself driven by playwright's bundled node, which this slim base cannot even load without
 # libatomic.so.1 (exit 127 before any dependency is resolved — build failure 2026-11-16).
