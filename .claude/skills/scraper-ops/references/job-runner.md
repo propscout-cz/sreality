@@ -6,9 +6,8 @@ rulings: `docs/design/actions-exit/PROGRAM.md` § 4.2. Since #2025's move PR it 
 `map_overlays`, since #2032 `clip`, since #2027 the daily `property_sweep` (03:00 UTC) and `broker_sweep` (06:00 UTC)
 and since #2028 `location_intake`, whose workflows those PRs deleted, since #2604 `ruian_buildings` (13:00 UTC, born
 on the runner; `docs/architecture.md` § Register facts), since #2029 the walks of web, maxima and bezrealitky, since
-#2033 the daily `ruian_load` (below) and since #2030 the hourly sreality walk; each later move PR (#2030, #2031) flips
-more entries' host. On
-Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and 8 GB
+#2033 the daily `ruian_load` (below) and since #2030 the hourly sreality walk; each later move PR (the rest of #2030,
+#2031) flips more entries' host. On Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and 8 GB
 (`.railway/railway.ts` `jobRunner`; settings, drain and image: `docs/architecture.md` § Railway service
 configuration). Its Health cells and the "Jobs: run now" form are #2026's (below).
 

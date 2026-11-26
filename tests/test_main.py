@@ -467,37 +467,42 @@ def test_walk_category_split_district_one_row_short_still_reached_the_end(
     assert walk_is_complete(86, 87) is False   # ...and the count still knows
 
 
+@pytest.mark.parametrize(("cut", "walked"), [
+    ("budget spent", 0),
+    ("stop before the first district", 0),
+    ("stop inside the first district", 1),
+])
 def test_walk_category_split_deadline_between_districts_suppresses_nomination(
-    patched_db, monkeypatch
+    patched_db, monkeypatch, cut, walked
 ):
     """The wall-clock budget expiring between districts leaves 77 - walked
     districts never reached (`slice_unreached`) plus our own `deadline` stop, so
-    the category nominates nothing however much the walked part collected."""
+    the category nominates nothing however much the walked part collected. On
+    the job runner (#2030) the walk carries no --max-seconds: its SIGTERM at
+    timeout_s, the stop event, is that budget, before a district or inside one
+    (the limiter raises StopRequested mid-page)."""
     monkeypatch.setattr(_FakeClient, "result_size", 12000, raising=False)
     monkeypatch.setattr(
         _FakeClient, "district_result_size", {1: 6000, 2: 6000}, raising=False,
     )
+    calls: list[object] = []
+
+    def walk(client, *args, **kwargs):
+        calls.append(client)
+        stop.EVENT.set()
+        raise stop.StopRequested()
+
+    if cut == "stop inside the first district":
+        monkeypatch.setattr(scraper_main, "_walk_category", walk)
+    if cut == "stop before the first district":
+        stop.EVENT.set()
+    deadline = time.monotonic() - 1 if cut == "budget spent" else None
 
     _seen, _counts, _rs, _pages, complete = scraper_main._walk_category_split(
-        1, 2, deadline=time.monotonic() - 1, **_split_args()
+        1, 2, deadline=deadline, **_split_args()
     )
     assert complete is False
-
-
-def test_the_runners_stop_signal_is_our_stop_between_districts_without_a_deadline(patched_db, monkeypatch):
-    """W4 (#2030): on the job runner the walk carries no --max-seconds; the runner's SIGTERM at timeout_s (the stop
-    event) is its one budget, and stops the district loop through deadline_reached(None): nothing nominates."""
-    monkeypatch.setattr(_FakeClient, "result_size", 12000, raising=False)
-    monkeypatch.setattr(
-        _FakeClient, "district_result_size", {1: 6000, 2: 6000}, raising=False,
-    )
-    stop.EVENT.set()
-
-    _seen, _counts, _rs, pages, complete = scraper_main._walk_category_split(
-        1, 2, deadline=None, **_split_args()
-    )
-    assert complete is False
-    assert pages == 0
+    assert len(calls) == walked
 
 
 def test_walk_category_split_union_shortfall_no_longer_vetoes(

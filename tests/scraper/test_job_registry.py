@@ -181,9 +181,7 @@ def test_a_walks_host_is_the_cutoffs() -> None:
     assert walk_host_problems(jobs.declared(), _portal_classes()) == []
     hosts = {j.name: j.host for j in jobs.declared() if j.name.startswith(jobs.WALK_PREFIX)}
     assert {n for n, h in hosts.items() if h == jobs.RUNNER} == {
-        "walk_web", "walk_maxima", "walk_bezrealitky", "walk_sreality"}, \
-        "batch 1 (#2029), then sreality alone at 40 min (#2030); remax and mmreality (60 min) wait for remax's " \
-        "sold/let gate #2647 and mmreality's proxy variable on the runner"
+        "walk_web", "walk_maxima", "walk_bezrealitky", "walk_sreality"}, "batch 1 (#2029), batch 2's first (#2030)"
 
 
 def test_the_walk_host_census_fires() -> None:

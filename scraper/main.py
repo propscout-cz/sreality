@@ -2,8 +2,8 @@
 
 `SrealityPortal` wraps this module's walk / fetch helpers for the shared
 portal_runner; the scheduled entrypoint is `scraper.sreality_main`
-(the job runner's hourly `walk_sreality`; the realtime worker drains). The image phase reads pending image rows
-and uploads their bytes to Cloudflare R2 (a no-op without the R2_* env vars).
+(the job runner's hourly `walk_sreality`; the realtime worker drains). The
+image phase reads pending image rows and uploads their bytes to Cloudflare R2 (a no-op without the R2_* env vars).
 
 Run with exactly one mode:
     python -m scraper.main --images-only           # image phase by hand (the worker's images lane runs it)
@@ -558,7 +558,7 @@ class SrealityPortal(portal_runner.PortalDefaults):
 
     source = "sreality"
     price_change_min_pct = 0.0  # instance reads from config (portal_factory)
-    walk_every_s = 3600  # PROGRAM R24: hourly once on the job runner
+    walk_every_s = 3600  # PROGRAM R24: hourly, on the job runner since #2030
     walk_timeout_s = 40 * 60
     index_rate = DEFAULT_DETAIL_RATE  # baked floor; instance reads from config
     shared_rate_limiter = False  # instance reads from config (portal_factory)

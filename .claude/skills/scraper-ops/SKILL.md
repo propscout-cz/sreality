@@ -190,8 +190,8 @@ The worker's `llm` check alarms PER PROVIDER (each its own account: a credit err
 once kept a credit-exhausted account green ~8h); `LLMClient` records the failure row on every
 provider exception, so the check needs no key of its own. Its `fleet/spend` cell judges 24 h spend (Watch > $130,
 Problem > $150, in `THRESHOLDS`) and lands in the same `pipeline_check_results` table the harness below writes to. Run any directly:
-- CLI: `gh workflow run <portal>_index_walk.yml --ref <branch>` (`-f` for flags); watch with
-  `gh run list --workflow=<portal>_index_walk.yml` then `gh run watch`. Runner walks: `references/job-runner.md`.
+- CLI: `gh workflow run <file>.yml --ref <branch>` (`-f` for flags); watch with
+  `gh run list --workflow=<file>.yml` then `gh run watch`. Runner walks: `references/job-runner.md`.
 - Browser: repo → **Actions** → the workflow → **Run workflow** → branch + flags. (All sreality
   scraping workflows are prefixed `Scraping:`.)
 
@@ -278,10 +278,9 @@ R2 key = `img/{listing_id}/{images.id}.jpg`, unique per ROW (rule #6); a stored 
   rotated/went stale into `listing_detail_queue` (NEW priority) so the detail drain repoints them.
 
 **Cadence:** the sreality walk runs hourly (frequent index walks surface delistings fast) and the worker's
-drain lane every 30 s keeps a steady, polite fetch volume. GitHub throttles scheduled workflows, so a walk's effective
-cadence is slower, and Health judges the gap a portal keeps, not a declared one: the `scraping` check's `<portal>/walks/<unit>`
+drain lane every 30 s keeps a steady, polite fetch volume. GitHub throttles the walks still on Actions, and Health judges the gap a portal keeps, not a declared one: the `scraping` check's `<portal>/walks/<unit>`
 cells age a unit's newest end-reached walk against G, the median start gap of the portal's finished walks over 14 d (under 10
-gaps, the slowest portal's G): Watch past 3 G, Problem past 6 G (crawlers ~43 h, sreality 26.5 h) or with no end-reached walk
+gaps, the slowest portal's G): Watch past 3 G, Problem past 6 G (crawlers ~43 h; sreality ~6 h hourly) or with no end-reached walk
 in 14 d; `<portal>/walks` is a Problem when no walk finished in 30 d (`THRESHOLDS` in `scripts/verify_pipeline.py`).
 Concurrency: each workflow has its own group with `cancel-in-progress: false` — a long run is never killed mid-batch, the
 next tick queues behind it. Per-category nominations are queued immediately after each category's walk, so even a timed-out

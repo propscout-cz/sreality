@@ -3946,7 +3946,8 @@ renumber.** Navigate by area:
     the pipeline and collection state beside it) and its writes on the same `/dismissals` routes.
 19. **The sreality scrape is split by cadence (Phase 2): a fast index-walk feeds an async
     batched detail-drain through `listing_detail_queue` (migration 105).** The job runner's hourly
-    `walk_sreality` (`scraper.sreality_main --index-only`, `run_type='index'`; `index_walk.yml` until #2030) walks the full index,
+    `walk_sreality` (`scraper.sreality_main --index-only`, `run_type='index'`; `index_walk.yml` until
+    #2030) walks the full index,
     `portal_runner.reconcile_sightings` (touch every sighted known row) + nominates unseen rows for a page check (rule #3, 2026-09-07), and **enqueues** new/price-changed
     ids — classified by the ONE shared verdict rule, `portal.classify_index_sighting`, which
     every portal including sreality routes through (a rail in `tests/scraper/test_portal.py`
