@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import os
 import re
-import signal
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
