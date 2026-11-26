@@ -11,6 +11,8 @@ out-of-band via the Supabase MCP.
 
 from __future__ import annotations
 
+import pathlib
+import re
 from typing import Any
 
 import pytest
@@ -376,11 +378,18 @@ def test_reclaim_stale_claims_releases_old_claims_and_prunes_ledger():
     assert params == ("sreality", 30)
 
 
-def test_the_ledger_outlives_a_7_day_gate_read_two_weeks_late_and_its_readers_judge_one_week():
-    """#2665: a gate's longest window (7 days, docs/agents/issue-tracker.md) plus two weeks of slack stays readable;
-    the live readers keep the week the 7-day prune left them, so the longer ledger changes no verdict."""
-    longest_gate_window_days, slack_days = 7, 14
-    assert db.COMPLETION_RETENTION_DAYS >= longest_gate_window_days + slack_days
+def test_the_ledger_outlives_the_longest_gate_window_read_two_weeks_late():
+    """#2665: the gate template's longest window plus two weeks of slack stays readable."""
+    template = (pathlib.Path(__file__).resolve().parents[1] / "docs/agents/issue-tracker.md").read_text()
+    windows = re.search(r"^Starts when .*?Window: <([^>]+)>", template, re.M)
+    assert windows, "the gate template's Window line moved"
+    to_days = {"hours": 1 / 24, "days": 1}
+    longest = max(int(n) * to_days[unit] for n, unit in re.findall(r"(\d+) (hours|days)", windows.group(1)))
+    assert db.COMPLETION_RETENTION_DAYS >= longest + 14
+
+
+def test_the_live_readers_judge_the_week_the_7_day_prune_left_them():
+    """#2665: the longer ledger changes no verdict, answer or Health cell (tests/test_completion_ledger_window_live)."""
     assert db.COMPLETION_EVIDENCE_DAYS == 7 < db.COMPLETION_RETENTION_DAYS
 
 

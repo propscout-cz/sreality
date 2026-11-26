@@ -22,16 +22,20 @@ from scraper import db
 from scripts.checks import delisting as dl
 
 _DB_URL = os.environ.get("TEST_DATABASE_URL")
+_REQUIRED = os.environ.get("DB_RAILS_REQUIRED") == "1"
 _H = 3600.0
 
 pytestmark = pytest.mark.skipif(
-    not _DB_URL,
-    reason="TEST_DATABASE_URL not set — the live ledger window runs in the CI DB job",
+    not _DB_URL and not _REQUIRED,
+    reason="TEST_DATABASE_URL not set — the live ledger window runs in CI's migrations lane",
 )
 
 
 @pytest.fixture()
 def conn() -> Iterator[psycopg.Connection]:
+    if not _DB_URL:
+        pytest.fail("DB_RAILS_REQUIRED=1 but TEST_DATABASE_URL is not set — the migrations lane is "
+                    "misconfigured and this rail would otherwise have skipped green.")
     connection = psycopg.connect(_DB_URL)
     try:
         connection.execute("select now()")
@@ -103,6 +107,7 @@ def test_health_counts_an_ad_in_dwell_only_from_the_evidence_week(conn, src):
     _ad(conn, src, "inside", seen_days=10)
     _completion(conn, src, "inside", "gone", days=db.COMPLETION_EVIDENCE_DAYS - 1)
 
+    # Both verdicts are days past any limit, so the one ad left in dwell is also the one stuck.
     rows = conn.execute(dl._STUCK_SQL, {"sources": [src], "limits_s": [37 * _H], "fallback_s": 25 * _H}).fetchall()
 
     assert [(row[0], row[1], row[2]) for row in rows if row[0] == src] == [(src, 1, 1)]

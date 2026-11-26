@@ -2330,7 +2330,7 @@ def reclaim_stale_claims(
     """Release `source` claims older than the cutoff (a drain SIGKILLed
     mid-flight), so its rows become claimable again. Mirrors
     sweep_stuck_scrape_runs. Also prunes this source's expired
-    detail_queue_completions rows (21-day ephemeral ledger, the rule-#9
+    detail_queue_completions rows (COMPLETION_RETENTION_DAYS, the rule-#9
     posture) — running it here, at every drain start, keeps the ledger
     bounded without pg_cron."""
     with conn.transaction(), conn.cursor() as cur:
