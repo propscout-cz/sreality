@@ -1237,10 +1237,29 @@ class _Source:
     join: str    # the event row `e` -> its `m`, one per source told about it
     scope: str   # this statement's own dispatches, on notification_dispatches
     within: str  # narrows the lifecycle reads to the source's members ({pid}); "" reads the market
+    held: str = ""  # who of `m` is told a return `e`: only a source that held the property then
 
 
 # A semi-join, never a JOIN: a property in two monitored collections is two members.
 _MEMBERS_ONLY = " AND {pid} IN (SELECT property_id FROM members)"
+
+# A return is told to a collection that held a property OFF the market. A merge returns a property
+# long gone by bringing a live one in, and a collection's membership reaches the survivor by that
+# merge's carry record (written in the merge's transaction, so never before the stamp it causes):
+# one row moved, the rest folded onto it. A collection whose membership was MOVED there at or after
+# the return did not hold the survivor; it is told only if one of those rows came from a property
+# off the market as the merge saw it (`from_on_market`, kept on the append-only record, migration
+# 777; NULL on an older row = unknown, not told). Undone or not: an undone carry whose row went
+# back names no member, one the operator kept is still that membership.
+_CARRIED_SINCE_THE_RETURN = (
+    "EXISTS (SELECT 1 FROM property_merge_carries c WHERE c.to_property_id = e.property_id "
+    "AND c.table_name = 'collection_properties' AND c.row_key = m.source_id "
+    "AND c.created_at >= e.back_on_market_at AND {which})"
+)
+_HELD_AT_THE_RETURN = (
+    f" AND (NOT {_CARRIED_SINCE_THE_RETURN.format(which="c.kind = 'moved'")}"
+    f" OR {_CARRIED_SINCE_THE_RETURN.format(which='c.from_on_market IS FALSE')})"
+)
 
 # A collection with monitoring_enabled tells each property it holds the kinds it is set to
 # (collections.notify_kinds, migration 735), from the later of when it was added
@@ -1270,6 +1289,7 @@ _MONITOR = _Source(
     join="JOIN members m ON m.property_id = e.property_id",
     scope="source_kind = 'collection_monitor'",
     within=_MEMBERS_ONLY,
+    held=_HELD_AT_THE_RETURN,
 )
 # A watchdog tells each published property its spec matches NOW (`{where}`, rule 16) from when it
 # last started (`active_since`), the kinds the step passes it (`%(kinds)s`: those of its own
@@ -1378,8 +1398,8 @@ def _inactive_sql(src: _Source) -> str:
 def _reactivated_sql(src: _Source) -> str:
     """'Back on the market': the property came back after `since`, having been off the market for
     INACTIVE_DWELL or more (`properties.back_on_market_at`, stamped only then by migration 754's
-    trigger: a portal blink is no return, nor is a merge that brings in a property already
-    published). event_ref = the epoch of that return, so the next return is its own event. For a
+    trigger: a portal blink is no return; a merge bringing a live property into one long gone is,
+    told to who held the one that was gone, `_Source.held`). event_ref = the epoch of that return, so the next return is its own event. For a
     collection and for a watchdog with no slice; such a watchdog's spec is read NOW, so a property
     that returned outside it and matches it within MONITOR_WINDOW is told then."""
     return (
@@ -1396,7 +1416,7 @@ def _reactivated_sql(src: _Source) -> str:
         f"SELECT m.source_id, '{src.kind}', e.property_id, m.listing_id, 'reactivated', "
         f"       {_RETURN_REF.format(at='e.back_on_market_at')} "
         f"FROM back e {src.join} "
-        "WHERE e.back_on_market_at > m.since AND 'reactivated' = ANY(m.kinds) "
+        f"WHERE e.back_on_market_at > m.since AND 'reactivated' = ANY(m.kinds){src.held} "
         f"{ON_EVENT_CONFLICT}"
     )
 

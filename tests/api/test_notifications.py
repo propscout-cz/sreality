@@ -1488,8 +1488,26 @@ def test_back_on_the_market_is_one_fact_for_both_producers() -> None:
             "public.properties for each row when (old.is_active is distinct from new.is_active "
             "and old.status = 'active' and new.status = 'active')") in sql
     assert "drop trigger" not in sql, "replaced in one statement: properties is never without it"
-    assert ("where x.merged_into = new.id and x.merged_at = now() and x.settled_at is not null") in sql, \
-        "a merge bringing in a published property is no return"
+    restated = " ".join((MIGRATIONS / "778_return_at_merge_is_a_return.sql").read_text().split())
+    body = restated.split("as $$", 1)[1].split("$$;", 1)[0]
+    assert "merged_at" not in body and "old.left_market_at <= now() - interval '24 hours'" in body, \
+        "#2583: a merge that returns a property long gone is its return; the followers are told apart below"
+    assert "drop " not in restated and "alter table" not in restated, "one function restated, nothing else"
+    assert nf._WATCHDOG.held == "" and nf._MONITOR.held == nf._HELD_AT_THE_RETURN
+    held = " ".join(nf._MONITOR_REACTIVATED_SQL.split())
+    carried = ("EXISTS (SELECT 1 FROM property_merge_carries c WHERE c.to_property_id = e.property_id "
+               "AND c.table_name = 'collection_properties' AND c.row_key = m.source_id "
+               "AND c.created_at >= e.back_on_market_at AND ")
+    assert f"AND (NOT {carried}c.kind = 'moved') OR {carried}c.from_on_market IS FALSE))" in held
+    assert "undone_at" not in nf._HELD_AT_THE_RETURN, "a kept row of an undone carry is still that membership"
+    assert "property_merge_carries" not in nf._WATCHDOG_REACTIVATED_SQL
+    from toolkit import property_identity
+
+    assert ("(SELECT p.is_active FROM properties p WHERE p.id = %(from_property)s)"
+            in property_identity._CARRY_SQL), "the fact of the merge instant, on the append-only record"
+    assert "left_market_at" not in property_identity._RETIRE_SQL
+    column = " ".join((MIGRATIONS / "777_carry_from_on_market.sql").read_text().split())
+    assert "add column if not exists from_on_market boolean;" in column and "update " not in column.lower()
     watchdog, collection = sql.split("alter table public.collections drop constraint", 1)
     allowed = watchdog.split("notify_kinds <@ array[", 1)[1].split("]", 1)[0]
     assert tuple(re.findall(r"'(\w+)'", allowed)) == nf.WATCHDOG_KINDS

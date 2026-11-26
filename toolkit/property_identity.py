@@ -140,12 +140,15 @@ WHERE l.property_id = %(retired)s
 
 _REPOINT_SQL = "UPDATE listings SET property_id = %s WHERE property_id = %s"
 
-# One carry record row per curation row a step moved or folded (migration 589, MS14).
+# One carry record row per curation row a step moved or folded (migration 589, MS14). It keeps
+# whether the property the row came from was on the market as this merge saw it (migration 777):
+# written before the retire, so `is_active` is still that property's own rollup.
 _CARRY_SQL = """
 INSERT INTO property_merge_carries (merge_group_id, table_name, row_key, row_at, account_id,
-    from_property_id, to_property_id, kind, snapshot)
+    from_property_id, to_property_id, kind, snapshot, from_on_market)
 VALUES (%(group)s, %(table)s, %(row_key)s, %(row_at)s, %(account_id)s, %(from_property)s,
-        %(survivor)s, %(kind)s, %(snapshot)s)
+        %(survivor)s, %(kind)s, %(snapshot)s,
+        (SELECT p.is_active FROM properties p WHERE p.id = %(from_property)s))
 """
 
 # Publication never regresses on a merge or a split (migrations 668/747): a published retired
@@ -619,8 +622,8 @@ def merge_property_set(
                     "cluster_key": key, "generation": gen, "member_ids": members,
                     "verdict": "same", "note": f"operator merge {group}", "reasons": [],
                     "decided_by": str(decided_by)} for key, gen, members in sets])
-        # Inside this transaction on purpose: the return stamp (migration 754's trigger) tells a merge
-        # from a return by the retired record's `merged_at = now()`, this transaction's start.
+        # Inside this transaction on purpose: a return this merge makes is stamped at the instant its
+        # carry rows are (`api/notifications._HELD_AT_THE_RETURN` tells the two memberships apart by it).
         properties_changed(conn, [survivor, *retired])
 
     return {
