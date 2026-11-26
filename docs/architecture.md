@@ -6059,12 +6059,9 @@ test); the `location_town_coverage` gauge's `registry` cell reads Problem when t
 
 **OPS RULES THE INCIDENTS WROTE.** The heavy lanes — registry load, claim intake, building load — share the job
 runner's `location-heavy` resource (`scraper/jobs.py`; GitHub's `location-batch` group until #2028) so
-**at most one runs at a time**: the runner claims the intake through it, and the load, on GitHub until
-#2033, claims it in its own main (`job_lease.held_job`: its row and an open `job_runs` row, waiting
-as long as a sibling can hold it), so the intake's Health cell reads `waiting for ruian_load`
-during a load, never red; a load that never got it exits 1 with nothing loaded, one that returns
-non-zero closes its run `failed` (`HeldRun.exit_code`), and a run its host dropped is closed `lost`
-by the runner's reaper. A new heavy lane joins the resource. On 2026-08-10
+**at most one runs at a time**: the runner claims each of the three through it (the registry load since #2033), so
+the intake's Health cell reads `waiting for ruian_load` during a load, never red. A new heavy lane joins the
+resource. On 2026-08-10
 four concurrent lanes dropped backends across
 the fleet, degraded the live Browse rebuild to multi-minute DataFileReads and wedged two lanes with
 no error at all. **The resolve DRAIN is outside the resource** (operator decision, 2026-09-10): it is

@@ -4,7 +4,7 @@
 where a lock taken on one backend and released on another silently strands. The row is the
 lock: a claim is a conditional UPDATE, a crashed holder's lease simply expires.
 
-Four shapes over one row:
+Three shapes over one row:
 
 * `claim` / `renew` / `release` — a scheduled job, driven by the job runner (`scraper.job_runner`).
   A claim takes a DUE row (its `due_at` passed and it is not paused, or a request is waiting: a
@@ -30,9 +30,6 @@ Four shapes over one row:
   a `Hold`. A lane that never renews needs a TTL that outlasts its pass (the resolver lanes); one that `renew`s, stops
   by `Hold.fenced` and ends each transaction with `fence` cannot commit under a lapsed lease. The release falls back to
   one fresh connection when the holding one died.
-* `held_job` — a registry job a workflow still runs (the RÚIAN load, #2028): its row claimed and its run opened as the
-  runner would, its resource included, so it and the runner's siblings exclude each other on any host; held for the
-  job's `timeout_s`, and a run its host dropped is the runner's reaper's. Under the runner it is the runner's claim.
 * `acquire` / `end` / `predecessor` / `end_predecessor` — the same lane row for a holder that outlives one `with` block (the autodedup
   lane, adapted by `autodedup/rt_lease.py`: its take, its release and a shutdown's release sit on different connections).
   `end` lapses the lease instead of clearing it: the row keeps who held it and when it ended.
@@ -70,9 +67,6 @@ TTL_S = 180
 FENCE_MARGIN_S = 30
 # How often a `held` that may wait tries the lane again.
 WAIT_POLL_S = 10
-# A held job's lease is what its host has left of its timeout_s, never less than a lane's TTL (a claim at the
-# ceiling).
-HELD_JOB_MIN_TTL_S = TTL_S
 
 RELEASE_OUTCOMES = frozenset({"ok", "failed", "cancelled", "skipped", "timeout", "interrupted"})
 NOT_FAILURES = frozenset({"cancelled", "skipped", "interrupted"})
@@ -87,10 +81,6 @@ STATEMENT_TIMEOUT_S = 5
 
 _FREE = "(j.lease_holder IS NULL OR j.lease_expires_at IS NULL OR j.lease_expires_at < now())"
 _UNPAUSED = "(j.paused_until IS NULL OR j.paused_until <= now())"
-_RESOURCE_FREE = """(j.resource IS NULL OR NOT EXISTS (
-         SELECT 1 FROM scheduled_jobs s
-          WHERE s.resource = j.resource AND s.job_name <> j.job_name
-            AND s.lease_holder IS NOT NULL AND s.lease_expires_at >= now()))"""
 # A DB-heavy job never starts beside another DB-heavy job's open run (#2027): a recovery after hours down, a deploy's
 # re-run or a request would otherwise find two due at once. No unique index spans two jobs, so a heavy claim first
 # takes _HEAVY_TURN_SQL: two replicas' heavy claims take turns, and the second reads the first's committed run.
@@ -116,31 +106,12 @@ UPDATE scheduled_jobs j
    AND ((j.due_at <= now() AND {_UNPAUSED}) OR j.requested_at <= now())
    AND {_FREE}
    AND {_ONE_HEAVY}
-   AND {_RESOURCE_FREE}
+   AND (j.resource IS NULL OR NOT EXISTS (
+         SELECT 1 FROM scheduled_jobs s
+          WHERE s.resource = j.resource AND s.job_name <> j.job_name
+            AND s.lease_holder IS NOT NULL AND s.lease_expires_at >= now()))
 RETURNING j.resource, coalesce(j.requested_at <= now(), false), j.requested_args, j.requested_by,
           coalesce(j.due_at <= now() AND {_UNPAUSED}, false)
-"""
-
-# A job a workflow still runs (`held_job`): its row as a lane's, with the declarations Health reads off a sibling (its
-# timeout, its resource); a row the runner registered keeps its runner. Then the runner's claim without a due time: its
-# host's own schedule decides when.
-_UPSERT_HELD_JOB_SQL = """
-INSERT INTO scheduled_jobs (job_name, cadence, runner, timeout_s, resource)
-VALUES (%(job)s, make_interval(secs => %(every_s)s::integer), %(runner)s, %(timeout_s)s::integer, %(resource)s::text)
-ON CONFLICT (job_name) DO UPDATE SET timeout_s = EXCLUDED.timeout_s, resource = EXCLUDED.resource
-"""
-_CLAIM_HELD_JOB_SQL = f"""
-UPDATE scheduled_jobs j
-   SET lease_holder = %(holder)s,
-       lease_expires_at = now() + make_interval(secs => %(ttl)s),
-       last_started_at = now(),
-       last_outcome = 'running'
- WHERE j.job_name = %(job)s
-   AND j.retired_at IS NULL
-   AND {_UNPAUSED}
-   AND {_FREE}
-   AND {_RESOURCE_FREE}
-RETURNING 1
 """
 
 # The open run on this job lost its holder: the claim above took the row from a lapsed lease. A sibling's
@@ -342,12 +313,10 @@ RETURNING job_name
 """
 
 # Open runs whose holder no longer holds a live lease, on every row this runner owns (paused, not due and retired
-# included), and any host's run on a resource: a workflow killed before its `held_job` release would otherwise hold
-# the resource's runner jobs off for good (`_DUE_SQL` lists none while a run on it is open). SKIP LOCKED: a claim
-# locks the row, then the runs, then its siblings, so a reaper that waited could deadlock with it. `again`: the job's
-# latest closed run (by id; a claim closes and opens at one now()) was lost too, a pure request's included: whoever
-# asked, the job lost its runner, as consecutive_failures counts a request's failure too. `due_at` moves only for this
-# deployment's names, so an old replica never reschedules a newer one's row.
+# included). SKIP LOCKED: a claim locks the row, then the runs, then its siblings, so a reaper that waited could
+# deadlock with it. `again`: the job's latest closed run (by id; a claim closes and opens at one now()) was lost
+# too, a pure request's included: whoever asked, the job lost its runner, as consecutive_failures counts a request's
+# failure too. `due_at` moves only for this deployment's names, so an old replica never reschedules a newer one's row.
 # `pure`: a request whose row was not due yet when it started took no slot (the run's started_at is its claim's now(),
 # and the claim leaves due_at as it was), so its loss keeps the schedule, as its release would (#2317), and a slot that
 # came due while it ran stays due. The pause can change mid-run, so it is not read: a request on a paused row that was
@@ -358,7 +327,7 @@ WITH lapsed AS MATERIALIZED (
     FROM job_runs r
     JOIN scheduled_jobs j ON j.job_name = r.job_name
    WHERE r.ended_at IS NULL
-     AND ((j.runner = %(runner)s AND j.registry_at IS NOT NULL) OR r.resource IS NOT NULL)
+     AND j.runner = %(runner)s AND j.registry_at IS NOT NULL
      AND NOT (j.lease_holder IS NOT DISTINCT FROM r.holder AND coalesce(j.lease_expires_at >= now(), false))
      FOR UPDATE OF r, j SKIP LOCKED
 ), judged AS (
@@ -488,13 +457,6 @@ class Lease(Hold):
     args: list[str] | None
     requested_by: str | None
     due_slot: bool = False  # the row was due and unpaused when claimed: the run also took its scheduled slot
-
-
-@dataclass
-class HeldRun:
-    """A `held_job` block's report: the exit code its process will return, which closes the run (non-zero: failed)."""
-
-    exit_code: int = 0
 
 
 @dataclass(frozen=True)
@@ -728,23 +690,19 @@ def _fresh_connection() -> psycopg.Connection:
     return db.connect(attempts=1, connect_timeout=10)
 
 
-def _release_hold(conn: psycopg.Connection, hold: Hold, outcome: str, error: str | None,
-                  exit_code: int | None = None) -> bool:
+def _release_hold(conn: psycopg.Connection, hold: Hold, outcome: str, error: str | None) -> bool:
     """False: no row was this holder's any more (released already, or another holder took the lane)."""
-    if isinstance(hold, Lease):
-        return release(conn, hold, outcome, error=error, exit_code=exit_code)
     with _bounded(conn) as cur:
         cur.execute(_RELEASE_RUN_SQL, _release_params(hold, outcome, due=None, error=error))
         return cur.fetchone() is not None
 
 
 def _release_with_fallback(conn: psycopg.Connection, hold: Hold, outcome: str, error: str | None,
-                           original: BaseException | None, connect: Callable[[], psycopg.Connection],
-                           exit_code: int | None = None) -> None:
+                           original: BaseException | None, connect: Callable[[], psycopg.Connection]) -> None:
     """Releases on the holding connection, else once on a fresh one. Never replaces `original`: a failure is noted on
     it and the lease expires by itself; with no `original`, the release's own failure is the error."""
     try:
-        if not _release_hold(conn, hold, outcome, error, exit_code):
+        if not _release_hold(conn, hold, outcome, error):
             LOG.warning("LEASE gone job=%s holder=%s at the release: another holder took it, so outcome %s is not "
                         "written", hold.job_name, hold.holder, outcome)
         return
@@ -753,7 +711,7 @@ def _release_with_fallback(conn: psycopg.Connection, hold: Hold, outcome: str, e
     fresh = None
     try:
         fresh = connect()
-        released = _release_hold(fresh, hold, outcome, error, exit_code)
+        released = _release_hold(fresh, hold, outcome, error)
     except Exception as exc:
         if original is None:
             raise exc from first
@@ -809,28 +767,6 @@ def end_predecessor(conn: psycopg.Connection, job_name: str, *, host: str, pid: 
     return _predecessor(conn, _END_PREDECESSOR_SQL, job_name, host, pid, booted_epoch)
 
 
-def _claim_held_job(conn: psycopg.Connection, job: Job, *, runner: str, holder: str, ttl_s: int) -> Lease | None:
-    """The job's run, claimed as the runner claims one and held for `ttl_s`, what its host has left of `timeout_s`;
-    None while the row or its resource is held, or the row is paused or retired."""
-    params = {"job": job.name, "every_s": job.every_s, "runner": runner, "timeout_s": job.timeout_s,
-              "resource": job.resource, "holder": holder, "ttl": ttl_s, "args": None, "requested_by": None,
-              "version": os.environ.get("RAILWAY_GIT_COMMIT_SHA") or os.environ.get("GITHUB_SHA")}
-    sent_at = clock()
-    try:
-        with _bounded(conn) as cur:
-            cur.execute(_UPSERT_HELD_JOB_SQL, params)
-            cur.execute(_CLAIM_HELD_JOB_SQL, params)
-            if cur.fetchone() is None:
-                return None
-            cur.execute(_CLOSE_LOST_SQL, params)
-            cur.execute(_OPEN_RUN_SQL, params)
-            run_id = cur.fetchone()[0]
-    except psycopg.errors.UniqueViolation:
-        LOG.info("LEASE race lost job=%s: another holder opened a run on it or its resource", job.name)
-        return None
-    return Lease(job.name, holder, ttl_s, _fence_at(sent_at, ttl_s), run_id=run_id, args=None, requested_by=None)
-
-
 @contextmanager
 def held(conn: psycopg.Connection, job_name: str, *, cadence: str, runner: str = "github_actions",
          ttl_s: int = 3600, holder: str | None = None, wait_s: float = 0,
@@ -839,39 +775,9 @@ def held(conn: psycopg.Connection, job_name: str, *, cadence: str, runner: str =
     or it is paused or retired. Taking and releasing it are bounded like a runner call; `connect` opens the release's
     fallback when `conn` died."""
     holder = holder or holder_id()
-    with _holding(conn, job_name, lambda: acquire(conn, job_name, cadence=cadence, runner=runner, ttl_s=ttl_s,
-                                                  holder=holder), wait_s, connect) as hold:
-        yield hold
-
-
-@contextmanager
-def held_job(conn: psycopg.Connection, job: Job, *, wait_s: float, runner: str = "github_actions",
-             connect: Callable[[], psycopg.Connection] = _fresh_connection) -> Iterator[HeldRun | None]:
-    """A `HeldRun` while this process may run `job`, on any host: under the runner (it exports `JOB_NAME`) the runner's
-    claim holds the row and its resource; elsewhere this claims them as the runner would and opens the job's run, so a
-    sibling waits for it and reads held, and closes it with how the block ended: an exception, or the exit code the
-    block set. None when they stayed held past `wait_s`."""
-    ran = HeldRun()
-    if os.environ.get("JOB_NAME") == job.name:
-        yield ran
-        return
-    holder, began = holder_id(), clock()
-
-    def take() -> Lease | None:
-        # Its host kills it timeout_s after it began: a lease past that would keep a sibling waiting on a dead run.
-        left_s = max(job.timeout_s - int(clock() - began), HELD_JOB_MIN_TTL_S)
-        return _claim_held_job(conn, job, runner=runner, holder=holder, ttl_s=left_s)
-
-    with _holding(conn, job.name, take, wait_s, connect, ran) as lease:
-        yield ran if lease is not None else None
-
-
-@contextmanager
-def _holding(conn: psycopg.Connection, job_name: str, take: Callable[[], Hold | None], wait_s: float,
-             connect: Callable[[], psycopg.Connection], ran: HeldRun | None = None) -> Iterator[Hold | None]:
     give_up_at = clock() + wait_s
     while True:
-        hold = take()
+        hold = acquire(conn, job_name, cadence=cadence, runner=runner, ttl_s=ttl_s, holder=holder)
         if hold is not None or clock() >= give_up_at:
             break
         LOG.info("LEASE busy job=%s: trying again in %ds", job_name, WAIT_POLL_S)
@@ -880,12 +786,9 @@ def _holding(conn: psycopg.Connection, job_name: str, take: Callable[[], Hold | 
         LOG.info("LEASE busy job=%s", job_name)
         yield None
         return
-    outcome, error, original, code = "ok", None, None, None
+    outcome, error, original = "ok", None, None
     try:
         yield hold
-        code = ran.exit_code if ran is not None else None
-        if code:
-            outcome, error = "failed", f"exit {code}"
     except Exception as exc:  # noqa: BLE001 - the lease must be released either way
         outcome, error, original = "failed", str(exc), exc
         raise
@@ -893,4 +796,4 @@ def _holding(conn: psycopg.Connection, job_name: str, take: Callable[[], Hold | 
         outcome, original = "interrupted", exc
         raise
     finally:
-        _release_with_fallback(conn, hold, outcome, error, original, connect, code)
+        _release_with_fallback(conn, hold, outcome, error, original, connect)

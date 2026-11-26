@@ -694,8 +694,8 @@ def _run(args: argparse.Namespace, io: Boundaries) -> int:
         raise Stop(f"momc questions with no quarter pair at the current version: {len(unanswerable)} (pairs there:"
                    f" {registry.pairs}); first confirm with a SELECT that no registry_versions row is newer than"
                    f" version {registry.version} (doors are unversioned), then, with the operator's OK, re-dispatch the"
-                   f" load's finishing step (it writes to production): gh workflow run location_registry_load.yml"
-                   f" -f vintage={registry.vintage:%Y%m%d}; then confirm the pairs")
+                   f" load's finishing step (it writes to production): python -m scraper.job_runner request ruian_load"
+                   f" -- --vintage {registry.vintage:%Y%m%d}; then confirm the pairs")
     numbers, scorable_numbers = {q.number for q in questions}, {q.number for q in scorable}
     for n in sorted(struck):
         if n not in numbers or n not in scorable_numbers:

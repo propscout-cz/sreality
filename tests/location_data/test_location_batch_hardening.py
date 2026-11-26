@@ -45,7 +45,7 @@ import psycopg
 import pytest
 import yaml
 
-from location_data import claims_intake, contracts, loader_db, payloads, ruian_boundaries as rb, ruian_load
+from location_data import claims_intake, contracts, loader_db, payloads, ruian_boundaries as rb
 from location_data.resolver import drain, resolve_db
 from scraper import jobs, stop
 
@@ -72,11 +72,10 @@ def test_no_workflow_holds_the_retired_location_batch_group():
 
 
 def test_the_heavy_location_jobs_share_one_resource():
-    """The intake, the registry load and the building load never overlap: they share `location-heavy`, claimed
-    through `scraper.job_lease` by the runner for the intake and the building load, and by the load's own main."""
-    assert {j.name for j in jobs.declared() if j.resource == jobs.LOCATION_HEAVY} == {
+    """The intake, the registry load and the building load never overlap: they share `location-heavy`, which the
+    runner claims for each of them (`scraper.job_lease`)."""
+    assert {j.name for j in jobs.declared() if j.resource == jobs.LOCATION_HEAVY and j.host == jobs.RUNNER} == {
         "location_intake", "ruian_load", "ruian_buildings"}
-    assert "job_lease.held_job(" in inspect.getsource(ruian_load.main)
 
 
 def test_env_timeout_s_never_yields_an_unbounded_or_broken_budget(monkeypatch):

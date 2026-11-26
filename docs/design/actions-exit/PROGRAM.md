@@ -354,6 +354,11 @@ stamped and vectored; Watch at most while `clip` is paused, then judged on the p
 re-embeds a frozen 100-image sample read-only; it runs while `clip` is paused "AC2 pending" from its
 registration, and the pause lifts on a pass. No hold for a GitHub run in flight (both writers are idempotent and
 stamp last), and no migration.
+**As built (#2033), the registry load:** `ruian_load` flips to `job-runner` (monthly, the 1st at 10:00 UTC, 6 h,
+`location-heavy`, DB-heavy) and `location_registry_load.yml` is deleted. The runner claims its resource, so
+`job_lease.held_job`, its only off-runner caller gone, is deleted with its tests. Migration 775 re-hosts the
+`place_facts` artifact row, keeping its fail line. A dry run of the 2026-11 vintage peaked at 342 MB (declared 2,048)
+and wrote 918 MB to its temporary directory. A by-hand run is `request ruian_load -- --vintage YYYYMMDD`.
 **Gate:** CLIP lag p90 ≤ 45 min; a 100-image re-embed identical within fp32 tolerance; both GitHub-hosted
 jobs show cells; `location_refetch` runs once a day across ≥ 3 deploys; **the flip gate: 7 days of billed
 GitHub run-rate under 50,000 min/month.**

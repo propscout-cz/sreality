@@ -63,14 +63,11 @@ Recipes:
   re-walk is `request location_intake -- --mode full` (`--source X` for one portal). Its 75 re-dues the registry's
   unscoped incremental argv, which carries any stopped full walk on, a one-portal one included, once it has emptied
   the change log.
-- **`location-heavy` off the runner:** the RÚIAN load runs on GitHub until #2033 and claims the resource in its own
-  main (`job_lease.held_job`: its `scheduled_jobs` row, runner `github_actions`, and an open `job_runs` row), waiting
-  `jobs.resource_wait_s` (its longest sibling's timeout + 10 min) and exiting 1 with nothing loaded if it never got it; a
-  load that returns non-zero hands its code to the `HeldRun` it was given, which closes the run `failed`. While
-  it holds, the intake is not due-listed and its cell reads `waiting for ruian_load`; a run its workflow dropped
-  without a release lapses when its host's ceiling does (the lease is what is left of `timeout_s` after the wait,
-  and its exit code reaches `job_runs`) and the reaper closes it `lost`. Under the runner
-  (`JOB_NAME` = the job) `held_job` is the runner's own claim.
+- **The RÚIAN registry load (`ruian_load`, #2033):** monthly on the 1st at 10:00 UTC, 6 h, on `location-heavy` with
+  the intake and the building load, so while it runs the intake's cell reads `waiting for ruian_load`. A run a deploy
+  cut resumes from its R2 archive on the next one (the module docstring). By hand:
+  `python -m scraper.job_runner request ruian_load -- --vintage YYYYMMDD` (add `--dry-run` to download, parse and
+  assert with no database).
 
 ## Log lines (Railway logs)
 
