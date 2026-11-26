@@ -2032,8 +2032,9 @@ renumber.** Navigate by area:
    close an ad 12 h after the first. The operator ruled on 2026-10-18 that 24 h becomes the one
    rule, in its own scraper PR (#1858). The `delisting` check's limits derive from this: its
    stuck arm counts the active ads whose first unrefuted verdict is older than the effective
-   dwell + 2 × the portal's p90 walk-start gap + 1 h. The ledger's 7-day retention bounds the
-   evidence; the gone-rate breaker is unchanged (ingest only). The same check's precision arm
+   dwell + 2 × the portal's p90 walk-start gap + 1 h. The evidence is the ledger's last 7 days
+   (`db.COMPLETION_EVIDENCE_DAYS`; it keeps 21 for late gate reads, #2665), the drain's and this
+   arm's alike; the gone-rate breaker is unchanged (ingest only). The same check's precision arm
    reads a day of `flipped` rows from 2 × the p90 walk gap + 1 h old (by then a walk has sighted any
    ad still listed; a later return is a re-list) whose ads are active again. Deleted with it: sreality's
    HTML "tato stránka neexistuje" body scan (the live listing page carries that string in its

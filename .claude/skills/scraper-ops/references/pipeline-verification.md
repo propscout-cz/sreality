@@ -1258,7 +1258,7 @@ there when any unit reached the end (coverage's portal-level walk needs every un
 its own question); outflow compares windows, not walks, so a walk that runs further off its baseline
 weeks' timing than the alignment absorbs can still read as a dip; location-refetch rows share the
 VERIFY priority and count in the backlog; "active again" includes probe and refetch revivals; and a
-verdict older than the ledger's 7 days is pruned, so stuck can never see it. It replaces
+verdict older than `db.COMPLETION_EVIDENCE_DAYS` (7; the ledger keeps 21) is never read, so stuck can never see it. It replaces
 `false_delist_share` (a mixed 7-day window) and `delist_flip_refused` (7 days of
 `delist_flip_refusals`, a table nothing reads after it); the old page's `delisting_latency` and
 `delisting_spike` matview checks rendered until wave 8 retired the page (migration 643 dropped the matview).

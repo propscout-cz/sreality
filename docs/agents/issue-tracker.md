@@ -85,7 +85,7 @@ Starts when #<build>'s PR deploys. Window: <48 hours | 72 hours | 7 days>. Due: 
 ## Pass when
 - [ ] <read-only check>
 ## How to measure
-<the Health cell, SELECT or gh command; read-only>
+<the Health cell, SELECT or gh command; read-only. A read of `detail_queue_completions` names its 21 days (`db.COMPLETION_RETENTION_DAYS`): measure inside them, or the window is gone>
 ## If it fails
 Comment the numbers, leave this open and open a fix ticket that blocks this one; the clock restarts when the fix deploys.
 ## Blocked by

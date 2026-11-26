@@ -376,6 +376,14 @@ def test_reclaim_stale_claims_releases_old_claims_and_prunes_ledger():
     assert params == ("sreality", 30)
 
 
+def test_the_ledger_outlives_a_7_day_gate_read_two_weeks_late_and_its_readers_judge_one_week():
+    """#2665: a gate's longest window (7 days, docs/agents/issue-tracker.md) plus two weeks of slack stays readable;
+    the live readers keep the week the 7-day prune left them, so the longer ledger changes no verdict."""
+    longest_gate_window_days, slack_days = 7, 14
+    assert db.COMPLETION_RETENTION_DAYS >= longest_gate_window_days + slack_days
+    assert db.COMPLETION_EVIDENCE_DAYS == 7 < db.COMPLETION_RETENTION_DAYS
+
+
 def test_active_count_is_source_scoped():
     conn = _FakeConn([
         (lambda s: "SELECT count(*) FROM listings" in s, [(42,)]),
