@@ -309,7 +309,7 @@ fix (b)). Their 7-day measurement is its gate ticket.
 main; exit 75 on the chain's own progress rule (`claims_intake.more_remains`), 143 on the runner's SIGTERM after
 stamping its cursor; a requested full walk is carried on by the scheduled runs, one portal's included; every run but a
 dry one projects the image's contracts first. Deleted: `location_claims_intake.yml` with its chain and yield bash, the
-`location-batch` group, the worker's yield (`running_batch_id`; migration 730's index it read: drop owed, #2419). The retire tool left with the
+`location-batch` group, the worker's yield (`running_batch_id`; migration 730's index it read: dropped by 776, #2419). The retire tool left with the
 location programme's W3 (#2223), so only the RÚIAN load claims `location-heavy` off the runner, in its own main
 (`job_lease.held_job`); the reaper now closes any host's lapsed run on a resource.
 **Gate (7 days):** derived artifacts fresh; `location_town_coverage` not worse; sweep durations ± 20 %; a
