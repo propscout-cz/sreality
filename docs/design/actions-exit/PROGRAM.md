@@ -346,6 +346,18 @@ delivered 22 walks in the 7 days to 11-26 (p50 1,165 s, p95 1,518 s, max 1,578 s
 sighted active ad (110k), so hourly walks add about 2.3M `listings` updates a day to today's ~2.5M (one 5-min reading
 on 11-26, 97 % heap-only since migration 743 dropped the last index on `last_seen_at`). sreality is not proxied and
 the runner already carries `SUPABASE_DB_URL` and the R2 set: no `.railway/` change, no migration.
+**As built (#2030), batch 2 ends with remax and mmreality.** The cutoff rises to 60 min, which takes both (each
+`walk_timeout_s` 60 min, every 6 h) and nothing else (bazos is next, at 130). `scrape_remax.yml` and
+`scrape_mmreality.yml` and their groups (`remax-scrape`, `mmreality-scrape`) are deleted; their dispatch inputs
+(`--max-pages`, `--max-seconds`) are request args now. GitHub's throttled cron delivered 14 walks of each in the 7
+days to 11-26 (p95 525 s and 961 s against the 60 min timeout, none near its old 2,100 s and 2,400 s budgets).
+mmreality is `PROXY_REQUIRED`, so job-runner takes `SCRAPER_PROXY_URL` by reference to the worker's (its own PR,
+applied by the operator's wizard, `window worker 0 0 job-runner`) and `tests/scraper/test_proxy_wiring.py` refuses a
+proxied portal's runner job without it. The runner walks it 4 times a day where GitHub managed about 2, so its walk's
+proxy traffic per day doubles (about 1,930 to 3,850 index pages a day, +8 % on the proxied walk and drain fetches of
+mmreality, ceskereality and idnes). **This PR merges only after gate #2647 has read remax (2026-11-29) and the wizard
+apply has put the variable on job-runner.** remax's walk changed under #2646 on 11-24 (466 to 385 pages, and a
+deferral backlog of sold/let ads still draining), so its gate baseline is re-read on the day.
 **Gate per walk (7 days):** pages and reached-end per cycle, nominations per day (a moved walk keeps its declared
 cadence), ± 10 %; 403/429 share from
 Railway ≤ the GitHub baseline; 0 `ended_at NULL` after ≥ 5 mid-walk deploys; proxy GB/day within its band;

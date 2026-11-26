@@ -6,8 +6,8 @@ rulings: `docs/design/actions-exit/PROGRAM.md` § 4.2. Since #2025's move PR it 
 `map_overlays`, since #2032 `clip`, since #2027 the daily `property_sweep` (03:00 UTC) and `broker_sweep` (06:00 UTC)
 and since #2028 `location_intake`, whose workflows those PRs deleted, since #2604 `ruian_buildings` (13:00 UTC, born
 on the runner; `docs/architecture.md` § Register facts), since #2029 the walks of web, maxima and bezrealitky, since
-#2033 the daily `ruian_load` (below) and since #2030 the hourly sreality walk; each later move PR (the rest of #2030,
-#2031) flips more entries' host. On Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and 8 GB
+#2033 the daily `ruian_load` (below) and since #2030 the hourly sreality walk and the walks of remax and mmreality;
+each later move PR (#2031) flips more entries' host. On Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and 8 GB
 (`.railway/railway.ts` `jobRunner`; settings, drain and image: `docs/architecture.md` § Railway service
 configuration). Its Health cells and the "Jobs: run now" form are #2026's (below).
 
@@ -210,27 +210,29 @@ of a sibling on its resource seen since its clock started. The worst condition w
 ## The walks (W4: `walk_<source>`, #2029, #2030)
 
 - **Which walks run here:** every walk whose Portal class's `walk_timeout_s` is at most `jobs.RUNNER_WALK_TIMEOUT_S`
-  (40 min since #2030: `walk_web` 15 min, `walk_maxima` and `walk_bezrealitky` 30 min, each every 6 h, and
-  `walk_sreality` 40 min, hourly (R24); 512 MB, 1 CPU). The rest wait on their GitHub workflows
-  (`github-actions-until-moved`). A batch raises the cutoff and deletes the workflows it takes over, and names no
-  portal (rule 21); the registry census `test_a_walks_host_is_the_cutoffs` refuses a per-portal host value (one would
-  need a ruling). The next cutoff (60 min) takes remax and mmreality together: remax waits for its sold/let gate
-  #2647 (to 2026-11-29), mmreality for `SCRAPER_PROXY_URL` on job-runner (a `.railway/` change, the operator's wizard).
+  (60 min since #2030: `walk_web` 15 min, `walk_maxima` and `walk_bezrealitky` 30 min, `walk_remax` and
+  `walk_mmreality` 60 min, each every 6 h, and `walk_sreality` 40 min, hourly (R24); 512 MB, 1 CPU). The rest wait on
+  their GitHub workflows (`github-actions-until-moved`). A batch raises the cutoff and deletes the workflows it takes
+  over, and names no portal (rule 21); the registry census `test_a_walks_host_is_the_cutoffs` refuses a per-portal
+  host value (one would need a ruling). The next cutoff (130 min) would take bazos; realitymix, ceskereality (the
+  `browser` extra) and idnes wait for a ruling on their order or the image (PROGRAM § W4).
 - **One budget:** the argv is `scraper.<source>_main --index-only` with no `--max-seconds`; the runner's SIGTERM at
   `timeout_s` is the walk's deadline (`stop` → `portal.deadline_reached`). A deploy's SIGTERM ends it 143,
   `interrupted`, re-claimed at once and resumed inside its cycle (a cut group nominates nothing; only the fragment
   that closes the cycle nominates orphans). A walk stopped at its own timeout is `timeout`, a Problem: W4 keeps each
   `walk_timeout_s` above the walk's p95 (7 days to 2026-11-25 on GitHub: web 3 s, maxima 40 s, bezrealitky 137 s;
-  to 11-26 sreality 1,518 s, its old 1,800 s `--max-seconds` never reached).
+  to 11-26 sreality 1,518 s, remax 525 s, mmreality 961 s, none near its old `--max-seconds`: 1,800, 2,100, 2,400 s).
 - **Exits:** 0 a walk, a partly failed one included (`errors` in `scrape_runs`); 1 when every category failed or an
   empty walk (`CHECK empty_walk`), retried on the failure backoff (60 s doubling, capped at the cadence and the next
   slot), where GitHub waited for the next cron.
 - **Politeness does not depend on the host:** a walk leases the same `portal_rate_state` budget
   (`scraper_limits_global` `shared_rate_limiter`) on either host and waits as long as it says (no `max_wait_s`).
   Egress moves from GitHub's rotating Azure addresses to Railway's, which the worker's drain (and, but for web, its
-  probe) already uses on these portals; none of the four is proxied (`USE_PROXY`), so no proxy budget moves.
-- **Run one now:** "Jobs: run now" with `walk_<source>`; args append (`--max-pages 2` on maxima or bezrealitky stops
-  each category short of its end, so it nominates nothing). A walk writes its `scrape_runs` row (`run_type='index'`)
+  probe) already uses on these portals. Of the six only mmreality is proxied (`USE_PROXY`, `PROXY_REQUIRED`): its
+  walk rides the residential proxy as on GitHub (below), and the runner's 6 h grid walks it 4 times a day where
+  GitHub's throttled cron walked it about twice, so its walk's proxy traffic per day doubles (~963 pages a walk).
+- **Run one now:** "Jobs: run now" with `walk_<source>`; args append (`--max-pages 2` on maxima, bezrealitky, remax or
+  mmreality stops each category short of its end, so it nominates nothing). A walk writes its `scrape_runs` row (`run_type='index'`)
   as on GitHub, and the runner its `job_runs` row. Slots: `_walks()` spreads one cadence's walks evenly, so a new
   portal moves them (`scheduled_jobs.offset_s`).
 - **The proxy:** a child inherits the runner's env, which holds `SCRAPER_PROXY_URL` by reference to the worker's

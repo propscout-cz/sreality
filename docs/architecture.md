@@ -329,12 +329,12 @@ prodej + pronájem today). Image-URL rows are recorded by the drain; the realtim
 `images` lane downloads the bytes to R2 (source-agnostic).
 
 **Data source (mmreality.cz).** A crawler (`scraper/mmreality_client.py`,
-`mmreality_parser.py`, `mmreality_main.py`, workflow `scrape_mmreality.yml` — pilot,
-cron `50 */6` — **every request rides the residential proxy** (`SCRAPER_PROXY_URL`,
-`USE_PROXY=True`): Cloudflare hard-403s datacenter IPs (the first 101 direct scheduled runs
-ingested zero listings), so the proxy is mandatory from ANY datacenter egress, GitHub or
-Railway alike; the cron is offset from ceskereality's `25 */6` so the two proxied portals
-don't hammer the shared proxy at the same minute) tagged `source='mmreality'`. M&M Reality is server-rendered HTML
+`mmreality_parser.py`, `mmreality_main.py`, the job runner's `walk_mmreality` since #2030 (every 6 h;
+`scrape_mmreality.yml` before) — pilot — **every request rides the residential proxy** (`SCRAPER_PROXY_URL`,
+`USE_PROXY=True`; job-runner reads the worker's by reference): Cloudflare hard-403s datacenter IPs (the first 101
+direct scheduled runs ingested zero listings), so the proxy is mandatory from ANY datacenter egress, GitHub or
+Railway alike; its runner slot (`jobs._walks()`'s even spread, 03:20 every 6 h today) is off ceskereality's
+`25 */6` minute) tagged `source='mmreality'`. M&M Reality is server-rendered HTML
 but **every detail page embeds a COMPLETE structured estate object** as a Vue
 `:property` prop (HTML-entity-encoded JSON), so `mmreality_parser.parse_detail` decodes
 that JSON rather than scraping markup: precise per-listing coordinates (`point`), typed
@@ -360,8 +360,8 @@ inactive on a second one at least the dwell later (rule #3's hysteresis).
 Registered as a scraper portal (migration 117, sort 35).
 
 **Data source (remax-czech.cz).** A scheduled scraper (`scraper/remax_client.py`,
-`remax_parser.py`, `remax_main.py`, workflow `scrape_remax.yml` — pilot, every 6h +
-dispatch) tagged `source='remax'`. RE/MAX is a national franchise catalogue (~7,900
+`remax_parser.py`, `remax_main.py`, the job runner's `walk_remax` since #2030, every 6 h; `scrape_remax.yml`
+before — pilot) tagged `source='remax'`. RE/MAX is a national franchise catalogue (~7,900
 listings) served as STRUCTURED server-rendered HTML (no JSON API), so
 `remax_parser` is deterministic: the search cards are `<div class="pl-items__item"
 data-url=… data-price=… data-gps=… data-title=…>` (price, coordinates and title
@@ -1672,9 +1672,9 @@ on 2026-12-01, and until then a file of that name would override the applied set
   daily `property_sweep` (03:00 UTC) and `broker_sweep` (06:00 UTC) since #2027, which never run beside each other
   or any other DB-heavy job (`job_lease`'s heavy turn), of the hourly claim intake `location_intake` since #2028
   and the RÚIAN registry load `ruian_load` since #2033, daily (§ Location data), and of the walks whose
-  `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (40 min: web, maxima and bezrealitky since #2029, each
-  `walk_<source>` every 6 h, and sreality hourly since #2030, with no `--max-seconds`, the runner's SIGTERM at the
-  timeout its one budget; the longer walks wait on their workflows):
+  `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (60 min: web, maxima and bezrealitky since #2029, remax and
+  mmreality since #2030, each `walk_<source>` every 6 h, and sreality hourly since #2030, with no `--max-seconds`,
+  the runner's SIGTERM at the timeout its one budget; the longer walks wait on their workflows):
   - two replicas in the worker's region, each 4 vCPU and 8 GB, restart policy ALWAYS, `checkSuites: false`. Railway
     counts decimal bytes, so 8e9 B is 7,629 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
     line and every beat carry `memory_limit_mb` and `cpus` as the replica's cgroup reads them;
