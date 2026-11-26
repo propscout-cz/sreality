@@ -230,8 +230,8 @@ name/email/phone keys, firm_keys=('agency',))`, and `contracts/portals/web.yaml`
   declared seam: `_queue_presence_checks` skips the empty-seen refusal only for a portal that declares
   `indexless = True` (rule 21: a per-portal need is a `Portal` seam, never an `if source ==`); the
   existing empty-seen tests stay valid for every other portal. A no-op `set_index_page_cap` keeps the
-  probe lane quiet. `.github/workflows/web_index_walk.yml` (every 6 h, so the 24 h `RECHECK_THROTTLE`
-  sets each ad's cadence — a daily cron would skip it one day in two; `web_main --index-only`)
+  probe lane quiet. The job runner's `walk_web` (`.github/workflows/web_index_walk.yml` until #2029; every 6 h,
+  so the 24 h `RECHECK_THROTTLE` sets each ad's cadence — a daily cron would skip it one day in two; `web_main --index-only`)
   nominates; the drain fetches; `gone_evidence` + `GONE_DWELL` + `mark_listing_
   inactive` apply unchanged, so a dead web ad closes 24–60 h after it dies. `delist_flip_cap` never
   throttles it (below the 2,000-row floor) and the gone-rate breaker never trips on it (< 20 ingest

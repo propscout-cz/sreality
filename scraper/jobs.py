@@ -29,6 +29,9 @@ STUCK_RUN_GRACE_S = 600
 LOCATION_HEAVY = "location-heavy"
 WALK_PREFIX = "walk_"
 WALK_MEMORY_MB, WALK_CPUS = 512, 1
+# W4 moves the walks shortest first (PROGRAM § W4): a walk whose timeout fits this runs on the runner, the rest wait on
+# their workflows. A batch raises it and deletes the workflows it takes over; it names no portal (rule 21).
+RUNNER_WALK_TIMEOUT_S = 30 * 60
 
 
 @dataclass(frozen=True)
@@ -74,7 +77,8 @@ _FIXED: tuple[Job, ...] = (
         ("location_data.claims_intake", "--mode", "incremental", "--max-seconds", "2400", "--batch-size", "10000"),
         HOUR, 35 * 60, 70 * 60, 1024, 4, RUNNER, LOCATION_HEAVY),
     # One unsharded run: tag, then retag on one model load; it re-selects inside its budget; 75 under a backlog (#2032).
-    # A chunk of 64: Pillow holds RGB at 4 B a pixel. Its first runner run peaked at 2,386 MB (#2155), so 3072.
+    # A chunk of 64 holds model inputs; a full frame lives only on a decoder, one a CPU (#2478). Its first runner run
+    # peaked at 2,386 MB (#2155), so 3072.
     Job("clip", ("scripts.clip_tag_backfill", "--max-seconds", "1500", "--limit", "5000", "--workers", "16",
                  "--chunk", "64"),
         15 * 60, 5 * 60, 55 * 60, 3072, 4, RUNNER),
@@ -96,8 +100,9 @@ _FIXED: tuple[Job, ...] = (
 
 
 def _walk(source: str, portal: type, offset_s: int) -> Job:
+    host = RUNNER if portal.walk_timeout_s <= RUNNER_WALK_TIMEOUT_S else UNTIL_MOVED
     return Job(f"{WALK_PREFIX}{source}", (f"scraper.{source}_main", "--index-only"), portal.walk_every_s,
-               offset_s, portal.walk_timeout_s, WALK_MEMORY_MB, WALK_CPUS, UNTIL_MOVED)
+               offset_s, portal.walk_timeout_s, WALK_MEMORY_MB, WALK_CPUS, host)
 
 
 @functools.cache

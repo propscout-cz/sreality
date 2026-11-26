@@ -23,3 +23,10 @@ def iac_constant(name: str) -> Any:
 def iac_entry(name: str) -> str:
     """The text of one project's definition (`const worker = ...` up to the next top-level const)."""
     return iac_text().split(f"\nconst {name} = ", 1)[1].split("\nconst ", 1)[0]
+
+
+def iac_env_names(name: str) -> set[str]:
+    """The variable names one definition declares in its inline `env: { ... }`."""
+    env = re.search(r"\benv: \{ (.*?) \},", iac_entry(name), re.S)
+    assert env, f"{name} declares its variables inline"
+    return set(re.findall(r"(\w+): ", env.group(1)))

@@ -157,6 +157,46 @@ def test_the_walk_set_is_the_portal_list() -> None:
     assert walk_problems(jobs.declared(), _portal_classes()) == []
 
 
+def walk_host_problems(entries: Sequence[Job], portals: dict[str, type]) -> list[str]:
+    """A walk's host is the one cutoff's (PROGRAM § W4): on the runner iff its timeout fits it, so a batch is one edit
+    of `jobs.RUNNER_WALK_TIMEOUT_S` and no Portal class carries a third per-portal walk value (a host needs a ruling)."""
+    problems: list[str] = []
+    walks = {j.name: j for j in entries if j.name.startswith(jobs.WALK_PREFIX)}
+    for source, cls in portals.items():
+        extra = sorted(a for a in dir(cls) if a.startswith("walk_") and a not in WALK_ATTRS
+                       and not callable(getattr(cls, a)))
+        if extra:
+            problems.append(f"{cls.__name__}: {extra} beside {WALK_ATTRS}: a per-portal walk value needs a ruling")
+        walk = walks.get(f"{jobs.WALK_PREFIX}{source}")
+        if walk is None:
+            continue
+        want = jobs.RUNNER if walk.timeout_s <= jobs.RUNNER_WALK_TIMEOUT_S else jobs.UNTIL_MOVED
+        if walk.host != want:
+            problems.append(f"{walk.name}: timeout_s {walk.timeout_s} against the cutoff "
+                            f"{jobs.RUNNER_WALK_TIMEOUT_S} puts it on {want}, not {walk.host}")
+    return problems
+
+
+def test_a_walks_host_is_the_cutoffs() -> None:
+    assert walk_host_problems(jobs.declared(), _portal_classes()) == []
+    hosts = {j.name: j.host for j in jobs.declared() if j.name.startswith(jobs.WALK_PREFIX)}
+    assert {n for n, h in hosts.items() if h == jobs.RUNNER} == {"walk_web", "walk_maxima", "walk_bezrealitky"}, \
+        "batch 1 (#2029); remax waits for a later batch while its sold/let gate #2647 runs"
+
+
+def test_the_walk_host_census_fires() -> None:
+    entries, portals = jobs.declared(), _portal_classes()
+    assert walk_host_problems([replace(j, host=jobs.UNTIL_MOVED) if j.name == "walk_web" else j for j in entries],
+                              portals)
+    assert walk_host_problems([replace(j, host=jobs.RUNNER) if j.name == "walk_idnes" else j for j in entries],
+                              portals)
+
+    class Hosted:
+        walk_every_s, walk_timeout_s, walk_host = 3600, 600, jobs.RUNNER
+
+    assert walk_host_problems(entries, {**portals, "web": Hosted})
+
+
 def test_the_walk_census_fires() -> None:
     entries, portals = jobs.declared(), _portal_classes()
     assert walk_problems([j for j in entries if j.name != "walk_web"], portals)
@@ -475,8 +515,10 @@ LEAVERS = {
 GITHUB_ENTRIES = frozenset({"verify_pipeline", "price_stats"})
 GITHUB_SCHEDULES = frozenset({"verify_pipeline.yml", "scrape_price_stats.yml"})
 # The waiting set only shrinks: a new job or portal is born on the runner, never as one more GitHub schedule.
-# Until the walks move (#2029) that blocks onboarding a portal: a name added here needs an operator ruling.
-# The PR moving the last waiting job deletes this set, jobs.UNTIL_MOVED and the LEAVERS lines whose file is gone.
+# A new portal is born on the runner only if its walk fits jobs.RUNNER_WALK_TIMEOUT_S; a longer one blocks
+# onboarding until the cutoff reaches it: a name added here needs an operator ruling.
+# The PR moving the last waiting job deletes this set, jobs.UNTIL_MOVED, jobs.RUNNER_WALK_TIMEOUT_S and the LEAVERS
+# lines whose file is gone.
 ORIGINAL_UNTIL_MOVED = frozenset({
     "stale_images", "rent_map", "map_overlays", "property_sweep", "broker_sweep",
     "location_intake", "clip", "ruian_load",
@@ -528,11 +570,13 @@ def test_every_job_has_exactly_one_host() -> None:
     assert pairing_problems(jobs.declared(), _repo_workflows()) == []
 
 
-# Each move PR's job and the workflow it deleted: W2 (#2025), W5 (#2032), W3 (#2027, #2028).
+# Each move PR's job and the workflow it deleted: W2 (#2025), W5 (#2032), W3 (#2027, #2028), W4 batch 1 (#2029).
 MOVED = (("stale_images", "refresh_stale_images.yml"), ("rent_map", "fetch_rent_map.yml"),
          ("map_overlays", "ingest_map_overlays.yml"), ("clip", "clip_tag.yml"),
          ("property_sweep", "recompute_property_stats.yml"), ("broker_sweep", "resolve_brokers_full.yml"),
-         ("location_intake", "location_claims_intake.yml"))
+         ("location_intake", "location_claims_intake.yml"),
+         ("walk_web", "web_index_walk.yml"), ("walk_maxima", "scrape_maxima.yml"),
+         ("walk_bezrealitky", "scrape_bezrealitky.yml"))
 
 
 @pytest.mark.parametrize(("name", "file"), MOVED)
