@@ -106,7 +106,7 @@ did within minutes, hence migration 279).
   that outlasts its pass, as the resolver lanes do; one that `renew`s, stops by `Hold.fenced` and ends each transaction
   with `fence` cannot commit under a lapsed lease; the release falls back to a fresh connection; a retired row refuses
   it for good, so the job registry (#2024) retires only rows it registered, `registry_at` set), `claim` / `renew` /
-  `release` for a scheduled job, `job_runs`' unique open-run indexes (per job, per resource) refusing a lost race. `tests/test_lease_census.py` fails CI on lease CAS text anywhere else.
+  `release` for a scheduled job, `held_job` for one off the runner (#2028), `job_runs`' unique open-run indexes (per job, per resource) refusing a lost race. `tests/test_lease_census.py` fails CI on lease CAS text anywhere else.
   Under READ COMMITTED each later statement in the CAS's transaction sees rows committed after it: re-check what
   the CAS proved, or let a unique index decide (job_lease's lost-run close, #2022).
 - **Work-queue claim** (many rows, many workers): `FOR UPDATE SKIP LOCKED` (`listing_detail_queue`,
@@ -479,11 +479,11 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   enqueue, `contracts.py --retract`), then that source is re-mined in full.
   The live set is `location_claims`,
   `listing_location`, `location_granularity_rank`, `dirty_locations`, `scheduled_jobs`,
-  `portal_contracts`/`_entries` + RÚIAN. Every heavy batch lane shares the ONE `location-batch`
-  Actions group + arms `SET LOCAL statement_timeout` — **except the resolve DRAIN**: latency-bound
-  not instance-bound, it runs outside the group and from the Railway worker too, serialized ONLY by
-  the `scheduled_jobs` lease + pass lock (pause the row, `paused_until`) — **idle it before a heavy batch**; `full-resolve` DOES stay
-  in the group. RÚIAN loaders + drain run on **`connect_session()`** (the loader refuses the fallback
+  `portal_contracts`/`_entries` + RÚIAN. The heavy lanes (intake, RÚIAN load) share the runner's
+  `location-heavy` resource (`job_lease.held_job` off the runner) + arm `SET LOCAL statement_timeout` —
+  **except the resolve DRAIN**: latency-bound
+  not instance-bound, it runs outside it on the Railway worker, serialized ONLY by
+  the `scheduled_jobs` lease + pass lock (pause the row, `paused_until`) — **idle it before a heavy batch**. RÚIAN loaders + drain run on **`connect_session()`** (the loader refuses the fallback
   — a 3 M-row COPY needs session GUCs). Rationale: `docs/architecture.md` § Location data.
 
 ## See also

@@ -79,8 +79,8 @@ production.
 - **One table**: `scheduled_jobs` = `location_jobs` renamed (migration, with a temporary alias view). Added:
   `argv`, `offset_s`, `timeout_s`, `memory_mb`, `cpus`, `due_at`, `paused_until` (finite, with a
   note and author), `requested_at/args/by`, `registry_at`, `retired_at`, a `resource` column for jobs that
-  must never overlap (intake, the RÚIAN load, the retire tool share `location-heavy`; it replaces the GitHub
-  `location-batch` group). `last_outcome` gains `timeout`, `interrupted`, `lost`. The dead columns
+  must never overlap (the intake and the RÚIAN address and building loads share `location-heavy`, and the retire tool did until #2223
+  deleted it; it replaces the GitHub `location-batch` group). `last_outcome` gains `timeout`, `interrupted`, `lost`. The dead columns
   (`enabled`, `concurrency_group`, `alert_route`, `note`) drop under R6b behind a backup receipt.
 - **One history table**: `job_runs` (closed in place; pruned daily by the runner after 90 days): holder, version
   (`RAILWAY_GIT_COMMIT_SHA`),
@@ -303,7 +303,15 @@ broker sweep's in #2108, with #2273 doing the same after gate #2111.
 (T 75 min, from its measured phases) on the runner, their two workflows deleted; migration 731 re-hosts the
 `property_sweep` artifact at 56 h with no slack (the same fail line). `job_lease` starts no DB-heavy job while another
 DB-heavy run is open, so a recovery, a deploy's re-run or a request waits instead of overlapping (the #2122 review's
-fix (b)). Their 7-day measurement is its gate ticket; location_intake is #2028.
+fix (b)). Their 7-day measurement is its gate ticket.
+**As built (#2028), one PR on the merge light, no migration:** `location_intake` hourly at :35 on the runner, `timeout_s`
+4200 for its 2400 s budget (the ⅔ line, now an argv census), 4 CPUs (GitHub's pool width), fetch width 32 set by its
+main; exit 75 on the chain's own progress rule (`claims_intake.more_remains`), 143 on the runner's SIGTERM after
+stamping its cursor; a requested full walk is carried on by the scheduled runs, one portal's included; every run but a
+dry one projects the image's contracts first. Deleted: `location_claims_intake.yml` with its chain and yield bash, the
+`location-batch` group, the worker's yield (`running_batch_id`; migration 730's index it read: drop owed, #2419). The retire tool left with the
+location programme's W3 (#2223), so only the RÚIAN load claims `location-heavy` off the runner, in its own main
+(`job_lease.held_job`); the reaper now closes any host's lapsed run on a resource.
 **Gate (7 days):** derived artifacts fresh; `location_town_coverage` not worse; sweep durations ± 20 %; a
 backlog drains at least as fast as the chain did; no two DB-heavy jobs overlap; intake reads `held by
 sibling` during a registry load instead of red.
@@ -314,7 +322,22 @@ realitymix, ceskereality, bazos, idnes last. Walk argv drops `--max-seconds`; th
 walk timeout is the one budget (this is #2029's "budget derived from the timeout"; the registry's argv census
 refuses a walk `--max-seconds`). A batch flips its walks' host without a portal name in `jobs.py`; a
 per-portal host attribute would be a third code-only per-portal value and needs a ruling.
-**Gate per walk (7 days):** pages, reached-end and nominations per cycle ± 10 %; 403/429 share from
+**As built (#2029), batch 1: web, maxima, bezrealitky.** One cutoff, `jobs.RUNNER_WALK_TIMEOUT_S` (30 min): a walk whose
+`walk_timeout_s` fits it is generated on `job-runner`, the rest stay `github-actions-until-moved`, so a batch raises one
+constant and names no portal; `test_a_walks_host_is_the_cutoffs` refuses a per-portal host value. `web_index_walk.yml`,
+`scrape_maxima.yml` and `scrape_bezrealitky.yml` and their groups (`web-index-walk`, `maxima-scrape`, `bezrealitky-scrape`)
+are deleted; their dispatch inputs (`--max-pages`, `--max-seconds`) are request args now. Timeouts stay the workflows'
+(15, 30, 30 min) against a GitHub p95 of 3, 40 and 137 s (7 days to 11-25). None of the three is proxied and the runner
+already carries `SUPABASE_DB_URL` and the R2 set (#2032): no `.railway/` change, no migration. **remax is held to a later
+batch:** its sold/let measurement gate #2647 reads remax until 2026-11-29, and a new host, cadence and egress would
+confound it. A cutoff moves walks in `walk_timeout_s` order (sreality 40; remax, mmreality 60; bazos 130; realitymix,
+ceskereality 180; idnes 240), so 60 min takes sreality with remax and mmreality; #2030's listed set and this section's
+order after it (realitymix before bazos) are not one cutoff, and ceskereality needs the `browser` extra the runner image
+lacks: later batches need a ruling on their order or the image. GitHub's throttled cron fired these walks
+about twice a day (14 runs each in those 7 days), the runner's grid four times, so the gate reads nominations per day
+beside per cycle (#2029's gate ticket).
+**Gate per walk (7 days):** pages and reached-end per cycle, nominations per day (a moved walk keeps its declared
+cadence), ± 10 %; 403/429 share from
 Railway ≤ the GitHub baseline; 0 `ended_at NULL` after ≥ 5 mid-walk deploys; proxy GB/day within its band;
 delisting and coverage cells unchanged; aggregate peak ≤ 70 % of a replica.
 

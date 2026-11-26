@@ -1087,98 +1087,6 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/load_obec_population.yml"
     },
     {
-      "filename": "location_claims_intake.yml",
-      "name": "Jobs: Location claim intake",
-      "description": "THE claim lane (CLAUDE.md rule 25: one store, one lane). Deterministic extraction of location claims from BOTH substrates we hold for a listing, all nine portals:",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "35 * * * *",
-          "human": "Every hour at :35"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "source",
-          "description": "one portal only (blank = all nine)",
-          "required": false,
-          "type": "choice",
-          "default": "",
-          "options": [
-            "",
-            "sreality",
-            "bezrealitky",
-            "bazos",
-            "idnes",
-            "mmreality",
-            "remax",
-            "ceskereality",
-            "realitymix",
-            "maxima"
-          ]
-        },
-        {
-          "name": "mode",
-          "description": "full = walk every listing; incremental = only rows seen since the last ok batch",
-          "required": false,
-          "type": "choice",
-          "default": "incremental",
-          "options": [
-            "incremental",
-            "full"
-          ]
-        },
-        {
-          "name": "max_seconds",
-          "description": "wall-clock budget; stops between batches, never mid-batch",
-          "required": false,
-          "type": "string",
-          "default": "2400",
-          "options": null
-        },
-        {
-          "name": "batch_size",
-          "description": "listings per batch (10000-30000; blank = 20000)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "extract and report; write nothing",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        },
-        {
-          "name": "chain",
-          "description": "dispatch one successor when this run leaves work behind (untick for a one-shot run; crons always chain)",
-          "required": false,
-          "type": "boolean",
-          "default": "true",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "location-batch",
-      "cancelInProgress": false,
-      "timeoutMinutes": 55,
-      "permissions": "contents: read, actions: write",
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/location_claims_intake.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/location_claims_intake.yml"
-    },
-    {
       "filename": "location_registry_load.yml",
       "name": "Location: RÚIAN registry load",
       "description": "The monthly RÚIAN registry load (design 04 §4.4.2): ONE `full` load per vintage, 1st 10:00 UTC. It HEAD-probes the vintage, archives both CSV zips AND the 253 MB state SHP boundary pack to R2, then stage -> blocking assertions -> merge -> boundaries (three geometries per unit, an unchanged unit's authoritative row carried from the previous version) -> gazetteer -> completeness assertion -> pointer swap into ONE new registry_version. A version publishes only when the state, every okres, every obec and every katastrální území has its geometry, so a killed or incomplete run leaves an inert staged version that any later dispatch resumes.",
@@ -1219,8 +1127,8 @@
         "SUPABASE_DB_SESSION_URL",
         "SUPABASE_DB_URL"
       ],
-      "concurrencyGroup": "location-batch",
-      "cancelInProgress": false,
+      "concurrencyGroup": null,
+      "cancelInProgress": null,
       "timeoutMinutes": 360,
       "permissions": "contents: read",
       "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/location_registry_load.yml",
@@ -1782,90 +1690,6 @@
       "permissions": "contents: read",
       "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/runpod_reap.yml",
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/runpod_reap.yml"
-    },
-    {
-      "filename": "scrape_bezrealitky.yml",
-      "name": "Scraping: Bezrealitky scraper (pilot)",
-      "description": "Scheduled (every 6h) + manual scraper for bezrealitky.cz on the shared portal framework. Bezrealitky is a JSON-API portal (public GraphQL at api.bezrealitky.cz) like sreality: the index walk pages listAdverts and enqueues new/price-changed ids into listing_detail_queue, then the detail drain fetches advert(id), parses to a ScrapedListing, and writes via listing_write.write_listings (the one listing write; new rows land property_id NULL and the straggler-attach births the singleton).",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "45 */6 * * *",
-          "human": "Every 6 hours at :45"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_pages",
-          "description": "cap index pages per category (ad-hoc partial; nominates nothing). Blank = full walk.",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "max_seconds",
-          "description": "wall-clock budget for the walk (default 1500s, under the 30-min job timeout)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "bezrealitky-scrape",
-      "cancelInProgress": false,
-      "timeoutMinutes": 30,
-      "permissions": null,
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/scrape_bezrealitky.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/scrape_bezrealitky.yml"
-    },
-    {
-      "filename": "scrape_maxima.yml",
-      "name": "Scraping: Maxima Reality scraper (pilot)",
-      "description": "Scheduled (every 6h) + manual scraper for nemovitosti.maxima.cz on the shared portal framework. Maxima is a single real-estate agency that publishes its whole catalogue (~220 listings) as one server-rendered WordPress index (no JSON API, no per-category URL): the index walk pages the catalogue and enqueues new/price-changed ids into listing_detail_queue, then the detail drain fetches each /nemovitosti/{id}/ page, parses to a ScrapedListing, and writes via listing_write.write_listings (the one listing write; new rows land property_id NULL and the straggler-attach births the singleton).",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "50 */6 * * *",
-          "human": "Every 6 hours at :50"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_pages",
-          "description": "cap catalogue pages walked (ad-hoc partial). Blank = full walk.",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "maxima-scrape",
-      "cancelInProgress": false,
-      "timeoutMinutes": 30,
-      "permissions": null,
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/scrape_maxima.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/scrape_maxima.yml"
     },
     {
       "filename": "scrape_mmreality.yml",
@@ -2605,44 +2429,6 @@
       "permissions": "contents: read, actions: read",
       "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/verify_pipeline.yml",
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/verify_pipeline.yml"
-    },
-    {
-      "filename": "web_index_walk.yml",
-      "name": "Scraping: Web index walk",
-      "description": "The tenth portal's walk: `web` is any site an operator pasted (scraper/web_main.py). It has no index, so the walk pages nothing and reaches its end at once; the portal's declared `indexless` seam then nominates every active web ad that has no queue row and no page check in the last 24 h (NULL categories included) at the verify priority. The worker's drain fetches each page and the page decides (rule #3): a live page refreshes the ad, a 404/410 or a redirect off the page records a gone verdict, and a second one 24 h+ later closes it. Records run_type='index'.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "17 */6 * * *",
-          "human": "Every 6 hours at :17"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_seconds",
-          "description": "wall-clock budget; the walk finalizes cleanly before this (blank = 300).",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "web-index-walk",
-      "cancelInProgress": false,
-      "timeoutMinutes": 15,
-      "permissions": null,
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/web_index_walk.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/web_index_walk.yml"
     }
   ]
 }

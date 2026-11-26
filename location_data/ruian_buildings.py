@@ -73,8 +73,9 @@ def current_version(conn: psycopg.Connection) -> Version:
 def registry_load_in_flight(conn: psycopg.Connection, version: Version) -> int | None:
     """The id of a registry version newer than the served one that has not published, else None.
 
-    The registry load (the 1st of a month, a GitHub workflow the runner's `location-heavy` cannot exclude) merges
-    into `ruian_address_points` in place for hours before it publishes, and this load writes the same rows. Its
+    The registry load (the 1st of a month) merges into `ruian_address_points` in place for hours before it
+    publishes, and this load writes the same rows. Since #2028 it holds `location-heavy` while it runs, so this
+    check covers a load its host cut before it published. Its
     merge also re-stamps every obec's `last_version_id` in one statement, after which nothing is pending for the
     served version anyway; this check covers the hours before that. A newer row that never published counts for
     two days: an aborted load is marked, retried or superseded well inside that."""

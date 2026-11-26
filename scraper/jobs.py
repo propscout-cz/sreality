@@ -23,9 +23,15 @@ REPLICA_MEMORY_MB, CO_TENANCY_SHARE = 7629, 0.81
 # The runner's SIGKILL grace after its SIGTERM stays under this; the API's stuck-run cutoff exceeds the longest
 # walk by it, and the DB-heavy hour census counts it (tests/scraper/test_job_registry.py).
 STUCK_RUN_GRACE_S = 600
+# The claim intake and the RÚIAN address and building loads never overlap (2026-08-10: four heavy location lanes at
+# once dropped backends across the instance). It replaced GitHub's `location-batch` group (#2028); the address load,
+# on GitHub until #2033, claims it with job_lease.held_job.
 LOCATION_HEAVY = "location-heavy"
 WALK_PREFIX = "walk_"
 WALK_MEMORY_MB, WALK_CPUS = 512, 1
+# W4 moves the walks shortest first (PROGRAM § W4): a walk whose timeout fits this runs on the runner, the rest wait on
+# their workflows. A batch raises it and deletes the workflows it takes over; it names no portal (rule 21).
+RUNNER_WALK_TIMEOUT_S = 30 * 60
 
 
 @dataclass(frozen=True)
@@ -64,12 +70,15 @@ _FIXED: tuple[Job, ...] = (
     # Watch line (50 min) clears every completed run, 10-01's the closest.
     Job("broker_sweep", ("scripts.resolve_brokers", "--max-seconds", "1500"),
         DAY, 6 * HOUR, 75 * 60, 1024, 1, RUNNER, db_heavy=True),
-    # Not DB-heavy: hourly, it runs beside the daily sweeps today; its one exclusion is location-heavy.
+    # Not DB-heavy: hourly, it runs beside the daily sweeps today; its one exclusion is location-heavy. 75 under a
+    # backlog (#2028). 70 min keeps its 2400 s budget, a last batch and the readout under the 2/3 Watch line; 4 CPUs,
+    # the extraction pool GitHub's runner gave it.
     Job("location_intake",
         ("location_data.claims_intake", "--mode", "incremental", "--max-seconds", "2400", "--batch-size", "10000"),
-        HOUR, 35 * 60, 55 * 60, 1024, 2, UNTIL_MOVED, LOCATION_HEAVY),
+        HOUR, 35 * 60, 70 * 60, 1024, 4, RUNNER, LOCATION_HEAVY),
     # One unsharded run: tag, then retag on one model load; it re-selects inside its budget; 75 under a backlog (#2032).
-    # A chunk of 64: Pillow holds RGB at 4 B a pixel. Its first runner run peaked at 2,386 MB (#2155), so 3072.
+    # A chunk of 64 holds model inputs; a full frame lives only on a decoder, one a CPU (#2478). Its first runner run
+    # peaked at 2,386 MB (#2155), so 3072.
     Job("clip", ("scripts.clip_tag_backfill", "--max-seconds", "1500", "--limit", "5000", "--workers", "16",
                  "--chunk", "64"),
         15 * 60, 5 * 60, 55 * 60, 3072, 4, RUNNER),
@@ -78,7 +87,7 @@ _FIXED: tuple[Job, ...] = (
     # The register's building facts (#2604): a month's ~6,250 obec files, resumed daily until none is pending, then
     # a no-op until the next vintage. It starts obce only 13:00-17:00 UTC (a run restarted by a deploy keeps those
     # hours) and none in :40-:50, so the largest obec (Praha, 65 s) is written before the :45 Browse rebuild. The
-    # registry load is a GitHub workflow, which location-heavy cannot exclude: the loader asks before every obec.
+    # registry load claims location-heavy too (#2028); the loader still asks before every obec, for a cut load.
     Job("ruian_buildings",
         ("location_data.ruian_buildings", "--max-seconds", "10800", "--window-utc", "13:00-17:00",
          "--quiet-minutes", "40-50"),
@@ -91,8 +100,9 @@ _FIXED: tuple[Job, ...] = (
 
 
 def _walk(source: str, portal: type, offset_s: int) -> Job:
+    host = RUNNER if portal.walk_timeout_s <= RUNNER_WALK_TIMEOUT_S else UNTIL_MOVED
     return Job(f"{WALK_PREFIX}{source}", (f"scraper.{source}_main", "--index-only"), portal.walk_every_s,
-               offset_s, portal.walk_timeout_s, WALK_MEMORY_MB, WALK_CPUS, UNTIL_MOVED)
+               offset_s, portal.walk_timeout_s, WALK_MEMORY_MB, WALK_CPUS, host)
 
 
 @functools.cache
@@ -121,3 +131,14 @@ def runner_jobs() -> tuple[Job, ...]:
 def host_of(name: str) -> Host | None:
     """The declared host of a name, for a refusal's message; never an entry: a scheduler reads runner_jobs()."""
     return next((j.host for j in declared() if j.name == name), None)
+
+
+def entry(name: str) -> Job:
+    """One job's own entry, for its own process to claim its run on whichever host starts it (job_lease.held_job)."""
+    return next(j for j in declared() if j.name == name)
+
+
+def resource_wait_s(job: Job) -> int:
+    """The longest a sibling on the job's resource can hold it: the sibling's timeout plus the runner's kill grace."""
+    return max((s.timeout_s + STUCK_RUN_GRACE_S for s in declared()
+                if job.resource is not None and s.resource == job.resource and s.name != job.name), default=0)

@@ -148,7 +148,7 @@ estimate ≈ −7,260 / +2,860 LOC, −30 files, −2 tables, −8 workflows, 0 
       and scores it 100), bezrealitky@3 → @4 appends `bzr.det.ruian_id`, lockfile + golden
       regenerated, no migration. 732 of the 2,836 ruianId-bearing active rows resolve below
       `address_point` today and lift to an exact point once the re-mine lands; the fill
-      needs one dispatched `location_claims_intake.yml` at `mode=full source=bezrealitky`
+      needs one `job_runner request location_intake -- --mode full --source bezrealitky`
       (the bodies-half hash gate re-arms page entries only, and this portal has none).
      
       Branch protection on `main` enabled 2026-09-22 (PR + the CI checks required, no review). Program DELIVERED.
