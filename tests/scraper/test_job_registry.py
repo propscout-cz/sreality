@@ -117,6 +117,7 @@ def test_the_argv_census_fires() -> None:
     assert argv_problems(replace(stale, argv=(*stale.argv, "--dry-run")))
     sweep = _entry("property_sweep")
     assert argv_problems(replace(sweep, timeout_s=6000))
+    assert argv_problems(replace(_entry("location_intake"), timeout_s=3300)), "2400 s of budget against 55 min"
     assert argv_problems(replace(sweep, timeout_s=8999, host=jobs.RUNNER)), "a budget past the Watch line"
     assert argv_problems(replace(sweep, timeout_s=8999, host=jobs.UNTIL_MOVED)) == [], "its move PR's to settle"
     walk = _entry("walk_bazos")
@@ -350,6 +351,17 @@ def test_no_two_db_heavy_jobs_share_an_hour() -> None:
     assert db_heavy_problems(jobs.declared()) == []
 
 
+def test_a_job_waits_for_its_resource_as_long_as_a_sibling_can_hold_it() -> None:
+    """The registry load, on GitHub until #2033, claims location-heavy itself and waits out its longest sibling's run:
+    the building load's, not the intake's."""
+    load = jobs.entry("ruian_load")
+    assert load == _entry("ruian_load")
+    siblings = [_entry("location_intake"), _entry("ruian_buildings")]
+    assert {s.resource for s in siblings} == {load.resource}
+    assert jobs.resource_wait_s(load) == max(s.timeout_s for s in siblings) + jobs.STUCK_RUN_GRACE_S
+    assert jobs.resource_wait_s(_entry("clip")) == 0, "no resource, no sibling to wait for"
+
+
 def test_the_db_heavy_census_fires() -> None:
     entries = [j for j in jobs.declared() if j.name not in ("property_sweep", "broker_sweep")]
     today = [replace(_entry("property_sweep"), offset_s=4 * 3600 + 15 * 60),
@@ -558,10 +570,11 @@ def test_every_job_has_exactly_one_host() -> None:
     assert pairing_problems(jobs.declared(), _repo_workflows()) == []
 
 
-# Each move PR's job and the workflow it deleted: W2 (#2025), W5 (#2032), W3 (#2027), W4 batch 1 (#2029).
+# Each move PR's job and the workflow it deleted: W2 (#2025), W5 (#2032), W3 (#2027, #2028), W4 batch 1 (#2029).
 MOVED = (("stale_images", "refresh_stale_images.yml"), ("rent_map", "fetch_rent_map.yml"),
          ("map_overlays", "ingest_map_overlays.yml"), ("clip", "clip_tag.yml"),
          ("property_sweep", "recompute_property_stats.yml"), ("broker_sweep", "resolve_brokers_full.yml"),
+         ("location_intake", "location_claims_intake.yml"),
          ("walk_web", "web_index_walk.yml"), ("walk_maxima", "scrape_maxima.yml"),
          ("walk_bezrealitky", "scrape_bezrealitky.yml"))
 
@@ -581,9 +594,9 @@ def test_a_move_is_a_host_flip_plus_its_workflows_deletion(name: str, file: str)
 
 def test_the_pairing_census_fires() -> None:
     workflows = _repo_workflows()
-    intake = workflows["location_claims_intake.yml"]
-    silent = replace(intake, invocations=tuple(c for c in intake.invocations if c.module != "location_data.claims_intake"))
-    assert pairing_problems(jobs.declared(), {**workflows, "location_claims_intake.yml": silent})
+    load = workflows["location_registry_load.yml"]
+    silent = replace(load, invocations=tuple(c for c in load.invocations if c.module != "location_data.ruian_load"))
+    assert pairing_problems(jobs.declared(), {**workflows, "location_registry_load.yml": silent})
     stray = Workflow("stray.yml", True, 600, (Invocation("scripts.stray_job", frozenset()),))
     assert pairing_problems(jobs.declared(), {**workflows, "stray.yml": stray})
     # #2033's tick hosts price_stats only once read_workflows reads the `once` form; until then B3 is red.
