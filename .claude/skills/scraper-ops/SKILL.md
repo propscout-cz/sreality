@@ -123,9 +123,9 @@ walk-only portals (sreality, bazos, idnes, ceskereality, realitymix, web), and s
 the four combined scrapers too (bezrealitky, maxima, mmreality, remax: each walk runs `--index-only` on the job runner, #2029/#2030). The combined `scrape.yml` fallback was deleted in C2-2
 (2026-10); an ad-hoc combined run is `python -m scraper.<portal>_main` with neither
 phase flag (walk, then drain), locally. The bazos crawl is **cadence-split**
-like sreality (bazos walks 22 nationwide scopes (migration 488), ~1500 index pages — a combined run starves the
-drain): `bazos_index_walk.yml` ("Scraping: Bazos index walk", cron `0 */6`, full walk +
-nominate unseen + enqueue) feeds the worker's drain lane. Bazos's ad text needs a post-publication pass the other
+like sreality (bazos walks 22 nationwide scopes (migration 488), ~1,300 index pages — a combined run starves the
+drain): the job runner's `walk_bazos` (every 6 h since #2031; full walk + nominate unseen + enqueue) feeds the
+worker's drain lane. Bazos's ad text needs a post-publication pass the other
 portals' structured pages don't: field-capture W7 runs it as the worker's `text_extract` lane
 (`toolkit/description_extraction.py`), never in the scrape — the LLM is behind publication, never
 in front of it.
@@ -290,7 +290,7 @@ The detail-drain writes `scrape_runs` rows too (`run_type='detail'`), but only t
 ## Onboarding a portal — and the tenth, `web` (2026-10-21)
 
 A portal is one row per registry, never a branch (the registry list: `docs/architecture.md` § rule 21 and
-`docs/design/new-property-from-link.md` §3.4; its Portal class declares `walk_every_s`/`walk_timeout_s` (`scraper/jobs.py`)). A walk whose `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (60 min, #2030) is born on the runner; a longer one fails the waiting-set ratchet (`ORIGINAL_UNTIL_MOVED`, `tests/scraper/test_job_registry.py`) until the cutoff reaches it or the operator rules. Run a new portal's first walk at deploy (a runner `request`): `scraping` judges every portal in `SOURCES` from then, so `<portal>/walks` reads Problem until it walks (web, 2026-10-22).
+`docs/design/new-property-from-link.md` §3.4; its Portal class declares `walk_every_s`/`walk_timeout_s` (`scraper/jobs.py`)). A walk whose `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (130 min, #2031) is born on the runner; a longer one fails the waiting-set ratchet (`ORIGINAL_UNTIL_MOVED`, `tests/scraper/test_job_registry.py`) until the cutoff reaches it or the operator rules. Run a new portal's first walk at deploy (a runner `request`): `scraping` judges every portal in `SOURCES` from then, so `<portal>/walks` reads Problem until it walks (web, 2026-10-22).
 `web` (`scraper/web_main.py`) is `indexless`: its 6-hourly walk sees
 nothing, reaches the end and nominates every active row as an orphan (its unit has no scope); the worker drains it FIRST;
 its pages go through `scraper/egress.py` (private ranges refused per hop, a wall-clock deadline, a decoded cap). A pasted

@@ -133,13 +133,13 @@ them; `tests/scraper/test_portal_category_coverage.py` now fails CI whenever a p
 ("Nové projekty" — developer marketing that also appears under byt/dum, and no other portal
 in the fleet carries such a category) and the rent-only `podnajem`/`ubytovani` (roommate
 search and short-term lodging classifieds, not the sale or rental of a property). So — like
-sreality/idnes (rule #19) — it is **cadence-split**: `bazos_index_walk.yml` (every 6h, full
-walk + presence nomination + enqueue) feeds the realtime worker's drain lane (bazos's only
+sreality/idnes (rule #19) — it is **cadence-split**: the job runner's `walk_bazos` (every 6 h since #2031;
+`bazos_index_walk.yml` before; full walk + presence nomination + enqueue) feeds the realtime worker's drain lane (bazos's only
 drain since Actions-exit W0, #2010). A combined run can't do both inside one job (the full 22-scope walk is
-~2600 index pages ≈ 80 min inside bazos's one 0.7 req/s budget, which the drain shares (migration 676;
-before #1852's fix the walk and drain each paced themselves at 0.5 and 0.6) — a 130-minute job timeout with a 110-minute budget — which eats
-the window, starving the drain); narrow ad-hoc runs go through the split
-workflows' dispatch inputs (`-f sale_type=… -f category=…`, or locality + radius) or
+~1,300 index pages ≈ 51 min in the 7 days to 2026-11-26 inside bazos's one 0.7 req/s budget, which the drain shares (migration 676;
+before #1852's fix the walk and drain each paced themselves at 0.5 and 0.6) — a 130-minute timeout, the runner's SIGTERM its one
+budget — which eats the window, starving the drain); narrow ad-hoc runs are runner requests with
+args (`--sale-type … --category …`, or `--locality` + `--radius-km`) or
 `scraper.bazos_main` locally. **A REMOVED ad answers HTTP 200 with the CATEGORY INDEX page** —
 bazos lands `/inzerat/<id>/…` on `/inzeraty/<slug>/`, titled `… inzerce - Reality | Bazoš.cz`,
 carrying an "Inzerát byl vymazán" banner — so, like mmreality/ceskereality/remax,
@@ -1672,9 +1672,9 @@ on 2026-12-01, and until then a file of that name would override the applied set
   daily `property_sweep` (03:00 UTC) and `broker_sweep` (06:00 UTC) since #2027, which never run beside each other
   or any other DB-heavy job (`job_lease`'s heavy turn), of the hourly claim intake `location_intake` since #2028
   and the RÚIAN registry load `ruian_load` since #2033, daily (§ Location data), and of the walks whose
-  `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (60 min: web, maxima and bezrealitky since #2029, remax and
-  mmreality since #2030, each `walk_<source>` every 6 h, and sreality hourly since #2030, with no `--max-seconds`,
-  the runner's SIGTERM at the timeout its one budget; the longer walks wait on their workflows):
+  `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (130 min: web, maxima and bezrealitky since #2029, remax and
+  mmreality since #2030, bazos since #2031, each `walk_<source>` every 6 h, and sreality hourly since #2030, with no
+  `--max-seconds`, the runner's SIGTERM at the timeout its one budget; the longer walks wait on their workflows):
   - two replicas in the worker's region, each 4 vCPU and 8 GB, restart policy ALWAYS, `checkSuites: false`. Railway
     counts decimal bytes, so 8e9 B is 7,629 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
     line and every beat carry `memory_limit_mb` and `cpus` as the replica's cgroup reads them;

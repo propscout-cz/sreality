@@ -358,6 +358,16 @@ proxy traffic per day doubles (about 1,930 to 3,850 index pages a day, +8 % on t
 mmreality, ceskereality and idnes). **This PR merges only after gate #2647 has read remax (2026-11-29) and the wizard
 apply has put the variable on job-runner.** remax's walk changed under #2646 on 11-24 (466 to 385 pages, and a
 deferral backlog of sold/let ads still draining), so its gate baseline is re-read on the day.
+**As built (#2031), batch 3 starts with bazos alone.** The cutoff rises to 130 min, which takes bazos (`walk_timeout_s`
+130 min, every 6 h) and nothing else (realitymix and ceskereality at 180 and idnes at 240 wait). `bazos_index_walk.yml`
+and its group `bazos-index-walk` are deleted; its dispatch inputs (`--sale-type`, `--category`, `--locality`,
+`--radius-km`, `--max-pages`, `--max-seconds`) are request args now. GitHub's throttled `0 */6` cron delivered 15 walks
+in the 7 days to 11-26 (1,300 pages on average, p50 3,053 s, p95 3,272 s against the 7,800 s timeout, none near the
+6,600 s budget it carried; 14 of 15 cycles closed, the fifteenth cut by one uncorroborated blank page). bazos needs
+neither the proxy nor the browser, and the runner already carries `SUPABASE_DB_URL` and the R2 set: no `.railway/`
+change, no migration. The runner walks it 4 times a day where GitHub managed about 2, so its direct index requests rise
+from about 2,800 to 5,200 a day beside the drain's 4,200, all inside bazos's one 0.7 req/s budget (60,480 slots a day).
+Its 51 min walk then spans about 3.4 h a day, so a deploy cuts one most days and the resumed walk re-reads the cut scope.
 **Gate per walk (7 days):** pages and reached-end per cycle, nominations per day (a moved walk keeps its declared
 cadence), ± 10 %; 403/429 share from
 Railway ≤ the GitHub baseline; 0 `ended_at NULL` after ≥ 5 mid-walk deploys; proxy GB/day within its band;
