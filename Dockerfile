@@ -93,8 +93,8 @@ RUN case ",${EXTRAS}," in *,browser,*) \
     esac
 # The job runner's proof, offline: CPU torch at its pin, the vector stack at the manifest's versions (a resolver that
 # replaced one fails the build), and Tagger.load reads only the baked checkpoint (a missing file fails the build after
-# Tagger.load's retries, and the old deployment stays live). Tagger.prepare, which resizes a photo the processor's
-# way before the processor sees it, must give the processor's own batch output to the bit (#2478).
+# Tagger.load's retries, and the old deployment stays live). Tagger.model_input resizes a photo the processor's way
+# before the processor sees it, and must give the processor's own batch output to the bit (#2478).
 RUN case ",${EXTRAS}," in *,clip,*) \
       HF_HUB_OFFLINE=1 python -c 'import torch; assert torch.version.cuda is None, torch.version.cuda; \
         assert torch.__version__.split("+")[0] == "2.14.1", torch.__version__; \
@@ -108,9 +108,9 @@ RUN case ",${EXTRAS}," in *,clip,*) \
         from PIL import Image; \
         ims = [Image.merge("RGB", [Image.effect_noise(s, 32 + 24 * k) for k in range(3)]) \
                for s in ((4032, 3024), (480, 1280), (225, 223), (100, 60))]; \
-        got = torch.cat([t.prepare(im) for im in ims]); \
-        assert torch.equal(got, t._processor(images=ims, return_tensors="pt")["pixel_values"]), "prepare drifted"; \
-        print("CLIP prepare matches the processor", tuple(got.shape))' \
+        got = torch.cat([t.model_input(im) for im in ims]); \
+        assert torch.equal(got, t._processor(images=ims, return_tensors="pt")["pixel_values"]), "model_input drifted"; \
+        print("CLIP model_input matches the processor", tuple(got.shape))' \
       && du -sh /root/.cache/huggingface ;; \
     esac
 

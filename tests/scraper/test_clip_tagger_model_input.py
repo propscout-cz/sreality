@@ -1,4 +1,4 @@
-"""Tagger.prepare (#2478): a photo becomes its model input with the image processor's own resize done first, on the
+"""Tagger.model_input (#2478): a photo becomes its model input with the image processor's own resize done first, on the
 photo itself, so the processor never makes its full-size copies. Fakes only: the real processor's bit-identity with
 its batch path is the runner image's offline proof (Dockerfile), at the pinned versions."""
 
@@ -13,7 +13,7 @@ from scraper.clip_tagger import Tagger
 
 
 class _ImageProcessor:
-    size = {"shortest_edge": 224, "crop_size": 999}
+    size = {"shortest_edge": 224}
     resample = Image.Resampling.BICUBIC
 
 
@@ -43,7 +43,7 @@ def test_the_processor_gets_the_photo_at_its_own_output_size(photo: tuple[int, i
                                                               resized: tuple[int, int]) -> None:
     img = Image.effect_noise(photo, 64).convert("RGB")
     processor = _Processor()
-    assert _tagger(processor).prepare(img) == ("input", 1)
+    assert _tagger(processor).model_input(img) == ("input", 1)
     ((images, tensors),) = processor.calls
     assert tensors == "pt" and len(images) == 1
     assert images[0].size == resized

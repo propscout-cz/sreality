@@ -142,26 +142,24 @@ def test_region_and_global_overlap_is_deduped() -> None:
 
 
 def test_the_runners_clip_chunk_decodes_inside_its_memory_declaration() -> None:
-    """A chunk holds its photos' model inputs (3x224x224 float32) until it is written; a full frame lives only on a
-    decoder while it becomes one, at Pillow's 4 B a pixel (12.3.0: 4.01 MB a megapixel), twice that while a non-RGB
-    file converts (#2478). The worst case: the largest photo stored (36.6 MP among the newest 2M images, read
-    2026-11-26) on every decoder at once, beside the fp32 weights (605,247,071 B), the chunk's and one encode batch's
-    inputs, the prefetched chunk's bytes at run 619's size (12.2 MP, at a generous 0.5 B a pixel) and the interpreter
-    with torch (~512 MiB). That fits memory_mb, the figure the co-tenancy census counts. Before #2478 a chunk kept its
-    frames until the embed: 64 of run 619's photos came to 2.9 GiB alone, and it peaked at 5,022 MB. The first runner
-    run (job_runs 6, 2026-10-28) peaked at 2,386 MB, so memory_mb also keeps a quarter over that measured peak
-    (#2155)."""
+    """The worst case the code allows, against memory_mb (the figure the co-tenancy census counts). A chunk holds its
+    photos' model inputs (3x224x224 float32) and a frame lives only on a decoder, at most ctb.MAX_DECODE_PX at Pillow's
+    4 B a pixel, twice while a non-RGB file converts; every decoder converts a cap-size frame at once, while the
+    chunk's bytes are cap-size photos at 0.3 B a pixel (the largest stored, 36.6 MP, measure 0.21-0.27; 2026-11-26),
+    beside the fp32 weights (605,247,071 B) and the interpreter with torch (~512 MiB). What is left is the margin for
+    torch's activations and the allocator's slack. The first runner run peaked at 2,386 MB, so memory_mb also keeps a
+    quarter over that measured peak (#2155)."""
     from scraper import jobs
 
     (clip,) = [j for j in jobs.runner_jobs() if j.name == "clip"]
     args = ctb._parser().parse_args(list(clip.argv[1:]))
     assert not args.threads, "the decoders are the job's CPUs (job_cpus), which the model counts"
     mib, model_input = 2**20, 3 * 224 * 224 * 4
-    largest_px, run_619_px = 36_578_304, 4032 * 3024
-    frames = clip.cpus * largest_px * 4 * 2
+    frames = clip.cpus * ctb.MAX_DECODE_PX * 4 * 2
     inputs = (args.chunk + args.batch_size) * model_input
-    peak = (605_247_071 + inputs + frames + args.chunk * run_619_px * 0.5) / mib + 512
-    assert peak <= clip.memory_mb, f"the worst chunk of {args.chunk} peaks near {peak:.0f} MiB, past {clip.memory_mb}"
+    peak = (605_247_071 + inputs + frames + args.chunk * ctb.MAX_DECODE_PX * 0.3) / mib + 512
+    assert clip.memory_mb - peak >= 256, f"the worst chunk of {args.chunk} peaks near {peak:.0f} MiB, too near " \
+                                         f"{clip.memory_mb}"
     measured_peak_mb = 2386
     assert clip.memory_mb >= 1.25 * measured_peak_mb, f"{clip.memory_mb} leaves under a quarter over {measured_peak_mb}"
 
@@ -180,7 +178,7 @@ def test_a_chunk_of_12_mp_photos_holds_only_the_models_inputs() -> None:
     lock = threading.Lock()
     input_bytes = 3 * 224 * 224 * 4
 
-    def prepare(img: Any) -> bytearray:
+    def model_input(img: Any) -> bytearray:
         assert img.size == (4032, 3024), "the input is made from the whole photo"
         with lock:
             frames.append(weakref.ref(img))
@@ -190,12 +188,37 @@ def test_a_chunk_of_12_mp_photos_holds_only_the_models_inputs() -> None:
 
     decoders = 2
     with ThreadPoolExecutor(max_workers=decoders) as pool:
-        decoded, undecodable = ctb._decode_all(pool, [(k, data) for k in range(8)], prepare)
+        decoded, undecodable = ctb._decode_all(pool, [(k, data) for k in range(8)], model_input)
     assert undecodable == []
     assert [image_id for image_id, _ in decoded] == list(range(8))
     assert all(type(held) is bytearray for _, held in decoded), "no frame is kept for the embed"
     assert sum(len(held) for _, held in decoded) == 8 * input_bytes
     assert len(alive) == 8 and max(alive) <= decoders, alive
+
+
+def _encoded(size: tuple[int, int], fmt: str, mode: str = "RGB") -> bytes:
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new(mode, size, 90).save(buf, fmt)
+    return buf.getvalue()
+
+
+def test_a_jpeg_over_the_frame_cap_decodes_at_a_scale_that_fits_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The cap bounds a decoder's frame by construction, not by the photos stored so far (#2478)."""
+    monkeypatch.setattr(ctb, "MAX_DECODE_PX", 1_000_000)
+    assert ctb._decode(_encoded((1000, 1000), "JPEG")).size == (1000, 1000), "at the cap: the whole photo"
+    assert ctb._decode(_encoded((1601, 1201), "JPEG")).size == (801, 601)
+    assert ctb._decode(_encoded((4100, 3000), "JPEG")).size == (1025, 750)
+    cmyk = ctb._decode(_encoded((1601, 1201), "JPEG", "CMYK"))
+    assert (cmyk.mode, cmyk.size) == ("RGB", (801, 601))
+
+
+def test_another_format_over_the_frame_cap_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ctb, "MAX_DECODE_PX", 1_000_000)
+    with pytest.raises(ValueError, match="over"):
+        ctb._decode(_encoded((1601, 1201), "PNG"))
+    assert ctb._decode(_encoded((1000, 1000), "PNG")).size == (1000, 1000)
 
 
 def test_fresh_photos_come_before_the_priority_kraje() -> None:
@@ -449,10 +472,10 @@ class _Tagger:
         self.clock, self.secs, self.raises, self.on_embed = clock, secs, raises, on_embed
         self.batches: list[list[int]] = []
 
-    def prepare(self, image: _Live) -> _Live:
+    def model_input(self, image: _Live) -> _Live:
         return image
 
-    def embed_prepared(self, images: list[_Live], batch_size: int = 32) -> list[_Vec]:
+    def embed_inputs(self, images: list[_Live], batch_size: int = 32) -> list[_Vec]:
         ids = [im.image_id for im in images]
         self.batches.append(ids)
         if self.on_embed:

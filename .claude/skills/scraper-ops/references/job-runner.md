@@ -46,10 +46,11 @@ Recipes:
   `R2_*` is missing. A GET that failed is retried by the next run, never again in the same one. A
   `clip_taxonomy_retag_after` later than the database's now() is no campaign until it passes (one `RETAG` warning a
   run). The last line is `CLIP_JOB exit=<code> why=…`.
-- **clip's memory is bounded by photo size × decoders, not by the chunk (#2478):** each photo is decoded and
-  resized the image processor's way on a decoder (one per job CPU), so a chunk holds only model inputs (588 KiB a
-  photo) and a full frame lives only on a decoder. The memory test in `tests/scripts/test_clip_tag_backfill.py` checks
-  the worst case against `memory_mb`: the largest stored photo on every decoder at once.
+- **clip's memory is bounded by construction (#2478):** each photo is decoded and resized the image processor's way
+  on a decoder (one per job CPU), so a chunk holds only model inputs (588 KiB a photo) and a frame lives only on a
+  decoder. A frame is at most `MAX_DECODE_PX` (32 MP): a larger JPEG decodes at a smaller DCT scale, any other larger
+  format is undecodable. The memory test in `tests/scripts/test_clip_tag_backfill.py` checks that worst case, a cap-size
+  frame on every decoder and a chunk of cap-size bytes, against `memory_mb`.
 - **After a move PR merges**, `gh run list --workflow=<deleted file> --json status,databaseId`; if a run is queued or
   running, pause the new row past that run's timeout (`runner-pause`), since a queued run in a non-cancelling group
   can still start. A re-land within an hour of its revert's deploy keeps the row's `due_at`, and its boot claims a

@@ -63,6 +63,9 @@ MAX_WARNINGS = 10
 # An image that fails to decode, or to embed alone, while a sibling of its chunk does is marked terminal: at most this
 # many of each kind.
 TERMINAL_PER_CHUNK, TERMINAL_PER_RUN = 2, 5
+# The largest frame a decoder holds (the memory model in tests/scripts/test_clip_tag_backfill.py counts it, #2478).
+# 2026-11-26: above every photo of the newest 2M bar 12 at 36.6 MP, and every one of the re-embed proof's (4.9 MP max).
+MAX_DECODE_PX = 32_000_000
 # How often a wait on a chunk's GETs looks at the stop signal.
 _POLL_S = 0.5
 # The least a chunk waits for its GETs once it is current: a prefetched chunk's deadline runs from its submission, and
@@ -160,10 +163,18 @@ def _vec_str(row: torch.Tensor) -> str:
 
 
 def _decode(data: bytes) -> Image.Image:
-    """The photo in RGB. An RGB file is returned as loaded: convert() would copy it, a second full frame (#2478)."""
+    """The photo in RGB, at most MAX_DECODE_PX: a larger JPEG decodes at the least DCT scale that fits (its pixels
+    then differ from a whole decode's), any other larger format is refused. An RGB file is returned as loaded:
+    convert() would copy it, a second frame (#2478)."""
     from PIL import Image  # base dep
 
     img = Image.open(io.BytesIO(data))
+    w, h = img.size
+    if w * h > MAX_DECODE_PX:
+        if img.format not in ("JPEG", "MPO"):
+            raise ValueError(f"{img.format} {w}x{h} is over {MAX_DECODE_PX} px")
+        s = next(s for s in (2, 4, 8) if -(-w // s) * -(-h // s) <= MAX_DECODE_PX or s == 8)
+        img.draft(img.mode, (w // s, h // s))
     img.load()
     return img if img.mode == "RGB" else img.convert("RGB")
 
@@ -301,7 +312,7 @@ def _await(fetch: _Fetch, deadline_s: float, clock: Callable[[], float]) -> tupl
 
 
 def _decode_all(pool: ThreadPoolExecutor, got: list[tuple[int, bytes]],
-                prepare: Callable[[Any], Any]) -> tuple[list[tuple[int, Any]], list[tuple[int, str]]]:
+                model_input: Callable[[Any], Any]) -> tuple[list[tuple[int, Any]], list[tuple[int, str]]]:
     """([(image_id, model input)], [(image_id, exception name)] whose bytes make none). A photo becomes its input on
     its decoder, so a chunk holds inputs, never frames: a full frame lives only on a decoder, at most one each, and a
     chunk of large photos weighs what one of small ones does (#2478). A MemoryError propagates: it is the process's,
@@ -309,7 +320,7 @@ def _decode_all(pool: ThreadPoolExecutor, got: list[tuple[int, bytes]],
 
     def one(item: tuple[int, bytes]) -> tuple[int, Any, str]:
         try:
-            return item[0], prepare(_decode(item[1])), ""
+            return item[0], model_input(_decode(item[1])), ""
         except MemoryError:
             raise
         except Exception as exc:  # noqa: BLE001 - judged by the caller, with its siblings
@@ -332,26 +343,26 @@ def _undecodable_alone(decoded: list, undecodable: list, tally: _Tally) -> bool:
         tally.decode_terminal + len(undecodable) <= TERMINAL_PER_RUN)
 
 
-def _embed(tagger: Tagger, decoded: list[tuple[int, Any]], batch_size: int, tally: _Tally,
+def _embed(tagger: Tagger, inputs: list[tuple[int, Any]], batch_size: int, tally: _Tally,
            lines: _Lines) -> tuple[list[tuple[int, TagResult, str]], list[int]] | None:
     """([(image_id, tags, vector text)], terminal ids), or None when the failure is not one image's: a MemoryError,
     no image of the chunk embedding alone, or more than the caps. Then nothing of the chunk may be marked: a terminal
     stamp is a photo with no CLIP evidence for ever, and autodedup reads it as moved for ever."""
     try:
-        emb = tagger.embed_prepared([d[1] for d in decoded], batch_size)
+        emb = tagger.embed_inputs([d[1] for d in inputs], batch_size)
         results = tagger.tags_from_emb(emb)
         return [(image_id, r, _vec_str(emb[k])) for k, (image_id, r) in
-                enumerate(zip([d[0] for d in decoded], results))], []
+                enumerate(zip([d[0] for d in inputs], results))], []
     except MemoryError:
-        lines.warn("CLIP_TAG embed failed chunk n=%d: MemoryError", len(decoded))
+        lines.warn("CLIP_TAG embed failed chunk n=%d: MemoryError", len(inputs))
         return None
     except Exception as exc:  # noqa: BLE001 - one image may be the cause: try them alone
-        lines.warn("CLIP_TAG embed failed batch n=%d: %s; one image at a time", len(decoded), type(exc).__name__)
+        lines.warn("CLIP_TAG embed failed batch n=%d: %s; one image at a time", len(inputs), type(exc).__name__)
     encoded: list[tuple[int, TagResult, str]] = []
     failed: list[tuple[int, str]] = []
-    for image_id, prepared in decoded:
+    for image_id, one_input in inputs:
         try:
-            emb = tagger.embed_prepared([prepared], 1)
+            emb = tagger.embed_inputs([one_input], 1)
             (result,) = tagger.tags_from_emb(emb)
             encoded.append((image_id, result, _vec_str(emb[0])))
         except MemoryError:
@@ -360,7 +371,7 @@ def _embed(tagger: Tagger, decoded: list[tuple[int, Any]], batch_size: int, tall
         except Exception as exc:  # noqa: BLE001 - judged below, with its siblings
             failed.append((image_id, type(exc).__name__))
     if not encoded or len(failed) > TERMINAL_PER_CHUNK or tally.embed_terminal + len(failed) > TERMINAL_PER_RUN:
-        lines.warn("CLIP_TAG embed failed chunk n=%d alone=%d: not one image's", len(decoded), len(failed))
+        lines.warn("CLIP_TAG embed failed chunk n=%d alone=%d: not one image's", len(inputs), len(failed))
         return None
     for image_id, name in failed:
         lines.warn("CLIP_TAG embed failed image=%d: %s", image_id, name)
@@ -399,8 +410,8 @@ def _tag(conn: psycopg.Connection, r2: image_storage.R2Client, tagger: Tagger, r
          *, priority: list[int], model: str, deadline: float, clock: Callable[[], float], tally: _Tally,
          lines: _Lines, decoders: int) -> str:
     """The tag phase; returns why it ended (EXITS). A chunk's GETs are submitted when the chunk before it has
-    decoded, so they download while it encodes; at most one chunk is ever decoded in memory, on its own pool, so a
-    GET abandoned in flight never delays it. A GET that failed in this run is not offered again before the next."""
+    decoded, so they download while it encodes; at most one chunk is ever in memory, as model inputs its own pool made,
+    so a GET abandoned in flight never delays it. A GET that failed in this run is not offered again before the next."""
     size = args.chunk
     snapshot, final = deque(rows), len(rows) < size
     last_select = clock()
@@ -424,7 +435,7 @@ def _tag(conn: psycopg.Connection, r2: image_storage.R2Client, tagger: Tagger, r
                                                                whole_chunk=len(fetch.rows) >= size)
             in_hand = {row[0] for row in fetch.rows}
             try:
-                decoded, undecodable = _decode_all(decode_pool, got, tagger.prepare)
+                decoded, undecodable = _decode_all(decode_pool, got, tagger.model_input)
             except MemoryError:
                 lines.warn("CLIP_TAG decode failed chunk n=%d: MemoryError", len(got))
                 return "decode"
