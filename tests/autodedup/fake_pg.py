@@ -41,7 +41,7 @@ from autodedup.score_lane import CLUSTER_INSERT_SQL, CLUSTER_MEMBER_INSERT_SQL
 
 # The reject ledger's key a test store is built with when the test is not about the ledger
 # (E943: `SqlStore` takes both, so the lookup and the write read one source).
-LEDGER_KEY: dict[str, str] = {"calibration_digest": "c", "engine_digest": "e"}
+LEDGER_KEY: dict[str, str] = {"calibration_digest": "c"}
 
 # The stored form (E963) of the empty calibration a test seeds a generation with when the test is
 # not about the calibration, and the digest its row must name for the reader to take it.
@@ -616,26 +616,21 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         return []
 
     # ---------------------------------------------------------------- the reject ledger
-    if sql == S.RT_REJECT_LEDGER_KEYED_SQL:
-        key = (p["calibration_digest"], p["feature_version"], p["engine_digest"])
-        return [(any(g == gen and (row["calibration_digest"], row["feature_version"],
-                                   row["engine_digest"]) == key
-                     for (g, _lo, _hi), row in db.reject_ledger.items()),)]
     if sql == S.RT_REJECT_LEDGER_LOOKUP_SQL:
-        # The four keys are READ from the statement, never assumed: a lookup that stopped
+        # The predicates are READ from the statement, never assumed: a lookup that stopped
         # matching one of them answers here what it would answer in Postgres.
         text = " ".join(sql.split())
-        matched = [column for column in ("dd_lo", "dd_hi", "calibration_digest",
-                                         "feature_version", "engine_digest")
-                   if f"l.{column} = " in text]
+        matched = [column for column in ("dd_lo", "dd_hi") if f"l.{column} = " in text]
+        timed = "l.decided_at >= greatest(a.updated_at, b.updated_at)" in text
         out = []
         for lo, hi, dd_lo, dd_hi in zip(p["los"], p["his"], p["dd_los"], p["dd_his"]):
             row = db.reject_ledger.get((gen, int(lo), int(hi)))
-            asked = {"dd_lo": dd_lo, "dd_hi": dd_hi,
-                     "calibration_digest": p["calibration_digest"],
-                     "feature_version": p["feature_version"],
-                     "engine_digest": p["engine_digest"]}
-            if row is not None and all(row[column] == asked[column] for column in matched):
+            sides = [db.rt_fp.get((gen, int(side))) for side in (lo, hi)]
+            asked = {"dd_lo": dd_lo, "dd_hi": dd_hi}
+            if (row is not None and None not in sides
+                    and all(row[column] == asked[column] for column in matched)
+                    and (not timed or row["decided_at"] >= max(
+                        side["updated_at"] for side in sides))):
                 out.append((int(lo), int(hi)))
         return out
     if sql == S.RT_REJECT_LEDGER_UPSERT_SQL:
@@ -644,9 +639,7 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         assert len(set(keys)) == len(keys), "one statement may not ledger a pair twice"
         for key, dd_lo, dd_hi in zip(keys, p["dd_los"], p["dd_his"]):
             assert key[1] < key[2], "a ledgered pair is (lo, hi)"
-            row = {"dd_lo": dd_lo, "dd_hi": dd_hi, "calibration_digest": p["calibration_digest"],
-                   "feature_version": p["feature_version"], "engine_digest": p["engine_digest"],
-                   "decided_at": db.now}
+            row = {"dd_lo": dd_lo, "dd_hi": dd_hi, "decided_at": db.now}
             assert all(value is not None for value in row.values()), (
                 f"rt_reject_ledger columns are NOT NULL: {row}")
             db.reject_ledger[key] = row

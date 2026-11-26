@@ -127,7 +127,7 @@ def test_a_designator_veto_row_is_kept_so_it_still_binds_the_clustering() -> Non
     """E61 names the two units on the row and scores 0. The SQL store evicted it as a reject
     below the floor, so the lane forgot the veto the batch pass unions into must-not-link."""
     db = FakePg()
-    store = SqlStore(db, "rt", store_floor=0.02, calibration_digest="c0ffee", engine_digest="e")
+    store = SqlStore(db, "rt", store_floor=0.02, calibration_digest="c0ffee")
     veto = replace(_pair(A, C, "veto", 0.0), veto="unit_designator", reason="guard:x",
                    evidence={"unit_lo": "12", "unit_hi": "14"})
     store.upsert_pairs([veto, _pair(A, B, "reject", 0.001)])
@@ -996,7 +996,7 @@ def test_the_region_s_towns_come_from_the_one_reader_of_the_scope(
     _read(db, 10, 11)
     _lane(db)
     incremental_lane._stale_claims(db, RT, {seed_version_key(RT): SEED_VERSION}, [[10, 11]],
-                                   SimpleNamespace(ledger_keyed=lambda: True), None, 200)
+                                   None, 200)
     assert seen == [[531057, 563510], [531057, 563510]], "the reconcile, then the re-claim"
 
 

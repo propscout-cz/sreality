@@ -17,7 +17,6 @@ from typing import Any, Iterable, Mapping, Sequence
 from dataclasses import replace
 
 from autodedup.dataset import Dataset, Image, Listing
-from autodedup.features import FEATURE_VERSION
 from autodedup.hazard_context import ContextStamp, address_block_key, category_group
 from autodedup.incremental import (
     CODE_CARRIER_READ,
@@ -40,8 +39,7 @@ def shape_token(listing: Listing) -> str:
 
 class MemoryStore:
     def __init__(self, now: float | None = None,
-                 score_sql_type: str = PAIR_SCORE_SQL_TYPE, store_floor: float = 0.0,
-                 calibration_digest: str = "", engine_digest: str = "") -> None:
+                 score_sql_type: str = PAIR_SCORE_SQL_TYPE, store_floor: float = 0.0) -> None:
         # The twin's clock, for `first_decided_at` (E92). Production reads the server's; a
         # replay that never sets one leaves the stamp NULL, which is what keeps the plain
         # replay byte-for-byte what it was before the evidence horizon existed.
@@ -52,13 +50,14 @@ class MemoryStore:
         # column, which is how W9m's regression arm shows the proof would now catch E114.
         self.score_sql_type = score_sql_type
         # E943: the reject ledger, as `SqlStore` keeps it — a pair decided below `store_floor`
-        # is ledgered under its two decision digests and the store's key (the calibration, the
-        # feature version, the engine). Unlike the SQL store the twin still keeps every pair, so
-        # at the default floor of 0 nothing is ledgered and a replay is what it was before.
+        # is ledgered under its two decision digests and the count of refreshes so far, the
+        # twin's `decided_at`: a row older than either side's last refresh answers nothing.
+        # Unlike the SQL store the twin still keeps every pair, so at the default floor of 0
+        # nothing is ledgered and a replay is what it was before.
         self.store_floor = float(store_floor)
-        self.calibration_digest = calibration_digest
-        self.engine_digest = engine_digest
-        self.ledger: dict[tuple[int, int], tuple[str, str, str, int, str]] = {}
+        self.ledger: dict[tuple[int, int], tuple[str, str, int]] = {}
+        self.refreshes = 0
+        self.refreshed: dict[int, int] = {}
         self.postings: dict[tuple[str, str], list[int]] = {}
         self.keys: dict[int, list[tuple[str, str]]] = {}
         self.fp: dict[int, FpRow] = {}
@@ -98,6 +97,8 @@ class MemoryStore:
         for code in (held.ref_codes if held is not None else ()):
             self.code_ids.get(code, set()).discard(listing_id)
         self.fp[listing_id] = replace(row, first_decided_at=stamped)
+        self.refreshes += 1
+        self.refreshed[listing_id] = self.refreshes
         for code in row.ref_codes:
             self.code_ids.setdefault(code, set()).add(listing_id)
         self.keys[listing_id] = list(keys)
@@ -174,20 +175,18 @@ class MemoryStore:
                         self.store_floor):
                 self.ledger.pop((row.lo, row.hi), None)
             else:
-                self.ledger[(row.lo, row.hi)] = (row.dd_lo, row.dd_hi, *self._ledger_key())
+                self.ledger[(row.lo, row.hi)] = (row.dd_lo, row.dd_hi, self.refreshes)
                 ledgered += 1
         return ledgered
 
-    def _ledger_key(self) -> tuple[str, int, str]:
-        return (self.calibration_digest, FEATURE_VERSION, self.engine_digest)
-
     def rejected(self, keys: Sequence[tuple[int, int, str, str]]) -> set[tuple[int, int]]:
-        return {(lo, hi) for lo, hi, dd_lo, dd_hi in keys
-                if self.ledger.get((lo, hi)) == (dd_lo, dd_hi, *self._ledger_key())}
-
-    def ledger_keyed(self) -> bool:
-        key = self._ledger_key()
-        return any(row[2:] == key for row in self.ledger.values())
+        out: set[tuple[int, int]] = set()
+        for lo, hi, dd_lo, dd_hi in keys:
+            row = self.ledger.get((lo, hi))
+            if (row is not None and row[:2] == (dd_lo, dd_hi) and lo in self.fp and hi in self.fp
+                    and row[2] >= max(self.refreshed.get(lo, 0), self.refreshed.get(hi, 0))):
+                out.add((lo, hi))
+        return out
 
     def delete_pairs(self, keys: Sequence[tuple[int, int]]) -> None:
         for key in keys:

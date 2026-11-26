@@ -174,8 +174,7 @@ def test_a_widening_keeps_every_row_pair_cluster_and_ledger_row(tmp_path: Path) 
     # The prior model leaves this world's pairs in the band, so a group and a below-floor
     # reject the store answers from its ledger (E943) are written in, to be seen kept.
     conn.reject_ledger[(GEN, 4000, 4008)] = {
-        "dd_lo": "a", "dd_hi": "b", "calibration_digest": conn.calibration[GEN]["digest"],
-        "feature_version": 1, "engine_digest": "e", "decided_at": conn.now}
+        "dd_lo": "a", "dd_hi": "b", "decided_at": conn.now}
     conn.clusters[(GEN, 4000)] = {"size": 2, "generation": GEN}
     conn.cluster_members.update({(GEN, 4000, 4000), (GEN, 4000, 4001)})
     conn.cluster_conflicts.append({"kind": "invariant", "detail": {"generation": GEN}})
@@ -358,13 +357,15 @@ def test_a_build_pass_carries_its_re_claims_inside_its_claim(
 # ------------------------------------------------------------------ the calibration and the ledger
 
 
-def test_the_widening_re_cuts_over_the_whole_scope_and_the_ledger_re_keys(tmp_path: Path) -> None:
+def test_the_widening_re_cuts_over_the_whole_scope_and_the_ledger_stands(tmp_path: Path) -> None:
     conn = _built_town(tmp_path)
     before = conn.calibration[GEN]["digest"]
     assert conn.calibration[GEN]["n_listings"] == len(OLD_IDS)
     conn.reject_ledger[(GEN, 4000, 4008)] = {
-        "dd_lo": "a", "dd_hi": "b", "calibration_digest": before, "feature_version": 1,
-        "engine_digest": "e", "decided_at": conn.now}
+        "dd_lo": "a", "dd_hi": "b", "decided_at": conn.now}
+    # The seed runs at a LATER instant: had it refreshed the held adverts, the reject would be
+    # older than its sides' last refresh and answer nothing (the cliff under another name).
+    conn.now += timedelta(hours=1)
 
     out = _seed(conn, tmp_path, f"obec:{TOWN} obec:{OTHER_TOWN}")
 
@@ -375,13 +376,10 @@ def test_the_widening_re_cuts_over_the_whole_scope_and_the_ledger_re_keys(tmp_pa
     assert {phash for phash in conn.phash_pop} >= {
         int(row["phash"]) for row in conn.image_rows if row["listing_id"] in NEW_IDS}, (
         "the new block's photographs are in the population")
-    # The ledger keeps its row, keyed on the old digest: inert for a store cut since (E943).
+    # The ledger keeps its row and the row still answers: a re-cut refreshes no advert, and a
+    # reject stands until one of its sides is read again (E943).
     key = [(4000, 4008, "a", "b")]
-    from autodedup.features import FEATURE_VERSION
-
-    conn.reject_ledger[(GEN, 4000, 4008)]["feature_version"] = FEATURE_VERSION
-    assert SqlStore(conn, GEN, calibration_digest=before, engine_digest="e").rejected(key)
-    assert not SqlStore(conn, GEN, calibration_digest=after, engine_digest="e").rejected(key)
+    assert SqlStore(conn, GEN, calibration_digest=after).rejected(key) == {(4000, 4008)}
     passed = run_incremental(lambda: conn)
     assert passed["calibration"]["digest"] == after, "the passes run on the widened cut"
 

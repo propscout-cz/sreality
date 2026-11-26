@@ -337,7 +337,7 @@ def test_without_rescore_another_scorer_is_refused_as_before(tmp_path: Path) -> 
     assert conn.snapshot() == before
 
 
-def test_rescore_beside_a_wider_scope_the_same_settings_or_fresh_is_refused(
+def test_rescore_beside_a_wider_scope_or_fresh_is_refused(
         tmp_path: Path) -> None:
     conn = _built_w31(tmp_path)
     lane_world._listing_row(conn, 5000, "sreality", [123])
@@ -347,13 +347,26 @@ def test_rescore_beside_a_wider_scope_the_same_settings_or_fresh_is_refused(
         run_rt_seed(lambda: conn, {"settings": "w34", "model": MODEL, "recut": "true",
                                    "rescore": "true",
                                    "rt_scope": f"{lane_world.SCOPE} obec:577626"}, tmp_path)
-    with pytest.raises(SystemExit, match="already scored by: nothing to switch"):
-        _seed(conn, tmp_path, "w31", recut="true", rescore="true")
     with pytest.raises(SystemExit, match="a first or fresh seed is scored by the settings"):
         _seed(conn, tmp_path, "w34", recut="true", rescore="true", fresh="true")
     assert conn.snapshot() == before
     with pytest.raises(SystemExit, match="a first or fresh seed is scored by the settings"):
         _seed(_world(), tmp_path, "w34", recut="true", rescore="true")
+
+
+def test_rescore_under_the_held_settings_orders_the_sweep(tmp_path: Path) -> None:
+    """E996: a change of the decision code voids no stored decision and no reject by itself;
+    the sweep that carries it is ordered by naming the settings the generation already holds."""
+    conn = _built_w31(tmp_path)
+    assert incremental_lane.rescore_key("rt") not in conn.settings
+    conn.now += timedelta(hours=1)
+    stamps = {key: row["updated_at"] for key, row in conn.rt_fp.items()}
+    out = _seed(conn, tmp_path, "w31", recut="true", rescore="true")
+    order = conn.settings[incremental_lane.rescore_key("rt")]
+    assert out["mode"] == "rescore" and order["settings"] == "w31" and order["dials"] == []
+    assert order["since"] == conn.now.isoformat()
+    assert {key: row["updated_at"] for key, row in conn.rt_fp.items()} == stamps, (
+        "the seed refreshes no advert: every one of them is owed to the sweep")
 
 
 def test_a_fresh_seed_forgets_the_rescore_and_its_cursor(tmp_path: Path) -> None:

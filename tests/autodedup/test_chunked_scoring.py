@@ -30,7 +30,6 @@ from autodedup.incremental import (
     _score_chunks,
     _Working,
     context_for,
-    engine_digest,
     run_pass,
 )
 from autodedup.incremental_lane import SqlFacts, SqlStore
@@ -102,21 +101,18 @@ class _Engine:
             work: Any = None, twin_work: Any = None, claim: int = CLAIM
             ) -> tuple[PassResult, list[int], int, list[int]]:
         settings = _settings()
-        key = {"calibration_digest": calibration.digest(),
-               "engine_digest": engine_digest(settings, MODEL)}
         limits = Limits(max_listings=claim, max_pairs=10 ** 9, score_chunk=self.chunk)
         hold = EvidenceHold(now=NOW, horizon_s=48 * 3600.0)
         asked: list[int] = []
         held["vectored"] = []
-        store = SqlStore(self.db, GEN, store_floor=FLOOR, **key)
+        store = SqlStore(self.db, GEN, store_floor=FLOOR,
+                         calibration_digest=calibration.digest())
         writes: list[int] = []
         upsert = store.upsert_pairs
         store.upsert_pairs = lambda rows: writes.append(len(rows)) or upsert(rows)  # type: ignore[method-assign]
         result = run_pass(store, _Counting(ds, asked), work or self.work, settings, MODEL,
                           calibration, limits=limits, generation=GEN, hold=hold)
         peak = max(held["vectored"], default=0)
-        self.twin.calibration_digest = key["calibration_digest"]
-        self.twin.engine_digest = key["engine_digest"]
         run_pass(self.twin, CohortFacts(ds), twin_work or self.twin_work, settings, MODEL,
                  calibration, limits=limits, generation=GEN, hold=hold)
         return result, asked, peak, writes

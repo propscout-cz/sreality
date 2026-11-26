@@ -186,7 +186,6 @@ from autodedup.incremental_sql import (
     RT_PAIRS_TOUCHING_SQL,
     RT_PAIRS_WITHIN_SQL,
     RT_REJECT_LEDGER_DELETE_SQL,
-    RT_REJECT_LEDGER_KEYED_SQL,
     RT_REJECT_LEDGER_LOOKUP_SQL,
     RT_REJECT_LEDGER_UPSERT_SQL,
     RT_RESCORE_SQL,
@@ -702,8 +701,7 @@ class SqlStore:
     claim."""
 
     def __init__(self, conn: Any, generation: str = GENERATION, *, calibration_digest: str,
-                 engine_digest: str, store_floor: float = 0.02,
-                 model_version: str | None = None) -> None:
+                 store_floor: float = 0.02, model_version: str | None = None) -> None:
         self.conn = conn
         self.generation = generation
         # WHICH SCORER TOOK THE DECISION, stamped on every row this store writes (E90a). The
@@ -714,10 +712,6 @@ class SqlStore:
         # are held here rather than fished out of a per-pair evidence bag.
         self.model_version = model_version
         self.calibration_digest = calibration_digest
-        # E943: the reject ledger's key besides the two decision digests is the store's ALONE —
-        # this calibration digest, this engine digest and `FEATURE_VERSION` — read by the
-        # lookup and written by the write, so the two can never disagree about a row.
-        self.engine_digest = engine_digest
         # The batch lane's own retention floor, carried here so the two stores keep the same
         # rows. It comes from the pass's settings, never from a constant of this module.
         self.store_floor = float(store_floor)
@@ -733,7 +727,6 @@ class SqlStore:
         self._cells_dirty: set[tuple[str, str]] = set()
         # This pass's start, as `rulings_changed` read it: the `rt_rulings` cursor `flush` writes.
         self._rulings_read_at: Any = None
-        self._ledger_keyed: bool | None = None
 
     # ------------------------------------------------------------------ plumbing
     def _query(self, sql: str, params: Mapping[str, Any] | None = None) -> list[tuple]:
@@ -1002,17 +995,15 @@ class SqlStore:
         return len(evicted)
 
     def _ledger(self, evicted: Sequence[PairRow], kept: Sequence[PairRow]) -> None:
-        """E943: every pair deleted for its score goes into the reject ledger under the store's
-        key, and every pair stored leaves it — inside the pass's transaction, so a pass that
-        rolls back ledgers nothing."""
+        """E943: every pair deleted for its score goes into the reject ledger and every pair
+        stored leaves it — inside the pass's transaction, so a pass that rolls back ledgers
+        nothing."""
         for start in range(0, len(evicted), LEDGER_CHUNK):
             chunk = evicted[start:start + LEDGER_CHUNK]
             self._run(RT_REJECT_LEDGER_UPSERT_SQL, {
                 "generation": self.generation,
                 "los": [row.lo for row in chunk], "his": [row.hi for row in chunk],
-                "dd_los": [row.dd_lo for row in chunk], "dd_his": [row.dd_hi for row in chunk],
-                "calibration_digest": self.calibration_digest,
-                "feature_version": FEATURE_VERSION, "engine_digest": self.engine_digest})
+                "dd_los": [row.dd_lo for row in chunk], "dd_his": [row.dd_hi for row in chunk]})
         for start in range(0, len(kept), LEDGER_CHUNK):
             chunk = kept[start:start + LEDGER_CHUNK]
             self._run(RT_REJECT_LEDGER_DELETE_SQL, {
@@ -1027,18 +1018,8 @@ class SqlStore:
                 RT_REJECT_LEDGER_LOOKUP_SQL, {
                     "generation": self.generation,
                     "los": [key[0] for key in chunk], "his": [key[1] for key in chunk],
-                    "dd_los": [key[2] for key in chunk], "dd_his": [key[3] for key in chunk],
-                    "calibration_digest": self.calibration_digest,
-                    "feature_version": FEATURE_VERSION, "engine_digest": self.engine_digest}))
+                    "dd_los": [key[2] for key in chunk], "dd_his": [key[3] for key in chunk]}))
         return out
-
-    def ledger_keyed(self) -> bool:
-        if self._ledger_keyed is None:
-            self._ledger_keyed = bool(self._query(RT_REJECT_LEDGER_KEYED_SQL, {
-                "generation": self.generation, "calibration_digest": self.calibration_digest,
-                "feature_version": FEATURE_VERSION,
-                "engine_digest": self.engine_digest})[0][0])
-        return self._ledger_keyed
 
     def delete_pairs(self, keys: Sequence[tuple[int, int]]) -> None:
         self._run_many(RT_PAIR_DELETE_SQL, [
@@ -3325,7 +3306,7 @@ def _stale_budget(conn: Any, generation: str, record: Mapping[str, Any], why: st
 
 
 def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
-                  handed: Sequence[Sequence[int]], store: "SqlStore",
+                  handed: Sequence[Sequence[int]],
                   engine_since: str, cap: int) -> tuple[list[int], int, int, dict[str, str]]:
     """What this pass re-claims for the groups the reconcile handed on (E960) in
     `reconcile._rank`'s order — Praha, the scope's towns, the rest (E974), then flats for sale,
@@ -3333,9 +3314,7 @@ def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
     `reconcile.CLAIM_ORDER`), active and inactive groups together — chosen BEFORE the pass, and the
     back-off map with their groups stamped tried, which `run_incremental` writes
     (`rt_redecide_tried`) once the pass ends on its own terms (E973). None while no reconcile
-    follows the pass (a seed of another version, a closed apply scope) or while the reject
-    ledger holds no row under this store's key (after a deploy that moved it, every neighbour's
-    reject would be re-scored). A build no longer stops it (E964): its reconcile merges the
+    follows the pass (a seed of another version, a closed apply scope). A build no longer stops it (E964): its reconcile merges the
     blocks it has read whole, and its claim holds the re-claims inside its limit (`SqlWork.claim`).
     The count is bounded like the rate (`rt_redecide_budget`): written in flight ahead of the
     pass, a count a pass finds still in flight means the last pass that re-claimed died, so this
@@ -3353,7 +3332,7 @@ def _stale_claims(conn: Any, generation: str, control: Mapping[str, Any],
     if not handed or not seed_current(control, generation):
         return [], 0, budget, {}
     scope = reconcile.read_scope(conn)[0]
-    if scope is None or not store.ledger_keyed():
+    if scope is None:
         return [], 0, budget, {}
     ages = reconcile.refreshed(conn, generation, [i for group in handed for i in group],
                                fresh_hours=reconcile.FRESH_DECISION_HOURS,
@@ -3712,14 +3691,14 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                     "generation": generation, "predecessor_released": predecessor,
                     "claim_cap": cap, "spent_usd": 0.0, **pass_memory()}
         store = SqlStore(conn, generation, calibration_digest=calibration.digest(),
-                         engine_digest=engine_digest(settings, model),
                          store_floor=settings.store_floor, model_version=model.version)
         facts = SqlFacts(conn, deadline=deadline, stopping=stopping)
+        engine = engine_digest(settings, model)
         engine_since = _engine_since(conn, generation, control.get(engine_key(generation)),
-                                     store.engine_digest)
+                                     engine)
         handed = reconcile.handed_groups(control.get(reconcile.redecide_key(generation)))
         stale_claims, stale_waiting, stale_budget, tried = _stale_claims(
-            conn, generation, control, handed, store, engine_since, int(cap["cap"]))
+            conn, generation, control, handed, engine_since, int(cap["cap"]))
         work = SqlWork(conn, scope, generation, parents=parents, districts=districts,
                        bootstrap=bootstrap,
                        pass_budget_s=(BOOTSTRAP_BUDGET_FRACTION * PASS_DEADLINE_S if bootstrap
@@ -3960,8 +3939,7 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         }
         summary["calibration"] = {"digest": calibration.digest(), "built_at": _iso(row[6]),
                                   "built_age_days": age_days(row[6])}
-        # E943: the reject ledger's engine key; a pass after it moved decides every reject anew.
-        summary["engine_digest"] = store.engine_digest
+        summary["engine_digest"] = engine
         summary["retention"] = {"store_floor": settings.store_floor,
                                 "pairs_retained": store.pairs_retained,
                                 "pairs_evicted": store.pairs_evicted}
@@ -4048,8 +4026,8 @@ def plan_widening(conn: Any, control: Mapping[str, Any], scope: Scope,
             "names that scope again: it widens nothing. The lane re-cuts the calibration itself "
             "only while the scope holds at most RECUT_MAX_LISTINGS "
             f"({RECUT_MAX_LISTINGS:,}) adverts (E944); above that the last seed's cut stands. "
-            "Pass recut=true to re-cut it over the whole scope (it re-keys the reject ledger: "
-            "every wanted reject is scored once more), a WIDER rt_scope to widen the "
+            "Pass recut=true to re-cut it over the whole scope (no stored decision or reject is "
+            "voided by it; recut=true rescore=true also re-reads every advert), a WIDER rt_scope to widen the "
             "generation (E964), or fresh=true to rebuild it (a new scorer or a narrower "
             "scope). Nothing was written.")
     recorded = _rows(conn, RT_CALIBRATION_SCORER_SQL, {"generation": generation})
@@ -4061,11 +4039,6 @@ def plan_widening(conn: Any, control: Mapping[str, Any], scope: Scope,
             f"switches only its SETTINGS in place, and this seed names model "
             f"{model.version!r}. Every stored score is the held model's: a new model is a "
             "REBUILD — pass fresh=true. Nothing was written.")
-    if rescore and held_settings.to_dict() == settings.to_dict():
-        raise SystemExit(
-            f"rescore=true names the settings generation {generation!r} is already scored by: "
-            "nothing to switch. recut=true alone re-cuts over the same scope. Nothing was "
-            "written.")
     if not rescore and (held_settings.to_dict() != settings.to_dict()
                         or held_model.version != model.version):
         raise SystemExit(
@@ -4124,7 +4097,8 @@ def widen_generation(conn: Any, plan: Widening, scope: Scope, *, parents: Mappin
     holds stays — pairs, clusters, fingerprints, postings, the reject ledger, the forward
     cursors — the blocks it has not read whole are listed, the calibration is cut again over
     the WHOLE scope, and the build phase opens for what the store does not hold yet.
-    `rescore` (the settings' name, E991) is that re-cut under NEW settings: the cut is taken
+    `rescore` (the settings' name, E991) is that re-cut under the settings it names, new or the
+    held ones (E996: the sweep that carries a change of the decision code): the cut is taken
     under them and records them on the generation, so every pass after it scores by them, and
     the same transaction writes `rt_rescore:<generation>` (`since` = its own stamp) and puts the
     rescore sweep's cursor at 0, so the lane re-reads every in-scope advert once. No row of
