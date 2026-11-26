@@ -1689,7 +1689,8 @@ on 2026-12-01, and until then a file of that name would override the applied set
   `IMAGE_INPUTS`, the same list, which includes the scraper files the proof imports, held to its imports by a test).
 - **The runner's CLIP vector stack is pinned (#2032):** `data/requirements-clip-runner.txt` (transformers, Pillow,
   numpy at `==`) installs in its own layer after the weights, and the offline proof asserts every version in it and
-  torch's. Pillow decodes and resizes the pixels the model reads, so a resolver drift would move every new vector
+  torch's, and that `Tagger.prepare` (a photo resized the processor's way before the processor sees it, so a chunk
+  holds inputs, never frames: #2478) gives the processor's own output to the bit. Pillow decodes and resizes the pixels the model reads, so a resolver drift would move every new vector
   under a green build. pyproject keeps its ranges (`Pillow>=10`, `transformers>=4.56,<5`), so RunPod's path is
   untouched. **A bump** (a Pillow security fix included): edit the file (torch: the Dockerfile's model layer), let
   `CI: runner image` build it, pause `clip` (`runner-pause`) before the merge deploys, merge, then file

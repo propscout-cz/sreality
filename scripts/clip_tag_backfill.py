@@ -160,9 +160,12 @@ def _vec_str(row: torch.Tensor) -> str:
 
 
 def _decode(data: bytes) -> Image.Image:
+    """The photo in RGB. An RGB file is returned as loaded: convert() would copy it, a second full frame (#2478)."""
     from PIL import Image  # base dep
 
-    return Image.open(io.BytesIO(data)).convert("RGB")
+    img = Image.open(io.BytesIO(data))
+    img.load()
+    return img if img.mode == "RGB" else img.convert("RGB")
 
 
 def _priority_region_ids(conn: psycopg.Connection, cli_region: int | None) -> list[int]:
@@ -297,14 +300,16 @@ def _await(fetch: _Fetch, deadline_s: float, clock: Callable[[], float]) -> tupl
     return got, failed
 
 
-def _decode_all(pool: ThreadPoolExecutor,
-                got: list[tuple[int, bytes]]) -> tuple[list[tuple[int, Any]], list[tuple[int, str]]]:
-    """(decoded, [(image_id, exception name)] whose bytes do not decode). A MemoryError propagates: it is the
-    process's, not the file's."""
+def _decode_all(pool: ThreadPoolExecutor, got: list[tuple[int, bytes]],
+                prepare: Callable[[Any], Any]) -> tuple[list[tuple[int, Any]], list[tuple[int, str]]]:
+    """([(image_id, model input)], [(image_id, exception name)] whose bytes make none). A photo becomes its input on
+    its decoder, so a chunk holds inputs, never frames: a full frame lives only on a decoder, at most one each, and a
+    chunk of large photos weighs what one of small ones does (#2478). A MemoryError propagates: it is the process's,
+    not the file's."""
 
     def one(item: tuple[int, bytes]) -> tuple[int, Any, str]:
         try:
-            return item[0], _decode(item[1]), ""
+            return item[0], prepare(_decode(item[1])), ""
         except MemoryError:
             raise
         except Exception as exc:  # noqa: BLE001 - judged by the caller, with its siblings
@@ -333,7 +338,7 @@ def _embed(tagger: Tagger, decoded: list[tuple[int, Any]], batch_size: int, tall
     no image of the chunk embedding alone, or more than the caps. Then nothing of the chunk may be marked: a terminal
     stamp is a photo with no CLIP evidence for ever, and autodedup reads it as moved for ever."""
     try:
-        emb = tagger.embed([d[1] for d in decoded], batch_size)
+        emb = tagger.embed_prepared([d[1] for d in decoded], batch_size)
         results = tagger.tags_from_emb(emb)
         return [(image_id, r, _vec_str(emb[k])) for k, (image_id, r) in
                 enumerate(zip([d[0] for d in decoded], results))], []
@@ -344,9 +349,9 @@ def _embed(tagger: Tagger, decoded: list[tuple[int, Any]], batch_size: int, tall
         lines.warn("CLIP_TAG embed failed batch n=%d: %s; one image at a time", len(decoded), type(exc).__name__)
     encoded: list[tuple[int, TagResult, str]] = []
     failed: list[tuple[int, str]] = []
-    for image_id, img in decoded:
+    for image_id, prepared in decoded:
         try:
-            emb = tagger.embed([img], 1)
+            emb = tagger.embed_prepared([prepared], 1)
             (result,) = tagger.tags_from_emb(emb)
             encoded.append((image_id, result, _vec_str(emb[0])))
         except MemoryError:
@@ -419,7 +424,7 @@ def _tag(conn: psycopg.Connection, r2: image_storage.R2Client, tagger: Tagger, r
                                                                whole_chunk=len(fetch.rows) >= size)
             in_hand = {row[0] for row in fetch.rows}
             try:
-                decoded, undecodable = _decode_all(decode_pool, got)
+                decoded, undecodable = _decode_all(decode_pool, got, tagger.prepare)
             except MemoryError:
                 lines.warn("CLIP_TAG decode failed chunk n=%d: MemoryError", len(got))
                 return "decode"
