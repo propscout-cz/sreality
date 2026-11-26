@@ -26,6 +26,9 @@ STUCK_RUN_GRACE_S = 600
 LOCATION_HEAVY = "location-heavy"
 WALK_PREFIX = "walk_"
 WALK_MEMORY_MB, WALK_CPUS = 512, 1
+# W4 moves the walks shortest first (PROGRAM § W4): a walk whose timeout fits this runs on the runner, the rest wait on
+# their workflows. A batch raises it and deletes the workflows it takes over; it names no portal (rule 21).
+RUNNER_WALK_TIMEOUT_S = 30 * 60
 
 
 @dataclass(frozen=True)
@@ -91,8 +94,9 @@ _FIXED: tuple[Job, ...] = (
 
 
 def _walk(source: str, portal: type, offset_s: int) -> Job:
+    host = RUNNER if portal.walk_timeout_s <= RUNNER_WALK_TIMEOUT_S else UNTIL_MOVED
     return Job(f"{WALK_PREFIX}{source}", (f"scraper.{source}_main", "--index-only"), portal.walk_every_s,
-               offset_s, portal.walk_timeout_s, WALK_MEMORY_MB, WALK_CPUS, UNTIL_MOVED)
+               offset_s, portal.walk_timeout_s, WALK_MEMORY_MB, WALK_CPUS, host)
 
 
 @functools.cache
