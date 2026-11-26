@@ -16,14 +16,16 @@ from typing import Any
 
 import pytest
 
-from autodedup import incremental, incremental_lane
+from autodedup import incremental, incremental_lane, reconcile
 from autodedup import incremental_sql as S
 from autodedup.incremental import Limits, run_pass
 from autodedup.incremental_lane import SqlStore, rescore_key, run_incremental
 from autodedup.incremental_store import CohortFacts, MemoryStore, Schedule
 from tests.autodedup import lane_world
 from tests.autodedup.fake_pg import FakePg
+from tests.autodedup.test_apply import _pair_group
 from tests.autodedup.test_incremental import _settings
+from tests.autodedup.test_one_lane import BLOCK, LaneDb
 from tests.autodedup.test_reject_ledger import (
     FLOOR,
     GEN,
@@ -214,6 +216,32 @@ def _undecided_in_a_group(conn: FakePg) -> list[tuple[int, int, bool]]:
     return out
 
 
+def _planned(conn: FakePg) -> tuple[list[list[int]], int]:
+    """The REAL reconcile's plan over the store as it stands (`reconcile.run` on the apply
+    path's fake): every advert on a property of its own, so each group is one merge that moves
+    all but its survivor, each member refreshed when the lane last refreshed it, the freshness
+    rule read against the engine instant the lane recorded. Returns the member sets it merges
+    and how many groups it holds back as stale (E960)."""
+    lane = LaneDb()
+    lane.live_scope()
+    lane.now = conn.now
+    for key, group in enumerate(_groups(conn), start=1):
+        if len(group) < 2:
+            continue
+        _pair_group(lane, key, group, [1_000_000 + i for i in group], gen=GEN)
+        for listing_id in group:
+            lane.snapshot[listing_id] = BLOCK
+            lane.read.add(listing_id)
+            lane.refreshed[listing_id] = conn.rt_fp[(GEN, listing_id)]["updated_at"]
+    since = conn.settings[incremental_lane.engine_key(GEN)]["since"]
+    out = reconcile.run(lane, GEN, [], run_id="rt:test", deadline=10 ** 9, blocks=[BLOCK],
+                        merge=lane.merge([]), clock=lambda: 0.0, now=lambda: lane.now,
+                        engine_since=str(since))
+    merged = sorted(sorted(row["member_ids"]) for row in lane.ledger
+                    if row["outcome"] == "applied")
+    return merged, int(out["counts"].get(reconcile.STALE, 0))
+
+
 def _switched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rule: bool
               ) -> tuple[FakePg, list[dict[str, Any]], list[Any]]:
     """A w31 store switched to w34 at 4 adverts a pass, with an ARRIVAL beside the window pair
@@ -231,10 +259,10 @@ def _switched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rule: bool
     conn = _built_w31(tmp_path)
     _seed(conn, tmp_path, "w34", recut="true", rescore="true")
     passes: list[dict[str, Any]] = []
-    seen: list[tuple[list[list[int]], list[tuple[int, int, bool]]]] = []
+    seen: list[Any] = []
     conn.now += timedelta(minutes=10)
     passes.append(run_incremental(lambda: conn))
-    seen.append((_groups(conn), _undecided_in_a_group(conn)))
+    seen.append((_groups(conn), _undecided_in_a_group(conn), _planned(conn)))
     _advert(conn, 4300, "remax", [0x7777_0000_1111_0001 + 13 * k for k in range(3)],
             disposition="3+kk", area_m2=64.0, usable_area=64.0, price_czk=7_100_000,
             description="Byt 3+kk s lodzii, puvodni stav, klidna ulice u parku. " * 3)
@@ -244,7 +272,7 @@ def _switched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rule: bool
             row["clip_tagged_at"] = lane_world.EXPORTED_AT
     conn.now += timedelta(minutes=10)
     passes.append(run_incremental(lambda: conn))
-    seen.append((_groups(conn), _undecided_in_a_group(conn)))
+    seen.append((_groups(conn), _undecided_in_a_group(conn), _planned(conn)))
     conn.listings[4002]["price_czk"] += 50_000
     conn.snapshots.append({"id": max(row["id"] for row in conn.snapshots) + 1,
                            "listing_id": 4002, "scraped_at": conn.now - timedelta(minutes=5),
@@ -252,7 +280,7 @@ def _switched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rule: bool
     for _ in range(60):
         conn.now += timedelta(minutes=10)
         passes.append(run_incremental(lambda: conn))
-        seen.append((_groups(conn), _undecided_in_a_group(conn)))
+        seen.append((_groups(conn), _undecided_in_a_group(conn), _planned(conn)))
         if conn.settings[rescore_key(GEN)].get("done") and not passes[-1]["counts"].get(
                 "claimed"):
             break
@@ -270,10 +298,22 @@ def test_arrivals_between_the_sweeps_passes_end_where_they_end_without_the_rule(
     # pair with a side already re-read (a merge may rest on such a side), and the rule never
     # forms a group the run without it does not hold at the same pass.
     assert len(seen) == len(plain_seen)
-    for step, ((groups, undecided), (plain_groups, _)) in enumerate(zip(seen, plain_seen)):
+    planned_any = held_any = False
+    for step, ((groups, undecided, (merged, stale)), (plain_groups, _, (plain_merged, _stale))
+               ) in enumerate(zip(seen, plain_seen)):
         assert all(both for _lo, _hi, both in undecided), (step, undecided)
         for group in groups:
             assert any(set(group) <= set(other) for other in plain_groups), (step, group)
+        # THE PLAN: a merge the reconcile makes mid-sweep holds no undecided pair, and it is a
+        # merge (or part of one) the run without the rule holds at the same pass.
+        open_pairs = {(lo, hi) for lo, hi, _both in undecided}
+        for members in merged:
+            assert not [pair for pair in open_pairs if set(pair) <= set(members)], (step, members)
+            assert any(set(members) <= set(other) for other in plain_groups), (step, members)
+        planned_any = planned_any or bool(merged)
+        held_any = held_any or stale > 0
+    assert planned_any, "the reconcile merged a group during the sweep"
+    assert held_any, "and held back a group whose mover the sweep had not re-read yet"
     assert sum(p["counts"]["sweep_owed"] for p in passes) > 0, "the rule left pairs to the sweep"
     assert sum(p["counts"]["sweep_owed"] for p in plain_passes) == 0
     assert ruled.settings[rescore_key(GEN)]["done"] is True
