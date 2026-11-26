@@ -1641,10 +1641,12 @@ def run_pass(
     decide -= skipped
     result.ledger_skipped = len(skipped)
     # E998: while a rescore sweep runs, a pair nobody has decided and neither side of which
-    # this pass refreshed is the sweep's: it still owes one of the sides a re-read, and a
-    # refreshed side's pairs are all decided (never asked above, never left here). Without
-    # this every neighbour of a claimed advert pays the new settings' retrieval at once: the
-    # w34 switch asked one pass of 8 adverts for 74k-150k such pairs.
+    # this pass refreshed is the sweep's when it still owes BOTH sides a re-read: the first one
+    # it refreshes decides the pair (a refreshed side's pairs are never asked above and never
+    # left here). Without this every neighbour of a claimed advert pays the new settings'
+    # retrieval at once: the w34 switch asked one pass of 8 adverts for 74k-150k such pairs.
+    # With one side already re-read the pair is decided now, as ever: a merge may rest on
+    # that side, and its cell must hold every pair it wants.
     owed = store.owed([pair for pair in asked if pair not in skipped])
     decide -= owed
     result.sweep_owed = len(owed)

@@ -1335,14 +1335,17 @@ on conflict (generation, listing_lo, listing_hi) do update set
     decided_at = now()
 """
 
-# E998: which of these pairs the rescore sweep still owes a decision: a side the sweep has not
-# re-read yet, by `RT_RESCORE_SQL`'s own test (not refreshed since the switch, and in scope).
-# Its re-claim refreshes that side, and a refreshed side's pairs are all decided.
+# E998: which of these pairs the rescore sweep still owes a decision: BOTH sides are adverts
+# the sweep has not re-read yet, by `RT_RESCORE_SQL`'s own test (not refreshed since the switch,
+# and in scope). The first of the two it re-claims is refreshed, and a refreshed side's pairs
+# are all decided. One owed side is not enough: the other was refreshed under the new settings
+# and decided every pair it then wanted, so the pair is new work of THIS pass (E71), and a
+# merge may rest on that other side.
 RT_SWEEP_OWED_SQL = """
 select k.lo, k.hi
   from unnest(%(los)s::bigint[], %(his)s::bigint[]) as k(lo, hi)
- where exists (
-       select 1
+ where 2 = (
+       select count(*)
          from autodedup.rt_fp f
          left join public.listing_location ll
                 on ll.listing_id = f.listing_id

@@ -1262,7 +1262,7 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
                     and _in_scope(db, listing_id, p))
 
         return [(int(lo), int(hi)) for lo, hi in zip(p["los"], p["his"])
-                if owed(int(lo)) or owed(int(hi))]
+                if owed(int(lo)) and owed(int(hi))]
     if sql == S.RT_REVIVED_SQL:
         slice_ids = sorted(i for g, i in db.rt_fp
                            if g == gen and not db.rt_fp[(g, i)]["is_active"]

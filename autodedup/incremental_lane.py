@@ -3302,6 +3302,20 @@ def _measure_rate(claimed: int, elapsed_s: float, previous: float,
     return round(blended, 6), False
 
 
+def _sweep_owes(rescore: Any, engine_since: str, scope: Scope) -> dict[str, Any] | None:
+    """E998: what `SqlStore.owed` reads while a rescore sweep runs, None when none does. An
+    advert is owed a re-read only if it was refreshed before the switch AND before the engine
+    the lane runs now, so an owed advert is always one a merge may not rest on (E960): after a
+    switch of settings the engine moves after `since` and the bound is `since`; under a sweep
+    ordered on the held settings (a change of the decision code) the engine moved first, and
+    an advert refreshed since then is not owed."""
+    if not (isinstance(rescore, Mapping) and rescore.get("since") and not rescore.get("done")):
+        return None
+    since = min(datetime.fromisoformat(str(rescore["since"])),
+                datetime.fromisoformat(str(engine_since)))
+    return {"since": since.isoformat(), **scope.params()}
+
+
 def _engine_since(conn: Any, generation: str, recorded: Any, digest: str) -> str:
     """Since when the lane has run under `digest` (E960): the recorded instant while the digest
     is the recorded one, else the database's now, written in a commit of its own (the clock
@@ -3707,15 +3721,13 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                     "generation": generation, "predecessor_released": predecessor,
                     "claim_cap": cap, "spent_usd": 0.0, **pass_memory()}
         rescore = control.get(rescore_key(generation))
-        store = SqlStore(conn, generation, calibration_digest=calibration.digest(),
-                         store_floor=settings.store_floor, model_version=model.version,
-                         sweep=({"since": rescore["since"], **scope.params()}
-                                if isinstance(rescore, Mapping) and rescore.get("since")
-                                and not rescore.get("done") else None))
-        facts = SqlFacts(conn, deadline=deadline, stopping=stopping)
         engine = engine_digest(settings, model)
         engine_since = _engine_since(conn, generation, control.get(engine_key(generation)),
                                      engine)
+        store = SqlStore(conn, generation, calibration_digest=calibration.digest(),
+                         store_floor=settings.store_floor, model_version=model.version,
+                         sweep=_sweep_owes(rescore, engine_since, scope))
+        facts = SqlFacts(conn, deadline=deadline, stopping=stopping)
         handed = reconcile.handed_groups(control.get(reconcile.redecide_key(generation)))
         stale_claims, stale_waiting, stale_budget, tried = _stale_claims(
             conn, generation, control, handed, engine_since, int(cap["cap"]))
