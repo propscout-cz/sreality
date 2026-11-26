@@ -111,7 +111,7 @@ The runner's own stop decides before the exit code.
 
 A DB-heavy job's backoff, retry and lost waits go to its own hour (the next day at most), so **the job itself outwaits
 a database restart** (#2660, ruling C): its first connect and every reconnect pass `db.JOB_PATIENCE`, 3 waits of 60 s,
-and an attempt counts only once `SELECT 1` answers (a pooler that cannot reach the database fails it); a database
+and with `probe` an attempt counts only once `SELECT 1` answers (a pooler that cannot reach the database fails it); a database
 down longer is an incident, and the day's Watch its signal. A census in `tests/scraper/test_db_connect_retry.py` holds
 every DB-heavy entry to it. **No DB-heavy job starts
 while another one's run is open** (#2027; `job_lease`'s `due`/`claim` with `PgLedger.heavy`, main's whole registry, so

@@ -8,9 +8,9 @@ missing SUPABASE_DB_URL, a bug) still fails fast.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import pathlib
-import re
 import time
 from typing import Any
 
@@ -182,20 +182,60 @@ def test_a_plain_connect_does_not_probe(monkeypatch):
     assert conns[0].probes == 0
 
 
-# db.connect(...), connect(...) or connect_session(...), never psycopg.connect or a comment's mention.
-_CONNECT_CALL = re.compile(r"(?<![.\w])(?:db\.)?connect(?:_session)?\(([^()]*)\)")
+def test_a_resilient_step_rides_out_a_restart_through_its_patient_reconnect(monkeypatch):
+    """The 11-11 path: a two-attempt step's connection dies in the restart; its reconnect reaches a pooler that cannot
+    reach the database yet, waits a minute, and the replayed step completes on the connection that answers."""
+    conns, fake = _pooler(False, True)
+    sleeps: list[float] = []
+    monkeypatch.setattr(psycopg, "connect", fake)
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    monkeypatch.setattr(db.random, "random", lambda: 0.0)
+    monkeypatch.setenv("SUPABASE_DB_URL", "postgres://pooler:6543/db")
+    dying = _Conn(answers=True)
+    dying.broken = False
+
+    def attribute(conn: Any) -> str:
+        if conn is dying:
+            dying.broken = True
+            raise psycopg.errors.AdminShutdown("terminating connection due to administrator command")
+        return "attributed"
+
+    result, live = db.run_resilient(dying, attribute, reconnect=lambda: db.connect(**db.JOB_PATIENCE), attempts=2)
+
+    assert (result, live) == ("attributed", conns[1])
+    assert sleeps == [db._RESILIENT_BASE_DELAY, db.JOB_PATIENCE["retry_delay"]]
 
 
-def _unpatient_connects(module: str) -> list[str]:
-    lines = pathlib.Path(importlib.util.find_spec(module).origin).read_text().splitlines()
-    code = "\n".join(line.split("#", 1)[0] for line in lines)
-    return [m.group(0) for m in _CONNECT_CALL.finditer(code) if "JOB_PATIENCE" not in m.group(1)]
+# Modules a DB-heavy job connects through besides its own entrypoint.
+_JOB_CONNECT_MODULES = ("location_data.loader_db", "location_data.ruian_boundaries")
+
+
+def connect_problems(source: str) -> list[str]:
+    """Every connect/connect_session call in `source` (db.*, psycopg.*, bare) not given **JOB_PATIENCE."""
+    problems: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+        if name in ("connect", "connect_session") and not any(
+                kw.arg is None and "JOB_PATIENCE" in ast.unparse(kw.value) for kw in node.keywords):
+            problems.append(f"line {node.lineno}: {ast.unparse(node)}")
+    return problems
 
 
 def test_every_db_heavy_runner_job_connects_with_the_jobs_patience():
     """#2660: a DB-heavy job's failure retries a day later (its own hour), so each one's first connect and every
-    reconnect outwait a restart: db.JOB_PATIENCE, or loader_db.open_loader_connection, which passes it."""
-    heavy = sorted({j.argv[0] for j in jobs.runner_jobs() if j.db_heavy})
-    assert heavy, "no DB-heavy runner job: the census reads nothing"
-    assert {m: _unpatient_connects(m) for m in heavy} == {m: [] for m in heavy}
-    assert _unpatient_connects("location_data.loader_db") == []
+    reconnect outwait a restart: db.JOB_PATIENCE, directly or through loader_db.open_loader_connection."""
+    modules = sorted({j.argv[0] for j in jobs.runner_jobs() if j.db_heavy}) + list(_JOB_CONNECT_MODULES)
+    assert len(modules) > len(_JOB_CONNECT_MODULES), "no DB-heavy runner job: the census reads nothing"
+    found = {m: connect_problems(pathlib.Path(importlib.util.find_spec(m).origin).read_text()) for m in modules}
+    assert found == {m: [] for m in modules}
+
+
+def test_the_connect_census_fires():
+    assert connect_problems("db.connect(url)") == ["line 1: db.connect(url)"]
+    assert connect_problems("conn = connect(database_url())")
+    assert connect_problems("psycopg.connect(url)")
+    assert connect_problems("db.connect_session(url, attempts=4)")
+    assert connect_problems("db.connect(url, **db.JOB_PATIENCE)\nconnect(**JOB_PATIENCE)  # db.connect(x)") == []
