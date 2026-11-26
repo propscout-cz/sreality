@@ -34,7 +34,6 @@ from autodedup.incremental import (
     _fill,
     _Working,
     decision_digest,
-    engine_digest,
     fp_digest,
     guard_row,
     retrieve,
@@ -104,8 +103,7 @@ class _Engine:
             limits: Limits | None = None, redecide: bool = False
             ) -> tuple[PassResult, set[int]]:
         store = SqlStore(self.db, GEN, store_floor=settings.store_floor,
-                         calibration_digest=calibration.digest(),
-                         engine_digest=engine_digest(settings, MODEL))
+                         calibration_digest=calibration.digest())
         facts = _Recording(ds)
         with monkeypatch.context() as patch:
             if self.everything:
@@ -193,9 +191,7 @@ def test_the_narrow_read_reaches_the_full_reads_state_after_every_pass(
         out, asked = disturb(target, mutate)
         assert out.ledger_skipped > 0 and out.dirty > len(asked)
     calibration = replace(calibration, corpus_docs=calibration.corpus_docs + 1)
-    out, _asked = disturb(None, None)
-    assert out.ledger_skipped == 0, "a re-cut re-decides every wanted reject, as before"
-    assert disturb(None, None)[0].ledger_skipped > 0
+    assert disturb(None, None)[0].ledger_skipped > 0, "a re-cut voids no reject (E996)"
 
 
 def test_the_neighbourhood_read_in_slices_retrieves_what_one_read_does(
@@ -666,17 +662,11 @@ def test_a_pass_stamps_its_re_claims_tried_only_once_it_ends_on_its_own_terms(
         "the same groups lead, at half the budget")
 
 
-@pytest.mark.parametrize("why", ["scope_closed", "ledger_inert"])
 def test_the_re_claim_waits_while_no_merge_can_follow_it(
-        why: str, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """No re-claim while the apply scope is closed (the reconcile then also empties the queue)
-    or while the reject ledger holds no row under the store's key (after a deploy that moved
-    it, a re-claim would re-score every neighbour's reject)."""
+        tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No re-claim while the apply scope is closed (the reconcile then also empties the queue)."""
     from autodedup import incremental_lane, reconcile
 
-    if why == "ledger_inert":
-        _open_scope(monkeypatch)
-        monkeypatch.setattr(incremental_lane.SqlStore, "ledger_keyed", lambda self: False)
     world = _built_world(tmp_path)
     ids = sorted(i for (_g, i) in world.rt_fp)
     for row in world.rt_fp.values():
@@ -685,9 +675,8 @@ def test_the_re_claim_waits_while_no_merge_can_follow_it(
     out = incremental_lane.run_incremental(lambda: world)
     assert not out["feeds"].get("stale")
     assert reconcile.tried_key(GEN) not in world.settings, "nothing stamped tried"
-    if why == "scope_closed":
-        assert out["reconcile"]["skipped"] == "scope_closed"
-        assert world.settings[reconcile.redecide_key(GEN)] == [], "the queue goes with it"
+    assert out["reconcile"]["skipped"] == "scope_closed"
+    assert world.settings[reconcile.redecide_key(GEN)] == [], "the queue goes with it"
 
 
 def _seeded_reject_world_for_floor(tmp_path):
@@ -702,38 +691,6 @@ def _seeded_reject_world_for_floor(tmp_path):
 
 
 # ------------------------------------------------------------- rows written before migration 604
-
-
-def test_a_row_without_its_digest_is_read_once_for_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every row of a store built before 604 carries no decision digest: the first pass whose
-    ledger lookup needs one reads that side, writes its digest and answers what the full read
-    answers; the next pass reads none for it."""
-    ds = _mixed_dataset()
-    settings = _settings()
-    calibration = _calibration(ds, settings)
-    order = arrival_order(ds)
-    full, narrow = _Engine(order, True), _Engine(order, False)
-    while not narrow.work.exhausted():
-        _lockstep(full, narrow, ds, settings, calibration, monkeypatch)
-    for row in narrow.db.rt_fp.values():
-        row["dd"] = None
-    randoms = sorted(i for i in ds.listings if i >= 7000)
-    for step, trigger in enumerate((randoms[0], randoms[0], randoms[1])):
-        ds.listings[trigger].price = (ds.listings[trigger].price or 0) + 10_000
-        ref, _ = full.run(ds, settings, calibration, monkeypatch, [trigger])
-        out, asked = narrow.run(ds, settings, calibration, monkeypatch, [trigger])
-        state, expected = _state(narrow.db), _state(full.db)
-        assert {k: v for k, v in state.items() if k != "rt_fp"} == {
-            k: v for k, v in expected.items() if k != "rt_fp"}
-        assert out.ledger_skipped == ref.ledger_skipped > 0
-        stamped = {i for (_g, i), row in narrow.db.rt_fp.items() if row["dd"]}
-        for listing_id in stamped:
-            assert narrow.db.rt_fp[(GEN, listing_id)]["dd"] == full.db.rt_fp[
-                (GEN, listing_id)]["dd"]
-        if step == 0:
-            assert out.reads["digest"] > 0 and stamped
-        if step == 1:
-            assert out.reads.get("digest", 0) == 0, "what the first pass read is written"
 
 
 def test_a_database_without_604_is_store_absent(tmp_path) -> None:
@@ -758,7 +715,7 @@ def test_a_database_without_604_is_store_absent(tmp_path) -> None:
 
 def test_a_digest_written_without_a_refresh_moves_nothing_else() -> None:
     db = FakePg()
-    sql = SqlStore(db, GEN, calibration_digest="c", engine_digest="e")
+    sql = SqlStore(db, GEN, calibration_digest="c")
     twin = MemoryStore()
     for store in (sql, twin):
         store.put_listing(1, incremental.FpRow(incremental.GuardRow(1, "byt", "prodej", 50.0,
@@ -772,7 +729,7 @@ def test_a_digest_written_without_a_refresh_moves_nothing_else() -> None:
     assert db.statements[statements:] == [S.RT_FP_DD_SQL]
     assert db.rt_fp[(GEN, 1)] == {**before, "dd": "new"} and (GEN, 2) not in db.rt_fp
     assert sql.rows([1])[1] == twin.rows([1])[1] == replace(twin.rows([1])[1], dd="new")
-    assert SqlStore(db, GEN, calibration_digest="c", engine_digest="e").rows([1])[1].dd == "new"
+    assert SqlStore(db, GEN, calibration_digest="c").rows([1])[1].dd == "new"
 
 
 # ------------------------------------------------------------------------- what is named

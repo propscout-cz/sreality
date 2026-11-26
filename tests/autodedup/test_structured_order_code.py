@@ -317,7 +317,7 @@ def test_the_sql_store_reads_a_codes_carriers_up_to_one_past_the_cap() -> None:
     db.rt_fp[("rt", 20)] = {"disposition": "3+kk", "area_m2": 80.0, "ref_codes": ["112233"]}
     db.rt_fp[("other", 21)] = {"disposition": "1+kk", "area_m2": 30.0, "ref_codes": ["112233"]}
     db.rt_fp[("rt", 22)] = {"disposition": "1+kk", "area_m2": 30.0, "ref_codes": None}
-    store = SqlStore(db, "rt", calibration_digest="c", engine_digest="e")
+    store = SqlStore(db, "rt", calibration_digest="c")
     found = store.code_carriers(["112233", "556677", "999999"])
     assert found == {"112233": [("3+kk", 80.0)],
                      "556677": [("2+kk", 61.0)] * CODE_CARRIER_READ}

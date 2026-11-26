@@ -8,7 +8,7 @@ to where a secret lives or who reads it.
 The Railway services sit in three separate projects: **API** (`api/`, uvicorn),
 **worker** (`scraper/realtime_worker.py`, same image) and **SPA** (`frontend/`, Caddy; it holds only the
 public `VITE_*` build values). The worker's project also runs **job-runner** (`scraper/job_runner.py`, same image,
-#2025), which stores no secret: its `SUPABASE_DB_URL`, its `SUPABASE_DB_SESSION_URL` (#2604) and its four `R2_*` are references to the worker's
+#2025), which stores no secret: its `SUPABASE_DB_URL`, its `SUPABASE_DB_SESSION_URL` (#2604), its four `R2_*` and its `SCRAPER_PROXY_URL` (#2030) are references to the worker's
 (`sreality.env.<NAME>`; the R2 set by reference since #2032), so a worker rotation changes them too and redeploys it
 after the worker; its other two variables are `EXTRAS` and `HF_HUB_OFFLINE` (`1`). "GH" is a GitHub Actions repository secret. Railway's variable names per
 service come from the 2026-10-25 audit (API 20, worker 14, SPA 3); the operator confirms each on the
@@ -85,10 +85,11 @@ the old key. The account also holds other projects' domains and keys: leave thos
 
 - Rotated 2026-10-22, before the M0 rotation: `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `QWEN_API_KEY`,
   `RUNPOD_API_KEY`, the Cloudflare API token. `VAPID_PRIVATE_KEY` was created after the incident and stays.
-- `SCRAPER_PROXY_URL` (GH + worker; the DataImpulse residential proxy, `http://<login>:<password>@gw.dataimpulse.com:823`,
+- `SCRAPER_PROXY_URL` (GH + worker; job-runner by reference since #2030; the DataImpulse residential proxy, `http://<login>:<password>@gw.dataimpulse.com:823`,
   read through `scraper/portal_base.py` `PROXY_ENV` by idnes, mmreality, ceskereality): rotated 2026-10-27 by operator
   ruling. The plan page's ↻ regenerates the password with no overlap, so take the autodedup brake first, then
-  regenerate, test (`curl -K -` with the proxy on stdin → CONNECT 200), stage + deploy the worker, `gh secret set`.
+  regenerate, test (`curl -K -` with the proxy on stdin → CONNECT 200), stage + deploy the worker (job-runner redeploys
+  after it), `gh secret set`.
   A rejected proxy login is a `ProxyError`, retried, never a gone signal.
 - GitHub-only, so outside Railway's incident: `HF_TOKEN`, `SREALITY_LOGIN_EMAIL` / `SREALITY_LOGIN_PASSWORD` /
   `SREALITY_SESSION_COOKIE`.

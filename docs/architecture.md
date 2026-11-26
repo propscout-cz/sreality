@@ -1684,8 +1684,9 @@ on 2026-12-01, and until then a file of that name would override the applied set
   - `BACKEND_WATCH`: every repo tree the Dockerfile COPYs (not `COPY --from=` a stage) plus `/Dockerfile` and
     `/.dockerignore`, pinned to the COPY lines by a census, so a move PR never forgets a tree; `.railway/` stays out;
   - variables `EXTRAS`, `HF_HUB_OFFLINE: "1"` (no runtime download), `SUPABASE_DB_URL: sreality.env.SUPABASE_DB_URL`,
-    `SUPABASE_DB_SESSION_URL` likewise (#2604: `ruian_buildings` refuses the transaction pooler) and the R2 set, by reference (#2032: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`,
-    each `sreality.env.<NAME>`), references to the worker's variables (`${{sreality.NAME}}`, ruling #2025-R3): one
+    `SUPABASE_DB_SESSION_URL` likewise (#2604: `ruian_buildings` refuses the transaction pooler), the R2 set, by reference (#2032: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`,
+    each `sreality.env.<NAME>`) and `SCRAPER_PROXY_URL` (#2030: a proxied portal's walk; `tests/scraper/test_proxy_wiring.py`
+    refuses one on the runner without it), references to the worker's variables (`${{sreality.NAME}}`, ruling #2025-R3): one
     stored value each, so a rotation changes one place, and applying the worker's staged change redeploys job-runner
     after it (Railway's deployment dependencies), cutting any run in flight (closed `interrupted`, re-claimed at once).
     The secrets inventory's rotation steps say so and check its Health cells. Later moves add their names in their
@@ -2861,7 +2862,7 @@ renumber.** Navigate by area:
     claim cap a death halves (E948), on its first attempt, each group at most once in 6 h
     (stamped once the pass carrying it commits, is refused, hits its deadline or raises; a
     shutdown, a lost lease or a kill stamps nothing, E973), and none while the apply scope is
-    closed or the reject ledger is inert. It
+    closed. It
     reconciles only a generation a
     seed of this version built (`rt_seed_version:rt` = `incremental.SEED_VERSION`) — through its
     build phase too (E964): a group waits only while an advert its merge would move (a member, or
