@@ -644,6 +644,14 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
                 f"rt_reject_ledger columns are NOT NULL: {row}")
             db.reject_ledger[key] = row
         return []
+    if sql == S.RT_REJECT_LEDGER_SALVAGE_SQL:
+        assert "not exists ( select 1 from autodedup.pairs p" in " ".join(sql.split())
+        for lo, hi, dd_lo, dd_hi in zip(p["los"], p["his"], p["dd_los"], p["dd_his"]):
+            key = (gen, int(lo), int(hi))
+            assert key[1] < key[2] and dd_lo and dd_hi
+            if key not in db.pairs:
+                db.reject_ledger[key] = {"dd_lo": dd_lo, "dd_hi": dd_hi, "decided_at": db.now}
+        return []
     if sql == S.RT_REJECT_LEDGER_DELETE_SQL:
         for lo, hi in zip(p["los"], p["his"]):
             db.reject_ledger.pop((gen, int(lo), int(hi)), None)
