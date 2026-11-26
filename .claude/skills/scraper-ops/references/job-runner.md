@@ -125,7 +125,8 @@ already due counts at its loss as having taken its slot, so its loss moves `due_
 `exit_code` is signed: −9 / −15 = killed by that signal; 143 = the child exited after its own SIGTERM handling.
 `peak_rss_mb` is the larger of the leader's `VmHWM` and its process tree's summed `VmRSS`: the job's group and every
 descendant in any group, so a browser in a group of its own counts (#2689; pool workers included; shared pages count
-twice). `last_error` on `scheduled_jobs` names the cause in `settle`'s order (none for an `ok` run, a
+twice). The leader is a child subreaper, so an orphan stays in its tree while it lives; one still running when the
+leader exits re-parents to the runner and drops out. `last_error` on `scheduled_jobs` names the cause in `settle`'s order (none for an `ok` run, a
 deploy or fence it outlived included; `killed by signal N` for a signal with no name) and never carries log text. **Never paste
 `log_tail` anywhere public: it can hold a connection string.**
 

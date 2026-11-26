@@ -708,7 +708,7 @@ def _stat_line(pid: int, ppid: int, pgrp: int, rss_pages: int, state: str = "S")
     return f"{pid} (job) {' '.join(fields)}\n"
 
 
-def test_a_jobs_family_is_its_group_and_every_descendant_in_any_group(tmp_path: Path) -> None:
+def test_a_jobs_process_tree_is_its_group_and_every_descendant_in_any_group(tmp_path: Path) -> None:
     """#2689: Playwright's chromium (200) and its renderer (201) sit in a group of their own under the job's driver
     (101); the job's memory, its stragglers and its kill reach them, and never an unrelated process (300)."""
     rows = [(100, 1, 100, 1000, "S"), (101, 100, 100, 2000, "S"), (200, 101, 200, 3000, "S"),
@@ -718,7 +718,7 @@ def test_a_jobs_family_is_its_group_and_every_descendant_in_any_group(tmp_path: 
         (tmp_path / str(pid) / "stat").write_text(_stat_line(pid, ppid, pgrp, rss, state))
     proc = str(tmp_path)
 
-    assert sorted(pid for pid, *_ in job_process._family(100, proc)) == [100, 101, 200, 201, 202]
+    assert sorted(p.pid for p in job_process._process_tree(100, proc)) == [100, 101, 200, 201, 202]
     page_kb = os.sysconf("SC_PAGE_SIZE") // 1024
     assert job_process.process_memory_mb(100, proc) == -(-(10_000 * page_kb) // 1024)
     assert job_process.stragglers(100, proc) == 4
@@ -732,20 +732,49 @@ def test_a_browser_in_a_session_of_its_own_is_counted_and_killed_with_its_job() 
     """#2689, with real processes: a grandchild that setsid()s (as chromium) is in the job's memory and its kill."""
     child = job_process.spawn_process([sys.executable, "-m", CHILD, "--detached-grandchild-mb", "96"],
                                       dict(os.environ), "browser#1", lambda _c: None)
-    detached = None
     try:
         _wait_for(lambda: "ready" in child.tail())
         [detached] = [int(line.split()[1]) for line in child.tail().splitlines() if line.startswith("detached ")]
-        assert os.getpgid(detached) != child.pid, "the grandchild left the job's group"
-        _wait_for(lambda: (job_process.process_memory_mb(child.pid) or 0) >= 96)  # the grandchild allocates late
+        _wait_for(lambda: os.getpgid(detached) != child.pid)  # its setsid() races the parent's prints
+        _wait_for(lambda: (job_process.process_memory_mb(child.pid) or 0) >= 96)  # and it allocates late
 
         job_process._kill_tree(child.pid)
         _wait_for(lambda: _state(detached) in (None, "Z"))
         child.reap()
     finally:
-        if detached is not None and _state(detached) not in (None, "Z"):
-            os.kill(detached, signal.SIGKILL)
-        _kill_quietly(child.pid)
+        job_process._kill_tree(child.pid)
+
+
+def test_a_runner_job_whose_browser_runs_in_its_own_session_records_it_and_kills_it_at_the_timeout() -> None:
+    """#2689's acceptance through the runner: `peak_rss_mb` includes the setsid() grandchild, and the timeout's kill
+    leaves it dead."""
+    import time
+
+    argv = (CHILD, "--ignore-term", "--detached-grandchild-mb", "96")
+    rig = _real_rig([_job("browser", argv=argv, timeout_s=1)])
+    pgid = detached = None
+    try:
+        rig.runner.tick()
+        child = _children(rig)["browser"]
+        pgid = child.pid
+        _wait_for(lambda: "ready" in child.tail())
+        [detached] = [int(line.split()[1]) for line in child.tail().splitlines() if line.startswith("detached ")]
+        _wait_for(lambda: (job_process.process_memory_mb(pgid) or 0) >= 96)
+
+        rig.guard.run_once(rig.clock())  # a sample while both are alive
+        rig.clock.advance(1.5)
+        rig.guard.run_once(rig.clock())
+        rig.clock.advance(job_process.GRACE_S)
+        rig.guard.run_once(rig.clock())
+        time.sleep(0.2)
+        _wait_for(lambda: bool(rig.releases()), tick=rig.runner.tick)
+        [done] = rig.releases()
+        assert done.outcome == "timeout"
+        assert done.peak_rss_mb is not None and done.peak_rss_mb >= 96, done.peak_rss_mb
+        _wait_for(lambda: _state(detached) in (None, "Z"))
+    finally:
+        if pgid is not None:
+            job_process._kill_tree(pgid)
 
 
 def test_a_real_child_that_ignores_sigterm_is_killed_after_the_grace_and_recorded_whole() -> None:
@@ -765,7 +794,7 @@ def test_a_real_child_that_ignores_sigterm_is_killed_after_the_grace_and_recorde
             assert int(its.read()) == min(1000, int(mine.read()) + 500), "the shim raised the job's OOM score"
         with open(f"/proc/{pgid}/environ", "rb") as environ:
             assert b"JOB_CPUS=2" in environ.read().split(b"\0")
-        [grandchild] = [pid for pid, *_ in job_process._family(pgid) if pid != pgid]
+        [grandchild] = [p.pid for p in job_process._process_tree(pgid) if p.pid != pgid]
 
         rig.clock.advance(1.5)
         rig.guard.run_once(rig.clock())
