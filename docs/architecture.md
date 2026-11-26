@@ -409,8 +409,8 @@ portal put an Anubis v1.28.2 JS proof-of-work interstitial in front of every pag
 cards, and each page read as EMPTY — an our-stop, so walks never reached the portal's end and
 stopped nominating (pages/walk fell ~2,400 → ~140 the day the wall went up; #2479). The one seam is
 `BasePortalClient._send`, which `CeskerealityClient` overrides to drive `scraper/browser_fetch.py`
-(Python Playwright, imported lazily, the `browser` pyproject extra, chromium baked into the scraper
-image by `EXTRAS=api,browser`): one chromium context per phase solves the interstitial ONCE and
+(Python Playwright, imported lazily, the `browser` pyproject extra, chromium baked into each image
+whose `EXTRAS` names `browser`: the worker's, and the job runner's since #2031): one chromium context per phase solves the interstitial ONCE and
 carries its ~7-day cookie, pinned to ONE residential exit IP (the gateway rotates per request and a
 rotating IP re-challenges every page). **That exit IP is RETIRED every 250 pages, and after 2
 consecutive 403s** (`rotate()`: a new sticky session, and the browser goes with it, since the
@@ -1653,8 +1653,8 @@ on 2026-12-01, and until then a file of that name would override the applied set
   `tests/fixtures/railway_plans/` is synthetic until #2025 pins it to a real plan's change list (names only).
 - **Every variable NAME is declared,** a secret as `preserve()` (values stay in Railway) or as a reference to another
   service's (the runner's `SUPABASE_DB_URL`), a plain value written out: add a name in the same PR as the secret;
-  removing one is a destructive delete the apply asks to confirm. `EXTRAS` (API and worker: `api`; the runner:
-  `api,clip,geo`) is the root Dockerfile's build argument: a service variable reaches the ARG of its name, and the
+  removing one is a destructive delete the apply asks to confirm. `EXTRAS` (API: `api`; worker: `api,browser`; the
+  runner: `api,browser,clip,geo`) is the root Dockerfile's build argument: a service variable reaches the ARG of its name, and the
   build log echoes it.
 - **Domains stay dashboard-owned, custom and generated (`*.up.railway.app`)**: no plan diffs either, and IaC cannot
   register one. The file names the custom domains that exist (`api.`, `app.` and, since 2026-10-31, the bare `propscout.cz`: the privacy page and a redirect to the app since the landing came down 2026-11-09), so removing one of those also takes it out of the
@@ -1711,6 +1711,16 @@ on 2026-12-01, and until then a file of that name would override the applied set
   within fp32 tolerance, read-only) and lift the pause on a pass, so no vector of the new stack lands unproven.
   The `api-image` job of the same workflow builds `EXTRAS=api` at the PR's base and head and fails if the head can
   import torch or transformers or holds a Hugging Face cache, so the API and worker images stay clip-free.
+- **The runner image bakes chromium too (#2031):** its `EXTRAS` name `browser`, so the Dockerfile's browser layer
+  (the worker's, #2529) runs in it, for the ceskereality walk W4 moves there. `CI: runner image` runs
+  `scripts/browser_image_check.py` in each finished browser image (worker and runner) with no network: chromium
+  launches, serves a loopback page and closes through `scraper/browser_fetch.py`, and as PID 1 the check holds no child
+  after the close; in the runner image it then loads one exit IP's session (`PAGES_PER_EXIT_IP`, 250) of a full-size
+  ceskereality page and prints the memory held, the walk's sizing (information, not a verdict). A census holds every
+  `EXTRAS` a service declares to one CI build, and each one naming `browser` to that check. Playwright launches
+  chromium as its own process group, so a job's `peak_rss_mb` never counts it and the runner's group SIGKILL never
+  reaches it: chromium exits once its driver's pipe closes (a SIGKILL of a walk's group took it down within 5 s,
+  2026-11-26), and its exited helpers go to PID 1, the runner, which reaps them.
 - **The runner is cut only by a new deployment:** a Redeploy of the ACTIVE deployment (same image and configuration)
   or Deploy Latest Commit. Restart restarts the process inside its container, and no doc says it honours
   `drainingSeconds`, so it is never a runner procedure. **Never boot an older runner image:** no dashboard Rollback,

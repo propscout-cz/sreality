@@ -111,7 +111,8 @@ production.
   identical replicas**, 8 GB / 4 vCPU each,
   `restartPolicy ALWAYS`, built from the same Dockerfile, whose `ARG EXTRAS` shipped with
   #2060 (no default; unset installs `api`): the runner sets `EXTRAS: "api,clip,geo"` in its `.railway/railway.ts`
-  env, so CPU torch, the pinned CLIP weights (revision 3d74acf9) and the geo wheels live in this image only.
+  env (`api,browser,clip,geo` since #2031), so CPU torch, the pinned CLIP weights (revision 3d74acf9) and the geo
+  wheels live in this image only.
   `watchPatterns` cover the trees jobs import. **As built (#2025):** service `job-runner` in the realtime-worker
   project (no new project); `drainingSeconds` 250, outlasting the runner's own 180 s drain by its last tick and
   forget (243 s); 8 GB is 8e9 B = 7,629 MiB (`jobs.REPLICA_MEMORY_MB`); the watch patterns are every tree the
@@ -336,6 +337,15 @@ order after it (realitymix before bazos) are not one cutoff, and ceskereality ne
 lacks: later batches need a ruling on their order or the image. GitHub's throttled cron fired these walks
 about twice a day (14 runs each in those 7 days), the runner's grid four times, so the gate reads nominations per day
 beside per cycle (#2029's gate ticket).
+**The runner image, before batch 3 (#2031):** the runner's `EXTRAS` gain `browser` (`api,browser,clip,geo`), so its
+image bakes chromium as the worker's does, and `CI: runner image` launches it through `scraper/browser_fetch.py` in the
+finished image with no network; no walk moves. The ceskereality walk still needs `SCRAPER_PROXY_URL` by reference (a
+datacenter IP is refused before the interstitial) and a memory value that fits it: one exit IP's 250-page browser
+session of a full-size page held ~1,260 MB PSS (Python 231, Playwright's driver 252, chromium 780; 360 after one page;
+the image's Playwright 1.65.2 and chromium 159, 2026-11-26) against `WALK_MEMORY_MB` 512 and 35 MB of co-tenancy
+headroom, and a job's `peak_rss_mb` never counts chromium (its own process group). Its 31 failed GitHub runs in 30 days
+were all the Anubis wall (11-02 to 11-16, `CHECK empty_walk`: 0 ads from ~165 pages), none in the 22 since #2530.
+realitymix needs neither the proxy nor the browser; idnes prefers the proxy, bazos neither.
 **Gate per walk (7 days):** pages and reached-end per cycle, nominations per day (a moved walk keeps its declared
 cadence), ± 10 %; 403/429 share from
 Railway ≤ the GitHub baseline; 0 `ended_at NULL` after ≥ 5 mid-walk deploys; proxy GB/day within its band;
