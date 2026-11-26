@@ -344,7 +344,7 @@ delisting and coverage cells unchanged; aggregate peak ≤ 70 % of a replica.
 ### W5 — CLIP, the registry load, the GitHub tick, the leftovers
 `clip` every 15 min in the runner image (one unsharded run, exit 75 for backlogs; `clip_tag.yml`, the shard
 plumbing and the weights cache deleted); `ruian_load` moves to the runner (geo wheels in the build);
-price_stats ticks daily through `job_runner once` on GitHub so it has a row and a cell; `location_refetch`
+price_stats ticks daily through `job_runner once` on GitHub (not built: § As decided below); `location_refetch`
 reads its due time from its row (`first_delay_seconds` deleted). The test pinning the GitHub schedule set
 exists from W2 (#2023) and tightens by itself when the last waiting job moves; W5 adds its one workflow-reader
 rule, `scraper.job_runner once <job>` read as running `<job>`, without which the pairing census reads

@@ -447,8 +447,7 @@ def _invocations(run: str, root: Path) -> list[Invocation]:
 
 
 def read_workflows(root: Path) -> dict[str, Workflow]:
-    """Every workflow file: whether it runs unattended, its timeout, and each `python -m <repo module>` it runs.
-    #2033 adds one rule here: `scraper.job_runner once <job>` runs <job> (the CLI is #2024's)."""
+    """Every workflow file: whether it runs unattended, its timeout, and each `python -m <repo module>` it runs."""
     workflows: dict[str, Workflow] = {}
     for path in sorted(p for p in (root / ".github" / "workflows").iterdir() if p.suffix in (".yml", ".yaml")):
         data = yaml.safe_load(path.read_text()) or {}
