@@ -351,6 +351,20 @@ def test_no_two_db_heavy_jobs_share_an_hour() -> None:
     assert db_heavy_problems(jobs.declared()) == []
 
 
+def test_the_registry_load_runs_every_day_so_a_new_vintage_never_ages_past_the_health_line() -> None:
+    """ČÚZK publishes a month-end vintage on the 1st (~08:00 UTC). A 30-day epoch grid drifts off the 1st and, once a
+    slot falls before publication, skips a whole month (the 2027-07-31 slot would have: #2666 review). A daily slot
+    loads it within a day of publication (a late one the next day); every other day the vintage is already current
+    and the run only finishes (~20 s, 2026-11-13). Worst case: a 31-day month, a day's wait, the 6 h load."""
+    from scripts import verify_pipeline
+
+    load = _entry("ruian_load")
+    assert load.host == jobs.RUNNER and load.every_s == jobs.DAY
+    assert load.offset_s >= 9 * jobs.HOUR, "the slot lands after ČÚZK's ~08:00 UTC publication"
+    worst_age_days = 31 + (load.every_s + load.timeout_s) / jobs.DAY
+    assert worst_age_days < verify_pipeline.THRESHOLDS["location_registry_max_age_days"]
+
+
 def test_the_db_heavy_census_fires() -> None:
     entries = [j for j in jobs.declared() if j.name not in ("property_sweep", "broker_sweep")]
     today = [replace(_entry("property_sweep"), offset_s=4 * 3600 + 15 * 60),

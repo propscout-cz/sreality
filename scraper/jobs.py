@@ -82,9 +82,10 @@ _FIXED: tuple[Job, ...] = (
     Job("clip", ("scripts.clip_tag_backfill", "--max-seconds", "1500", "--limit", "5000", "--workers", "16",
                  "--chunk", "64"),
         15 * 60, 5 * 60, 55 * 60, 3072, 4, RUNNER),
-    # Monthly; a cut run resumes from its R2 archive (the module docstring). A dry run of the 2026-11 vintage peaked at
-    # 342 MB and wrote 918 MB of zips and extracts to its temporary directory (#2033).
-    Job("ruian_load", ("location_data.ruian_load",), 30 * DAY, 10 * HOUR, 6 * HOUR, 2048, 1, RUNNER,
+    # Daily at 10:00 UTC, not on a 30-day grid that drifts off the 1st (#2666 review): the day ČÚZK publishes a month-end
+    # vintage (~08:00 UTC) it loads it, every other day the vintage is current and it only finishes (~20 s). A cut run
+    # resumes from its R2 archive. A dry run of the 2026-11 vintage peaked at 342 MB and wrote 918 MB (#2033).
+    Job("ruian_load", ("location_data.ruian_load",), DAY, 10 * HOUR, 6 * HOUR, 2048, 1, RUNNER,
         LOCATION_HEAVY, db_heavy=True),
     # The register's building facts (#2604): a month's ~6,250 obec files, resumed daily until none is pending, then
     # a no-op until the next vintage. It starts obce only 13:00-17:00 UTC (a run restarted by a deploy keeps those

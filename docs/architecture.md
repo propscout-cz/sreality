@@ -1663,9 +1663,10 @@ on 2026-12-01, and until then a file of that name would override the applied set
   and the re-tag campaign, one unsharded run every 15 min; `fleet/photo_tags` judges its 45-min line), and of the
   daily `property_sweep` (03:00 UTC) and `broker_sweep` (06:00 UTC) since #2027, which never run beside each other
   or any other DB-heavy job (`job_lease`'s heavy turn), of the hourly claim intake `location_intake` since #2028
-  and the monthly RÚIAN registry load `ruian_load` since #2033 (§ Location data), and of the walks whose `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (30 min: web, maxima
-  and bezrealitky since #2029, each `walk_<source>` every 6 h with no `--max-seconds`, the runner's SIGTERM at the
-  timeout its one budget; the longer walks wait on their workflows):
+  and the RÚIAN registry load `ruian_load` since #2033, daily (§ Location data), and of the walks whose
+  `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (30 min: web, maxima and bezrealitky since #2029, each
+  `walk_<source>` every 6 h with no `--max-seconds`, the runner's SIGTERM at the timeout its one budget; the longer
+  walks wait on their workflows):
   - two replicas in the worker's region, each 4 vCPU and 8 GB, restart policy ALWAYS, `checkSuites: false`. Railway
     counts decimal bytes, so 8e9 B is 7,629 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
     line and every beat carry `memory_limit_mb` and `cpus` as the replica's cgroup reads them;
