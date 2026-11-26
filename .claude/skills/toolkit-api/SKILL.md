@@ -1,6 +1,6 @@
 ---
 name: toolkit-api
-description: Use when writing or changing analytical toolkit functions (toolkit/) or the FastAPI service (api/) — the facts-not-opinions rule, the standard tool return envelope, the read-only-with-write-exceptions rule, the auth gates (one credential, a Supabase JWT: require_token = any signed-in caller, require_admin/verify_jwt = identity / admin gating / login), the billing/entitlements skeleton (Stripe webhook, plans, agenda gating), the versioned estimation trace, provider pluggability (Anthropic, Gemini, OpenAI, Qwen, OSS), or the full env-var/secrets reference (Postgres, tenant pool, R2 images, LLM+maps keys, API service, scraper orchestration, frontend/extension build-time). Triggers on: new toolkit tool, /admin route, API_AUTH_OPTIONAL, login, admin gating, identity, account menu, billing, Stripe, entitlement, plan, agenda gating, write exception, estimation_runs.trace, llm_calls, provider, env var, secret, R2/ANTHROPIC/GEMINI/MAPY/STRIPE keys, CORS.
+description: Use when writing or changing analytical toolkit functions (toolkit/) or the FastAPI service (api/) — the facts-not-opinions rule, the standard tool return envelope, the read-only-with-write-exceptions rule, the auth gates (one credential, a Supabase JWT: require_token = any signed-in caller, require_admin/verify_jwt = identity / admin gating / login), the billing/entitlements skeleton (Stripe webhook, plans, agenda gating), the versioned estimation trace, provider pluggability (Anthropic, Gemini, OpenAI, Qwen, OSS), or the full env-var/secrets reference (Postgres, tenant pool, R2 images, LLM keys, API service, scraper orchestration, frontend/extension build-time). Triggers on: new toolkit tool, /admin route, API_AUTH_OPTIONAL, login, admin gating, identity, account menu, billing, Stripe, entitlement, plan, agenda gating, write exception, estimation_runs.trace, llm_calls, provider, env var, secret, R2/ANTHROPIC/GEMINI/STRIPE keys, CORS.
 ---
 
 # Toolkit & API
@@ -410,9 +410,8 @@ LLM + maps (FastAPI service + scoring jobs):
   Read lazily by a lane pointed at qwen: an Actions secret there, Railway only to call it here.
 - `OSS_LLM_BASE_URL` / `OSS_LLM_API_KEY` — a self-hosted vLLM pod (`oss:<hf id>` ids, `provider='oss'`):
   an EPHEMERAL RunPod proxy root the autodedup judge lane exports per pass, re-read per call and never stored; the key defaults to `none` (vLLM serves unauthenticated).
-- `MAPY_CZ_API_KEY` / `MAPY2_CZ_API_KEY` — Mapy.cz REST keys, still set on the **Railway API** but read by nothing
-  since the switch-over (#2453) deleted `/maps/suggest`; Stage B (#2455) removes them and revokes them at Mapy.
-  `/maps/sreality-price-map` is no Mapy call: a key-free sreality suggest proxy, no CORS upstream.
+- No Mapy.cz key: no code calls Mapy (#2455; `tests/test_mapy_retirement_census.py`). `/maps/sreality-price-map` is
+  no Mapy call: a key-free sreality suggest proxy, no CORS upstream.
 - `VALUO_SANDBOX_API_TOKEN` / `VALUO_API_TOKEN` (Railway API, and agent-worker for `valuo_valuation`; never local, never `VITE_*`) — Valuo's paid API v3 at `https://api.valuo.com/v1`
   (`api/valuo_client.py`: `market-value/{type}` + one `advert/detail` for photos); production wins, neither = `GET /properties/{id}/valuo` says
   so and the POST 503s. A row stamps `token_sha` + the environment that ANSWERED (`ver` `-sandbox` = sandbox); tests delete both (`tests/conftest.py`).

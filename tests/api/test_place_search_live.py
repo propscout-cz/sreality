@@ -547,13 +547,6 @@ def test_a_database_it_cannot_reach_is_the_same_503(client, monkeypatch, caplog)
     assert not any("brnoxq" in r.getMessage().lower() or r.exc_info for r in caplog.records)
 
 
-def test_own_search_never_reads_the_picks_its_holdout(mirror, client, conn):
-    _jihomoravsky(mirror)
-    mirror.publish()
-    conn.execute("ALTER TABLE place_picks RENAME TO place_picks_holdout")
-    assert _chips(_suggest(client, "Brno"))[0] == ("obec", BRNO, "Brno", "Brno-město")
-
-
 KOLIN_OKRES, KOLIN, NADRAZNI_KOLIN, NADRAZNI_KH = 3204, 533165, 401001, 401002
 
 

@@ -1152,14 +1152,11 @@ rules. Identify which one a task belongs to before you start.
   not fly. A 503 shows "Place search is unavailable right now" under the box, which stays enabled (the next
   keystroke asks again) while the chips keep filtering; nothing is ever asked of Mapy. The address picker saves a
   door, street or obec row as it is (`{adresni_misto, kód ADM}`, `{ulice, code}`, `{obec, code}`); any other level
-  offers no save. The Mapy proxy, its resolve binder and the pick record's writer are gone; the keys and the
-  Seznam.cz lines wait for Stage B (#2455).
-- **The pick record** (`place_picks`, migration 737; spec #2441 Part 1, ruling Q10), the HOLDOUT the gate (#2465)
-  scored own search against while the box was on Mapy: the Mapy binder stored each human pick's answered text (NULL
-  when it held a digit; the CHECK pins `und-x-icu`), its rank and the bound level and code. Nothing records a pick
-  since #2453; its deploy is followed by one DELETE that empties the table, on the operator's OK. RLS on, no policy,
-  browser roles revoked; `place_picks.picks_between` is the one reader (the DB-lane test and the gate's eval, #2452),
-  and pg_cron `place-picks-retention` stays until Stage B drops the table (#2455).
+  offers no save. The Mapy proxy and its resolve binder are gone; Stage B (#2455) took the keys (its wizard window
+  removed them from the API before the merge), the privacy page's
+  Seznam.cz line and the pick record (`place_picks`, the holdout the gate #2465 scored own search on, emptied
+  2026-11-23, dropped by migration 773 with its eval). No code calls Mapy: `tests/test_mapy_retirement_census.py`
+  keeps an empty ledger.
 - **Own place search** (#2449; spec #2441 Part 4, rulings Q2 c, Q6 a, Q9, Q12 a). `location_data/place_search.suggest`
   behind `POST /places/suggest` (`require_token`; body `{query 1–200, limit 1–10}`, an unknown field a 422; answers
   `{items}`). A row is already a chip, `{level, id, name, context, point}`: the `ruian_level`, the RÚIAN code, the
@@ -1314,64 +1311,7 @@ rules. Identify which one a task belongs to before you start.
   table would block its DROP. 738 also swapped the gazetteer's btree for `(name_norm text_pattern_ops,
   registry_version_id)`, which serves `=` and `LIKE 'p%'` under ICU (net 0 indexes). A failed read or an unreachable
   database is a 503 `place_search_unavailable`: the module logs only the SQLSTATE, the route only the error class,
-  never the typed text. No cache, flag or admin parameter; it never reads `place_picks` (its holdout). Every place box
-  asks it since the switch-over (#2453).
-- **The gate's eval** (#2452; spec #2441 Part 4 (1)–(4), Q2 c; the gate is #2465). `scripts/place_search_gate_eval.py`
-  scores own search on the recorded picks, read-only on production, and goes at Stage B (#2455) with its test
-  (`tests/api/test_place_search_gate_eval_live.py`, a migrations-lane step). **Reads:** `place_picks` only through
-  `picks_between`, every pick up to the window's end (a question seen before the window is left out: ruling
-  2026-11-08), plus the current registry version, its `momc_cast_obce` pair count and, for each place the window's
-  picks name (passed in as arrays, never a join on the picks), own search's liveness predicates (a copy until Stage B)
-  and the latest name and parent, all in ONE `connect_read_only` transaction, closed before the first request. **Calls:** only
-  `POST /places/suggest`, as the non-admin smoke account (a password grant, renewed 5 minutes before it lapses; a 401
-  gets one fresh sign-in, a second stops the run), agent `propscout-gate-eval-2452/run-<8 hex>`; and the pinned
-  Railway CLI (`.railway/node_modules/.bin/railway`, the box's own login), only `deployment list` and `logs --http
-  --json`. It never calls Mapy (the test's fakes fail on any other URL or CLI verb) and its one write is the smoke
-  account's auth session. **Questions:** a window is whole Prague days from `--window-first` (never before 2026-11-09,
-  window 1's first full day) to the day its 200th scorable question landed; a window short of 200, one scored past
-  that day (the day is named) and N = 0 are refused, exit 2. A question is a distinct (text, level, code): NULL-text,
-  refused and not-live rows are counted and left out, the digit share is NULL-text rows over the window's rows, and a
-  pick at a level outside kraj, okres, obec, momc, část obce and ulice stops the run. Numbered by first pick, then
-  level, code, text, so the operator's strikes are numbers in a file, never text; striking an unknown or unscorable
-  number stops the run, and a struck question this run finds answered top-1 is dropped from the strikes and said. A momc question whose městská část has no quarter pair at the current version
-  stops it before any request, naming the finishing-only re-dispatch (vintage from the version's `source_date`) after
-  its precondition: no `registry_versions` row newer, as it writes to production. Top-1: the first row is the stored place (a
-  shortcut: `momc` and the městská část's code); top-5: within the first five. An answer other than 200, or a
-  timeout, is asked once more after the gap, and one that stays failed is a miss ("route errors k"). Pass: ⌈0.97 N⌉
-  top-5 and ⌈0.90 N⌉ top-1 hits after strikes; printed before and after strikes with the Wilson 95 % interval (too
-  narrow: questions cluster by about four people) and Mapy's rank-based top-1 and top-5 from the stored rank, a
-  repeat keeping its best, marked biased upward. **Latency**, by method from the API host's HTTP log: Mapy's
-  `GET /maps/suggest`, every client, over the 7 days before the replay (or the 7 days from `--mapy-from`, once they
-  have passed; until then latency is incomplete; since #2454 dropped the suggest cache, a window must start after
-  that deploy, as cached answers made Mapy look faster), read FIRST so
-  retention cannot eat its oldest rows (the earliest row is printed); then the prefix replay (each numbered text,
-  refused and not-live ones too, from two trimmed characters, 0.2 s between keystrokes, 30 s between texts; the last
-  prefix's answer is the one scored); then its own rows, found by the run's agent and re-read every 30 s for up to
-  5 minutes until the log holds every request sent, else the latency part is incomplete. Each side: n, p50 and p95
-  of the 200s, counts by status, and Mapy's 499 share; own p50 ≤ Mapy p50 passes. The deployment list gives no
-  removal time, so the read covers every deployment created by the span's end, back to the newest one created before
-  the span that had run 30 minutes unreplaced by then (an assumption; a FAILED or SKIPPED one never counts); a page of
-  5,000 rows (the CLI's most) is read again in halves; a deployment created during the replay is flagged, as its cold
-  start skews the p50.
-  **Addresses:** `--addresses` (kód ADM, a tab, the text as dictated; the session looks up each dictated house's kód
-  ADM in `ruian_address_points` with a read-only SELECT and the operator confirms it, so the label stays the
-  operator's) are asked whole after the replay under the agent
-  plus `-addresses`, so never in the latency read; a hit is the `adresni_misto` row of that kód ADM (#2451: never the
-  label); Q2 c's thresholds, no strike, no Mapy figure. **The look:** `--report` writes one self-contained HTML file
-  (CSP `default-src 'none'`, no referrer, mode 0600): per numbered question, refused and not-live ones too, the text,
-  the place it became, own top 5 with that place marked, the outcome, Mapy's best rank, the pick count and a key-free
-  mapy.cz link; then the addresses. The report, strikes and addresses files are refused inside any git checkout.
-  Stdout carries tallies only, and an uncaught error prints its class alone. A Claude session never opens the report
-  (that would send the texts to the model's provider): the operator opens it (`wslview`) and deletes it after the
-  look. Exit 0 every measured part passes, 1 a part fails, 2 a refusal, an error, or an incomplete part with none
-  failed. **Run** (the
-  recipe and its steps are the module docstring, `--help`): in the operator's terminal, the database string
-  pasted for the command (the IPv4 transaction pooler; none is kept on disk); the figures' run writes its own report
-  from the answers it scores, since answers can move after the look, and the operator checks there that every
-  unstruck miss is real before the verdict goes on #2465; before it, the momc pairs at the current
-  version, no merge during the replay and no registry load (the 1st of the month) across it, as liveness is judged at
-  the version current when the eval reads. After #2461 the same window is re-scored and that verdict replaces the
-  first.
+  never the typed text. No cache, flag or admin parameter. Every place box asks it since the switch-over (#2453).
 - Frontend conventions live in `frontend/README.md`. Design tokens (every colour and
   radius of the six themes) are in `frontend/src/styles/tokens.css`, plain CSS that
   `globals.css` imports (its `@theme` keeps only the fonts); **never tweak these
@@ -1598,7 +1538,7 @@ on 2026-12-01, and until then a file of that name would override the applied set
   `/properties/{property_id}/notes` read 0 while both serve traffic, and a 0 speaks only for that literal path. Logs
   (`get-logs`) cap at 500 entries per stream, so they show presence, not a count. The pinned CLI can count:
   `logs <deployment> --http --json` returns up to 5,000 rows a call (5,001 is refused), the newest of the range when
-  it holds more, and reads a REMOVED deployment's log (measured 2026-11-09; the gate's eval reads it this way).
+  it holds more, and reads a REMOVED deployment's log (measured 2026-11-09).
 - **One file, three plans.** An IaC file describes one project/environment and omitting a resource deletes it, so the
   file returns the linked project's own definition, keyed by project id AND name: a wrong `railway link` throws.
 - **Deploys never read it.** A change ships as a PR, then the operator applies it with `scripts/railway_iac_wizard.sh`

@@ -551,7 +551,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
     `MAPY_CZ_API_KEY` injections in seven scrape/drain workflows; `scraper/geocoding.py`'s CLI.
     **No data migration**: W4-c drops every column the UPDATE would have nulled, so purge = drop.
     Kept: `scraper/geocoding.py`'s key helpers + `geocode()` (`api/maps.py`, the on-demand URL
-    parse, `scripts/seed_curated_cities.py` — none of them stores a result). **+328 / −3,454
+    parse, `scripts/seed_curated_cities.py` — none of them stores a result; all gone since, #2453 and #2454). **+328 / −3,454
     overall; +84 / −1,854 outside tests and docs.** The golden claim sets were re-blessed and the
     diff is deletions only — no fixture's claims changed, which is the measurement that the veto
     was never what licensed a pin. Suites: pytest 7265 passed / 219 skipped.
@@ -1402,11 +1402,11 @@ component is slimmed twice — each wave rewrites one component and slims its st
   containing-obec helper (the MF hand-off reads the resolver's view) and the worker's Mapy key copy (wizard) are gone;
   739 drops `curated_cities.centroid/source/source_confidence` and `backup_w4` uncopied, `obec_kod` unique. The seed
   refuses an unknown city or CSV column by name. **Next:** Mapy's latency baseline for #2465 is read from 7 days after
-  the deploy (no cached answers); Stage B (#2455) after the switch-over's soak.
-- **The pick record — built 2026-11-08** (#2445; spec #2441 Part 1, ruling Q10; migration 737, additive; as built:
-  `docs/architecture.md` § the pick record). Every place box's resolve carries `pick {text, rank}`; `/maps/resolve`
+  the deploy (no cached answers); Stage B (#2455) after the switch-over's soak. Done: Stage B, below.
+- **The pick record — built 2026-11-08** (#2445; spec #2441 Part 1, ruling Q10; migration 737, additive; its
+  architecture section left with it at Stage B). Every place box's resolve carries `pick {text, rank}`; `/maps/resolve`
   records one row after the answer for a verified non-automation caller; 12-month pg_cron retention. The switch-over
-  (#2453) stopped the recording. **Next:** the one DELETE after #2453 deploys (operator's OK); Stage B drop (#2455).
+  (#2453) stopped the recording; one DELETE emptied it 2026-11-23 and Stage B (#2455) dropped it (migration 773).
 - **Own place search — built 2026-11-08** (#2449; spec #2441 Part 4, rulings Q2 c, Q12 a; migration 738, additive; as
   built: `docs/architecture.md` § own place search). `POST /places/suggest` answers chips (level, code, name, context,
   point) for kraj, okres, obec, část and street: exact, prefix, then fuzzy; within a tier served properties of any
@@ -1468,10 +1468,19 @@ component is slimmed twice — each wave rewrites one component and slims its st
   picker) asks only `POST /places/suggest`; a row is the chip, a městská část adds its quarters, an address its street
   (no street: no chip, a notice), the map flies by the shared zoom table. Deleted: `api/maps.py` (suggest proxy, key
   failover, resolve binder), the pick writer and `deps.is_automation`, the SPA's Mapy row type, badge map and Browse's
-  Mapy zoom table. **Next:** after deploy, the place box smoke, then the picks DELETE (operator OK 2026-11-22); Stage
-  B (#2455): keys, Seznam.cz lines, revocation, the table drop.
-- **The gate's eval — built 2026-11-09** (#2452; spec #2441 Part 4 (1)–(4), Q2 c, ruling 2026-11-08; no migration; as
-  built: `docs/architecture.md` § the gate's eval). `scripts/place_search_gate_eval.py`, read-only on production:
+  Mapy zoom table. Live 2026-11-23 (c789dfefd): the place box smoke passed, the picks DELETE emptied the table (22
+  rows, operator OK 2026-11-22); the soak (#2466) passed and the operator ended it early on 2026-11-25.
+- **Mapy exit, Stage B — built 2026-11-25** (#2455; spec #2441 Part 6, rulings Q1 b, Q3 a, Q4; migration 773,
+  destructive, backup waived by the spec; as built: `docs/architecture.md` § every place box on own place search). The
+  API's two Mapy keys leave `.railway/railway.ts` and `.env.example`; the picks reader, the gate's eval and both
+  DB-lane tests go, and 773 drops `place_picks` and its pg_cron job; the privacy page (CZ + EN) drops the Mapy.cz
+  search sentence, the picks section and Seznam.cz (Valuo stays). The census ledger is empty: no code calls Mapy.
+  The worker holds no Mapy key (read 2026-11-26), so #2454's last item is done. **Next (operator):** the merge is the
+  wizard's `window API 0 2 sreality` on the merge coordinator's light: it removes the API's two keys from Railway, then
+  merges the draft PR at once. Then delete the two GitHub secrets, revoke both keys at Mapy, clear them from the local
+  `.env`, clear the `automation` marker on the two smoke users; then the landing copy deck is rebuilt.
+- **The gate's eval — built 2026-11-09** (#2452; spec #2441 Part 4 (1)–(4), Q2 c, ruling 2026-11-08; no migration; the
+  architecture section left with it at Stage B). `scripts/place_search_gate_eval.py`, read-only on production:
   picks only through `picks_between`, in one READ ONLY transaction closed before any request; only `POST
   /places/suggest` as the non-admin smoke account, never Mapy; both latency medians from the API host's HTTP log
   through the pinned Railway CLI (Mapy's 7 days read before the prefix replay); dictated addresses scored by kód ADM;
@@ -1480,7 +1489,7 @@ component is slimmed twice — each wave rewrites one component and slims its st
   the run. Test: `tests/api/test_place_search_gate_eval_live.py` (migrations lane). **Next:** gate #2465, whose
   clock starts when this deploys (window 1 from 2026-11-09; comment the first day and the questions so far there);
   before its run, the finishing-only re-dispatch of `20261031` for the momc pairs (0 at v4), the address count ruled
-  on #2465 and, by the soft order, #2461 (else the window is re-scored); removal at Stage B #2455.
+  on #2465 and, by the soft order, #2461 (else the window is re-scored). Removed at Stage B (#2455).
 
 Standing rulings that bind every wave: no labelling campaign, ever (joint review is the gate); the
 ceskereality contract is settled (headline = granularity, `exact` = backup); no scope creep into LLM
@@ -1499,7 +1508,8 @@ operator ruling (katastr_kod, 2026-09) or after a measured Browse/map slowdown a
   markers); week-stamped accumulating keys + client-side freshness skip + probe guard.
 - **R1 Mapy kill switch** (#997, operator action A3): `MAPY_GEOCODE_ENABLED` default
   OFF; geocode client unreachable; display-only tiles/suggest unaffected; URL-parse
-  estimations fail fast pre-spend with an honest 422 while off.
+  estimations fail fast pre-spend with an honest 422 while off. (Gone since: Stage A #2454 deleted the geocoder and
+  the switch, Stage B #2455 the keys.)
 - **0a resolver-street auto-write stopped** (#998): weekly cron removed, writes need
   explicit `--write`; dead sreality precision guard (`locality.accuracy`) replaced
   with `inaccuracy_type IN ('gps','address')`.

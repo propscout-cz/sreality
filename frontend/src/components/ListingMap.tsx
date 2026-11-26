@@ -307,7 +307,7 @@ interface Props {
   cities?: CuratedCity[];
   /* Municipality boundary per city, `city_id` → raw ST_AsGeoJSON string
    * (JSON.parsed into the feature geometry). A city missing from the map
-   * falls back to a radius circle around its centroid. */
+   * is not drawn. */
   cityPolygons?: Map<number, string>;
   showCities?: boolean;
   /* If set, paint pins with a linear gradient between
