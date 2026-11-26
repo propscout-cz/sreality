@@ -109,20 +109,33 @@ class Tagger:
         return cls(model, processor, labels, text_emb, tax.get("collapse", {}),
                    model_id, revision=revision)
 
-    def embed(self, images: list, batch_size: int = 32) -> torch.Tensor | None:
-        """L2-normalized image embeddings (for tagging AND the cosine tier)."""
+    def model_input(self, image: Any) -> torch.Tensor:
+        """One RGB photo -> its model input, (1, 3, 224, 224) float32. The image processor's own resize (its
+        shortest edge, its rounding, its filter) is done first, on the photo: the processor's full-size uint8 array
+        and PIL copy are never made, and its resize to the size the photo already has is a copy, so the input is the
+        batch path's to the bit (the runner image's offline proof asserts it at the pinned versions, #2478)."""
+        ip = self._processor.image_processor
+        short = ip.size["shortest_edge"]
+        w, h = image.size
+        size = (short, int(short * h / w)) if w <= h else (int(short * w / h), short)
+        return self._processor(images=[image.resize(size, resample=ip.resample)],
+                               return_tensors="pt")["pixel_values"]
+
+    def embed_inputs(self, inputs: list, batch_size: int = 32) -> torch.Tensor | None:
+        """L2-normalized image embeddings (for tagging AND the cosine tier) of model_input()'s inputs."""
         import torch
 
         chunks = []
-        for i in range(0, len(images), batch_size):
-            inp = self._processor(images=images[i:i + batch_size],
-                                  return_tensors="pt")
+        for i in range(0, len(inputs), batch_size):
             with torch.no_grad():
-                out = self._model.vision_model(pixel_values=inp["pixel_values"])
+                out = self._model.vision_model(pixel_values=torch.cat(inputs[i:i + batch_size]))
                 feats = self._model.visual_projection(_project(out))
             feats = feats / feats.norm(dim=-1, keepdim=True)
             chunks.append(feats)
         return torch.cat(chunks) if chunks else None
+
+    def embed(self, images: list, batch_size: int = 32) -> torch.Tensor | None:
+        return self.embed_inputs([self.model_input(image) for image in images], batch_size)
 
     def tags_from_emb(self, emb: torch.Tensor) -> list[TagResult]:
         """Tag precomputed embeddings — proper CLIP zero-shot (logit_scale +
