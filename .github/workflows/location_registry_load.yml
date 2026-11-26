@@ -88,4 +88,4 @@ jobs:
           if [ "$DRY_RUN" = "true" ]; then ARGS="$ARGS --dry-run"; fi
           if [ -n "$VINTAGE" ]; then ARGS="$ARGS --vintage $VINTAGE"; fi
           echo "python -m location_data.ruian_load $ARGS"
-          python -m location_data.ruian_load $ARGS
+          exec python -m location_data.ruian_load $ARGS

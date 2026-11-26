@@ -703,3 +703,13 @@ def test_a_load_that_fails_without_raising_closes_its_run_failed(monkeypatch):
 
 def test_a_dry_run_touches_no_database_and_holds_nothing(monkeypatch):
     assert _main_holding(monkeypatch, False, "--dry-run") == (0, ["run"])
+
+
+def test_the_workflow_execs_the_load_so_a_cancel_releases_its_hold() -> None:
+    """A cancel in the Actions UI signals the step's shell. Without `exec` the load is its child, never sees the
+    signal, and its held run keeps `location-heavy` until the lease's ceiling (~6 h). With `exec` the load gets the
+    signal and `held_job` releases the run `interrupted` (#2028 review)."""
+    workflow = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "location_registry_load.yml"
+    runs = [line.strip() for line in workflow.read_text(encoding="utf-8").splitlines()
+            if "-m location_data.ruian_load" in line and not line.strip().startswith(("echo", "#"))]
+    assert runs == ["exec python -m location_data.ruian_load $ARGS"], runs
