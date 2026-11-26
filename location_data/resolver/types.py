@@ -25,8 +25,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Protocol
 
-# Mirrors migration 380's location_granularity_rank seed. The TABLE survives (it is read by
-# `toolkit/dedup_candidates_sql.py`), but the resolver no longer spends a round trip loading
+# Mirrors migration 380's location_granularity_rank seed. The TABLE survives (the town floor in
+# `location_data/location_steps.py` reads it), but the resolver no longer spends a round trip loading
 # a mapping that is fixed by the enum's own declaration order. `street_segment` (70) is gone
 # from the resolver's vocabulary with the unbound-number rung that was its only producer (v5.5,
 # D7); the DB enum label and its rank row stay, inert, because dropping one is a type rebuild.

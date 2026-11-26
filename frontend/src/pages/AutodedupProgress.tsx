@@ -182,8 +182,8 @@ function sameBlob(
 /* ------------------------------------------------------------------- a card */
 
 function IterationCard({ row }: { row: AutodedupIteration }) {
-  /* Same mechanism and same storage scheme as the settings pages and the
-   * candidate audit — one twisty, one localStorage key namespace. */
+  /* Same mechanism and same storage scheme as the settings pages — one twisty,
+   * one localStorage key namespace. */
   const [open, toggle] = useCollapsed(`autodedup-progress.${row.id}`, false);
   const bodyId = `autodedup-iteration-${row.id}`;
   const tools = row.tools ?? [];

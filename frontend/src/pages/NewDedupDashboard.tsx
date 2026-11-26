@@ -1,17 +1,12 @@
 /* NEW DEDUP · Dashboard — the program's front page.
  *
- * This replaces the Wave 0 placeholder. It is W1's one unbuilt bullet — the
- * "dashboard skeleton (funnel + cost table)" — carried into Wave 2 and shipped
- * with the candidate audit page, because until a candidate generation had run
- * there was nothing for a funnel to count (PROGRAM.md, ledger 2026-09-10 (a)).
- *
- * THREE THINGS, IN THE ORDER SOMEONE ARRIVING WANTS THEM:
+ * TWO THINGS, IN THE ORDER SOMEONE ARRIVING WANTS THEM:
  *   1. WHERE THE PROGRAM IS — the waves, and which one is being built.
- *   2. WHAT IT CAN SEE — the same funnel component the Candidates page opens
- *      with, over the newest finished candidate run. One component, so the two
- *      pages can never disagree about how many listings the program can reach.
- *   3. WHAT IT WILL COST — the two spend knobs that are set, beside the actual
+ *   2. WHAT IT WILL COST — the two spend knobs that are set, beside the actual
  *      spend, which does not exist yet and therefore says "not yet".
+ *
+ * The candidate funnel that stood between them went with the Level 0 candidate
+ * lane (#2681, operator decision 2026-11-26).
  *
  * "NOT YET" IS A REAL ANSWER HERE. Levels 3 and 4 have not run, so there is no
  * spend to report. The cell says so in words rather than showing a zero, which
@@ -21,17 +16,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 
-import {
-  getNewDedupCandidateOverview,
-  listNewDedupSettings,
-  type NewDedupSetting,
-} from '@/lib/api';
-import CandidateFunnel from '@/components/new-dedup/CandidateFunnel';
+import { listNewDedupSettings, type NewDedupSetting } from '@/lib/api';
 import ErrorBanner from '@/components/ErrorBanner';
 import Panel from '@/components/Panel';
-import Spinner from '@/components/Spinner';
 import { ROUTES } from '@/lib/routes';
-import { fmtAbsolute, fmtCount, fmtUsd } from '@/lib/format';
+import { fmtUsd } from '@/lib/format';
 
 /* ------------------------------------------------------------------ chrome */
 
@@ -161,17 +150,10 @@ function CostTable({ settings }: { settings: NewDedupSetting[] | null }) {
 /* ---------------------------------------------------------------- the page */
 
 export default function NewDedupDashboard() {
-  const overview = useQuery({
-    queryKey: ['new-dedup', 'candidates', 'overview', null],
-    queryFn: () => getNewDedupCandidateOverview(null),
-  });
   const settings = useQuery({
     queryKey: ['new-dedup', 'settings'],
     queryFn: listNewDedupSettings,
   });
-
-  const data = overview.data?.data;
-  const generation = data?.generation ?? null;
 
   return (
     <div className="px-6 pt-5 pb-10 max-w-screen-xl mx-auto">
@@ -196,44 +178,6 @@ export default function NewDedupDashboard() {
         </Panel>
 
         <Panel
-          title="What the program can see"
-          lede="How many listings survive each narrowing on the way to becoming a candidate — a pair of listings worth comparing. This is the same readout the Candidates page opens with, over the newest finished candidate run."
-        >
-          {overview.isPending && (
-            <p className="flex items-center gap-2 text-sm text-[var(--color-ink-3)]">
-              <Spinner /> Loading the funnel…
-            </p>
-          )}
-          {overview.error && <ErrorBanner message={(overview.error as Error).message} />}
-          {data && (
-            <>
-              <CandidateFunnel
-                stats={data.stats}
-                emptyText={
-                  data.store_ready
-                    ? 'No candidate run has finished yet, so there is nothing to count.'
-                    : 'The candidate store has not been created yet, so there is nothing to count.'
-                }
-              />
-              <p className="mt-3 text-[0.72rem] text-[var(--color-ink-3)]">
-                {generation ? (
-                  <>
-                    From run #{generation.id}, finished {fmtAbsolute(generation.completed_at)}.{' '}
-                  </>
-                ) : null}
-                <Link
-                  to={ROUTES.newDedupCandidates.build()}
-                  className="text-[var(--color-copper-2)] underline decoration-dotted underline-offset-2"
-                >
-                  Open the full candidate audit
-                </Link>
-                .
-              </p>
-            </>
-          )}
-        </Panel>
-
-        <Panel
           title="What it will cost"
           lede="The two spend knobs that are set today, beside what has actually been spent. Levels 3 and 4 have not run, so both amounts say “not yet” rather than showing a zero — a zero would read as a measured result."
         >
@@ -247,10 +191,6 @@ export default function NewDedupDashboard() {
             >
               Settings
             </Link>
-            . Candidate pairs recorded so far:{' '}
-            <span className="font-mono tabular-nums">
-              {data?.stats ? fmtCount(data.stats.pairs?.total ?? null) : NOT_YET}
-            </span>
             .
           </p>
         </Panel>
