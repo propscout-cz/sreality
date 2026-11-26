@@ -24,8 +24,8 @@ What stays sreality-specific lives behind the Portal seams, unchanged:
   listing_fetch_failures bookkeeping behind record_failure.
 
 scraper.main keeps the image-download phase the worker's images lane runs —
-it does not move here. Cadence split (rule #19): index_walk.yml runs `--index-only`
-every 15 min; the realtime worker's drain lane drains, and `--drain-only`
+it does not move here. Cadence split (rule #19): the job runner's `walk_sreality` runs `--index-only`
+hourly (#2030); the realtime worker's drain lane drains, and `--drain-only`
 with a --max-seconds budget is the hand run. Omitting
 both flags runs both phases (dispatch-only combined fallback). Records an
 'index' / a 'detail' scrape_runs row tagged source='sreality', with per-chunk

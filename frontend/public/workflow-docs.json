@@ -893,52 +893,6 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/idnes_index_walk.yml"
     },
     {
-      "filename": "index_walk.yml",
-      "name": "Scraping: Sreality index walk (Phase 2)",
-      "description": "The fast half of the Phase-2 cadence split, now on the shared portal framework: `scraper.sreality_main --index-only` drives SrealityPortal through the one generic portal_runner (the same loop every other portal uses). Walks the COMPLETE index of every configured category pair (scraper.main.CATEGORIES — the full category cross product incl. pozemek/ostatni/drazba/podil; district-split + national fallback above the deep-pagination cap), bumps last_seen on still-listed ids (touch), nominates unseen ids for a page check once the walk reached the portal's own end (rule #3 — the walk flips nothing; the drain fetches each nominated page and the PAGE decides), and enqueues new + price-changed ids into listing_detail_queue (source='sreality'). It does NO detail fetching, so it finishes in minutes and delistings surface fast.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "*/15 * * * *",
-          "human": "Every 15 minutes"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_seconds",
-          "description": "wall-clock budget; the walk finalizes cleanly before this (blank = 1800 = 30 min)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Walk the index and log enqueue intent, but write nothing",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "sreality-index-walk",
-      "cancelInProgress": false,
-      "timeoutMinutes": 40,
-      "permissions": null,
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/index_walk.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/index_walk.yml"
-    },
-    {
       "filename": "label_images.yml",
       "name": "Labeling: bulk machine labels",
       "description": "The LLM builds the training set for named heads: one call per image carrying the ACTIVE definitions, verdicts written to image_tag_labels as source='machine' (migration 468 gives the pass its own called_for so its price is measured separately). See scripts/label_images.py for the rails.",

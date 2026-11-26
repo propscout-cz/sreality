@@ -2,7 +2,7 @@
 
 `SrealityPortal` wraps this module's walk / fetch helpers for the shared
 portal_runner; the scheduled entrypoint is `scraper.sreality_main`
-(index_walk.yml; the realtime worker drains). The image phase reads pending image rows
+(the job runner's hourly `walk_sreality`; the realtime worker drains). The image phase reads pending image rows
 and uploads their bytes to Cloudflare R2 (a no-op without the R2_* env vars).
 
 Run with exactly one mode:

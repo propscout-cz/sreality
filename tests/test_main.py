@@ -16,7 +16,7 @@ import pytest
 from datetime import datetime, timedelta, timezone
 import requests
 
-from scraper import main as scraper_main
+from scraper import main as scraper_main, stop
 from scraper.listing_write import WriteOutcome
 from scraper.portal import walk_is_complete
 from scraper.sreality_client import ListingGoneError
@@ -482,6 +482,22 @@ def test_walk_category_split_deadline_between_districts_suppresses_nomination(
         1, 2, deadline=time.monotonic() - 1, **_split_args()
     )
     assert complete is False
+
+
+def test_the_runners_stop_signal_is_our_stop_between_districts_without_a_deadline(patched_db, monkeypatch):
+    """W4 (#2030): on the job runner the walk carries no --max-seconds; the runner's SIGTERM at timeout_s (the stop
+    event) is its one budget, and stops the district loop through deadline_reached(None): nothing nominates."""
+    monkeypatch.setattr(_FakeClient, "result_size", 12000, raising=False)
+    monkeypatch.setattr(
+        _FakeClient, "district_result_size", {1: 6000, 2: 6000}, raising=False,
+    )
+    stop.EVENT.set()
+
+    _seen, _counts, _rs, pages, complete = scraper_main._walk_category_split(
+        1, 2, deadline=None, **_split_args()
+    )
+    assert complete is False
+    assert pages == 0
 
 
 def test_walk_category_split_union_shortfall_no_longer_vetoes(
