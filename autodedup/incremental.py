@@ -1127,8 +1127,8 @@ DECISION_SOURCE_DIGEST: str = source_digest(Path(__file__).resolve().parent, DEC
 
 
 def engine_digest(settings: Settings, model: LogisticModel) -> str:
-    """The decision code, the model and the settings a reject is decided under (E943): the
-    reject ledger's fifth key. The model is hashed as loaded (`to_json`), so the hand-set prior,
+    """The decision code, the model and the settings a pass decides under: the digest
+    `rt_engine` records, which a merge's freshness is read against (E960). The model is hashed as loaded (`to_json`), so the hand-set prior,
     which has no file, is covered as `models/<version>.json` is."""
     payload = json.dumps([DECISION_SOURCE_DIGEST, model.to_json(), settings.to_dict()],
                          sort_keys=True, default=str)

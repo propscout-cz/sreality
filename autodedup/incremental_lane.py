@@ -4026,8 +4026,8 @@ def plan_widening(conn: Any, control: Mapping[str, Any], scope: Scope,
             "names that scope again: it widens nothing. The lane re-cuts the calibration itself "
             "only while the scope holds at most RECUT_MAX_LISTINGS "
             f"({RECUT_MAX_LISTINGS:,}) adverts (E944); above that the last seed's cut stands. "
-            "Pass recut=true to re-cut it over the whole scope (it re-keys the reject ledger: "
-            "every wanted reject is scored once more), a WIDER rt_scope to widen the "
+            "Pass recut=true to re-cut it over the whole scope (no stored decision or reject is "
+            "voided by it; recut=true rescore=true also re-reads every advert), a WIDER rt_scope to widen the "
             "generation (E964), or fresh=true to rebuild it (a new scorer or a narrower "
             "scope). Nothing was written.")
     recorded = _rows(conn, RT_CALIBRATION_SCORER_SQL, {"generation": generation})
@@ -4039,11 +4039,6 @@ def plan_widening(conn: Any, control: Mapping[str, Any], scope: Scope,
             f"switches only its SETTINGS in place, and this seed names model "
             f"{model.version!r}. Every stored score is the held model's: a new model is a "
             "REBUILD — pass fresh=true. Nothing was written.")
-    if rescore and held_settings.to_dict() == settings.to_dict():
-        raise SystemExit(
-            f"rescore=true names the settings generation {generation!r} is already scored by: "
-            "nothing to switch. recut=true alone re-cuts over the same scope. Nothing was "
-            "written.")
     if not rescore and (held_settings.to_dict() != settings.to_dict()
                         or held_model.version != model.version):
         raise SystemExit(
@@ -4102,7 +4097,8 @@ def widen_generation(conn: Any, plan: Widening, scope: Scope, *, parents: Mappin
     holds stays — pairs, clusters, fingerprints, postings, the reject ledger, the forward
     cursors — the blocks it has not read whole are listed, the calibration is cut again over
     the WHOLE scope, and the build phase opens for what the store does not hold yet.
-    `rescore` (the settings' name, E991) is that re-cut under NEW settings: the cut is taken
+    `rescore` (the settings' name, E991) is that re-cut under the settings it names, new or the
+    held ones (E996: the sweep that carries a change of the decision code): the cut is taken
     under them and records them on the generation, so every pass after it scores by them, and
     the same transaction writes `rt_rescore:<generation>` (`since` = its own stamp) and puts the
     rescore sweep's cursor at 0, so the lane re-reads every in-scope advert once. No row of

@@ -6,7 +6,11 @@
 -- committed for a day). The lane now reads and writes the ledger by the stored pair's rule
 -- (decided_at >= both sides' rt_fp.updated_at) and writes none of the three columns.
 --
--- ADDITIVE, apply BEFORE the code merges: the new UPSERT names no version column, and the deployed one still
+-- ADDITIVE, apply BEFORE the code merges and UNDER THE BRAKE (interval 0, lease free: the ACCESS EXCLUSIVE would
+-- time out against a running pass). Strictly first: the new code on the old shape fails every pass that ledgers
+-- a reject (not-null violation, after the work). The new UPSERT leaves the three columns as they were on a row it
+-- rewrites, so from the deploy on they describe nothing: read decided_at, never them.
+-- The new UPSERT names no version column, and the deployed one still
 -- writes all three, so both run against this shape. Metadata only (no rewrite, no scan); ACCESS EXCLUSIVE for
 -- an instant, hence the lock_timeout. Idempotent. The columns are dropped by a later migration, once the
 -- code that stopped writing them is live. No row is deleted: the rows of older keys are judged by the same rule.

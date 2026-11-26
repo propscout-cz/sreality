@@ -363,6 +363,9 @@ def test_the_widening_re_cuts_over_the_whole_scope_and_the_ledger_stands(tmp_pat
     assert conn.calibration[GEN]["n_listings"] == len(OLD_IDS)
     conn.reject_ledger[(GEN, 4000, 4008)] = {
         "dd_lo": "a", "dd_hi": "b", "decided_at": conn.now}
+    # The seed runs at a LATER instant: had it refreshed the held adverts, the reject would be
+    # older than its sides' last refresh and answer nothing (the cliff under another name).
+    conn.now += timedelta(hours=1)
 
     out = _seed(conn, tmp_path, f"obec:{TOWN} obec:{OTHER_TOWN}")
 

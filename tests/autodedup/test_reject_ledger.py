@@ -115,6 +115,9 @@ class _Engine:
             twin_work: Any = None, limits: Limits | None = None) -> PassResult:
         caps = limits or Limits(max_listings=CLAIM, max_pairs=10 ** 9)
         settings = _settings()
+        # Every pass at its own instant, as in production: a reject older than a side's last
+        # refresh must answer nothing, and a frozen clock would hide a rule that forgot it.
+        self.db.now += timedelta(seconds=60)
         store = self.store_cls(self.db, GEN, store_floor=settings.store_floor,
                                calibration_digest=calibration.digest())
         result = run_pass(store, CohortFacts(ds), work or self.work, settings, self.model,
@@ -650,6 +653,7 @@ def _drained(ds: Dataset) -> tuple[FakePg, Calibration]:
     db = FakePg()
     work = Schedule(arrival_order(ds))
     while not work.exhausted():
+        db.now += timedelta(seconds=60)
         run_pass(SqlStore(db, GEN, store_floor=FLOOR, **_key(calibration)),
                  CohortFacts(ds), work, _settings(), MODEL, calibration,
                  limits=Limits(max_listings=CLAIM, max_pairs=10 ** 9), generation=GEN)
