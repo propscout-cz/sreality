@@ -1020,7 +1020,7 @@ rules. Identify which one a task belongs to before you start.
   share. Once the map has loaded, a "Vrstvy" button (top right, on a paper backing, the count of
   layer groups on beside it) opens a bottom sheet with every map's one list (`MapOverlayControls`
   `tone="phone"`, 2026-11-20): Podklad "Mapa" / "Letecká", the reference overlays, "Reliéf a
-  vrstevnice"; the keys of the overlays that are on go under the plate (`legendSlot`), never on it.
+  vrstevnice", "Katastrální mapa"; the keys of the overlays that are on go under the plate (`legendSlot`), never on it.
   Letecká is ČÚZK's aerial photo (#2447): `lib/basemap` `addBasemapLayers` adds Ortofoto ČR's
   `ORTOFOTO_WM` raster hidden, over the whole basemap and under every layer of ours (256 px
   tiles, y before x, source `maxzoom` 20 so deeper zooms overscale; "© ČÚZK, CC BY 4.0" linked to
@@ -1035,8 +1035,16 @@ rules. Identify which one a task belongs to before you start.
   draws nothing coarser than 1:10 000), both hidden and under the basemap's first `transportation`
   layer, so roads, buildings and names stay on top — lifted over the photo while it shows. Neither
   service is cached as tiles: each tile is an export of its bbox, drawn on request (~0.3 s relief,
-  ~0.5–1 s contours), transparent abroad. The three are keys of every map's one `layers` selection
-  (`aerial`, `relief`, `contours`; docs/design/map-overlays.md § State), remembered per browser like
+  ~0.5–1 s contours), transparent abroad.
+  "Katastrální mapa" (2026-11-26) is ČÚZK's cadastral map (KN) from its cached WMTS in web mercator
+  (`local-km-wmts-google`, 256 px, row before column, CORS `*`): two layers hidden like the rest, ČÚZK's
+  black lines under the basemap's first label and its `Yellow` ones over the photo while it shows, from zoom
+  17 (`CADASTRE_MINZOOM`; ČÚZK serves nothing coarser, a coarser tile is an HTML notice), parcel numbers
+  from 19. There a click off the listings asks ČÚZK's RÚIAN view service for the parcel under it (two point
+  queries from the browser, `lib/cadastre`) and the popup (`openReferencePopup`) names it, with a link to
+  its page in Nahlížení do KN (docs/design/map-overlays.md § The parcel click). The four are keys of every
+  map's one `layers` selection (`aerial`, `relief`, `contours`, `cadastre`; docs/design/map-overlays.md
+  § State), remembered per browser like
   the overlays, so Browse, the property maps and the comparables map offer and keep the same picks
   (Browse's 2026-11-11 `relief=1` / `contours=1` read as legacy spellings). PhoneMap's zoom is `lib/zoomByLevel`'s by precision
   (street 15, quarter 13, town 11, coarse 9); the links take one step more, since the map apps

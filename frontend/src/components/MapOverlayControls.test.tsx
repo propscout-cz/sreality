@@ -1,7 +1,7 @@
 /* Every map's one layer list: the Podklad bar (Mapa | Letecká), one toggle per
  * registry section, tri-state over the section's layers, the settings under one
  * that is on (per-layer toggles, zoom hint, note, provenance), ČÚZK's Reliéf a
- * vrstevnice, the legend cards a map draws for the sections that are on (the
+ * vrstevnice and Katastrální mapa, the legend cards a map draws for the sections that are on (the
  * rent map's an area card, which also picks the size category), and the
  * compact chips the comparables map uses.
  * The registry is fixed here; the selection grammar itself is
@@ -10,7 +10,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 
-import MapOverlayControls, { MapOverlayLegends, TerrainControls } from './MapOverlayControls';
+import MapOverlayControls, { CadastreControls, MapOverlayLegends, TerrainControls } from './MapOverlayControls';
 import type { OverlayPlaces } from '@/lib/mapOverlayDraw';
 import type { MapOverlayRegistry, OverlaySection } from '@/lib/mapOverlays';
 import { PPM2_UNIT } from '@/lib/measure';
@@ -145,21 +145,22 @@ const size = (label: string) => sizes().find((b) => b.textContent?.startsWith(la
 const chip = (name: string) => screen.getByRole('checkbox', { name });
 
 describe('<MapOverlayControls> chips', () => {
-  it('renders one chip per registry section between the base and the terrain', () => {
+  it('renders one chip per registry section between the base and ČÚZK’s own layers', () => {
     renderControls('');
     expect(chip('Metro')).not.toBeChecked();
     expect(chip('Záplavová území')).not.toBeChecked();
     expect(chip('Cenová mapa nájemného')).not.toBeChecked();
     expect(screen.getAllByRole('checkbox').map((c) => c.getAttribute('aria-label') ?? c.parentElement?.textContent))
-      .toEqual(['Metro', 'Záplavová území', 'Cenová mapa nájemného', 'Reliéf a vrstevnice']);
+      .toEqual(['Metro', 'Záplavová území', 'Cenová mapa nájemného', 'Reliéf a vrstevnice', 'Katastrální mapa']);
     expect(screen.getByRole('group', { name: 'Podklad mapy' })).toBeInTheDocument();
   });
 
   it('offers the basemap picks alone while the registry is missing', () => {
     render(<MapOverlayControls registry={undefined} selection="metro" onChange={vi.fn()} />);
     expect(screen.getByRole('group', { name: 'Podklad mapy' })).toBeInTheDocument();
-    expect(screen.getAllByRole('checkbox')).toHaveLength(1);
+    expect(screen.getAllByRole('checkbox')).toHaveLength(2);
     expect(chip('Reliéf a vrstevnice')).not.toBeChecked();
+    expect(chip('Katastrální mapa')).not.toBeChecked();
   });
 
   it('turns every layer of a section on, in canonical order', () => {
@@ -211,6 +212,12 @@ describe('<MapOverlayControls> Podklad', () => {
     expect(onChange).toHaveBeenLastCalledWith('contours,metro,relief');
   });
 
+  it('switches the cadastral map in the same selection', () => {
+    const onChange = renderControls('aerial,metro');
+    fireEvent.click(chip('Katastrální mapa'));
+    expect(onChange).toHaveBeenLastCalledWith('aerial,cadastre,metro');
+  });
+
   it('lays Browse’s own rows between the base and the registry', () => {
     render(
       <MapOverlayControls registry={REGISTRY} selection="" onChange={vi.fn()}>
@@ -223,6 +230,7 @@ describe('<MapOverlayControls> Podklad', () => {
     expect(rows[1]).toBe('Města');
     expect(rows[2]).toContain('Metro');
     expect(rows[3]).toContain('Reliéf a vrstevnice');
+    expect(rows[4]).toContain('Katastrální mapa');
   });
 });
 
@@ -254,6 +262,27 @@ describe('<TerrainControls>', () => {
     expect(screen.queryByText('Vrstevnice: přibližte mapu')).toBeNull();
     rerender(<TerrainControls relief contours={false} zoom={12} onChange={vi.fn()} />);
     expect(screen.queryByText('Vrstevnice: přibližte mapu')).toBeNull();
+  });
+});
+
+/* ČÚZK's cadastral map in the list: one row; while on, the zoom hint or what a click does, and the source. */
+describe('<CadastreControls>', () => {
+  it('switches from its row and shows nothing more while off', () => {
+    const onChange = vi.fn();
+    render(<CadastreControls on={false} zoom={18} onChange={onChange} />);
+    expect(screen.queryByRole('link', { name: '© ČÚZK' })).toBeNull();
+    fireEvent.click(chip('Katastrální mapa'));
+    expect(onChange).toHaveBeenLastCalledWith(true);
+  });
+
+  it('asks to zoom in below zoom 17, then says a click opens the parcel, and names ČÚZK', () => {
+    const { rerender } = render(<CadastreControls on zoom={16} onChange={vi.fn()} />);
+    expect(screen.getByText('Přibližte mapu')).toHaveAttribute('title', 'Katastrální mapa se kreslí od přiblížení 17');
+    expect(screen.queryByText(/Klikněte na parcelu/)).toBeNull();
+    rerender(<CadastreControls on zoom={17} onChange={vi.fn()} />);
+    expect(screen.queryByText('Přibližte mapu')).toBeNull();
+    expect(screen.getByText('Klikněte na parcelu pro její číslo a výměru')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '© ČÚZK' })).toHaveAttribute('href', 'https://geoportal.cuzk.gov.cz/');
   });
 });
 
@@ -438,7 +467,7 @@ describe('<MapOverlayControls> hint, note and footer', () => {
 describe('<MapOverlayControls compact>', () => {
   it('shows the chips alone, with the same tri-state and the same writes', () => {
     const onChange = renderControls('flood_q5,metro', { compact: true, zoom: 3 });
-    expect(screen.getAllByRole('checkbox')).toHaveLength(5);
+    expect(screen.getAllByRole('checkbox')).toHaveLength(6);
     expect(screen.queryByRole('group', { name: 'Podklad mapy' })).toBeNull();
     expect(chip('Metro')).toBeChecked();
     expect(chip('Záplavová území')).toBePartiallyChecked();
@@ -451,7 +480,7 @@ describe('<MapOverlayControls compact>', () => {
 });
 
 describe('<MapOverlayControls compact> basemap chips', () => {
-  it('carries the photo and the terrain as chips of their own', () => {
+  it('carries the photo, the terrain and the cadastre as chips of their own', () => {
     const onChange = renderControls('relief', { compact: true });
     expect(chip('Letecká')).not.toBeChecked();
     expect(chip('Reliéf a vrstevnice')).toBePartiallyChecked();
@@ -459,5 +488,7 @@ describe('<MapOverlayControls compact> basemap chips', () => {
     expect(onChange).toHaveBeenLastCalledWith('aerial,relief');
     fireEvent.click(chip('Reliéf a vrstevnice'));
     expect(onChange).toHaveBeenLastCalledWith('contours,relief');
+    fireEvent.click(chip('Katastrální mapa'));
+    expect(onChange).toHaveBeenLastCalledWith('cadastre,relief');
   });
 });

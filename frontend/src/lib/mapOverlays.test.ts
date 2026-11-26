@@ -205,7 +205,7 @@ describe('layersFromSearchParams — the URL rule and the legacy key', () => {
   });
 });
 
-/* ČÚZK's photo, relief and contours: keys of the same selection, never the registry's. */
+/* ČÚZK's photo, relief, contours and cadastral map: keys of the same selection, never the registry's. */
 describe('the basemap picks', () => {
   const REG: MapOverlayRegistry = {
     sections: [
@@ -215,32 +215,43 @@ describe('the basemap picks', () => {
   };
 
   it('reads each pick from its key', () => {
-    expect(basemapPicks('')).toEqual({ aerial: false, relief: false, contours: false });
-    expect(basemapPicks('aerial,contours,metro')).toEqual({ aerial: true, relief: false, contours: true });
+    expect(basemapPicks('')).toEqual({ aerial: false, relief: false, contours: false, cadastre: false });
+    expect(basemapPicks('aerial,contours,metro')).toEqual({
+      aerial: true,
+      relief: false,
+      contours: true,
+      cadastre: false,
+    });
+    expect(basemapPicks('cadastre,metro').cadastre).toBe(true);
   });
 
   it('switches picks and keeps every other key, canonical', () => {
     expect(withBasemap('metro', { aerial: true })).toBe('aerial,metro');
     expect(withBasemap('aerial,metro,rent_map:vk2', { aerial: false, relief: true })).toBe('metro,relief,rent_map:vk2');
     expect(withBasemap('relief', {})).toBe('relief');
+    expect(withBasemap('metro,relief', { cadastre: true })).toBe('cadastre,metro,relief');
+    expect(withBasemap('cadastre,metro', { cadastre: false })).toBe('metro');
   });
 
   it('survive layersOf with or without a registry, as no variant', () => {
     expect(serializeLayers(layersOf(parseLayers('aerial,ghost,metro,relief:x'), REG))).toBe('aerial,metro,relief');
     expect(serializeLayers(layersOf(parseLayers('contours,metro'), undefined))).toBe('contours');
+    expect(serializeLayers(layersOf(parseLayers('cadastre,ghost'), REG))).toBe('cadastre');
   });
 
   it('need no registry: hasRegistryLayers asks for a registry key only', () => {
-    expect(hasRegistryLayers('aerial,contours,relief')).toBe(false);
+    expect(hasRegistryLayers('aerial,cadastre,contours,relief')).toBe(false);
     expect(hasRegistryLayers('aerial,metro')).toBe(true);
     expect(hasRegistryLayers('')).toBe(false);
   });
 
-  it('count as a group each in the Vrstvy badge: the photo, the terrain, each section drawn', () => {
+  it('count as a group each in the Vrstvy badge: the photo, the terrain, the cadastre, each section drawn', () => {
     expect(layerGroupsOn('', REG)).toBe(0);
     expect(layerGroupsOn('aerial', REG)).toBe(1);
     expect(layerGroupsOn('contours,relief', REG)).toBe(1);
+    expect(layerGroupsOn('cadastre', REG)).toBe(1);
     expect(layerGroupsOn('aerial,flood_q100,flood_q5,metro,relief', REG)).toBe(4);
+    expect(layerGroupsOn('aerial,cadastre,flood_q5,metro,relief', REG)).toBe(5);
     expect(registrySectionsOn('aerial,flood_q100,flood_q5,metro,relief', REG)).toBe(2);
     expect(layerGroupsOn('aerial,metro', undefined)).toBe(1);
   });

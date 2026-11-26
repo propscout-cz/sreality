@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useNewTabProps, useSpaLinkDelegation } from '@/lib/linkGestures';
 import { YmPicker, YM_SELECT_CLS } from '@/components/YmPicker';
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
-import { addBasemapLayers, createMap, useBasemapPicks } from '@/lib/basemap';
+import { addBasemapLayers, createMap, openReferencePopup, useBasemapPicks } from '@/lib/basemap';
 import type { HaloPoint } from '@/lib/hoverSync';
 import { haloFeatures, useMapFeatureHover } from '@/lib/useMapFeatureHover';
 import {
@@ -958,23 +958,21 @@ export default function ListingMap({
        * choropleth (a scale layer) covers every place, though, so inside a
        * curated city it leaves the click to the city's card, as the rent map
        * always has. Registered after the city handler, so this popup replaces
-       * the city's inside any other area. */
+       * the city's inside any other area. With the cadastral map drawn, a click
+       * off the listings also asks for the parcel under it (lib/cadastre), in
+       * the same popup, under the area's card; at that zoom it replaces the
+       * city's card everywhere. */
       map.on('click', (e) => {
-        const html = overlayPopupAt(map, e.point, overlayRegistryRef.current, overlayLayersRef.current, {
+        if (listingUnderCursor(e.point)) return;
+        const layers = overlayLayersRef.current;
+        const html = overlayPopupAt(map, e.point, overlayRegistryRef.current, layers, {
           above: LISTING_HIT_LAYERS,
           cityHit: () => map.queryRenderedFeatures(e.point, { layers: ['city-fill'] }).length > 0,
         });
-        if (!html) return;
+        const popup = openReferencePopup(map, e.lngLat, html, layers);
+        if (!popup) return;
         popupRef.current?.remove();
-        popupRef.current = new maplibregl.Popup({
-          closeButton: true,
-          closeOnClick: true,
-          maxWidth: '300px',
-          className: 'listing-popup overlay-popup',
-        })
-          .setLngLat(e.lngLat)
-          .setHTML(html)
-          .addTo(map);
+        popupRef.current = popup;
       });
 
       /* Locator halo — the card→map "where is it" answer. A separate

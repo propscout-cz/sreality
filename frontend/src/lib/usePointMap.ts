@@ -1,13 +1,21 @@
 /* A map of one property's point — the property page's header map and its large dialog,
  * the phone's Poloha: the shared basemap around the pin, and every layer the `layers`
  * selection picks (lib/mapOverlays): the basemap picks under everything, the reference
- * overlays under the pin, a click on an overlay area answered with its popup. ONE hook,
+ * overlays under the pin, a click on an overlay area (or, with the cadastral map drawn,
+ * on a parcel) answered with its popup (lib/basemap openReferencePopup). ONE hook,
  * so the three maps cannot drift; each draws only its own controls around it. */
 
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import maplibregl from 'maplibre-gl';
 
-import { addBasemapLayers, addPointPin, createMap, guardMap, useBasemapPicks } from '@/lib/basemap';
+import {
+  addBasemapLayers,
+  addPointPin,
+  createMap,
+  guardMap,
+  openReferencePopup,
+  useBasemapPicks,
+} from '@/lib/basemap';
 import {
   overlayPopupAt,
   useMapOverlays,
@@ -82,17 +90,10 @@ export function usePointMap(
       addPointPin(map, [lng, lat], { active });
       map.on('click', (e) => {
         const html = overlayPopupAt(map, e.point, registryRef.current, layersRef.current);
-        if (!html) return;
+        const next = openReferencePopup(map, e.lngLat, html, layersRef.current);
+        if (!next) return;
         popup?.remove();
-        popup = new maplibregl.Popup({
-          closeButton: true,
-          closeOnClick: true,
-          maxWidth: '300px',
-          className: 'listing-popup overlay-popup',
-        })
-          .setLngLat(e.lngLat)
-          .setHTML(html)
-          .addTo(map);
+        popup = next;
       });
       setReady(true);
     });

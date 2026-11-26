@@ -361,9 +361,11 @@ left the key over an empty map until a reload.
 `MapOverlayControls` IS the list, on every map: Podklad (`SegmentedBar` "Mapa" / "Letecká": ČÚZK's aerial
 photo over the whole basemap), then its `children` (Browse's Města and Růst cen a nájmů — Browse's alone,
 by ruling), then the registry sections, then "Reliéf a vrstevnice" (`TerrainControls`, moved out of
-`ListingMap`). `tone="phone"` sizes it for the phone's bottom sheet (15 px rows, 44 px tall; one context,
+`ListingMap`), then "Katastrální mapa" (`CadastreControls`, 2026-11-26: below zoom 17 "Přibližte mapu",
+above it what a click on a parcel does). `tone="phone"` sizes it for the phone's bottom sheet (15 px rows, 44 px tall; one context,
 `MapControlsToneContext`, read by `OverlayChip`, `OverlayPanel` and the rows). `compact` (ComparablesMap)
-adds a "Letecká" and a "Reliéf a vrstevnice" chip around the section chips. Where it shows:
+adds a "Letecká", a "Reliéf a vrstevnice" and a "Katastrální mapa" chip around the section chips (no parcel
+click there: the comparables map opens no reference popup). Where it shows:
 - Browse: the Vrstvy flyout, as above.
 - The property page's header minimap (`DetailMap`, 170 px): draws the remembered picks; its rail holds
   Vrstvy and zoom. Vrstvy opens `PropertyMapDialog`, the large map: the minimap's view in a `Dialog`,
@@ -377,6 +379,18 @@ The three point maps (minimap, large map, phone) are ONE hook, `lib/usePointMap`
 `guardMap`, `addBasemapLayers`, `addPointPin`, `useBasemapPicks`, `useMapOverlays` (under 'pin'),
 `useOverlayCursor`, the click popup (`overlayPopupAt`, which Browse's click handler calls too, with
 its listing layers first) and `useOverlayPlacesAtCenter`. Rendering is all each one owns.
+
+**The parcel click (2026-11-26, operator: "click → parcel card").** While the cadastral map is drawn
+(`cadastre` picked, zoom ≥ `CADASTRE_MINZOOM` = 17; `asksParcel`), a click off the listings asks ČÚZK's
+RÚIAN view service (`Prohlizeci_sluzba_nad_daty_RUIAN`: layer 5 the parcel, layer 7 the k.ú., two point
+queries from the browser, ~0.3 s; `lib/cadastre` `fetchParcelAt`) which parcel lies under it. One popup
+carries it, `lib/basemap` `openReferencePopup` (Browse and `lib/usePointMap` both open their reference
+popups through it): the overlay area's card when one answers, then the parcel's ("Hledám parcelu…" until
+ČÚZK answers; closing the popup aborts the question). The card: "Parcela 1/1" ("st. 64" where the k.ú.
+numbers building plots apart, `druhcislovanikod` 1), k.ú. and area, land type and use (ČÚZK's code lists
+`SC_D_POZEMKU`, `SC_ZP_VYUZITI_POZ`), and "Nahlížení do KN ↗" to the parcel's page
+(`ZobrazObjekt.aspx?typ=parcela&id=<RÚIAN id>`; owners stay behind ČÚZK's CAPTCHA). At that zoom it
+replaces Browse's city card everywhere; a class overlay's card (a flood zone) keeps its place above it.
 
 **The area card (#2489, variant D of the 2026-11-09 design page).** A scale layer with variants (the rent
 map) is keyed by an area card instead of a bare scale: the place under the map's centre (its `level` word and
@@ -403,12 +417,14 @@ stays clear of it. The count pill keeps the pin key
   comparables map mounts the hook (`beforeId` 'comparables-point') and the compact controls, the point
   maps `lib/usePointMap`. `ListingMap`: under the first growth-choropleth layer (where the rent map and
   the kraj borders have always sat), so a choropleth on top still tints them as before.
-- **The basemap picks are keys of the same selection (2026-11-20):** `aerial`, `relief`, `contours`
-  (`BASEMAP_KEYS`, `basemapPicks`, `withBasemap`), never registry keys; `layersOf` keeps them with or
-  without a registry, so a registry edit never drops them. `lib/basemap` `addBasemapLayers` adds all three
-  hidden at load (terrain under the basemap's roads, the photo over the whole basemap, both under every
-  layer of ours); `setBasemapPicks` / `useBasemapPicks` show the picked ones and move the terrain over
-  the photo while it shows, back under the roads when the map does. `MapOverlayState` lost `relief` /
+- **The basemap picks are keys of the same selection (2026-11-20):** `aerial`, `relief`, `contours`,
+  since 2026-11-26 `cadastre` (`BASEMAP_KEYS`, `basemapPicks`, `withBasemap`), never registry keys;
+  `layersOf` keeps them with or without a registry, so a registry edit never drops them. `lib/basemap`
+  `addBasemapLayers` adds them all hidden at load (terrain under the basemap's roads, the cadastral map
+  under its labels, the photo over the whole basemap, all under every layer of ours); `setBasemapPicks` /
+  `useBasemapPicks` show the picked ones and move the terrain and the cadastre over the photo while it
+  shows, back down when the map does. The cadastre is two layers over ČÚZK's cached WMTS: its black lines
+  (`default`) on the map, its `Yellow` ones on the photo, only the shown one loading tiles. `MapOverlayState` lost `relief` /
   `contours`: Browse's 2026-11-11 URL keys `relief=1` / `contours=1` read into `layers` as legacy
   spellings (`LEGACY_LAYER_KEYS`), rewritten by the next layer change. So the terrain is now remembered
   per browser like every other pick (it was a URL-only view knob for its first nine days).
@@ -423,6 +439,8 @@ stays clear of it. The count pill keeps the pin key
 `mapOverlays.test.ts` (grammar, legacy mapping, style-layer builders from a legend/scale, protocol
 URL parsing); `browseState.test.ts` (round trip incl. `layers`, `kraje=1` legacy);
 `MapOverlayControls.test.tsx` (chips, tri-state, area card, hint, note, footer, compact);
+`basemap.test.ts` (draw order, black/yellow cadastre, the shared popup); `cadastre.test.ts` (parcel row
+→ card, the two RÚIAN queries, when a click asks);
 `persistedFlag.test.ts` (string helpers); `geoRing.test.ts`.
 
 ## Cleanup PR (after the feature merges): the MF rent choropleth onto this path
@@ -498,7 +516,7 @@ Backend, as built (2026-10-15):
 | schema | `migrations/600_map_overlays.sql`; `tests/test_map_overlays_live.py` (CI DB lane: control point, render function on a square + a line + a point, tile bytes contain the layer name); the pytest line in `.github/workflows/migrations.yml` |
 | ingest | `scripts/ingest_map_overlays.py`; `.github/workflows/ingest_map_overlays.yml` (deleted by #2025: the `map_overlays` job); `frontend/src/lib/workflowDocs.generated.ts`; `tests/scripts/test_ingest_map_overlays.py` + `tests/fixtures/map_overlays/*.json` (small real samples) |
 | api | `api/routes/map_overlays.py`; `api/main.py` registration; `tests/api/test_map_overlays.py` |
-| spa | `frontend/src/lib/mapOverlays.ts`, `geoRing.ts`, `persistedFlag.ts`, `basemap.ts`, `browseState.ts`, `queries.ts`; `components/MapOverlayControls.tsx`, `OverlayChip.tsx`, `ListingMap.tsx`, `BrowseExperience.tsx`, `estimation/ComparablesMap.tsx`, `filter-controls/LocationControl.tsx`; tests |
+| spa | `frontend/src/lib/mapOverlays.ts`, `geoRing.ts`, `persistedFlag.ts`, `basemap.ts`, `cadastre.ts`, `browseState.ts`, `queries.ts`; `components/MapOverlayControls.tsx`, `OverlayChip.tsx`, `ListingMap.tsx`, `BrowseExperience.tsx`, `estimation/ComparablesMap.tsx`, `filter-controls/LocationControl.tsx`; tests |
 | docs | this file; `docs/architecture.md` (new section + cross-reference map); `roadmap/map-track.md`; `GLOSSARY.md` ("Reference overlay"); `.claude/skills/toolkit-api/SKILL.md` (the two routes; trim a line first, the file is at its cap); `.claude/skills/database/SKILL.md` (one line: the overlay store is a mirror, rendered tiles, ingest workflow) |
 
 ## Deploy sequence

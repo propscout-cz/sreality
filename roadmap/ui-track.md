@@ -29,6 +29,16 @@ toolkit work.
 - Next (unruled): both services draw each tile on request; if they turn slow under use, cache the tiles
   on our side (R2) behind the API.
 
+### Cadastral map on every map: ČÚZK KN + a parcel click (2026-11-26, no migration)
+- **Done** (operator ask 2026-11-26; rulings: a click opens a parcel card; below zoom 17 the row only hints
+  to zoom in). A fourth basemap pick, `cadastre`, in the one `layers` selection: ČÚZK's cached KN WMTS,
+  black lines on the map, yellow on the photo, from zoom 17 (ČÚZK's own floor), on Browse, the property
+  maps, the phone and the comparables chips. A click there asks ČÚZK's RÚIAN view service for the parcel
+  (number, k.ú., area, land type and use) with a link to Nahlížení do KN, in the same popup as an overlay
+  area's card (`lib/cadastre`, `lib/basemap` `openReferencePopup`; docs/design/map-overlays.md).
+- Next (unruled): no parcel click on the comparables map (it opens no reference popup); katastrální území
+  borders when zoomed out would be a registry layer from our RÚIAN mirror.
+
 ### Browse's circle is a true circle, placed on the main map (2026-10-30, migrations 694 + 695)
 - **Done** (operator report 2026-10-30: "I do not see pins for inactive properties" — the view held
   more than the pin limit, and a centre + radius with no centre filtered nothing). Rulings 2026-10-30:

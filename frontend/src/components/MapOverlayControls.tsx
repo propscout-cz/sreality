@@ -28,6 +28,7 @@ import {
   type OverlayScale,
   type OverlaySection,
   activeVariant,
+  CADASTRE_MINZOOM,
   CONTOURS_MINZOOM,
   basemapPicks,
   layersOf,
@@ -45,7 +46,7 @@ type Edit = (apply: (next: Map<string, string | null>) => void) => void;
 /* Every layer a map offers, in one list (docs/design/map-overlays.md): the base
  * (Podklad: Mapa | Letecká), then `children` (Browse's own Města and Růst cen a
  * nájmů), then one toggle per registry section, checked when every layer of it is
- * on, then ČÚZK's Reliéf a vrstevnice. While a section is on, the panel under it
+ * on, then ČÚZK's Reliéf a vrstevnice and Katastrální mapa. While a section is on, the panel under it
  * holds the per-layer toggles, the zoom hint, the source's caveats and its
  * provenance (a layer's variant is picked on its area card, on the map). Every
  * pick is a key of the one `layers` selection. `compact` is the chips alone (the
@@ -92,6 +93,12 @@ export default function MapOverlayControls({
           indeterminate={picks.relief !== picks.contours}
           onChange={(checked) => setPicks({ relief: checked, contours: checked })}
         />
+        <OverlayChip
+          compact
+          label="Katastrální mapa"
+          checked={picks.cadastre}
+          onChange={(cadastre) => setPicks({ cadastre })}
+        />
       </div>
     );
   }
@@ -106,6 +113,9 @@ export default function MapOverlayControls({
         {sectionControls.length > 0 && <div className={`${row} flex flex-col`}>{sectionControls}</div>}
         <div className={row}>
           <TerrainControls relief={picks.relief} contours={picks.contours} zoom={zoom} onChange={setPicks} />
+        </div>
+        <div className={row}>
+          <CadastreControls on={picks.cadastre} zoom={zoom} onChange={(cadastre) => setPicks({ cadastre })} />
         </div>
       </div>
     </MapControlsToneContext.Provider>
@@ -194,22 +204,67 @@ export function TerrainControls({
                 Vrstevnice: přibližte mapu
               </p>
             )}
-            <p className={`${tone.foot} text-[var(--color-ink-3)]`}>
-              Jen území ČR ·{' '}
-              <a
-                href="https://geoportal.cuzk.gov.cz/"
-                target="_blank"
-                rel="noreferrer"
-                title="CC BY 4.0"
-                className="underline-offset-2 hover:underline hover:text-[var(--color-ink-2)]"
-              >
-                © ČÚZK
-              </a>
-            </p>
+            <CuzkCredit />
           </div>
         </OverlayPanel>
       )}
     </div>
+  );
+}
+
+/* ČÚZK's cadastral map: one row; while it is on, the panel under it holds the zoom hint
+ * (ČÚZK draws parcels only from CADASTRE_MINZOOM), what a click on a parcel does
+ * (lib/cadastre) and the source. */
+export function CadastreControls({
+  on,
+  zoom,
+  onChange,
+}: {
+  on: boolean;
+  zoom: number | null;
+  onChange: (on: boolean) => void;
+}) {
+  const tone = useMapControlsTone();
+  return (
+    <div className="flex flex-col">
+      <OverlayChip label="Katastrální mapa" checked={on} onChange={onChange} />
+      {on && (
+        <OverlayPanel>
+          <div className="flex flex-col gap-1">
+            {zoom != null && zoom < CADASTRE_MINZOOM ? (
+              <p
+                className={`${tone.hint} font-medium text-[var(--color-ink-2)]`}
+                title={`Katastrální mapa se kreslí od přiblížení ${CADASTRE_MINZOOM}`}
+              >
+                Přibližte mapu
+              </p>
+            ) : (
+              <p className={`${tone.hint} text-[var(--color-ink-2)]`}>Klikněte na parcelu pro její číslo a výměru</p>
+            )}
+            <CuzkCredit />
+          </div>
+        </OverlayPanel>
+      )}
+    </div>
+  );
+}
+
+/* The source line of ČÚZK's own layers (terrain, cadastral map). */
+function CuzkCredit() {
+  const tone = useMapControlsTone();
+  return (
+    <p className={`${tone.foot} text-[var(--color-ink-3)]`}>
+      Jen území ČR ·{' '}
+      <a
+        href="https://geoportal.cuzk.gov.cz/"
+        target="_blank"
+        rel="noreferrer"
+        title="CC BY 4.0"
+        className="underline-offset-2 hover:underline hover:text-[var(--color-ink-2)]"
+      >
+        © ČÚZK
+      </a>
+    </p>
   );
 }
 

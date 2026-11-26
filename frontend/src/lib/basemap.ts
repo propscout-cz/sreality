@@ -11,8 +11,9 @@
 import { useEffect } from 'react';
 import maplibregl, { type MapOptions } from 'maplibre-gl';
 
+import { asksParcel, lookUpParcel, parcelPopupHtml, type ParcelLookup } from '@/lib/cadastre';
 import { registerOverlayProtocol } from '@/lib/mapOverlayDraw';
-import { CONTOURS_MINZOOM, basemapPicks, type BasemapPicks } from '@/lib/mapOverlays';
+import { CADASTRE_MINZOOM, CONTOURS_MINZOOM, basemapPicks, type BasemapPicks } from '@/lib/mapOverlays';
 
 export const TILE_STYLE = 'https://tiles.openfreemap.org/styles/liberty';
 
@@ -195,38 +196,117 @@ function addTerrainLayers(map: maplibregl.Map): void {
   );
 }
 
+export const CADASTRE_LAYER = 'cadastre';
+export const CADASTRE_ON_PHOTO_LAYER = 'cadastre-photo';
+
+/* The basemap's first label: the cadastral map sits right under it, so street names read
+ * over the parcel lines. */
+const labelsId = (map: maplibregl.Map): string | undefined =>
+  map.getStyle().layers.find((l) => l.type === 'symbol')?.id;
+
+/* ČÚZK's cadastral map (Katastrální mapa, KN; CC BY 4.0), cached WMTS tiles in web
+ * mercator, row before column. Two layers, both added HIDDEN: ČÚZK's black lines over the
+ * basemap, its yellow ones ("pro zobrazení nad ortofotem") over the photo; only the shown
+ * one's tiles load. ČÚZK draws parcels only from zoom 17 (a zoomed-out tile is an HTML
+ * notice, not a PNG), so the layers start there too and the panel's hint and the parcel
+ * click (lib/cadastre) agree with what is drawn. Abroad the tiles come back empty. */
+function addCadastreLayers(map: maplibregl.Map): void {
+  const beforeId = labelsId(map);
+  for (const [id, style] of [
+    [CADASTRE_LAYER, 'default'],
+    [CADASTRE_ON_PHOTO_LAYER, 'Yellow'],
+  ] as const) {
+    map.addSource(id, {
+      type: 'raster',
+      tiles: [`https://services.cuzk.cz/wmts/local-km-wmts-google/rest/WMTS/${style}/KN/{z}/{y}/{x}`],
+      tileSize: 256,
+      minzoom: CADASTRE_MINZOOM,
+      maxzoom: 22,
+      attribution: CUZK_ATTRIBUTION,
+    });
+    map.addLayer(
+      { id, type: 'raster', source: id, minzoom: CADASTRE_MINZOOM, layout: { visibility: 'none' } },
+      beforeId,
+    );
+  }
+}
+
 /* Every map's basemap picks (lib/mapOverlays BasemapPicks), all HIDDEN until picked: the
- * terrain under the roads, the photo over the whole basemap. Call it once the style has
- * loaded and before any layer of ours, so each of ours draws over all three. */
+ * terrain under the roads, the cadastral map under the labels, the photo over the whole
+ * basemap. Call it once the style has loaded and before any layer of ours, so each of
+ * ours draws over all of them. */
 export function addBasemapLayers(map: maplibregl.Map): void {
   addTerrainLayers(map);
+  addCadastreLayers(map);
   addAerialLayer(map);
 }
 
-/* Shows the picked ones and hides the rest. The terrain moves with the base: over the
- * photo while it shows (under it the photo would hide it), back under the roads when the
- * basemap does (right under the photo on a basemap with neither roads nor labels). A
- * no-op on a map without addBasemapLayers. */
-export function setBasemapPicks(map: maplibregl.Map, { aerial, relief, contours }: BasemapPicks): void {
+/* Shows the picked ones and hides the rest. The terrain and the cadastral map move with
+ * the base: over the photo while it shows (under it the photo would hide them; the
+ * cadastre over the terrain, in its yellow), back under the roads and the labels when the
+ * basemap does (right under the photo on a basemap with neither). A no-op on a map
+ * without addBasemapLayers. */
+export function setBasemapPicks(
+  map: maplibregl.Map,
+  { aerial, relief, contours, cadastre }: BasemapPicks,
+): void {
   if (!map.getLayer(AERIAL_LAYER)) return;
   const order = map.getLayersOrder();
-  const terrain = new Set([RELIEF_LAYER, CONTOURS_LAYER]);
-  const beforeId = aerial
-    ? order.slice(order.indexOf(AERIAL_LAYER) + 1).find((id) => !terrain.has(id))
-    : roadsId(map) ?? AERIAL_LAYER;
-  map.moveLayer(RELIEF_LAYER, beforeId);
-  map.moveLayer(CONTOURS_LAYER, beforeId);
+  const moving = new Set([RELIEF_LAYER, CONTOURS_LAYER, CADASTRE_LAYER, CADASTRE_ON_PHOTO_LAYER]);
+  const overPhoto = order.slice(order.indexOf(AERIAL_LAYER) + 1).find((id) => !moving.has(id));
+  const terrainBefore = aerial ? overPhoto : roadsId(map) ?? AERIAL_LAYER;
+  const cadastreBefore = aerial ? overPhoto : labelsId(map) ?? AERIAL_LAYER;
+  map.moveLayer(RELIEF_LAYER, terrainBefore);
+  map.moveLayer(CONTOURS_LAYER, terrainBefore);
+  map.moveLayer(CADASTRE_LAYER, cadastreBefore);
+  map.moveLayer(CADASTRE_ON_PHOTO_LAYER, cadastreBefore);
   const show = (id: string, on: boolean) => map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
   show(AERIAL_LAYER, aerial);
   show(RELIEF_LAYER, relief);
   show(CONTOURS_LAYER, contours);
+  show(CADASTRE_LAYER, cadastre && !aerial);
+  show(CADASTRE_ON_PHOTO_LAYER, cadastre && aerial);
+}
+
+/* The one popup a click on a map's reference data opens (Browse's map, lib/usePointMap):
+ * the overlay area's card (lib/mapOverlayDraw overlayPopupAt's html), then, while the
+ * cadastral map is drawn, the parcel under the click (lib/cadastre), its card filled in
+ * when ČÚZK answers; closing the popup drops the question. Null when neither has anything
+ * to say. */
+export function openReferencePopup(
+  map: maplibregl.Map,
+  at: maplibregl.LngLat,
+  overlayHtml: string | null,
+  selection: string,
+): maplibregl.Popup | null {
+  const parcel = asksParcel(map, selection);
+  if (!overlayHtml && !parcel) return null;
+  const html = (lookup: ParcelLookup | null): string =>
+    `${overlayHtml ?? ''}${lookup ? parcelPopupHtml(lookup) : ''}`;
+  const popup = new maplibregl.Popup({
+    closeButton: true,
+    closeOnClick: true,
+    maxWidth: '300px',
+    className: 'listing-popup overlay-popup',
+  })
+    .setLngLat(at)
+    .setHTML(html(parcel ? { state: 'loading' } : null))
+    .addTo(map);
+  if (parcel) {
+    const question = new AbortController();
+    popup.on('close', () => question.abort());
+    void lookUpParcel(at, question.signal).then((lookup) => {
+      if (!question.signal.aborted) popup.setHTML(html(lookup));
+    });
+  }
+  return popup;
 }
 
 /* Keeps a map's basemap picks in step with a `layers` selection; `ready` = its style has
  * loaded and addBasemapLayers ran. A pick flips visibility, never builds a new map. */
 export function useBasemapPicks(map: maplibregl.Map | null, ready: boolean, selection: string): void {
-  const { aerial, relief, contours } = basemapPicks(selection);
+  const { aerial, relief, contours, cadastre } = basemapPicks(selection);
   useEffect(() => {
-    if (map && ready) setBasemapPicks(map, { aerial, relief, contours });
-  }, [map, ready, aerial, relief, contours]);
+    if (map && ready) setBasemapPicks(map, { aerial, relief, contours, cadastre });
+  }, [map, ready, aerial, relief, contours, cadastre]);
 }
