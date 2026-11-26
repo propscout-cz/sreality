@@ -201,10 +201,10 @@ def test_the_rent_map_paints_the_choropleth_the_browse_map_drew() -> None:
         "outline": {"color": "rgba(60, 60, 90, 0.25)", "width": 0.4},
     }
     assert rent.variants == (
-        {"key": "vk1", "label": "1+kk, 1+1", "prop": "vk1"},
-        {"key": "vk2", "label": "2+kk, 2+1", "prop": "vk2"},
-        {"key": "vk3", "label": "3+kk, 3+1", "prop": "vk3"},
-        {"key": "vk4", "label": "4+kk, 4+1", "prop": "vk4"},
+        {"key": "vk1", "label": "1+kk, 1+1", "prop": "vk1", "alt_prop": "nov1", "example_m2": 34},
+        {"key": "vk2", "label": "2+kk, 2+1", "prop": "vk2", "alt_prop": "nov2", "example_m2": 54},
+        {"key": "vk3", "label": "3+kk, 3+1", "prop": "vk3", "alt_prop": "nov3", "example_m2": 75},
+        {"key": "vk4", "label": "4+kk, 4+1", "prop": "vk4", "alt_prop": "nov4", "example_m2": 106},
     )
     assert json.loads(json.dumps(rent.scale)) == rent.scale, "the scale must survive JSON as is"
 
@@ -855,26 +855,33 @@ def test_a_dissolve_cuts_overlaps_against_earlier_rows_then_subdivides_each_piec
 
 
 def test_the_kraje_source_draws_each_kraj_boundary_in_3857() -> None:
+    """W8 (ruling Q12b): the register's render polygons at the current version, dated by that version."""
     text = _compact(mod.KRAJE_SQL)
-    assert "st_transform(st_boundary(b.geom::geometry),3857)" in text
-    assert "whereb.level='kraj'" in text
+    assert "st_transform(st_boundary(r.geom),3857)" in text
+    assert "fromruian_unit_renderrwherer.level='kraj'" in text
+    assert _compact(mod.KRAJE_REVISED_SQL) == "selectsource_datefromregistry_versionswhereis_current"
 
 
-def test_the_rent_map_source_is_the_old_matviews_query_without_its_geojson() -> None:
-    """Migration 132's rent_map_choropleth: one row per territory of the LATEST revision, its
-    boundary at the level the MF priced it (obec or KÚ), the four VK rents pivoted into flat
-    props, NULLs stripped so an unpriced VK paints as null_color; the geometry stays geometry."""
+def test_the_rent_map_source_pivots_both_rents_of_the_latest_revision() -> None:
+    """Migration 132's rent_map_choropleth without its GeoJSON: one row per territory of the
+    LATEST revision, its boundary at the level the MF priced it (obec or KÚ), the four VK rents
+    and their new-build twins (the area card's second column) pivoted into flat props, NULLs
+    stripped so an unpriced VK paints as null_color; the geometry stays geometry."""
     text = _compact(mod.RENT_MAP_SQL)
-    assert text.startswith("selectb.id::textassource_id,")
-    assert ("jsonb_strip_nulls(jsonb_build_object('name',b.name,'kraj',min(v.kraj),"
-            "'level',b.level,") in text
+    assert text.startswith("selectv.ruian_code::textassource_id,")
+    assert ("jsonb_strip_nulls(jsonb_build_object('name',r.name,'kraj',v.kraj,'level',v.level,"
+            "'vk1',v.vk1,'vk2',v.vk2,'vk3',v.vk3,'vk4',v.vk4,"
+            "'nov1',v.nov1,'nov2',v.nov2,'nov3',v.nov3,'nov4',v.nov4))asprops") in text
     for vk in range(1, 5):
-        assert f"'vk{vk}',max(v.ref_rent_per_m2)filter(wherev.vk={vk})" in text
-    assert "st_transform(b.geom::geometry,3857)asgeom" in text
-    assert "joinadmin_boundariesbonb.id=v.ruian_codeandb.level=v.level" in text
-    assert "wherev.source_revision=(selectmax(source_revision)fromrent_map_revisions)" in text
-    assert text.endswith("groupbyb.id")
-    assert "geojson" not in text and "novostavba" not in text
+        assert f"max(ref_rent_per_m2)filter(wherevk={vk})asvk{vk}" in text
+        assert f"max(ref_rent_novostavba_per_m2)filter(wherevk={vk})asnov{vk}" in text
+    assert "st_transform(r.geom,3857)asgeom" in text
+    # W8 (ruling Q12b): the polygon is the register's, at the level the MF priced it.
+    assert ("joinruian_unit_renderronr.code=v.ruian_codeandr.level=(casev.levelwhen'ku'then'katastralni_uzemi'"
+            "elsev.levelend)::ruian_level") in text
+    assert "wheresource_revision=(selectmax(source_revision)fromrent_map_revisions)" in text
+    assert "groupbyruian_code,level" in text
+    assert "geojson" not in text
 
 
 def test_the_rent_map_revision_date_is_the_drawn_revisions_source_date() -> None:
@@ -1144,7 +1151,7 @@ def test_the_database_only_render_keeps_the_datum_check(offline: None) -> None:
 
 
 def test_the_database_only_render_refuses_an_empty_first_render(offline: None) -> None:
-    """A join that finds no boundary (an empty admin_boundaries) must not publish an empty map."""
+    """A join that finds no boundary (an empty register) must not publish an empty map."""
     conn = _FakeConn()
     with pytest.raises(mod.Refused, match="0 features against 0"):
         mod.render_sql_section(conn, "rent_map")
@@ -1251,7 +1258,7 @@ def test_a_clean_full_run_exits_zero_and_stamps_the_store_wide_tile_count(
 
 
 def test_a_partial_run_stamps_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ingest_boundaries' `--sections kraje` step must not mark metro + flood fresh."""
+    """A `--sections kraje` run by hand must not mark metro + flood fresh."""
     seen: list[str] = []
     stamps: list[str] = []
     monkeypatch.setattr(mod, "run_section", _fake_run(seen, {}))

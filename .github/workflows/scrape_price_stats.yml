@@ -2,7 +2,7 @@ name: "Scraping: Sreality price stats (ceny-nemovitosti, weekly + manual)"
 
 # Ingests the aggregate market statistics sreality publishes at
 # /ceny-nemovitosti (NOT individual listings) into the price_stat_* tables.
-# For each active dataset (one named filter set) × tracked municipality ×
+# For each active dataset (one named filter set) × town in ruian_translation ×
 # {prodej, pronájem} it fetches the per-month series from the login-gated
 # estate_prices JSON API, then recomputes the per-city derived metrics
 # (CAGR growth, gross yield) + refreshes the map choropleth. Design:
@@ -29,13 +29,12 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: probe (test auth) | resolve (refresh localities) | full
+        description: probe (test auth) | full
         required: true
         default: "full"
         type: choice
         options:
           - "probe"
-          - "resolve"
           - "full"
       dataset_id:
         description: Single dataset id to run (empty = all active datasets)
@@ -108,7 +107,6 @@ jobs:
           fi
 
           ARGS=""
-          if [ "$MODE" = "resolve" ]; then ARGS="$ARGS --resolve-only"; fi
           if [ -n "${{ inputs.dataset_id }}" ]; then ARGS="$ARGS --dataset-id ${{ inputs.dataset_id }}"; fi
 
           SY='${{ inputs.start_year }}'; if [ -z "$SY" ]; then SY="2015"; fi
@@ -125,7 +123,7 @@ jobs:
       # the weekly schedule. The job's own GITHUB_TOKEN can dispatch it: GitHub
       # exempts workflow_dispatch from its rule that a GITHUB_TOKEN event starts no
       # new run. Re-dispatch keeps the inputs (dataset_id / window). Skipped for
-      # probe / resolve / dry-run.
+      # probe / dry-run.
       #
       # It YIELDS first: the price-stats group keeps one pending slot and GitHub
       # cancels the older pending run, so a dispatch now would silently cancel a

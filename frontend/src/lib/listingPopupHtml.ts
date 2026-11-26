@@ -8,7 +8,7 @@ import { fmtAbsolute, fmtArea, fmtCzk, fmtMeasuredPricePerM2, fmtRelativeCs } fr
 import { propertyPath } from './listingUrl';
 import { areaKindOf, ppm2BasisFromToken } from './measure';
 import type { MapRow } from './queries';
-import { pinPrecisionLabel, pinPrecisionShort } from './uncertaintyCircle';
+import { pinPrecisionLabel, pinPrecisionShort } from './pinPrecision';
 
 export function listingPopupHtml(r: MapRow, newTab: NewTabProps = {}): string {
   const price = fmtCzk(r.price_czk);
@@ -27,8 +27,7 @@ export function listingPopupHtml(r: MapRow, newTab: NewTabProps = {}): string {
   const place = r.display_label ?? '';
   /* Directly under the place it qualifies, one line with when the ad was last
    * seen (ruling P13): "Přesná poloha · viděno před 2 h". Each half's detail is
-   * its tooltip — the rung and the radius the circle drawn behind this popup
-   * shows (the TRUE one where that circle is capped), and the exact time. */
+   * its tooltip: the rung the pin stands on, and the exact time. */
   const precision = pinPrecisionShort(r);
   const precisionDetail = pinPrecisionLabel(r);
   const seen = fmtRelativeCs(r.last_seen_at);

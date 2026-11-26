@@ -88,3 +88,25 @@ describe('<PropertyIdentity> price note', () => {
     expect(screen.queryByText('Cena na vyžádání')).toBeNull();
   });
 });
+
+describe('<PropertyIdentity> register marks', () => {
+  const COMPARED = { ...LISTING, building_type: 'cihla', has_lift: true, cellar: true, floor: 2, total_floors: 5 } as ListingPublic;
+  const identity = (registerMark?: (fact: string) => JSX.Element) =>
+    render(
+      <MemoryRouter>
+        <PropertyIdentity listing={COMPARED} registerMark={registerMark} />
+      </MemoryRouter>,
+    );
+
+  it('asks the page for a mark beside each fact the register states too, and only those', () => {
+    identity((fact) => <i data-testid="mark">{fact}</i>);
+    expect(screen.getAllByTestId('mark').map((m) => m.textContent)).toEqual(['floors', 'construction', 'lift']);
+    expect(screen.getByText('Lift').closest('li')).toContainElement(screen.getByText('lift'));
+    expect(screen.getByText('Cellar').closest('li')!.querySelector('[data-testid="mark"]')).toBeNull();
+  });
+
+  it('marks nothing on a surface that passes no mark (Estimation Detail)', () => {
+    identity();
+    expect(screen.queryByTestId('mark')).toBeNull();
+  });
+});

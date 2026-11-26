@@ -38,7 +38,8 @@ from scraper import street, vocabulary
 from scraper.area import PortalAreas, derive_headline_area, parse_area_text
 from scraper.attribute_contract import floor_convention, source_value, source_values
 from scraper.ceskereality_client import detail_url
-from scraper.floor import floor_from_portal
+from scraper.floor import floor_from_portal, floor_from_text, names_a_storey
+from scraper.portal_base import states_closed
 from scraper.portal_identity import native_id
 from scraper.price_text import is_per_area_price
 from scraper.published import czech_date
@@ -99,6 +100,7 @@ class IndexItem:
     title: str | None = None
     price_text: str | None = None
     locality_text: str | None = None
+    closed: bool = False  # the card says sold/let: collected, never a sighting (rule #3)
 
 
 @dataclass(frozen=True)
@@ -420,6 +422,8 @@ def parse_index(html: str) -> IndexPage:
                 or _text(card.css_first(".i-estate__header-title")),
                 price_text=_text(card.css_first(".i-estate__footer-price-value")),
                 locality_text=_text(card.css_first(".i-estate__header-locality")),
+                closed=any(states_closed(_text(badge))
+                           for badge in card.css(".i-estate__image-badges .badge__title")),
             )
         )
 
@@ -489,6 +493,17 @@ def areas_from_params(
         area_m2=area_m2, area_basis=area_basis,
         usable_area=usable, estate_area=estate_area, garden_area=None,
     )
+
+
+def _storey(cell: str | None, category_main: str | None, text: str) -> int | None:
+    """The flat's storey. The portal drops the "Patro" row of a ground-storey flat: of
+    1,201 such flats that are also on sreality, 1,135 (94%) are on the ground storey there
+    (#2552, ruling 2026-11-17). So with no row the advert's own words lead, and a flat
+    whose text names no storey at all is on the ground one."""
+    if cell is not None or category_main != "byt":
+        return floor_from_portal(floor_convention(SOURCE), cell)
+    said, _ = floor_from_text(text, category_main=category_main)
+    return 0 if said is None and not names_a_storey(text) else said
 
 
 def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
@@ -586,7 +601,7 @@ def parse_detail(html: str, *, source_url: str) -> ScrapedListing:
         house_number=house_number,
         lat=lat,
         lon=lon,
-        floor=floor_from_portal(floor_convention(SOURCE), read("floor")),
+        floor=_storey(read("floor"), category_main, f"{title}\n{description}"),
         # "Balkóny" is one multi-value cell ("Balkon, Lodžie, Terasa"), so has_balcony
         # (R11: balcony OR loggia) and `terrace` are both read out of it — and a list
         # that names neither is the portal stating their absence, which is why this

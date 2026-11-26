@@ -1,7 +1,8 @@
 """`health_liveness()`, the pg_cron watcher, writes one `liveness` row of cells (migration 620, its lane cell 621,
 its explicit cells 633, no API cell since 655, one subject per worker since 675, one per job-runner job and the fleet
-since 682). The `migration_633` tests run that file's own unschedule and post-condition, the `migration_655`,
-`migration_675` and `migration_682` tests those files' post-conditions and 682's precondition (not copies).
+since 682, every class's staleness since 745). The `migration_633` tests run that file's own unschedule and
+post-condition, the `migration_655`, `migration_675`, `migration_682` and `migration_745` tests those files'
+post-conditions and 682's and 745's preconditions (not copies).
 
 Executed against the replayed schema inside a transaction that always rolls back. Runs in CI's migrations
 lane (`TEST_DATABASE_URL`, `DB_RAILS_REQUIRED=1`): the watcher's step, and 633's step for the `migration_633`
@@ -24,6 +25,7 @@ _MIGRATION_629 = Path(__file__).resolve().parents[1] / "migrations" / "633_healt
 _MIGRATION_655 = Path(__file__).resolve().parents[1] / "migrations" / "655_health_liveness_without_api_cell.sql"
 _MIGRATION_675 = Path(__file__).resolve().parents[1] / "migrations" / "675_scheduled_jobs_expand.sql"
 _MIGRATION_682 = Path(__file__).resolve().parents[1] / "migrations" / "682_health_job_cells.sql"
+_MIGRATION_745 = Path(__file__).resolve().parents[1] / "migrations" / "745_health_stale_gauges.sql"
 # pg_cron's job table and unschedule(bigint), as the file calls them: the replay has no pg_cron.
 _CRON_STUB = """
 create schema cron;
@@ -342,6 +344,30 @@ def test_stale_is_judged_on_the_last_measured_result_never_on_unmeasured_rows(cu
     assert measured["facts"]["last_measured_at"] is not None and 29.9 <= measured["value"] <= 30.1
     [never] = cells["stale:k_never_measured"]
     assert never["facts"]["last_measured_at"] is None and never["value"] >= 24 * 29
+
+
+def test_a_gauge_is_stale_past_its_own_budget_like_an_alarm(cur):
+    """745 (#2512): every class is judged, each on the budget its own cadence gives it (three cadences on the worker),
+    so a 6-hourly gauge unmeasured for 20 h is told and one measured 10 h ago is not; a dead worker folds it."""
+    _beat(cur, "realtime-worker", "0 minutes")
+    for key in ("g_stale", "g_fresh", "g_timed_out"):
+        _check(cur, key, cls="gauge", host="realtime-worker", cadence_s=21_600, budget="18 hours")
+    _result(cur, "g_stale", "fail", "20 hours", [{"subject": "s", "status": "fail"}])
+    _result(cur, "g_fresh", "ok", "10 hours", [])
+    _result(cur, "g_timed_out", "ok", "19 hours", [])
+    _result(cur, "g_timed_out", "unknown", "1 hour")
+
+    status, _value, _details, cells = _liveness(cur)
+
+    assert status == "fail"
+    assert {s for s in cells if s.startswith("stale:")} == {"stale:g_stale", "stale:g_timed_out"}
+    [stale] = cells["stale:g_stale"]
+    assert (stale["status"], stale["message"]) == ("fail", "g_stale not measured for 20.0 h (budget 18 h)")
+    assert stale["facts"]["host"] == "realtime-worker" and stale["facts"]["budget_s"] == 18 * 3600
+
+    cur.execute("update worker_heartbeats set beat_at = now() - interval '20 minutes' where worker = 'realtime-worker'")
+    cells = _liveness(cur)[3]
+    assert not {s for s in cells if s.startswith("stale:")}
 
 
 def _statement(start: str, end: str, migration: Path = _MIGRATION_629) -> str:
@@ -1266,6 +1292,7 @@ def test_migration_682_precondition_takes_675s_body_or_its_own_and_refuses_a_dri
     import psycopg
 
     pre = _statement("do $pre$", "$pre$;", _MIGRATION_682)
+    cur.execute(_statement("create or replace function public.health_liveness()", "$fn$;", _MIGRATION_682))
     cur.execute(pre)  # 682's own body is live: a re-run
     watcher_675 = _statement("create or replace function public.health_liveness()", "$fn$;", _MIGRATION_675)
     cur.execute(watcher_675)
@@ -1279,7 +1306,9 @@ def test_migration_682_precondition_takes_675s_body_or_its_own_and_refuses_a_dri
 
 
 def _apply_682(cur: Any) -> None:
-    """The whole of 682 inside the test's transaction, its own begin and commit left out."""
+    """The whole of 682 inside the test's transaction, its own begin and commit left out, over 682's own body (the
+    replay's is 745's, which 682's precondition refuses)."""
+    cur.execute(_statement("create or replace function public.health_liveness()", "$fn$;", _MIGRATION_682))
     lines = _MIGRATION_682.read_text(encoding="utf-8").splitlines()
     cur.execute("\n".join(line for line in lines if line not in ("begin;", "commit;")))
 
@@ -1350,3 +1379,60 @@ def test_migration_682_first_apply_heals_a_row_an_older_images_blink_has_retired
     for name in ("blink", "live"):
         assert _said(cells, f"job/{name}") == (
             "fail", f"{name}: 5 failed runs in a row, the first 30.0 h ago; the last: exit 1")
+
+
+# --- every class's staleness (migration 745, #2512) ----------------------------------------------------------------
+
+
+def test_migration_745_post_condition_holds_keeps_one_liveness_row_and_leaves_no_probe(cur: Any) -> None:
+    _beat(cur, "liveness-test-fresh", "0 minutes")
+    cur.execute(_statement("do $post$", "$post$;", _MIGRATION_745))
+    cur.execute("select count(*) from pipeline_check_results where check_key = 'liveness'")
+    assert cur.fetchone()[0] == 1
+    cur.execute("select count(*) from health_checks where key = '_745_probe'")
+    assert cur.fetchone()[0] == 0
+
+
+def test_migration_745_post_condition_refuses_a_watcher_judging_alarms_only(cur: Any) -> None:
+    """The guard bites: 682's body, re-created inside the test's transaction, tells no stale gauge."""
+    import psycopg
+
+    cur.execute(_statement("create or replace function public.health_liveness()", "$fn$;", _MIGRATION_682))
+    with pytest.raises(psycopg.errors.RaiseException,
+                       match="745: health_liveness\\(\\) still judges the staleness of alarms only"):
+        with cur.connection.transaction():
+            cur.execute(_statement("do $post$", "$post$;", _MIGRATION_745))
+
+
+def test_migration_745_precondition_takes_682s_body_or_its_own_and_refuses_a_drift(cur: Any) -> None:
+    """Fail-closed: a live watcher that is neither 682's body nor 745's (a re-run) is never regressed."""
+    import psycopg
+
+    pre = _statement("do $pre$", "$pre$;", _MIGRATION_745)
+    cur.execute(pre)  # 745's own body is live in the replay: a re-run
+    watcher_682 = _statement("create or replace function public.health_liveness()", "$fn$;", _MIGRATION_682)
+    cur.execute(watcher_682)
+    cur.execute(pre)
+    drifted = watcher_682.replace("-- The worker beats every 30 s", "-- The worker beats every 30 s.", 1)
+    assert drifted != watcher_682
+    cur.execute(drifted)
+    with pytest.raises(psycopg.errors.RaiseException, match="745 refused: health_liveness\\(\\) is neither"):
+        with cur.connection.transaction():
+            cur.execute(pre)
+
+
+def test_migration_745_is_682s_body_but_the_stale_arms_class_filter() -> None:
+    """Offline: one line gone (the stale arm's `hc.class = 'alarm' and`), one comment line added, nothing else."""
+    import difflib
+
+    def body(path: Path) -> list[str]:
+        return _statement("create or replace function public.health_liveness()", "$fn$;", path).splitlines()
+
+    ops = [op for op in difflib.SequenceMatcher(a=body(_MIGRATION_682), b=body(_MIGRATION_745),
+                                                autojunk=False).get_opcodes() if op[0] != "equal"]
+    before, after = body(_MIGRATION_682), body(_MIGRATION_745)
+    changed = [(before[i1:i2], after[j1:j2]) for _tag, i1, i2, j1, j2 in ops]
+    assert changed == [
+        ([], ["            -- Every class since 745: a gauge stales on its own budget too (three of its cadences on "
+              "the worker)."]),
+        (["           where hc.class = 'alarm' and hc.key <> 'liveness'"], ["           where hc.key <> 'liveness'"])]

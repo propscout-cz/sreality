@@ -90,9 +90,8 @@ def test_the_box_is_the_obec_envelope_widened_by_the_shared_read_radius():
 
     sql, params = conn.executed[0]
     assert params == {"margin_m": 5000.0, "obec_kod": 500496}
-    # `admin_boundaries.id` IS the RÚIAN kód (migration 017); `sreality_id` is the
-    # other id space and joining it here would silently box the wrong town.
-    assert "ab.level = 'obec' AND ab.id = %(obec_kod)s" in sql
+    # The register's render polygon at the current version, by the RÚIAN kód (W8, ruling Q12b).
+    assert "FROM ruian_unit_render r WHERE r.level = 'obec' AND r.code = %(obec_kod)s" in " ".join(sql.split())
     assert "sreality_id" not in sql
     # geography in, so the margin is metres — an uncast ST_Buffer is degrees.
     assert "::geography," in sql
@@ -142,11 +141,11 @@ def test_the_work_list_means_a_live_card_on_an_active_flat_or_house():
 
 
 def test_a_cell_that_cannot_be_boxed_is_never_offered_as_work():
-    # An obec absent from the boundary ingest has no box, so a fetch can only skip
+    # An obec the register cannot draw has no box, so a fetch can only skip
     # it — writing no ledger row, leaving `fetched_at` NULL, and sorting FIRST again
     # on every pass for ever. Excluding it in SQL is what bounds that.
     sql = " ".join(sold_db._SOLD_COMP_CELLS_SQL.split())
-    assert "JOIN admin_boundaries ab ON ab.level = 'obec' AND ab.id = ll.obec_kod" in sql
+    assert "JOIN ruian_unit_render r ON r.level = 'obec' AND r.code = ll.obec_kod" in sql
 
 
 def test_freshness_is_subtracted_from_the_newest_ledger_row_per_cell():

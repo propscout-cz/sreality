@@ -9,6 +9,9 @@ import {
   type ReactNode,
 } from 'react';
 import type { HoverTarget } from '@/lib/hoverSync';
+import { useQuery } from '@tanstack/react-query';
+import { fetchPropertyBuildingSales } from '@/lib/api';
+import { summarizeBuildingSales } from '@/lib/soldInBuilding';
 import { Link } from 'react-router-dom';
 import CollectionMark from '@/components/CollectionMark';
 import CollectionSaveMenu from '@/components/CollectionSaveMenu';
@@ -35,7 +38,7 @@ import {
   type SortSpec,
 } from '@/lib/queries';
 import {
-  fmtArea, fmtCzk, fmtFloorTag, fmtMeasuredPricePerM2,
+  fmtArea, fmtCzk, fmtFloor, fmtMeasuredPricePerM2,
   fmtShortDate, fmtTomDays,
 } from '@/lib/format';
 import type { CohortKind } from '@/lib/filters';
@@ -45,6 +48,7 @@ import { listingKindParts, listingTypeLabel } from '@/lib/enums';
 import type { ListingEstimate } from '@/lib/types';
 import { runSurfaceUrl } from '@/lib/runLinks';
 import { propertyPath } from '@/lib/listingUrl';
+import { withQuery } from '@/lib/routes';
 import { useNewTabProps } from '@/lib/linkGestures';
 import { inzeratu } from '@/lib/mergedAdverts';
 import type { MergeMode } from '@/lib/useMergeMode';
@@ -61,7 +65,7 @@ import type { MergeMode } from '@/lib/useMergeMode';
  * properties cascade), so they can never drift. auto-fill (not auto-fit)
  * keeps trailing empty tracks, so a short final row keeps the same card size
  * instead of stretching. The min() wrapper caps the track floor at the
- * column's own width: at "large" (23rem) a narrow Split column — the map
+ * column's own width: at "large" (23rem) a narrow Map-layout column — the map
  * dragged toward MAP_SPLIT_MAX — would otherwise be narrower than the floor
  * and force a horizontal scrollbar; capped, it instead falls back to one
  * full-width card per row, same as any responsive auto-fill grid. */
@@ -94,7 +98,7 @@ interface Props {
   cohortKind?: CohortKind | null;
   /* Card image size: "large" doubles the grid's --card-min (and therefore
    * the photo + card width); everything else in the card body is fixed-size
-   * and untouched. Shared identically by the Split and Cards (map-collapsed)
+   * and untouched. Shared identically by the Map and Cards (map-collapsed)
    * layouts, since both render this one grid — see ImageSizeToggle. */
   imageLarge: boolean;
   /* Which tagged photo every card opens on — see COVER_OPTIONS. A per-browser
@@ -637,18 +641,16 @@ function Card({
               </p>
             )}
             {storeyTag && (
-              /* `card-tip` keeps the tooltip hit-testable under the stretched link.
-                 A quiet inset label, no border (P06 note); on a delisted card,
+              /* A quiet inset label, no border (P06 note); on a delisted card,
                  whose surface is already the inset, it sits one step up. */
               <span
-                title={storeyTag.title}
                 className={[
-                  'card-tip ml-auto shrink-0 px-1.5 py-px text-[0.6rem] tabular-nums whitespace-nowrap',
+                  'ml-auto shrink-0 px-1.5 py-px text-[0.6rem] tabular-nums whitespace-nowrap',
                   'rounded-[var(--radius-xs)] text-[var(--color-ink-3)]',
                   inactive ? 'bg-[var(--color-paper)]' : 'bg-[var(--color-inset)]',
                 ].join(' ')}
               >
-                {storeyTag.text}
+                {storeyTag}
               </span>
             )}
           </div>
@@ -692,6 +694,11 @@ function Card({
             that runs an estimate or opens a run would be a second meaning for
             the same gesture. `.card-action` lifts it over the stretched link's
             ::after — without it the corner would be inert. */}
+        {inactive && r.property_id != null && !merge && (
+          <div className="card-action mt-1 flex justify-end">
+            <SoldCorner propertyId={r.property_id} />
+          </div>
+        )}
         {r.category_main === 'byt' && r.sreality_id != null && !merge && (
           <div className="card-action mt-1 flex justify-end">
             <EstimateCorner
@@ -743,13 +750,13 @@ function focusFromPointer(button: HTMLButtonElement | null): void {
 
 /* A storey is a fact about a UNIT in a building: 91 % of apartments and 25 % of
  * commercial units carry one, but a house's is almost always the ground floor
- * ("přízemí" on a house reads as a claim) and a plot has none. */
+ * ("1. podlaží" on a house reads as a claim) and a plot has none. */
 const STOREY_CATEGORIES: ReadonlySet<string | null> = new Set(['byt', 'komercni']);
 
 /* The small tag beside the place, never part of the headline. */
-function storeyTagOf(r: CardRow, storey: ListingFloor | null): ReturnType<typeof fmtFloorTag> {
+function storeyTagOf(r: CardRow, storey: ListingFloor | null): string | null {
   if (storey == null || !STOREY_CATEGORIES.has(r.category_main)) return null;
-  return fmtFloorTag(storey.floor, storey.total_floors);
+  return fmtFloor(storey.floor, storey.total_floors);
 }
 
 function formatTitle(r: CardRow, cohortKind: CohortKind | null): string {
@@ -776,6 +783,55 @@ function formatTitle(r: CardRow, cohortKind: CohortKind | null): string {
   const parts = [`${kind} ${deal}`];
   if (r.disposition) parts.push(r.disposition);
   return [...parts, ...measures].join(' · ');
+}
+
+/* -------------------------------------------------------------------------- */
+/* SoldCorner — on a delisted card: what we hold about registered sales in the */
+/* card's building. Asked only on click (one read per card, never for a whole  */
+/* page), then shown IN PLACE of the button, like the estimate corner: the     */
+/* count and the median per m², linking to the property's Hodnota tab where    */
+/* each sale is listed. Building-level: it never says a sale is this flat's.   */
+/* -------------------------------------------------------------------------- */
+
+function SoldCorner({ propertyId }: { propertyId: number }) {
+  const newTab = useNewTabProps();
+  const [asked, setAsked] = useState(false);
+  const { data, isFetching, isError } = useQuery({
+    queryKey: ['property-building-sales', propertyId],
+    queryFn: () => fetchPropertyBuildingSales(propertyId),
+    enabled: asked,
+    staleTime: 10 * 60_000,
+  });
+  const quiet = 'inline-flex items-center gap-1 text-[0.62rem] text-[var(--color-ink-3)] tabular-nums';
+  if (asked && isFetching) {
+    return <span className={quiet}><Spinner />Hledám prodeje…</span>;
+  }
+  if (asked && data) {
+    const summary = summarizeBuildingSales(data.sales);
+    if (summary.count === 0) return <span className={quiet}>V domě žádný známý prodej</span>;
+    const median = summary.medianPpm2 != null ? fmtMeasuredPricePerM2(summary.medianPpm2, summary.basis) : null;
+    return (
+      <Link
+        to={withQuery(propertyPath(propertyId), { tab: 'hodnota' })}
+        {...newTab}
+        title="Registrované prodeje ve stejné budově: otevřít jejich seznam"
+        className="inline-flex items-center rounded-[var(--radius-xs)] border border-[var(--color-rule-strong)] px-1.5 py-0.5 text-[0.62rem] font-medium tabular-nums text-[var(--color-ink)] hover:border-[var(--color-copper)] hover:text-[var(--color-copper)] transition-colors"
+      >
+        {`V domě ${summary.count} ${summary.count === 1 ? 'prodej' : summary.count < 5 ? 'prodeje' : 'prodejů'}`}
+        {median ? ` · medián ${median}` : ''}
+      </Link>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => setAsked(true)}
+      title={isError ? 'Nepodařilo se načíst, zkusit znovu' : 'Zjistit registrované prodeje ve stejné budově'}
+      className="inline-flex items-center gap-1 rounded-[var(--radius-xs)] border border-[var(--color-rule)] px-1.5 py-0.5 text-[0.62rem] font-medium text-[var(--color-ink-2)] hover:border-[var(--color-copper)] hover:text-[var(--color-copper)] transition-colors"
+    >
+      {isError ? 'Prodeje v domě ↻' : 'Prodeje v domě'}
+    </button>
+  );
 }
 
 /* -------------------------------------------------------------------------- */

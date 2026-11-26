@@ -190,6 +190,31 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
         self.index_rate = config.limits.index_rate
         self.shared_rate_limiter = config.limits.shared_rate_limiter
         self.price_change_min_pct = config.limits.price_change_min_pct
+        self._client_cache: CeskerealityClient | None = None
+        self._client_limiter: RateLimiter | None = None
+
+    def _client(self, limiter: RateLimiter) -> CeskerealityClient:
+        """ONE client — so ONE browser and ONE interstitial solve — per phase.
+
+        `walk_category` is called once per category, so building a client per call would
+        launch ten browsers and pay ten solves for one walk. Cached on the adapter, which
+        lives for the whole run, and released by `close()` from the runner's teardown. A
+        phase that arrives with a different limiter (the probe) gets its own.
+        """
+        if self._client_cache is not None and self._client_limiter is not limiter:
+            self.close()
+        if self._client_cache is None:
+            self._client_cache = CeskerealityClient(limiter=limiter)
+            self._client_limiter = limiter
+        return self._client_cache
+
+    def close(self) -> None:
+        # Drop the reference FIRST: if close() raises, the caller swallows it and a dead
+        # client must not be handed to the next phase.
+        client, self._client_cache = self._client_cache, None
+        self._client_limiter = None
+        if client is not None:
+            client.close()
 
     # --- index-walk seams ---
     def categories(self) -> list[dict[str, Any]]:
@@ -374,9 +399,9 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
                     return out("page_cap", 1, outcome="ceiling")
             if parsed.total is not None:
                 live_last = max(1, -(-parsed.total // _PER_PAGE))
-            # ITEMS FIRST, ahead of the pager: a blocked page carries no next
-            # arrow either, and reading one as the last page is how a soft block
-            # becomes a nomination.
+            # ITEMS FIRST, ahead of the pager: a page with no cards carries no
+            # next arrow either, and reading one as the last page would turn it
+            # into a nomination.
             if not parsed.items:
                 if page == 1 and declared_total == 0:
                     # A measured zero with zero collected: the portal's own answer.
@@ -384,7 +409,7 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
                 # BARREN. It is the portal's end only if the page is past what
                 # the declared total implies AND a re-read of the SAME url is
                 # empty again. Position first: it is the necessary half, and a
-                # page we already suspect is a soft block is not worth a second
+                # page we already suspect is degraded is not worth a second
                 # request we could not use anyway. On this site the position half
                 # effectively never holds — the loop bounds itself at the declared
                 # tail and deliberately never fetches the 404 beyond it — so a
@@ -396,6 +421,9 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
                     return out("empty_confirmed", page - 1)
                 return out("barren", page, outcome="degraded")
             for item in parsed.items:
+                if item.closed:
+                    # No sighting: unseen, it is nominated and its page closes it (rule #3).
+                    continue
                 rows.append((
                     item.source_id_native,
                     detail_url(item.detail_path),
@@ -547,7 +575,7 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
         deadline: float | None = None,
     ) -> tuple[set[str], dict[str, int], int | None, int, bool]:
         sale_type, cat = category["sale_type"], category["category"]
-        client = CeskerealityClient(limiter=limiter)
+        client = self._client(limiter)
         kraje = self._kraje or KRAJ_SLUGS
 
         archive_week = db.index_archive_week() if conn is not None else None
@@ -683,7 +711,7 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
         the first all-known page. Diff + enqueue only; always reached_end=False,
         so a probe can never nominate anything for a page check (rule #3)."""
         sale_type, cat = category["sale_type"], category["category"]
-        client = CeskerealityClient(limiter=limiter)
+        client = self._client(limiter)
         seen: set[str] = set()
         total: int | None = None
         pages = 0
@@ -706,7 +734,7 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
                 break
             rows = {
                 it.source_id_native: (detail_url(it.detail_path), index_price(it.price_text))
-                for it in parsed.items if it.source_id_native not in seen
+                for it in parsed.items if it.source_id_native not in seen and not it.closed
             }
             seen.update(rows)
             page_counts = portal_runner.reconcile_sightings(

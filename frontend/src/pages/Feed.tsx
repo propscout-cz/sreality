@@ -10,6 +10,10 @@
  * follow that timestamp. The photos come through the shared hydration layer, the
  * cover chosen as the Browse card chooses it.
  *
+ * Above the chips, only while this iPhone could receive notifications and does
+ * not, the push notice (components/phone/PushNotice): push is on by default,
+ * and the start screen is where the one tap Apple requires is asked for.
+ *
  * The chips: "Filtry" (Browse's whole filter set in a sheet, its own lazy chunk),
  * "Vše" + the account's saved presets (#1761, per account since #1775); the
  * portals; "Skryté" switches the roll to the hidden properties only
@@ -27,11 +31,12 @@ import FeedCard from '@/components/phone/FeedCard';
 import BottomSheet from '@/components/phone/BottomSheet';
 import DayRule from '@/components/phone/DayRule';
 import { CHIP, CHIP_DIVIDER, CHIP_MD, CHIP_ROW, CHIP_SM, chipState } from '@/components/phone/chips';
-import { PHOTOS_PER_CARD } from '@/components/phone/CardRoll';
 import { filtersBeyond } from '@/components/phone/filterRows';
 import { RollEmpty, RollSkeleton } from '@/components/phone/RollParts';
 import { usePhoneHeaderAside } from '@/components/phone/PhoneShell';
-import { SlidersIcon } from '@/components/phone/phoneIcons';
+import PushNotice from '@/components/phone/PushNotice';
+import { SlidersIcon, SortIcon } from '@/components/phone/phoneIcons';
+import SortSheet from '@/components/phone/SortSheet';
 import { AlertIcon, EyeOffIcon } from '@/components/icons';
 import InfiniteSentinel from '@/components/InfiniteSentinel';
 import { listFilterPresets } from '@/lib/api';
@@ -60,7 +65,7 @@ import {
 import { filterById } from '@/lib/filterRegistry.generated';
 import { filtersEqualForPreset } from '@/lib/filters';
 import { czPlural } from '@/lib/format';
-import { CardHydrationProvider } from '@/lib/hydration';
+import { CardHydrationProvider, PHOTOS_PER_CARD } from '@/lib/hydration';
 import type { KeysetCursor } from '@/lib/keyset';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { cyclePortal, portalShort, type PortalChoice } from '@/lib/portals';
@@ -100,6 +105,7 @@ export default function Feed() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [hidden, setHidden] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [sortOpen, setSortOpen] = useState(false);
 
   const presetsQ = useQuery({ queryKey: filterPresetKeys.all, queryFn: listFilterPresets });
   const presets = useMemo(() => presetsQ.data?.data ?? [], [presetsQ.data]);
@@ -271,6 +277,8 @@ export default function Feed() {
       };
   /* The Filtry chip counts what the view adds to its scope (not under Skryté). */
   const shownBeyond = hidden ? 0 : beyond;
+  /* Likewise the Řazení chip names an order only where one applies: Skryté is read by dismissal date. */
+  const orderShown = !hidden && !newestFirst;
   /* The chosen chip carries a trailing "·" once the view has left its filters. */
   const scopeChip = (id: string, name: string) => {
     const on = !hidden && activeScope === id;
@@ -306,6 +314,7 @@ export default function Feed() {
 
   return (
     <div className="pt-3">
+      <PushNotice />
       <div className={CHIP_ROW} role="group" aria-label="Předvolby">
         <button
           type="button"
@@ -319,6 +328,16 @@ export default function Feed() {
           {shownBeyond > 0 && (
             <span className="font-mono text-[11px] tabular-nums text-[var(--color-ink)]">{shownBeyond}</span>
           )}
+        </button>
+        <button
+          type="button"
+          onClick={() => setSortOpen(true)}
+          aria-haspopup="dialog"
+          aria-label={orderShown ? `Řazení: ${sortLabel(sort)}` : 'Řazení'}
+          className={`${CHIP} ${CHIP_MD} ${chipState(orderShown)}`}
+        >
+          <SortIcon className="h-3.5 w-3.5" />
+          {orderShown ? sortLabel(sort) : 'Řazení'}
         </button>
         <span aria-hidden className={CHIP_DIVIDER} />
         {scopeChip(FEED_ALL_SCOPE, 'Vše')}
@@ -412,6 +431,11 @@ export default function Feed() {
           )}
         </div>
       </CardHydrationProvider>
+
+      {sortOpen && (
+        /* Through `show`, as the Filtry sheet applies: Skryté is read by dismissal date and takes no order. */
+        <SortSheet sort={sort} onPick={(next) => show({ ...view, sort: next })} onClose={() => setSortOpen(false)} />
+      )}
 
       {sheetOpen && (
         <Suspense

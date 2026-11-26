@@ -17,6 +17,7 @@ TestClient = pytest.importorskip("fastapi.testclient").TestClient
 from api import dependencies as deps
 from api import main as api_main
 from api import tenant_pool
+from api.cursor import encode_cursor
 from api.routes import brokers as broker_routes
 
 _SEARCH_ROW = {"broker_id": 1, "display_name": "RK Alfa",
@@ -309,6 +310,33 @@ def test_contacts_route(admin_client, monkeypatch):
     assert res.json()["data"][0]["value"] == "a@b.cz"
 
 
+def test_properties_route_pages_by_an_opaque_cursor(client, monkeypatch):
+    """The page's last row comes back as `next_cursor`, and the next request hands the toolkit that same row."""
+    seen = []
+
+    def page(conn, bid, **kw):
+        seen.append(kw)
+        return {"data": [{"property_id": 9}],
+                "metadata": {"next_after": [True, "2026-11-24T00:00:00+00:00", 9]}}
+
+    monkeypatch.setattr(broker_routes.brokers, "broker_properties", page)
+    first = client.get("/brokers/527/properties?category_main=byt").json()
+    assert "next_after" not in first["metadata"]
+    assert client.get(f"/brokers/527/properties?cursor={first['next_cursor']}").status_code == 200
+    assert seen == [
+        {"category_main": "byt", "category_type": None, "after": None},
+        {"category_main": None, "category_type": None, "after": (True, "2026-11-24T00:00:00+00:00", 9)},
+    ]
+
+
+@pytest.mark.parametrize("values", [None, [[True, "x"], 9], [["ab"], 9], [[1, "2026-11-24T00:00:00+00:00"], 9],
+                                    [[True, 5], 9], [[True, "2026-11-24T00:00:00+00:00"], "9"]])
+def test_properties_route_refuses_a_malformed_cursor(client, values):
+    """A cursor is the caller's text: a shape or a value the read cannot bind is a 422, never the database's error."""
+    cursor = "nope" if values is None else encode_cursor(values)
+    assert client.get(f"/brokers/527/properties?cursor={cursor}").status_code == 422
+
+
 _SENTINEL = {"data": [{"broker_id": 1, "display_name": "leak@rk.cz",
                        "primary_email": "leak@rk.cz",
                        "primary_phone": "+420 111 222 333"}], "metadata": {}}
@@ -320,7 +348,7 @@ _NON_ADMIN_CALLS = [
     ("GET", "/brokers/search", "/brokers/search?q=a", None),
     ("GET", "/brokers/firm-options", "/brokers/firm-options", None),
     ("GET", "/brokers/{broker_id}", "/brokers/1", None),
-    ("GET", "/brokers/{broker_id}/listings", "/brokers/1/listings", None),
+    ("GET", "/brokers/{broker_id}/properties", "/brokers/1/properties", None),
     ("GET", "/brokers/{broker_id}/property-ids", "/brokers/1/property-ids", None),
 ]
 
@@ -330,7 +358,7 @@ _UNMASKED_CALLS = [
     ("POST", "/brokers/by-listings", "/brokers/by-listings", {"listing_ids": [1]}),
 ]
 
-_TOOLKIT_READS = ("search", "firm_options", "listing_brokers", "get_broker", "broker_listings",
+_TOOLKIT_READS = ("search", "firm_options", "listing_brokers", "get_broker", "broker_properties",
                   "broker_property_ids")
 
 
@@ -370,14 +398,14 @@ def test_the_unmasked_routes_still_stamp_the_policy(
                                   "/broker-review/candidates"])
 def test_a_read_counting_the_broker_book_is_bounded(path: str) -> None:
     """READ ONLY at 8 s, as the board's own read (tenant_pool.read_conn; tests/test_broker_board_live.py)."""
-    from tests.api.test_admin_route_coverage import _api_routes, _reachable_calls
+    from tests.api._routes import _api_routes, _reachable_calls
 
     (route,) = [r for m, p, r in _api_routes() if (m, p) == ("GET", path)]
     assert tenant_pool.read_conn in _reachable_calls(route.dependant)
 
 
 def test_the_pii_gate_covers_every_non_admin_broker_route() -> None:
-    from tests.api.test_admin_route_coverage import _api_routes, _reachable_calls
+    from tests.api._routes import _api_routes, _reachable_calls
 
     live = {
         (method, path)
@@ -396,7 +424,7 @@ def test_no_broker_route_rides_the_static_token() -> None:
     caller's claims, so `apply_pii_policy` could not see admin status — a broker
     read re-gated on it would be a silent regression (until 2026-10-13 that gate
     also admitted the bundle-public static key: unauthenticated PII access)."""
-    from tests.api.test_admin_route_coverage import _api_routes, _reachable_calls
+    from tests.api._routes import _api_routes, _reachable_calls
 
     offenders = sorted(
         f"  {method} {path}"

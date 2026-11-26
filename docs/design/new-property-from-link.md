@@ -101,7 +101,7 @@ never nominated (693 such active ads exist today on realitymix, remax and cesker
 probe lane never nominates. A portal with no index therefore needs a declared seam, not a pretend walk.
 
 **Where a fetch may run.** The Railway API service holds no `SCRAPER_PROXY_URL`; ceskereality and
-mmreality hard-403 without it, idnes soft-throttles, and every portal's pacing lives in its client +
+mmreality require it, idnes soft-throttles without it, and every portal's pacing lives in its client +
 limiter. The worker has all of it. The text lane's provider is live at scale (`enrichment_model =
 gpt-5.6-luna`: 602 k calls / $196 in the last seven days, p50 2.6 s), bounded by its own pass budget,
 dollar cap, thread pool and provider-fatal exemption; the dormant parser's `llm_parse_model` is a second
@@ -230,8 +230,8 @@ name/email/phone keys, firm_keys=('agency',))`, and `contracts/portals/web.yaml`
   declared seam: `_queue_presence_checks` skips the empty-seen refusal only for a portal that declares
   `indexless = True` (rule 21: a per-portal need is a `Portal` seam, never an `if source ==`); the
   existing empty-seen tests stay valid for every other portal. A no-op `set_index_page_cap` keeps the
-  probe lane quiet. `.github/workflows/web_index_walk.yml` (every 6 h, so the 24 h `RECHECK_THROTTLE`
-  sets each ad's cadence — a daily cron would skip it one day in two; `web_main --index-only`)
+  probe lane quiet. The job runner's `walk_web` (`.github/workflows/web_index_walk.yml` until #2029; every 6 h,
+  so the 24 h `RECHECK_THROTTLE` sets each ad's cadence — a daily cron would skip it one day in two; `web_main --index-only`)
   nominates; the drain fetches; `gone_evidence` + `GONE_DWELL` + `mark_listing_
   inactive` apply unchanged, so a dead web ad closes 24–60 h after it dies. `delist_flip_cap` never
   throttles it (below the 2,000-row floor) and the gone-rate breaker never trips on it (< 20 ingest

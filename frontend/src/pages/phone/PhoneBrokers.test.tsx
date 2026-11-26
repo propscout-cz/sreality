@@ -18,7 +18,6 @@ import { expectNoNestedInteractive } from '@/test/a11y';
 import { BOARD_META, boardRow } from '@/test/brokerBoard';
 
 import Brokers from '../Brokers';
-import { brokerInitials } from './PhoneBrokers';
 
 const never = vi.hoisted(() => () => new Promise<never>(() => {}));
 vi.mock('@/lib/phoneShell', async (importOriginal) => ({
@@ -256,13 +255,5 @@ describe('phone broker helpers', () => {
     expect(placeLabelOf([{ ...ZIZKOV, excluded: true }, PRAHA])).toBe('Praha +1');
     expect(placeLabelOf([{ ...ZIZKOV, excluded: true }])).toBe('Celá ČR − Žižkov');
     expect(placeLabelOf([{ ...STREET, excluded: true }, { ...ZIZKOV, excluded: true }])).toBe('Celá ČR −2');
-  });
-
-  it('draws initials from the first and last word of the name, degrees aside', () => {
-    expect(brokerInitials('Jana Kubíčková')).toBe('JK');
-    expect(brokerInitials('Ing. Petr van der Berg')).toBe('PB');
-    expect(brokerInitials('Petr Novák, MBA')).toBe('PN');
-    expect(brokerInitials('Bc.')).toBe('?');
-    expect(brokerInitials(null)).toBe('?');
   });
 });

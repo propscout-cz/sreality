@@ -14,8 +14,10 @@ order statistic of their prices, or a verdict over a code's carriers, so each fo
 - `block_docs`, `block_token_df`, `corpus_docs`, `corpus_token_df`, `pin_pop`, `block_attr_df`:
   integer counts, so `FeatureContext.build` and `index_attrs` run on each chunk as they would on
   the cohort and their counts are summed (counts over disjoint chunks add);
-- `certifying_codes`: `index_reference_codes` over the adverts that print a code (~7 %), each
-  kept as its description, disposition and area — all the verdict reads.
+- `certifying_codes` (and `certifying_structured_codes`): `index_reference_codes` over the
+  adverts that print a code (~7 %) or, under settings that read the column, store one in
+  `ad_reference`, each kept as its description, column, disposition and area — all the verdict
+  reads; an advert carrying the column alone is kept without its body.
 
 No float is summed anywhere, and the payload is serialised with sorted keys, so the calibration
 is the oracle's to the byte; `tests/autodedup/test_calibration_cut.py` holds the two in lockstep.
@@ -41,7 +43,7 @@ from autodedup.features import FEATURE_VERSION, FeatureContext
 from autodedup.fingerprint import Fingerprint
 from autodedup.incremental import GENERATION, Calibration, _cut_key, _now, key_token
 from autodedup.settings import Settings
-from autodedup.text_facts import reference_codes
+from autodedup.text_facts import reference_codes, structured_code
 
 _Cohort = tuple[str | None, str | None]
 
@@ -56,6 +58,7 @@ class _Carrier:
     description: str | None
     disposition: str | None
     area_m2: float | None
+    ad_reference: str | None
 
 
 def _add(into: dict[Any, int], counts: Mapping[Any, int]) -> None:
@@ -112,10 +115,15 @@ class CalibrationCut:
         for block, bucket in ctx.block_attr_df.items():
             _add(self.block_attr_df.setdefault(block, {}), bucket)
         _add(self.pin_pop, ctx.pin_pop)
+        read_column = bool(self.settings.ref_code_structured_categories)
         for listing_id, listing in listings.items():
-            if reference_codes(listing.description):
-                self._carriers[listing_id] = _Carrier(listing.description, listing.disposition,
-                                                      listing.area_m2)
+            printed = bool(reference_codes(listing.description))
+            column = (listing.ad_reference
+                      if read_column and structured_code(listing.ad_reference) else None)
+            if printed or column:
+                self._carriers[listing_id] = _Carrier(
+                    listing.description if printed else None, listing.disposition,
+                    listing.area_m2, column)
         self.n_listings += len(fps)
 
     def build(self, generation: str = GENERATION) -> Calibration:
@@ -137,6 +145,9 @@ class CalibrationCut:
         certifying: set[str] = set()
         for found in codes.codes.values():
             certifying |= set(found)
+        structured: set[str] = set()
+        for found in codes.union_codes.values():
+            structured |= set(found)
         return Calibration(
             generation=generation,
             feature_version=FEATURE_VERSION,
@@ -152,6 +163,7 @@ class CalibrationCut:
                            for block, bucket in self.block_attr_df.items()},
             pin_pop=dict(self.pin_pop),
             certifying_codes=sorted(certifying),
+            certifying_structured_codes=sorted(structured),
         )
 
 

@@ -94,11 +94,11 @@ def _register(cur: Any) -> None:
 
     def unit(level: str, code: int, name: str, retired: bool = False) -> int:
         cur.execute(
-            "insert into ruian_admin_units (level, code, name, name_norm, path, display_path, "
+            "insert into ruian_admin_units (level, code, name, name_norm, path, "
             "  valid_from, first_version_id, last_version_id, retired_at) "
-            "values (%s::ruian_level, %s, %s, lower(%s), %s::ltree, %s, '2020-01-01', %s, %s, "
+            "values (%s::ruian_level, %s, %s, lower(%s), %s::ltree, '2020-01-01', %s, %s, "
             "  case when %s::boolean then now() end) returning id",
-            (level, code, name, name, f"{level}_{code}", name, version, version, retired),
+            (level, code, name, name, f"{level}_{code}", version, version, retired),
         )
         return cur.fetchone()[0]
 

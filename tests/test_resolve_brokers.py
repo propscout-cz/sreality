@@ -109,28 +109,6 @@ def test_keyset_empty_universe_is_single_query():
 # --- connection / lock resilience (the 2026-08-10 23:10 SSL-drop red) ---------
 
 
-def test_release_lock_survives_a_dead_connection(caplog: Any) -> None:
-    """The release runs from a `finally:`. On 2026-08-10 an SSL drop mid-rollup
-    made `conn.cursor()` itself raise here, so the crash-during-cleanup REPLACED
-    the real error in the traceback. It must warn and return instead."""
-    import logging
-
-    from scripts.resolve_brokers import _release_lock
-
-    class _DeadConn:
-        def cursor(self) -> Any:
-            raise RuntimeError("the connection is closed")
-
-    with caplog.at_level(logging.WARNING):
-        _release_lock(_DeadConn(), "full:abc")  # must not raise
-    failed = [r for r in caplog.records if "lock release failed" in r.message]
-    assert failed
-    # ...carrying the exception. The warning used to discard it entirely, so the
-    # one scenario worth investigating produced a green run and a log line with
-    # zero diagnostic content.
-    assert failed[-1].exc_info is not None
-
-
 def test_firm_link_takes_row_locks_in_ascending_id_order() -> None:
     """Deadlock guard: this UPDATE and the detail drain's batch upsert write the
     same `listings` rows, so this side must have ONE fixed lock order regardless
@@ -198,9 +176,8 @@ def test_main_opens_the_connection_through_db_connect(monkeypatch: Any) -> None:
     assert opened == ["postgres://test"]
 
 
-_BEAT = "UPDATE broker_resolution_lock SET heartbeat_at=now()"
+_RENEW = "UPDATE scheduled_jobs SET lease_expires_at"
 _FENCE = "FROM scheduled_jobs WHERE job_name = %(job)s AND lease_holder = %(holder)s AND lease_expires_at > clock_timestamp() FOR UPDATE"
-_RELEASE = "UPDATE broker_resolution_lock SET holder=NULL"
 
 
 def _hold() -> job_lease.Hold:
@@ -258,10 +235,6 @@ class _ResilientCur:
         else:
             self._rows = []
         self.rowcount = len(self._rows)
-        if _BEAT in s:
-            # The heartbeat's holder-guarded CAS matches our row (1) unless the
-            # lock was declared stale and re-claimed by another run (0).
-            self.rowcount = self._conn.lock_rows
 
     def fetchone(self) -> Any:
         return self._rows[0] if self._rows else None
@@ -274,13 +247,11 @@ class _ResilientConn:
     autocommit = False
     info = SimpleNamespace(transaction_status=psycopg.pq.TransactionStatus.IDLE)
 
-    def __init__(self, name: str, fail_on: str | None = None,
-                 lock_rows: int = 1) -> None:
+    def __init__(self, name: str, fail_on: str | None = None) -> None:
         self.name = name
         # The `scheduled_jobs` lease row's answer to a renewal or fence: empty is a refusal.
         self.lease_rows: list[tuple[Any, ...]] = [(1,)]
         self.fail_on = fail_on
-        self.lock_rows = lock_rows
         self.broken = False
         self.closed = False
         self.executed: list[str] = []
@@ -335,13 +306,13 @@ def test_run_incremental_reconnects_and_rebinds_after_a_pooler_drop(monkeypatch:
     assert any("listings_attributed" in s for s in fresh.executed)
 
 
-def test_heartbeat_runs_once_per_attempt_not_once_per_phase(monkeypatch: Any) -> None:
-    """The beat must be the FIRST statement of every retried ATTEMPT, not a step
-    of its own before each phase. A phase re-runs from the top on retry, so a beat
-    outside the retried op leaves the lock unrefreshed for the whole replay — the
+def test_the_renewal_runs_once_per_attempt_not_once_per_phase(monkeypatch: Any) -> None:
+    """The renewal must be the FIRST statement of every retried ATTEMPT, not a step
+    of its own before each phase. A phase re-runs from the top on retry, so a renewal
+    outside the retried op leaves the lease unrefreshed for the whole replay — the
     2026-08-09 sweep's merge phase alone ran 8.4 min on ONE attempt, so a single
     replay used to exceed the staleness window and let a `*/10` incremental steal
-    the lock out from under a live sweep."""
+    the lease out from under a live sweep."""
     import scripts.resolve_brokers as rb
 
     monkeypatch.setattr(rb.db.time, "sleep", lambda s: None)
@@ -351,57 +322,30 @@ def test_heartbeat_runs_once_per_attempt_not_once_per_phase(monkeypatch: Any) ->
     rb._run_incremental(first, [], [], 500, _hold(),
                         reconnect=lambda: fresh)
 
-    # the dropped attempt beat before it ran, and it was that attempt's LAST
+    # the dropped attempt renewed before it ran, and it was that attempt's LAST
     # statement (nothing of the phase itself landed). Attribution's timeout lift
-    # is not phase data — SET LOCAL rolls back with the aborted transaction. The new
-    # row's renewal comes right before the beat.
+    # and the renewal's own bound are not phase data.
     landed = [s for s in first.executed if "statement_timeout" not in s]
-    assert landed[-1].startswith(_BEAT)
+    assert landed[-1].startswith(_RENEW)
     # ...and the replay renewed AGAIN, first thing, on the FRESH connection
-    assert "UPDATE scheduled_jobs SET lease_expires_at" in " ".join(fresh.executed[:2])
-    assert fresh.executed[2].startswith(_BEAT)
-    beats = [i for i, s in enumerate(fresh.executed) if s.startswith(_BEAT)]
+    assert _RENEW in " ".join(fresh.executed[:2])
+    renewals = [i for i, s in enumerate(fresh.executed) if s.startswith(_RENEW)]
     phases = ["INSERT INTO broker_identities", "UPDATE broker_identities bi SET firm_identity_id",
               "WITH targets AS MATERIALIZED", "INSERT INTO brokers",
               "DELETE FROM dirty_broker_listings"]
-    # one beat per phase re-run on the fresh conn, each preceding its phase
-    assert len(beats) >= len(phases)
+    # one renewal per phase re-run on the fresh conn, each preceding its phase
+    assert len(renewals) >= len(phases)
     for needle in phases:
         at = next(i for i, s in enumerate(fresh.executed) if needle in s)
-        assert any(b < at for b in beats)
-    # beats are counted per ATTEMPT, not per phase: the dropped attempt of
-    # resolve.attribute contributed exactly one beat of its own on top of the
+        assert any(r < at for r in renewals)
+    # renewals are counted per ATTEMPT, not per phase: the dropped attempt of
+    # resolve.attribute contributed exactly one of its own on top of the
     # one-per-phase set the replay produced.
-    dropped = [s for s in first.executed if s.startswith(_BEAT)]
+    dropped = [s for s in first.executed if s.startswith(_RENEW)]
     assert len(dropped) == 1
 
 
-def test_lost_lock_aborts_the_run_instead_of_resolving_concurrently(
-    monkeypatch: Any,
-) -> None:
-    """A heartbeat CAS that matches 0 rows means our lock went stale and another
-    run took it over. Continuing would resolve concurrently while _release_lock's
-    own CAS silently no-ops. Fail loud — and RuntimeError is not an
-    OperationalError, so db.run_resilient re-raises it immediately rather than
-    replaying three more times into the race."""
-    import pytest
-
-    import scripts.resolve_brokers as rb
-
-    monkeypatch.setattr(rb.db.time, "sleep", lambda s: None)
-    stolen = _ResilientConn("stolen", lock_rows=0)
-
-    with pytest.raises(RuntimeError, match="lock lost mid-run"):
-        rb._run_incremental(stolen, [], [], 500, _hold(),
-                            reconnect=lambda: stolen)
-
-    # exactly ONE beat: non-transient, so no retry churn...
-    assert len([s for s in stolen.executed if s.startswith(_BEAT)]) == 1
-    # ...and no attribution write landed after the lock was lost
-    assert not any("INSERT INTO broker_identities" in s for s in stolen.executed)
-
-
-def test_a_refused_renewal_of_the_new_row_aborts_the_run(monkeypatch: Any) -> None:
+def test_a_refused_renewal_aborts_the_run(monkeypatch: Any) -> None:
     """`renew` refuses a lapsed lease even when nobody has taken it yet: LeaseLost is no transient error, so no replay."""
     import pytest
 
@@ -412,7 +356,7 @@ def test_a_refused_renewal_of_the_new_row_aborts_the_run(monkeypatch: Any) -> No
     with pytest.raises(job_lease.LeaseLost, match="lease lost mid-run"):
         rb._run_incremental(lapsed, [], [], 500, _hold(), reconnect=lambda: lapsed)
     assert not any("INSERT INTO broker_identities" in s for s in lapsed.executed)
-    assert not any(s.startswith(_BEAT) for s in lapsed.executed)
+    assert len([s for s in lapsed.executed if s.startswith(_RENEW)]) == 1
 
 
 @pytest.mark.parametrize("write", [
@@ -469,37 +413,6 @@ def test_the_merge_phase_hands_its_hold_to_the_apply(monkeypatch: Any) -> None:
     hold = _hold()
     rb._auto_merge(conn, 1, hold)
     assert seen == [hold]
-
-
-def test_release_lock_falls_back_to_a_fresh_connection() -> None:
-    """The lease holds the connection it was taken on, so a run that reconnected
-    releases on the socket run_resilient already closed — stranding the lock for a full staleness TTL
-    even though the process had a healthy path to the DB. The holder-guarded CAS
-    is safe from any connection, so the release opens one of its own."""
-    import scripts.resolve_brokers as rb
-
-    class _DeadConn:
-        def cursor(self) -> Any:
-            raise RuntimeError("the connection is closed")
-
-    fresh = _ResilientConn("fresh")
-    rb._release_lock(_DeadConn(), "full:abc", reconnect=lambda: fresh)
-    assert any(s.startswith(_RELEASE) for s in fresh.executed)
-    # the release owns the connection it opened, so it must close it
-    assert fresh.closed
-
-
-def test_release_lock_does_not_reconnect_when_the_handle_is_live() -> None:
-    """The fallback is a last resort, not a second write: a working connection
-    must release on itself and never open a spare."""
-    import scripts.resolve_brokers as rb
-
-    live = _ResilientConn("live")
-    opened: list[int] = []
-    rb._release_lock(live, "full:abc",
-                     reconnect=lambda: opened.append(1) or _ResilientConn("spare"))
-    assert [s for s in live.executed if s.startswith(_RELEASE)]
-    assert opened == []
 
 
 def test_firm_linking_gets_its_own_floor_when_attribution_ate_the_budget(
@@ -1752,3 +1665,43 @@ def test_shared_contacts_are_built_only_for_the_pairs_being_written() -> None:
     assert rb._shared_contacts(contacts, [(2, 1)]) == {(1, 2): {"email:a@x.cz"}}
     assert rb._shared_contacts(contacts, [(1, 3)]) == {}   # nothing in common
     assert rb._shared_contacts(contacts, []) == {}
+
+
+# From the logs of the 36 full sweeps since Broker Unify W3 (2026-10-01 to 11-05): attribution and the firm links stop
+# at a chunk boundary, so the prefix ran up to 43 s past budget + floor, and the longest tail (merge + rollups +
+# candidates) was 10-01's 8 + 1069 + 60 s. A measurement, not a bound: the job cell and gate #2411 watch it live.
+MEASURED_PREFIX_OVERSHOOT_S = 43
+MEASURED_TAIL_S = 1137
+
+
+def test_the_runner_timeout_covers_every_budgeted_phase_and_a_retried_tail() -> None:
+    """#2027: the `broker_sweep` entry's timeout_s outlasts the lease wait and attribution (`--max-seconds`), the firm
+    links' own floor, their measured overshoot, and the measured tail with each of its phases tried twice
+    (attempts=2)."""
+    import scripts.resolve_brokers as rb
+    from scraper import jobs
+
+    [entry] = [j for j in jobs.runner_jobs() if j.name == "broker_sweep"]
+    budget = int(entry.argv[entry.argv.index("--max-seconds") + 1])
+    assert rb._LOCK_WAIT_MAX_SECONDS < budget, "the lease wait spends the budget, never more"
+    prefix = budget + rb._FIRM_LINK_MIN_SECONDS + MEASURED_PREFIX_OVERSHOOT_S
+    assert entry.timeout_s >= prefix + 2 * MEASURED_TAIL_S
+
+
+def test_the_runner_s_stop_unwinds_the_sweep_so_its_lease_is_released(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#2027: the job runner stops a run with SIGTERM (a deploy, or its timeout_s). Python's default dies on the spot
+    and strands the broker_resolution lease for its 20-min TTL, stalling the worker's broker lane; SystemExit unwinds
+    `job_lease.held`, which releases it."""
+    import signal
+    import sys
+
+    import scripts.resolve_brokers as rb
+
+    handlers: dict[int, Any] = {}
+    monkeypatch.setattr(signal, "signal", lambda sig, handler: handlers.__setitem__(sig, handler))
+    monkeypatch.setattr(sys, "argv", ["resolve_brokers", "--max-seconds", "1500"])
+    monkeypatch.delenv("SUPABASE_DB_URL", raising=False)
+    assert rb.main() == 2
+    with pytest.raises(SystemExit) as stopped:
+        handlers[signal.SIGTERM](signal.SIGTERM, None)
+    assert stopped.value.code == 143

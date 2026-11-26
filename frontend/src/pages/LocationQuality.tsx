@@ -5,11 +5,17 @@
  * measured twice and the page holds no threshold; every status is the check's, every value the
  * count or share that colours it. Admin-only (the health view returns no row to anyone else).
  * W3b moved corrections to the property page's address picker and deleted the inspector.
+ * W6-c (migration 733): the town cell's stored position grid replaced the grain bars, and every
+ * number in it opens its ads (components/location/PositionAudit); the portal and the open cell
+ * live in the URL (?portal=&kind=&grain=).
+ * Ruling Q18: the property waterfall, from served/town's stored `grains` and the served cells (one table pins gauge
+ * and page: tests/fixtures/property_waterfall.json); no portal pick, no arithmetic.
  *
  * Visual note: a class mix is single-hue horizontal bars — magnitude of one measure, so one
  * hue; identity color would be noise. */
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Field } from '@/components/controls';
 import ErrorBanner from '@/components/ErrorBanner';
@@ -21,23 +27,31 @@ import StatusDot from '@/components/StatusDot';
 import { HEALTH_QUERY, HealthEmptyError, tail, verdictOf, type HealthCell, type HealthRow } from '@/lib/healthChecks';
 import { portalShort } from '@/lib/portals';
 import { LOCATION_SOURCES } from '../lib/locationQuality';
+import { KindStrip, NoAnswerEntry, PositionList, PositionsGrid } from '@/components/location/PositionAudit';
+import {
+  KIND_LABEL,
+  listFromParams,
+  paramsForList,
+  POSITION_GRAINS,
+  positionGrid,
+  type PositionCell,
+  type PositionListSpec,
+} from '@/lib/positionAudit';
 
 const CHECK_KEY = 'location_town_coverage';
 
-/* A cell's counts by class (`facts.grains`, `facts.disputed`) as bars, in the matrix's figures. */
-function BarList({ counts }: { counts: unknown }) {
-  const rows = Object.entries(counts && typeof counts === 'object' ? counts : {})
-    .filter((e): e is [string, number] => typeof e[1] === 'number');
+/* Counts by class as bars, in the matrix's figures: a cell's `facts.disputed`, or the waterfall's steps. */
+function BarList({ rows }: { rows: [string, number][] }) {
   const total = rows.reduce((a, [, n]) => a + n, 0);
   if (rows.length === 0) {
     return <p className="text-sm text-[var(--color-ink-3)]">No rows.</p>;
   }
   return (
-    <div className="space-y-1.5">
+    <ul className="space-y-1.5">
       {rows.map(([value, n]) => {
         const pct = total ? (100 * n) / total : 0;
         return (
-          <div key={value} className="flex items-center gap-2">
+          <li key={value} className="flex items-center gap-2">
             <span className="w-44 shrink-0 truncate text-sm text-[var(--color-ink-2)]">
               {value}
             </span>
@@ -50,10 +64,59 @@ function BarList({ counts }: { counts: unknown }) {
             <span className="text-right font-mono tabular-nums text-[0.78rem]">
               {fmtNumber(n)}
             </span>
-          </div>
+          </li>
         );
       })}
-    </div>
+    </ul>
+  );
+}
+
+/* A cell fact's numeric entries, in stored order. */
+const numberEntries = (fact: unknown): [string, number][] =>
+  Object.entries(fact && typeof fact === 'object' ? fact : {}).filter((e): e is [string, number] => typeof e[1] === 'number');
+
+/* ---------- the property waterfall (ruling Q18) ---------- */
+
+/* Every published property once, at its location ad's finest level: the no-town steps are the served cells themselves
+ * (Health's figures, by their own names), then served/town's stored `grains` coarse to fine in the position grid's
+ * words. Only stored counts, never a remainder; null when the reading stored no complete waterfall. */
+function waterfall(fleet: HealthCell[]): { published: number; steps: [string, number][] } | null {
+  const town = fleet.find((c) => c.subject === 'served/town');
+  const withheld = fleet.find((c) => c.subject === 'served/town_withheld');
+  const grains = town?.facts.grains as Record<string, number> | undefined;
+  const { ads, foreign } = town?.facts ?? {};
+  if (!town || town.value == null || !withheld || withheld.value == null || !grains
+      || typeof ads !== 'number' || typeof foreign !== 'number') return null;
+  return {
+    published: ads,
+    steps: [
+      [KIND_LABEL.foreign.label, foreign],
+      [town.subject, town.value],
+      [withheld.subject, withheld.value],
+      ...POSITION_GRAINS.filter((g) => g.key in grains).reverse()
+        .map((g): [string, number] => [`ends at ${g.label}`, grains[g.key]]),
+    ],
+  };
+}
+
+function PropertyWaterfall({ fleet }: { fleet: HealthCell[] }) {
+  const shown = waterfall(fleet);
+  return (
+    <Panel
+      title="Property waterfall"
+      count={shown ? fmtNumber(shown.published) : null}
+      lede={
+        'Published properties, each counted once at its location ad’s finest level: published, not all active (a ' +
+        'young property counts once it is published). Browse also applies the consumer rule (rule 25), so its count ' +
+        'is not this total.'
+      }
+    >
+      {shown ? (
+        <BarList rows={shown.steps} />
+      ) : (
+        <p className="text-sm text-[var(--color-ink-3)]">The gauge has stored no waterfall in this reading.</p>
+      )}
+    </Panel>
   );
 }
 
@@ -82,14 +145,32 @@ function pivot(cells: HealthCell[]) {
   return { portals, columns, at, fleet };
 }
 
-function Scorecard({ row, source, onSource }: { row: HealthRow; source: string; onSource: (s: string) => void }) {
+function Scorecard({
+  row,
+  source,
+  list,
+  onSource,
+  onList,
+}: {
+  row: HealthRow;
+  source: string;
+  list: PositionListSpec | null;
+  onSource: (s: string) => void;
+  onList: (portal: string, list: PositionListSpec | null) => void;
+}) {
+  const cell = list?.mode === 'cell' ? list.cell : null;
+  const onCell = (portal: string, next: PositionCell) => onList(portal, { mode: 'cell', cell: next });
   const { portals, columns, at, fleet } = useMemo(() => pivot(row.details?.cells ?? []), [row.details]);
   /* Every verdict is Health's (`verdictOf`); a stale row's facts are history, withheld as on Health. */
   const current = row.effective_status !== 'unknown';
-  const grains = current ? at[source]?.street?.facts.grains : undefined;
+  const positions = current ? at[source]?.town?.facts.positions : undefined;
   const disputed = current ? at[source]?.outside?.facts.disputed : undefined;
+  const grids = current
+    ? portals.map((p) => [p, positionGrid(at[p]?.town?.facts.positions)] as const)
+    : [];
   return (
     <>
+      {current ? <PropertyWaterfall fleet={fleet} /> : null}
       <Panel title="By portal">
         <div className="overflow-x-auto">
           <table className="block w-full border-collapse text-sm md:table">
@@ -143,15 +224,28 @@ function Scorecard({ row, source, onSource }: { row: HealthRow; source: string; 
           </ul>
         )}
       </Panel>
-      {grains || disputed ? (
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Panel title={`Grain · ${portalShort(source)}`}>
-            <BarList counts={grains} />
-          </Panel>
-          <Panel title={`Disputed classes · ${portalShort(source)}`}>
-            <BarList counts={disputed} />
-          </Panel>
-        </div>
+      {current ? (
+        <PositionsGrid
+          portal={source}
+          grid={positions === undefined ? undefined : positionGrid(positions)}
+          chosen={cell}
+          onOpen={(c) => onCell(source, c)}
+        />
+      ) : null}
+      {cell ? (
+        <PositionList key={`${source}|${cell.kind}|${cell.grain ?? ''}`} portal={source} spec={{ mode: 'cell', cell }}
+          readingAt={row.run_at} onClose={() => onList(source, null)} />
+      ) : null}
+      <KindStrip grids={grids} portal={source} chosen={cell} onOpen={onCell} />
+      <NoAnswerEntry open={list?.mode === 'answerless'}
+        onOpen={() => onList(source, list?.mode === 'answerless' ? null : { mode: 'answerless' })} />
+      {list?.mode === 'answerless' ? (
+        <PositionList key="answerless" portal={source} spec={list} readingAt={null} onClose={() => onList(source, null)} />
+      ) : null}
+      {disputed ? (
+        <Panel title={`Disputed classes · ${portalShort(source)}`}>
+          <BarList rows={numberEntries(disputed)} />
+        </Panel>
       ) : null}
     </>
   );
@@ -160,7 +254,12 @@ function Scorecard({ row, source, onSource }: { row: HealthRow; source: string; 
 /* ---------- page ---------- */
 
 export default function LocationQuality() {
-  const [source, setSource] = useState<string>('bezrealitky');
+  /* The portal and the open cell are the URL's (?portal=&kind=&grain=), so a cell is a link. */
+  const [params, setParams] = useSearchParams();
+  const source = params.get('portal') ?? 'bezrealitky';
+  const list = listFromParams(params);
+  const openList = (portal: string, next: PositionListSpec | null) => setParams(paramsForList(portal, next));
+  const setSource = (portal: string) => openList(portal, null);
   /* The Health page's own entry (same key, same poll): identical numbers by construction. */
   const health = useQuery({
     ...HEALTH_QUERY,
@@ -202,7 +301,7 @@ export default function LocationQuality() {
           />
         ) : row ? (
           <>
-            <Scorecard row={row} source={source} onSource={setSource} />
+            <Scorecard row={row} source={source} list={list} onSource={setSource} onList={openList} />
             <Panel title="As on Health">
               <CheckRow row={{ ...row, owner_path: '' }} />
             </Panel>

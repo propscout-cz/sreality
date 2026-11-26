@@ -546,10 +546,12 @@ REGISTERED_SITES: tuple[RegisteredSite, ...] = (
         hits=2,
         measure="ppm2",
         kind=KIND_GUARDS,
-        why="`is_per_area_price()` (W1) — the one guard, shared by nine "
-        "portals, that stops a per-m² NOTE in a price string being stored as the "
-        "price. It has to spell the unit in order to detect it; storing a rate "
-        "as a total is what made mmreality dum read ~5 700 CZK per m².",
+        why="`is_per_area_price()` (W1) — the guard, shared by the text portals "
+        "that still refuse a rate, that stops a per-m² NOTE in a price string being "
+        "stored as the price (remax, realitymix and bezrealitky convert a rate to a "
+        "total instead: scraper/price_reading.py, #2355). It has to spell the unit "
+        "in order to detect it; storing a rate as a total is what made mmreality "
+        "dum read ~5 700 CZK per m².",
     ),
     # -- Python: heal, watch, consume ---------------------------------------
     # `scripts/backfill_idnes_areas.py` was registered here until the one re-parse

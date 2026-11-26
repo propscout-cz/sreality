@@ -51,8 +51,8 @@ table still honest when it is empty?
   per cell page at `listPerPage=100`; re-fetch only while `nextPage` is non-null, hard cap
   25 pages. **W4's lane landed here** rather than as its own PR: a fetch path with no
   scheduler is a feature nobody can turn on, and the lane is ~40 lines over the existing
-  `_lane_loop` contract. The cell is the obec's `admin_boundaries` envelope (its `id` IS
-  the RÚIAN kód) widened by 5,000 m — the read surface's largest radius, so any subject
+  `_lane_loop` contract. The cell is the envelope of the obec's RÚIAN render polygon
+  (`ruian_unit_render`, by the RÚIAN kód, since W8-3) widened by 5,000 m — the read surface's largest radius, so any subject
   inside the obec is covered by construction.
 - **W3** — ✅ shipped (#1551, migration 545 applied, verified in a real browser on production). The read surface (migration 545): the SALES behind
   definer-style `sold_transactions_public`, read by `sold_comparables(lat, lng, radius)` —
@@ -144,6 +144,6 @@ table still honest when it is empty?
   `record_count` is what the upsert wrote, not what the pages parsed. That row suppresses the
   cell for 35 days, so a clean `ok` over part of an answer would be the same half-truth by
   another door, and W3's coverage header would state it as fact.
-- A cell that cannot be BOXED is not work: the work-list joins `admin_boundaries`. A skipped
+- A cell that cannot be BOXED is not work: the work-list joins `ruian_unit_render` (since W8-3). A skipped
   cell writes no ledger row, so `ORDER BY fetched_at NULLS FIRST` would re-offer it at the head
   of every pass for ever — starving the lane while the heartbeat read perfectly healthy.

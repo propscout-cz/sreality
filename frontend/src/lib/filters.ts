@@ -243,9 +243,7 @@ export interface ListingFilters {
    * categoryMain in (dum, komercni); see SUBTYPE_LABELS_BY_MAIN. */
   subtype: string[];
   buildingMaterial: BuildingMaterial[];
-  /* PENB letters A–G (registry `energy_rating_match`): a property matches when its
-   * rating — the first non-null across its ads in canonical order — is one of them;
-   * an unrated property never does. Empty = no constraint. */
+  /* PENB letters A–G (registry `energy_rating_match`). Empty = no constraint. */
   energyRatingMatch: string[];
   estateAreaMin: number | null;
   estateAreaMax: number | null;
@@ -283,8 +281,8 @@ export interface ListingFilters {
   pipeline: SetScope | null;
   /* Browse-only broker scope ("Explore this broker's listings"). Null = off.
    * A preset keeps it, a dashboard does not (DASHBOARD_EXCLUDED_KEYS); it is
-   * NOT in toolkit/filter_registry.py (must stay invisible to the agent /
-   * comparables / estimation agendas). Set by the explore-broker modal's seed,
+   * NOT in toolkit/filter_registry.py (must stay invisible to the agent and
+   * the comparables agenda). Set by the explore-broker modal's seed,
    * a `?broker=` URL param, or the sidebar's Advanced → Broker search
    * (filter-controls/BrokerFilterControl). A property-id allowlist (MS19): the
    * properties where one of this broker's ads is on the portals in the status

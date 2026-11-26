@@ -70,7 +70,7 @@ _ROLES = ("anon", "authenticated", "public")
 # what catches default-ACL drift or a blanket `grant ... on all tables`.
 _BROKER_A6_SURFACES = frozenset({
     "brokers_public", "broker_firm_memberships_public",
-    "broker_listings_public", "listing_broker_public",
+    "listing_broker_public",
     "broker_resolution_runs_public",
     # The broker book (migration 692): its view and its table, the API's alone.
     "broker_book", "broker_book_projection",
@@ -425,7 +425,8 @@ def test_live_allowlist_is_pinned():
     An 'acl' function (account_email reads emails) never belongs here: the sweep's function arm skips what
     `authenticated` cannot EXECUTE, so waiving it would let a later grant on it pass unseen."""
     assert sorted(live_allowlist()) == [
-        "agent_account_spent_today", "curation_clock_audience", "images_public", "llm_cost_hour_union", "location_jobs", "sold_coverage"]
+        "agent_account_spent_today", "curation_clock_audience", "images_public", "llm_cost_hour_union", "location_jobs",
+        "location_quality_by_source", "sold_coverage"]
 
 
 def test_no_write_grants_to_browser_roles():

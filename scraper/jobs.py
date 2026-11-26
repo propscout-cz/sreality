@@ -23,9 +23,15 @@ REPLICA_MEMORY_MB, CO_TENANCY_SHARE = 7629, 0.81
 # The runner's SIGKILL grace after its SIGTERM stays under this; the API's stuck-run cutoff exceeds the longest
 # walk by it, and the DB-heavy hour census counts it (tests/scraper/test_job_registry.py).
 STUCK_RUN_GRACE_S = 600
+# The claim intake and the RÚIAN address and building loads never overlap (2026-08-10: four heavy location lanes at
+# once dropped backends across the instance). It replaced GitHub's `location-batch` group (#2028); the runner claims it
+# for all three since the address load moved too (#2033).
 LOCATION_HEAVY = "location-heavy"
 WALK_PREFIX = "walk_"
 WALK_MEMORY_MB, WALK_CPUS = 512, 1
+# W4 moves the walks shortest first (PROGRAM § W4): a walk whose timeout fits this runs on the runner, the rest wait on
+# their workflows. A batch raises it and deletes the workflows it takes over; it names no portal (rule 21).
+RUNNER_WALK_TIMEOUT_S = 30 * 60
 
 
 @dataclass(frozen=True)
@@ -51,23 +57,44 @@ _FIXED: tuple[Job, ...] = (
     Job("rent_map", ("scripts.fetch_rent_map",), 30 * DAY, 356400, 15 * 60, 512, 1, RUNNER),
     Job("map_overlays", ("scripts.ingest_map_overlays",), 91 * DAY, 6300000, 2 * HOUR, 1024, 1, RUNNER,
         db_heavy=True),
-    # 03:00: clear of the hourly intake's 00:35 slot, and it holds through the kill grace. (The daily
-    # full location resolve left this table in the location programme's W2: the worker sweeps itself.)
+    # The daily sweeps (#2027), each held off the other by the hour census and by job_lease's DB-heavy turn. A
+    # property sweep runs its 6000 s budget, one in-flight batch (24 min) and its finalize: 130 min; its timeout is
+    # 1.5x the budget, so only a budget stop's tail reads Watch. (The daily full location resolve left this table
+    # in the location programme's W2: the worker sweeps itself.)
     Job("property_sweep", ("scripts.recompute_property_stats", "--batch-size", "2000", "--max-seconds", "6000"),
-        DAY, 3 * HOUR, 130 * 60, 1024, 1, UNTIL_MOVED, db_heavy=True),
+        DAY, 3 * HOUR, 150 * 60, 1024, 1, RUNNER, db_heavy=True),
+    # A broker sweep's 36 full runs since Broker Unify W3 (2026-10-01 to 11-05, end to end from their logs) took
+    # 1684 s p50, 2799 s p95, 2982 s at most; 10-02's failed at 3497 s, its 28-min rollup outliving the lease. The
+    # lease wait and attribution spend the 1500 s budget and the firm links ~300 s (1843 s at most), then merge,
+    # rollups and candidates take 48-1137 s, each tried twice at most (~4120 s, worst case). 75 min clears that; its
+    # Watch line (50 min) clears every completed run, 10-01's the closest.
     Job("broker_sweep", ("scripts.resolve_brokers", "--max-seconds", "1500"),
-        DAY, 6 * HOUR, 3 * HOUR, 1024, 1, UNTIL_MOVED, db_heavy=True),
-    # Not DB-heavy: hourly, it runs beside the daily sweeps today; its one exclusion is location-heavy.
+        DAY, 6 * HOUR, 75 * 60, 1024, 1, RUNNER, db_heavy=True),
+    # Not DB-heavy: hourly, it runs beside the daily sweeps today; its one exclusion is location-heavy. 75 under a
+    # backlog (#2028). 70 min keeps its 2400 s budget, a last batch and the readout under the 2/3 Watch line; 4 CPUs,
+    # the extraction pool GitHub's runner gave it.
     Job("location_intake",
         ("location_data.claims_intake", "--mode", "incremental", "--max-seconds", "2400", "--batch-size", "10000"),
-        HOUR, 35 * 60, 55 * 60, 1024, 2, UNTIL_MOVED, LOCATION_HEAVY),
+        HOUR, 35 * 60, 70 * 60, 1024, 4, RUNNER, LOCATION_HEAVY),
     # One unsharded run: tag, then retag on one model load; it re-selects inside its budget; 75 under a backlog (#2032).
-    # A chunk of 64: Pillow holds RGB at 4 B a pixel. Its first runner run peaked at 2,386 MB (#2155), so 3072.
+    # A chunk of 64 holds model inputs; a full frame lives only on a decoder, one a CPU (#2478). Its first runner run
+    # peaked at 2,386 MB (#2155), so 3072.
     Job("clip", ("scripts.clip_tag_backfill", "--max-seconds", "1500", "--limit", "5000", "--workers", "16",
                  "--chunk", "64"),
         15 * 60, 5 * 60, 55 * 60, 3072, 4, RUNNER),
-    Job("ruian_load", ("location_data.ruian_load",), 30 * DAY, 10 * HOUR, 6 * HOUR, 2048, 1, UNTIL_MOVED,
+    # Daily at 10:00 UTC, not on a 30-day grid that drifts off the 1st (#2666 review): the day ČÚZK publishes a month-end
+    # vintage (~08:00 UTC) it loads it, every other day the vintage is current and it only finishes (~20 s). A cut run
+    # resumes from its R2 archive. A dry run of the 2026-11 vintage peaked at 342 MB and wrote 918 MB (#2033).
+    Job("ruian_load", ("location_data.ruian_load",), DAY, 10 * HOUR, 6 * HOUR, 2048, 1, RUNNER,
         LOCATION_HEAVY, db_heavy=True),
+    # The register's building facts (#2604): a month's ~6,250 obec files, resumed daily until none is pending, then
+    # a no-op until the next vintage. It starts obce only 13:00-17:00 UTC (a run restarted by a deploy keeps those
+    # hours) and none in :40-:50, so the largest obec (Praha, 65 s) is written before the :45 Browse rebuild. The
+    # registry load holds location-heavy too; the loader still asks before every obec, for a load the runner cut.
+    Job("ruian_buildings",
+        ("location_data.ruian_buildings", "--max-seconds", "10800", "--window-utc", "13:00-17:00",
+         "--quiet-minutes", "40-50"),
+        DAY, 13 * HOUR, 270 * 60, 2048, 1, RUNNER, LOCATION_HEAVY, db_heavy=True),
     Job("price_stats", ("scraper.price_stats_main", "--start-year", "2015", "--window-years", "5"),
         7 * DAY, 4 * DAY + 4 * HOUR, 1 * HOUR, 1024, 1, GITHUB),  # the epoch began on a Thursday: Monday 04:00
     Job("verify_pipeline", ("scripts.verify_pipeline", "--host", "github-actions"),
@@ -76,8 +103,9 @@ _FIXED: tuple[Job, ...] = (
 
 
 def _walk(source: str, portal: type, offset_s: int) -> Job:
+    host = RUNNER if portal.walk_timeout_s <= RUNNER_WALK_TIMEOUT_S else UNTIL_MOVED
     return Job(f"{WALK_PREFIX}{source}", (f"scraper.{source}_main", "--index-only"), portal.walk_every_s,
-               offset_s, portal.walk_timeout_s, WALK_MEMORY_MB, WALK_CPUS, UNTIL_MOVED)
+               offset_s, portal.walk_timeout_s, WALK_MEMORY_MB, WALK_CPUS, host)
 
 
 @functools.cache

@@ -39,6 +39,11 @@ THE NAMED BLIND SPOTS — real, and listed so nobody has to rediscover them:
     `/m²` suffix with the currency formatted separately).
   * A division through a helper — `np.divide(price, area)`, `ratio(a, b)` — has
     no operator to walk out from and is invisible.
+  * A MULTIPLICATION is never walked. `scraper/price_reading.py` turns a stated
+    rate into the stored total (rate × `area_m2`) and judges a reading against
+    `PPM2_BANDS` × area, the measure's own percentiles held as constants, with
+    neither a division nor a unit literal, so no arm sees it. It produces the
+    measure's numerator; it never serves a per-m² figure.
   * `ruian_*`, `area_km2` and `area_ha` are exempt BY NAME on the denominator,
     with no inspection of what the code does.
   * The SQL half is a census of `migrations/` ON DISK, not of the database. An

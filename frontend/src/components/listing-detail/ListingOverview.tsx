@@ -5,7 +5,7 @@
  * with ListingOverview below: the SAME pieces, one surface, not two. Driven by a
  * ListingPublic-shaped row: the property page passes the property as its Browse
  * card shows it, the estimation page the subject's resolved listings row. */
-import { Suspense, useLayoutEffect, useRef, useState } from 'react';
+import { Suspense } from 'react';
 import { lazyChunk } from '@/lib/lazyChunk';
 import { fmtCzk, fmtArea, fmtFloor, fmtMeasuredPricePerM2, fmtAbsolute } from '@/lib/format';
 import { areaKindOf, ppm2BasisFromToken } from '@/lib/measure';
@@ -16,7 +16,9 @@ import {
   buildAmenities,
   FactsList,
   AmenityChips,
+  type RegisterMarkOf,
 } from '@/lib/listingFacts';
+import Expandable from '@/components/Expandable';
 import Panel, { PanelEmpty } from '@/components/Panel';
 
 const DetailMap = lazyChunk(() => import('@/components/listing-detail/DetailMap'));
@@ -72,8 +74,14 @@ export function PropertyIdentity({
   showStatus = true,
   statusHref,
   addressAction,
+  registerMark,
+  badge,
 }: {
   listing: ListingPublic;
+  /* Slots the property page fills from the register: the mark for a fact the register states too (after the
+   * storey, a fact, an amenity), and a badge after the status. */
+  registerMark?: RegisterMarkOf;
+  badge?: React.ReactNode;
   /* Rendered under the headline price, or in its place when the listing states
    * none. Estimation Detail leaves it empty. */
   priceNote?: PriceNote;
@@ -120,12 +128,14 @@ export function PropertyIdentity({
             <>
               <span className="mx-2 text-[var(--color-ink-4)]">·</span>
               <span className="text-[var(--color-ink)]">{floor}</span>
+              {registerMark?.('floors')}
             </>
           )}
         </p>
         {showStatus && (
           <StatusPill isActive={listing.is_active} lastSeenAt={listing.last_seen_at} href={statusHref} />
         )}
+        {badge}
       </div>
       <h1
         className={[
@@ -169,7 +179,7 @@ export function PropertyIdentity({
           )}
         </p>
       )}
-      <KeyFactsBlock listing={listing} />
+      <KeyFactsBlock listing={listing} registerMark={registerMark} />
     </div>
   );
 }
@@ -201,6 +211,7 @@ export function LocationMap({
             lng={lng}
             isActive={listing.is_active}
             heightClass={heightClass}
+            label={listing.display_label}
           />
         </Suspense>
       ) : (
@@ -317,50 +328,29 @@ export function DescriptionBody({
   label = 'Description',
   empty,
   className,
-  clamp = 'line-clamp-4',
+  lines = 4,
   words = ['Show more', 'Show less'],
 }: {
   text: string;
   label?: string;
   empty?: string;
   className?: string;
-  /* The collapsed height, as a Tailwind line-clamp class. */
-  clamp?: string;
+  /* How many lines show until opened. */
+  lines?: 4 | 6;
   words?: readonly [more: string, less: string];
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const [overflows, setOverflows] = useState(false);
-  const ref = useRef<HTMLParagraphElement | null>(null);
-
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    setOverflows(el.scrollHeight - el.clientHeight > 1);
-  }, [text, clamp]);
-
   return (
     <Panel title={label} className={className}>
       {text ? (
-        <div>
-          <p
-            ref={ref}
-            className={
-              'text-sm leading-relaxed text-[var(--color-ink)] whitespace-pre-wrap ' +
-              (expanded ? '' : clamp)
-            }
-          >
-            {text}
-          </p>
-          {(overflows || expanded) && (
-            <button
-              type="button"
-              onClick={() => setExpanded((v) => !v)}
-              className="mt-2 inline-flex items-center text-[0.75rem] tracking-wide text-[var(--color-ink-3)] hover:text-[var(--color-copper)] transition-colors"
-            >
-              {expanded ? words[1] : words[0]}
-            </button>
-          )}
-        </div>
+        <Expandable
+          as="p"
+          lines={lines}
+          words={words}
+          contentClassName="text-sm leading-relaxed text-[var(--color-ink)] whitespace-pre-wrap"
+          toggleClassName="mt-2 inline-flex items-center text-[0.75rem] tracking-wide text-[var(--color-ink-3)] hover:text-[var(--color-copper)] transition-colors"
+        >
+          {text}
+        </Expandable>
       ) : (
         <PanelEmpty>{empty}</PanelEmpty>
       )}
@@ -378,7 +368,7 @@ export function DescriptionBody({
  * label·value pairs on one wrapping line, with the amenity chips below. Rendered
  * inside the header's left column, under the price, so it fills the space beside
  * the map instead of pushing the description down. */
-function KeyFactsBlock({ listing }: { listing: ListingPublic }) {
+function KeyFactsBlock({ listing, registerMark }: { listing: ListingPublic; registerMark?: RegisterMarkOf }) {
   const facts = buildFacts(listing);
   const amenities = buildAmenities(listing);
   if (facts.length === 0 && amenities.length === 0) {
@@ -386,8 +376,8 @@ function KeyFactsBlock({ listing }: { listing: ListingPublic }) {
   }
   return (
     <div className="mt-5 space-y-3">
-      <FactsList facts={facts} />
-      <AmenityChips amenities={amenities} />
+      <FactsList facts={facts} mark={registerMark} />
+      <AmenityChips amenities={amenities} mark={registerMark} />
     </div>
   );
 }

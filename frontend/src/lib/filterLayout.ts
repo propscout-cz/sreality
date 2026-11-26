@@ -213,7 +213,6 @@ export const BROWSE_FILTER_BANDS: readonly FilterBand[] = [
       'priceGrowthRules',
     ],
     rows: [
-      /* PENB A–G. G is also the legal "no certificate" placeholder (registry note). */
       { blocks: [form({ energy_rating_match: 'Energy rating (PENB)' })] },
       /* MF reference rent ÷ asking price: sale flats only, so Prodej only;
        * cleared on leaving Prodej (applySidebarUpdates). */

@@ -29,6 +29,7 @@ from scripts.checks.common import (
     as_utc,
     cell,
     graded,
+    in_dwell_ctes,
     iso,
     judged,
     now,
@@ -186,23 +187,21 @@ select i.source, count(*) filter (where i.recent), count(*) filter (where i.rece
 """
 
 # Active ads per portal and category, and those with a gone verdict newer than their last
-# sighting (in dwell: the page read gone once and the flip waits out the dwell).
-_HELD_SQL = """
+# sighting (in dwell: the page read gone once and the flip waits out the dwell; one row an ad).
+_HELD_SQL = f"""
 with held as (
     select source, category_main, category_type, count(*) as held
       from listings
      where is_active and source = any(%(sources)s)
      group by 1, 2, 3),
-pending as (
-    select l.source, l.category_main, l.category_type, count(distinct l.id) as pending
-      from detail_queue_completions c
-      join listings l on l.source = c.source and l.source_id_native = c.native_id
-     where c.outcome = 'gone' and c.source = any(%(sources)s) and l.is_active
-       and c.completed_at > coalesce(l.last_seen_at, '-infinity'::timestamptz)
+{in_dwell_ctes(" and c.source = any(%(sources)s)")},
+dwell as (
+    select source, category_main, category_type, count(*) as pending
+      from pending
      group by 1, 2, 3)
 select h.source, h.category_main, h.category_type, h.held, coalesce(p.pending, 0)
   from held h
-  left join pending p on p.source = h.source
+  left join dwell p on p.source = h.source
         and p.category_main is not distinct from h.category_main
         and p.category_type is not distinct from h.category_type
 """

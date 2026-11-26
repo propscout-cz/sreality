@@ -280,6 +280,40 @@ describe('<Feed>', () => {
     await waitFor(() => expect(lastAside()).toBe('1\u00a0234 nemovitostí'));
   });
 
+  it('re-orders the roll from the Řazení chip, in one tap', async () => {
+    const user = userEvent.setup();
+    renderFeed();
+    await screen.findByText('Místo 1', { exact: false });
+    await user.click(screen.getByRole('button', { name: 'Řazení' }));
+    const sheet = screen.getByRole('dialog', { name: 'Řazení' });
+    /* A menu that acts as you tap closes on "Hotovo"; the orders are the Filtry sheet's, in the feed's ink chips. */
+    expect(within(sheet).getByRole('button', { name: 'Hotovo' })).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Newest first' })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(within(sheet).getByRole('button', { name: 'Price: low → high' }));
+    expect(screen.queryByRole('dialog', { name: 'Řazení' })).toBeNull();
+    await waitFor(() => {
+      const calls = vi.mocked(queries.fetchListingsForCards).mock.calls;
+      expect(calls[calls.length - 1][1]).toEqual({ field: 'price_czk', direction: 'asc' });
+    });
+    /* The chip names the order once it is not the default. */
+    expect(screen.getByRole('button', { name: 'Řazení: Price: low → high' })).toHaveTextContent('Price: low → high');
+  });
+
+  it('an order picked under Skryté leaves Skryté, which takes no order', async () => {
+    const user = userEvent.setup();
+    renderFeed();
+    await screen.findByText('Místo 1', { exact: false });
+    await user.click(screen.getByRole('button', { name: /^Skryté/ }));
+    expect(screen.getByRole('button', { name: /^Skryté/ })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(screen.getByRole('button', { name: 'Řazení' }));
+    await user.click(within(screen.getByRole('dialog', { name: 'Řazení' })).getByRole('button', { name: 'Oldest first' }));
+    expect(screen.getByRole('button', { name: /^Skryté/ })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: 'Řazení: Oldest first' })).toBeInTheDocument();
+    /* Back under Skryté the chip names no order: none applies there. */
+    await user.click(screen.getByRole('button', { name: /^Skryté/ }));
+    expect(screen.getByRole('button', { name: 'Řazení' })).toHaveTextContent(/^Řazení$/);
+  });
+
   it('opens the Filtry sheet and applies its draft to the roll', async () => {
     const user = userEvent.setup();
     renderFeed();

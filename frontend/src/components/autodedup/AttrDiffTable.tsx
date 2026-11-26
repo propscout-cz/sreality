@@ -55,10 +55,10 @@ export function memberDiffRows(a: AutodedupMember, b: AutodedupMember): DiffRow[
       b: b.area_m2 == null ? null : fmtArea(b.area_m2),
     },
     {
-      /* Floor WITHIN the building: "2. patro z 5 podlaží" against "… z 6 podlaží"
-       * is two different buildings, which the bare storey number hides. The total is
-       * shown only when the payload carries it — never padded with a guess. */
-      label: 'Patro',
+      /* Floor WITHIN the building: "3. podlaží z 5" against "… z 6" is two different
+       * buildings, which the bare storey number hides. The total is shown only when
+       * the payload carries it — never padded with a guess. */
+      label: 'Podlaží',
       a: fmtFloor(a.floor, a.total_floors),
       b: fmtFloor(b.floor, b.total_floors),
     },

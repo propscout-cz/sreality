@@ -1,7 +1,7 @@
 name: "Jobs: load obec population (manual)"
 
-# Load ČSÚ municipality population into admin_boundaries.population for EVERY
-# obec (not just the 206 curated cities). Reads the committed DataStat export
+# Load ČSÚ municipality population into obec_population (by RÚIAN code and year) for
+# EVERY obec. Reads the committed DataStat export
 # data/csu_population.json (OBY02AT02 — download from
 # https://data.csu.gov.cz/datastat/data/VYBER/OBY02AT02). Idempotent: only
 # changed rows are written. Dispatch this after committing a refreshed export.

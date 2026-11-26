@@ -48,7 +48,6 @@ class Agenda(StrEnum):
     BROWSE = "browse"             # frontend Browse sidebar
     WATCHDOG = "watchdog"         # WatchdogFilterSpec + matcher
     COMPARABLES = "comparables"   # toolkit.find_comparables_* + agent tools
-    ESTIMATION = "estimation"     # CreateEstimationIn
     VELOCITY = "velocity"         # compute_market_velocity
     SOLD = "sold"                 # ListingDetail sold-comps block (sold_comparables)
 
@@ -607,7 +606,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_COHORT,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.VELOCITY}),
             constraints={"min": 100, "max": 10000},
             unit="m",
         ),
@@ -626,7 +625,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_COHORT,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.VELOCITY}),
             constraints={"min": 0.05, "max": 0.6, "step": 0.05},
             unit="%",
         ),
@@ -643,7 +642,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_COHORT,
             ui_control=UiControl.SINGLE_SELECT,
-            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.VELOCITY}),
             constraints={"enum": ["exact", "loose", "any"]},
             enum_values=DISPOSITION_MATCH_OPTIONS,
         ),
@@ -661,7 +660,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_COHORT,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.VELOCITY}),
             constraints={"min": 0, "max": 20},
         ),
         FilterDef(
@@ -677,7 +676,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_VELOCITY,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.VELOCITY}),
             constraints={"min": 1, "max": 365},
             unit="days",
         ),
@@ -723,7 +722,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_STATUS,
             ui_control=UiControl.SINGLE_SELECT,
-            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.VELOCITY}),
             constraints={"enum": ["active", "delisted", "all"]},
             enum_values=LIFECYCLE_OPTIONS,
         ),
@@ -739,8 +738,8 @@ def _build_registry() -> dict[str, FilterDef]:
                 "shows both live and delisted properties; `active` = a live "
                 "property (with a portal filter: with an active ad there); "
                 "`inactive` = a delisted property, every ad ended. "
-                "The Watchdog matcher ignores this (it fires on new "
-                "properties only) — use `lifecycle` for the analytical "
+                "A watchdog ignores this (it watches the properties on "
+                "the market) — use `lifecycle` for the analytical "
                 "surfaces."
             ),
             category=CATEGORY_STATUS,
@@ -812,7 +811,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_VELOCITY,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES, Agenda.ESTIMATION}),
+            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES}),
             constraints={"min": 0},
             unit="days",
         ),
@@ -827,7 +826,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_VELOCITY,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES, Agenda.ESTIMATION}),
+            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES}),
             constraints={"min": 0},
             unit="days",
         ),
@@ -844,7 +843,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_VELOCITY,
             ui_control=UiControl.BOOLEAN,
-            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES, Agenda.ESTIMATION}),
+            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES}),
         ),
         FilterDef(
             id="last_seen_min_days",
@@ -858,7 +857,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_VELOCITY,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES, Agenda.ESTIMATION}),
+            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES}),
             constraints={"min": 0},
             unit="days",
         ),
@@ -874,7 +873,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_VELOCITY,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES, Agenda.ESTIMATION}),
+            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES}),
             constraints={"min": 0},
             unit="days",
         ),
@@ -891,7 +890,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_VELOCITY,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES, Agenda.ESTIMATION}),
+            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES}),
             constraints={"min": 0},
             unit="days",
         ),
@@ -907,7 +906,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_VELOCITY,
             ui_control=UiControl.NUMBER_INPUT,
-            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES, Agenda.ESTIMATION}),
+            agendas=frozenset({Agenda.BROWSE, Agenda.COMPARABLES}),
             constraints={"min": 0},
             unit="days",
         ),
@@ -1125,7 +1124,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_PROPERTY,
             ui_control=UiControl.MULTISELECT,
-            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.VELOCITY}),
             enum_values=BUILDING_TYPE_OPTIONS,
         ),
         FilterDef(
@@ -1159,14 +1158,12 @@ def _build_registry() -> dict[str, FilterDef]:
                 "capital letters A through G). New constructions "
                 "trend A/B; pre-renovation panel buildings often G. "
                 "G is also the legal placeholder for 'no certificate', "
-                "which no portal marks apart. A property's rating is the "
-                "first non-null one across its ads in canonical order; "
-                "an unrated property never matches."
+                "which no portal marks apart. An unrated row never matches."
             ),
             category=CATEGORY_PROPERTY,
             ui_control=UiControl.MULTISELECT,
             agendas=frozenset({
-                Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY,
+                Agenda.COMPARABLES, Agenda.VELOCITY,
                 Agenda.BROWSE, Agenda.WATCHDOG,
             }),
             enum_values=ENERGY_RATING_OPTIONS,
@@ -1703,10 +1700,10 @@ def _build_registry() -> dict[str, FilterDef]:
             default=None,
             description=(
                 "Lower bound on the population of the listing's OWN "
-                "municipality (`home_obec_pop >= N`, ČSÚ population of the "
-                "obec whose polygon contains the listing). Precomputed by "
-                "recompute_city_proximity (migration 142) for every listing "
-                "country-wide — not just the 206 curated cities."
+                "municipality (`home_obec_pop >= N`, the latest ČSÚ population "
+                "of the obec its location ad is bound to, `obec_population`). "
+                "Precomputed by recompute_city_proximity (migrations 142, 726) "
+                "for every listing country-wide — not just the 206 curated cities."
             ),
             category=CATEGORY_CITY_QUALITY,
             # Plain paired number inputs, not a 0–1.5M slider: the range is
@@ -1952,7 +1949,7 @@ def _build_registry() -> dict[str, FilterDef]:
             ),
             category=CATEGORY_STATUS,
             ui_control=UiControl.BOOLEAN,
-            agendas=frozenset({Agenda.COMPARABLES, Agenda.ESTIMATION, Agenda.VELOCITY}),
+            agendas=frozenset({Agenda.COMPARABLES, Agenda.VELOCITY}),
         ),
     ]
 

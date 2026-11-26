@@ -3,8 +3,10 @@
 The Railway job runner (`scraper/job_runner.py`, `scraper/job_process.py`; SQL in `scraper/job_lease.py`) runs every
 `scraper/jobs.py` entry whose host is `job-runner` (`jobs.runner_jobs()`), each as its own subprocess. Design and
 rulings: `docs/design/actions-exit/PROGRAM.md` § 4.2. Since #2025's move PR it runs `stale_images`, `rent_map` and
-`map_overlays`, and since #2032 `clip`, whose workflows those PRs deleted; each later move PR (#2027–#2031,
-#2033) flips more entries' host. On
+`map_overlays`, since #2032 `clip`, since #2027 the daily `property_sweep` (03:00 UTC) and `broker_sweep` (06:00 UTC)
+and since #2028 `location_intake`, whose workflows those PRs deleted, since #2604 `ruian_buildings` (13:00 UTC, born
+on the runner; `docs/architecture.md` § Register facts), since #2029 the walks of web, maxima and bezrealitky, and
+since #2033 the daily `ruian_load` (below); each later move PR (#2030, #2031) flips more entries' host. On
 Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and 8 GB
 (`.railway/railway.ts` `jobRunner`; settings, drain and image: `docs/architecture.md` § Railway service
 configuration). Its Health cells and the "Jobs: run now" form are #2026's (below).
@@ -45,13 +47,36 @@ Recipes:
   `R2_*` is missing. A GET that failed is retried by the next run, never again in the same one. A
   `clip_taxonomy_retag_after` later than the database's now() is no campaign until it passes (one `RETAG` warning a
   run). The last line is `CLIP_JOB exit=<code> why=…`.
+- **clip's memory is bounded by construction (#2478):** each photo is decoded and resized the image processor's way
+  on a decoder (one per job CPU), so a chunk holds only model inputs (588 KiB a photo) and a frame lives only on a
+  decoder. A frame is at most `MAX_DECODE_PX` (32 MP): a larger JPEG decodes at a smaller DCT scale, any other larger
+  format is undecodable. The memory test in `tests/scripts/test_clip_tag_backfill.py` checks that worst case, a cap-size
+  frame on every decoder and a chunk of cap-size bytes, against `memory_mb`.
 - **After a move PR merges**, `gh run list --workflow=<deleted file> --json status,databaseId`; if a run is queued or
-  running, pause the new row past that run's timeout (`runner-pause`), since a queued run in a non-cancelling group
-  can still start. A re-land within an hour of its revert's deploy keeps the row's `due_at`, and its boot claims a
+  running, pause the new row (`runner-pause`) past the last one's end: a queued run in a non-cancelling group starts
+  when the run ahead ends, so one running and one queued is two timeouts from now. List again before the pause lapses
+  and extend it while one is still queued or running. A re-land within an hour of its revert's deploy keeps the row's `due_at`, and its boot claims a
   slot GitHub ran in between: pause the retired row before that deploy (the slot then runs once the pause ends).
 - **clip's move (#2032) held nothing for a GitHub run in flight:** both writers upsert idempotently and stamp last,
   so an overlap corrupts nothing (a rewritten vector moves about 1e-6 per value); the "AC2 pending" pause is what
   held its first slot.
+- **location_intake's exits (#2028):** 75 when it leaves an unfinished half it moved (`claims_intake.more_remains`:
+  unmined bodies with some mined, or a change-log scan stopped with listings opened), so a contract bump's backlog
+  drains run after run, a minute apart; 0 otherwise and on a `--dry-run`; 143 on the runner's SIGTERM (the batch in
+  hand commits and the run stamps `stopped`, so the next resumes there); 2 when a contract changed without a
+  version bump (every run but a dry one projects the image's contracts first) or the schema is missing. A full
+  re-walk is `request location_intake -- --mode full` (`--source X` for one portal). Its 75 re-dues the registry's
+  unscoped incremental argv, which carries any stopped full walk on, a one-portal one included, once it has emptied
+  the change log.
+- **The RÚIAN registry load (`ruian_load`, #2033):** daily at 10:00 UTC, 6 h, on `location-heavy` with the intake
+  and the building load, so while it runs the intake's cell reads `waiting for ruian_load`. Daily, not monthly: an
+  epoch-anchored 30-day grid drifts off the 1st and, once a slot falls before ČÚZK's publication (~08:00 UTC on the
+  1st), skips a month. The day a new month-end vintage is out it loads it (a late one the next day); every other day
+  the vintage is already current and the run only finishes (quarter pairs and two matview refreshes, ~20 s). A test
+  holds the worst-case registry age under Health's 40-day line. A run a deploy cut resumes from its R2 archive on the
+  next one (the module docstring). By hand:
+  `python -m scraper.job_runner request ruian_load -- --vintage YYYYMMDD` (add `--dry-run` to download, parse and
+  assert with no database).
 
 ## Log lines (Railway logs)
 
@@ -82,13 +107,18 @@ The runner's own stop decides before the exit code.
 | exit 75 | `ok` | now + 60 s |
 | deploy stop, fence | `interrupted` | now (DB-heavy too) |
 | any other exit, an unsent SIGKILL (likely the OOM killer) | `failed` | backoff: 60 s doubling, capped at the cadence and the next slot |
-| lease lapsed (runner crash, a database outage past the fence; a refused renewal, since the reaper closes the run first) | `lost` | now, then backoff on a second loss in a row |
+| lease lapsed (runner crash, a database outage past the fence; a refused renewal, since the reaper closes the run first) | `lost` | now, then backoff on a second loss in a row; a pure request: unchanged (one exception, below) |
 
-A DB-heavy job's backoff, retry and lost waits go to its own hour (the next day at most). A pure request run's
-release never moves `due_at` (its exit 75 pulls it to 60 s at most), and the row's `due=now` log line does not apply to
-it; a request that also took a due slot advances it. **A `lost` request does move it** (#2317, the reaper cannot tell):
-a `lost` `map_overlays` request schedules a live run at the next 22:00Z, so read `due_at` after every `map_overlays`
-request and never start one between 20:00 and 22:00Z.
+A DB-heavy job's backoff, retry and lost waits go to its own hour (the next day at most), and **no DB-heavy job starts
+while another one's run is open** (#2027; `job_lease`'s `due`/`claim` with `PgLedger.heavy`, main's whole registry, so
+`once` too; a transaction advisory lock makes two replicas' heavy claims take turns). A run off its hours (an
+interrupted one, a recovery after hours down, a request) waits instead, and past 10 min its cell reads Watch `due N ago
+and not started`. A pure request run never
+moves `due_at` (its exit 75 pulls it to 60 s at most), and the row's `due=now` log line does not apply to it; a request
+that also took a due slot advances it. Its loss keeps `due_at` too, but `job_runs` keeps no due slot, so the reaper
+reads one from the run: a request run whose row's `due_at` is still after its `started_at` (the claim's own now())
+took none (#2317), so a slot that came due while it ran stays due. One exception: a request on a paused row that was
+already due counts at its loss as having taken its slot, so its loss moves `due_at` on, never earlier.
 
 ## Reading `job_runs`
 
@@ -164,15 +194,43 @@ of a sibling on its resource seen since its clock started. The worst condition w
   older image booted and retired it): read Railway's job-runner deployments and the `BOOT … jobs=N` line. Missing at
   one read only: Watch (in a deploy overlap the one worker heartbeat row can be the predecessor's). A live row the code
   does not declare: Watch. Inside the grace: ok `waiting for the runner's deploy`.
-- **For the move PRs (#2027, #2028, #2029): the ⅔ line.** A job whose own budget sits above ⅔ of its `timeout_s`
-  reads Watch on every healthy run that uses it: location_intake runs `--max-seconds 2400` against T 3300 (⅔ = 2200)
-  and property_sweep `--max-seconds 6000` against 7800 (⅔ = 5200). Each move PR sets `timeout_s` ≥ 1.5× the job's own
-  budget, lowers the budget, or asks the operator. A walk stopped at its own timeout records `timeout`, a Problem: W4
-  keeps `walk_timeout_s` above each walk's p95. W2's three jobs are clear (stale_images runs 2-9 s of 1200;
-  rent_map and map_overlays carry no self-budget), and so is W5's clip (`--max-seconds 1500` against 3300: a full
-  run, with its last chunk and its exit, ends by about 1600 s, under the 2200 s line).
+- **For the move PRs (#2029): the ⅔ line.** A job whose own budget sits above ⅔ of its `timeout_s`
+  reads Watch on every healthy run that uses it.
+  `tests/scraper/test_job_registry.py`'s argv census refuses a runner job's `--max-seconds` past ⅔ of its `timeout_s`, so
+  a move PR sets `timeout_s` ≥ 1.5× the job's own budget, lowers the budget, or asks the operator. A walk stopped at
+  its own timeout records `timeout`, a Problem: W4 keeps `walk_timeout_s` above each walk's p95. W2's three jobs are
+  clear (stale_images runs 2-9 s of 1200; rent_map and map_overlays carry no self-budget), W5's clip (`--max-seconds
+  1500` against 3300) and W3's sweeps: property_sweep's 6000 s budget against 9000 (its worst run, budget + one
+  in-flight batch + finalize, is 130 min; only a budget stop's tail crosses 6000 s), broker_sweep's against 4500
+  (its full runs since Broker Unify W3, 2026-10-01: 2982 s at most, under the 3000 s line; one failed at 3497 s).
+  W3's location_intake (#2028) went to 4200 for its 2400 s, room for a last batch and the readout under the line.
 - One job's cell off: `pause <job> --until <t> --note <why>`. The whole arm, forward only: a migration replacing
   `health_job_cells(interval)` with `select '[]'::jsonb`.
+
+## The walks (W4: `walk_<source>`, #2029)
+
+- **Which walks run here:** every walk whose Portal class's `walk_timeout_s` is at most `jobs.RUNNER_WALK_TIMEOUT_S`
+  (30 min since #2029: `walk_web` 15 min, `walk_maxima` and `walk_bezrealitky` 30 min, each every 6 h, 512 MB,
+  1 CPU). The rest wait on their GitHub workflows (`github-actions-until-moved`).
+  A batch raises the cutoff and deletes the workflows it takes over, and names no portal (rule 21); the registry
+  census `test_a_walks_host_is_the_cutoffs` refuses a per-portal host value (one would need a ruling). remax is held
+  out of batch 1 while its sold/let gate #2647 runs (to 2026-11-29); it moves with a later batch.
+- **One budget:** the argv is `scraper.<source>_main --index-only` with no `--max-seconds`; the runner's SIGTERM at
+  `timeout_s` is the walk's deadline (`stop` → `portal.deadline_reached`). A deploy's SIGTERM ends it 143,
+  `interrupted`, re-claimed at once and resumed inside its cycle (a cut group nominates nothing; only the fragment
+  that closes the cycle nominates orphans). A walk stopped at its own timeout is `timeout`, a Problem: W4 keeps each
+  `walk_timeout_s` above the walk's p95 (7 days to 2026-11-25 on GitHub: web 3 s, maxima 40 s, bezrealitky 137 s).
+- **Exits:** 0 a walk, a partly failed one included (`errors` in `scrape_runs`); 1 when every category failed or an
+  empty walk (`CHECK empty_walk`), retried on the failure backoff (60 s doubling, capped at the cadence and the next
+  slot), where GitHub waited for the next cron.
+- **Politeness does not depend on the host:** a walk leases the same `portal_rate_state` budget
+  (`scraper_limits_global` `shared_rate_limiter`) on either host and waits as long as it says (no `max_wait_s`).
+  Egress moves from GitHub's rotating Azure addresses to Railway's, which the worker's drain (and, but for web, its
+  probe) already uses on these portals; none of the three is proxied (`USE_PROXY`), so no proxy budget moves.
+- **Run one now:** "Jobs: run now" with `walk_<source>`; args append (`--max-pages 2` on maxima or bezrealitky stops
+  each category short of its end, so it nominates nothing). A walk writes its `scrape_runs` row (`run_type='index'`)
+  as on GitHub, and the runner its `job_runs` row. Slots: `_walks()` spreads one cadence's walks evenly, so a new
+  portal moves them (`scheduled_jobs.offset_s`).
 
 ## Jobs: run now, click by click
 
@@ -225,8 +283,9 @@ up to about 10 s. One drill at a time, with no other request run open.
   15:59Z: create the deployment 20 s before the slot, for a SIGTERM at slot + 17 s. It closed `interrupted` (exit 143) 4.9 s
   after the SIGTERM, and a new replica re-claimed it 4.1 s later (limit 60 s).
 - **E. Self-fence:** six writes, each one guarded on the ticket. Pause the row 14 days, so a moved `due_at` cannot start a
-  live run. File a dry run and check its args. Fence at run age 10-45 s. Read the reap, then restore `due_at` (the reaper
-  overwrites an earlier restore). File nothing until `RUN kill … why=fence` (50 s, limit about 62 s): a missing heartbeat
-  entry does not prove the child dead. File one clean dry run, then lift the pause only if `due_at` reads right. Expect
+  live run. File a dry run and check its args. Fence at run age 10-45 s. Read the reap: `due_at` reads unchanged, or later
+  if the row was already due (a pure request's loss keeps it since #2317; before it, the reaper moved it and the drill
+  restored it). File nothing until `RUN kill … why=fence` (50 s, limit about 62 s): a missing heartbeat entry does not
+  prove the child dead. File one clean dry run, then lift the pause only if `due_at` reads right. Expect
   `LEASE lost`, never `LEASE race lost`. The gate's overlap query cannot see a second holder here, because the reaper sets
   `ended_at` before the child dies: compare started_at with the kill line.

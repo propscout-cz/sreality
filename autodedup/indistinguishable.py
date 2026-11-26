@@ -159,7 +159,7 @@ from autodedup.text_facts import (
     states_second_plot,
     states_top_storey,
     same_form_floor_gap,
-    address_block_key,
+    one_block,
     capacity_counts,
     fold,
     ground_or_upper,
@@ -507,8 +507,8 @@ def headline_area(listing: Listing) -> float | None:
 
 def _stated_areas_meet(a: Listing, b: Listing, tol: float) -> bool:
     """Both BODIES print a common floor area — the stored gap is then a basis difference."""
-    left = stated_areas(a.description, a.area_m2)
-    right = stated_areas(b.description, b.area_m2)
+    left = stated_areas(a.description, a.area_m2, a.source)
+    right = stated_areas(b.description, b.area_m2, b.source)
     if not left or not right:
         return False
     return any(rel_diff(x, y) <= tol for x in left for y in right)
@@ -2704,8 +2704,8 @@ def distinguishing_facts(
             and not printed_prevail):
         add("area", area_a, area_b)
 
-    areas_a = stated_areas(a.description, a.area_m2)
-    areas_b = stated_areas(b.description, b.area_m2)
+    areas_a = stated_areas(a.description, a.area_m2, a.source)
+    areas_b = stated_areas(b.description, b.area_m2, b.source)
     if areas_disjoint(areas_a, areas_b):
         add("stated_area", sorted(areas_a), sorted(areas_b))
 
@@ -2818,7 +2818,7 @@ def distinguishing_facts(
 
     units_a, units_b = unit_designators(a.description), unit_designators(b.description)
     if (len(units_a) == 1 and len(units_b) == 1 and units_a != units_b
-            and address_block_key(a) == address_block_key(b)):
+            and one_block(a, b)):
         add("unit_designator", next(iter(units_a)), next(iter(units_b)))
 
     # E140/E141/E142/E143: the four W15 readings. Every one of them is a fact the advert
@@ -3231,8 +3231,9 @@ def agreeing_attributes(
         a.location.street_key == b.location.street_key
     ):
         out.append("street")
-    areas_a, areas_b = stated_areas(a.description, a.area_m2), stated_areas(b.description,
-                                                                           b.area_m2)
+    areas_a, areas_b = stated_areas(a.description, a.area_m2, a.source), stated_areas(
+        b.description, b.area_m2, b.source
+    )
     if areas_a and areas_b and (areas_a & areas_b):
         out.append("stated_area")
     dirs_a, dirs_b = orientations(a.description), orientations(b.description)

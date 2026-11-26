@@ -240,8 +240,12 @@ name: "AUTODEDUP: engine lane"
 #             merging. It reads first - the walk outside any transaction, the cut's reads (hours
 #             at hundreds of thousands of adverts) each in a short transaction of its own - and
 #             writes last, in one transaction. `recut=true` re-cuts the same scope that way (the
-#             lane never re-cuts above 50,000 adverts). A narrower or reshaped scope, the same
-#             scope without `recut=true` and another scorer are refused: those are rebuilds. The seed takes the lane's lease (`rt_lease`) and refuses,
+#             lane never re-cuts above 50,000 adverts); `recut=true,rescore=true` also switches
+#             the SETTINGS in place (the model kept, the same scope; E991): the cut is taken
+#             under the new settings, which every later pass scores by, and the lane re-reads
+#             every in-scope advert once (live ones first). A narrower or reshaped scope, the
+#             same scope without `recut=true` and another scorer (without `rescore=true`; another
+#             model always) are refused: those are rebuilds. The seed takes the lane's lease (`rt_lease`) and refuses,
 #             writing nothing, while a pass holds it: set
 #             app_settings.realtime_autodedup_interval_seconds to 0 first. A first or fresh
 #             seed writes rt_seed_version:rt (the lane reconciles - through a build too, block
@@ -417,7 +421,7 @@ name: "AUTODEDUP: engine lane"
 # its pairs are skipped rather than flooding the label set, default 12),
 # sample_seed (the seed the UI's unbiased group order ran under, default v1, which is
 # what each implied label's `sample_rank` is a rank UNDER) and timeout_ms; rt_seed accepts
-# settings (required), model (required), rt_scope, fresh, recut and release_lease; rt_equivalence accepts
+# settings (required), model (required), rt_scope, fresh, recut, rescore and release_lease; rt_equivalence accepts
 # generation (default rt), run or score_run (exactly one) and tol (the score tolerance,
 # default 1e-6); apply accepts generation (REQUIRED),
 # dry_run (1, the default, or

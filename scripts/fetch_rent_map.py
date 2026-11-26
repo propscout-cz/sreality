@@ -2,9 +2,10 @@
 
 Downloads the current file from the MF infografika page (or a local
 `--source-path`), parses it, and appends a new `rent_map_revisions` row —
-unless the file's sha256 already exists, in which case it's a no-op. The MF
-data updates 4×/year, so the monthly job (scraper/jobs.py `rent_map`) mostly
-no-ops. Every run then re-renders the map's `rent_map` overlay.
+unless the file's sha256 already exists, in which case it's a no-op that stamps
+`rent_map_cells` current when the cells serve that file. The MF data updates
+4×/year, so the monthly job (scraper/jobs.py `rent_map`) mostly no-ops. Every
+run then re-renders the map's `rent_map` overlay.
 
     python -m scripts.fetch_rent_map                     # fetch + ingest live
     python -m scripts.fetch_rent_map --source-path f.xlsx
@@ -22,11 +23,11 @@ from pathlib import Path
 
 from api.rent_map import fetch_latest_xlsx, ingest_bytes
 from scraper.db import connect
+from scraper.hashing import file_sha256
 from scripts import ingest_map_overlays
 from toolkit.rent_map import (
     MF_INFOGRAPHIC_URL,
     parse_rent_map_xlsx,
-    sha256_bytes,
     source_date_from_filename,
 )
 
@@ -57,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         LOG.info(
             "DRY RUN sha256=%s source_date=%s territories=%d adjustments=%d",
-            sha256_bytes(data)[:12], parsed.source_date,
+            file_sha256(data)[:12], parsed.source_date,
             len({v.ruian_code for v in parsed.values}), len(parsed.adjustments),
         )
         return ingest_map_overlays.main(["--sections", "rent_map", "--dry-run"])

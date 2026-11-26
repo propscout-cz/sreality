@@ -116,11 +116,15 @@ def test_the_scope_from_the_llm_text_portals_unions_the_open_gates() -> None:
 
 def test_a_delisted_advert_is_read_once_per_schema_and_an_active_one_on_every_change() -> None:
     """Q1 (2026-09-30). The delisted arm is hash-free and runs FIRST; the CASE also fences the
-    anti-join into a per-row probe (a new version pulled up into a join grew towards 120 s)."""
+    anti-join into a per-row probe (a new version pulled up into a join grew towards 120 s).
+    The delisted arm is a scalar LIMIT 1 probe: as an EXISTS the planner still hashed it, a
+    full scan of the cache every pass (2026-11-13). EXISTS is true exactly when that
+    subquery returns a row, and `SELECT 1` is never NULL, so the result is the same."""
     where = tx._eligible_where(OPEN_GATES)
-    arm = where[where.index("CASE WHEN l.is_active OR NOT EXISTS"):where.index("   THEN NOT EXISTS")]
+    arm = where[where.index("CASE WHEN l.is_active OR ("):where.index("   THEN NOT EXISTS")]
     assert f"d.extractor_version LIKE '{tx.SCHEMA_VERSION}:%%'" in arm
     assert "d.extracted -> 'error' IS NULL" in arm
+    assert "EXISTS" not in arm and arm.rstrip().endswith("LIMIT 1) IS NULL")
     assert "text_hash" not in arm and where.endswith(")) END")
     assert tx.SCHEMA_VERSION == "2"
 
@@ -157,17 +161,95 @@ def test_the_hash_stays_out_of_the_index_condition() -> None:
     assert "text_hash =" not in tx.SELECT_INFLOW_SQL
 
 
-def test_one_arm_newest_first_reaches_the_backlog() -> None:
+def test_newest_first_reaches_the_backlog() -> None:
     """An extracted row leaves the predicate, so DESC walks BACKWARDS through a backlog at
     PASS_SLICE a pass (~57k a day against a 1,940-a-day inflow). The oldest-first arm an
     earlier draft added bought nothing and cost a measured 9.4-10.0 s per run."""
     assert "ORDER BY l.first_seen_at DESC" in tx.SELECT_INFLOW_SQL
     assert "CROSS JOIN LATERAL" in tx.SELECT_INFLOW_SQL and "l.source = s.src" in tx.SELECT_INFLOW_SQL
+    assert "ORDER BY l.first_seen_at ASC" not in tx.SELECT_INFLOW_SQL
     assert not hasattr(tx, "SELECT_BACKLOG_SQL")
     assert not hasattr(tx, "BACKLOG_EVERY_PASSES")
 
 
-def test_a_pass_issues_exactly_one_select() -> None:
+def test_the_head_is_walked_whole_and_the_archive_a_slice_a_pass() -> None:
+    """2026-11-05: every pass walked the whole portal (600k buffers; 27 statement timeouts
+    in 7 h on Large). The head keeps the SLO; the archive is ARCHIVE_WALK rows from a cursor."""
+    flat = " ".join(tx.SELECT_INFLOW_SQL.split())
+    assert f"l.first_seen_at >= now() - make_interval(hours => {tx.HEAD_HOURS})" in flat
+    assert f"l.first_seen_at < now() - make_interval(hours => {tx.HEAD_HOURS})" in flat
+    assert "l.first_seen_at <= coalesce(%(below)s::timestamptz, 'infinity')" in flat
+    assert "LIMIT %(walk)s" in flat
+    assert tx.HEAD_HOURS * 60 > tx.SLO_MINUTES and tx.ARCHIVE_WALK > 100
+
+
+class _Rows:
+    """A connection whose one SELECT returns `rows` and records its params."""
+
+    def __init__(self, rows: list[tuple]) -> None:
+        self.rows, self.params = rows, None
+
+    def cursor(self):
+        conn = self
+
+        class _Cur:
+            def __enter__(self): return self
+            def __exit__(self, *a): return None
+            def execute(self, sql, params=None): conn.params = params
+            def fetchall(self): return conn.rows
+
+        return _Cur()
+
+
+def _pick(i: int, at: int, arm: str) -> tuple:
+    return (i, "bazos", at, True, "T\nD", "h", arm, None)
+
+
+def _edge(at: int, walked: int) -> tuple:
+    return (None, "bazos", at, None, None, None, "edge", walked)
+
+
+@pytest.fixture()
+def archive():
+    tx._ARCHIVE["below"] = None
+    yield tx._ARCHIVE
+    tx._ARCHIVE["below"] = None
+
+
+def test_a_full_slice_moves_the_cursor_to_its_edge(archive) -> None:
+    conn = _Rows([_pick(1, 90, "head"), _pick(2, 50, "archive"), _edge(40, tx.ARCHIVE_WALK)])
+    rows = tx.select_eligible(conn, version="v", slice_size=10)
+    assert [r["id"] for r in rows] == [1, 2]
+    assert conn.params["below"] is None and conn.params["walk"] == tx.ARCHIVE_WALK
+    assert archive["below"] == 40
+
+
+def test_a_short_slice_starts_the_cycle_over(archive) -> None:
+    archive["below"] = 40
+    conn = _Rows([_pick(2, 30, "archive"), _edge(10, tx.ARCHIVE_WALK - 1)])
+    tx.select_eligible(conn, version="v", slice_size=10)
+    assert conn.params["below"] == 40
+    assert archive["below"] is None
+
+
+def test_eligible_rows_left_in_the_slice_hold_the_cursor_at_the_oldest_kept(archive) -> None:
+    conn = _Rows([_pick(1, 90, "head"), _pick(2, 50, "archive"), _pick(3, 45, "archive"),
+                  _pick(4, 41, "archive"), _edge(40, tx.ARCHIVE_WALK)])
+    rows = tx.select_eligible(conn, version="v", slice_size=3)
+    assert [r["id"] for r in rows] == [1, 2, 3]
+    assert archive["below"] == 45
+
+
+def test_a_head_that_fills_the_pass_leaves_the_cursor_where_it_was(archive) -> None:
+    archive["below"] = 40
+    conn = _Rows([_pick(1, 90, "head"), _pick(2, 89, "head"), _pick(3, 30, "archive"),
+                  _edge(10, tx.ARCHIVE_WALK)])
+    rows = tx.select_eligible(conn, version="v", slice_size=2)
+    assert [r["id"] for r in rows] == [1, 2]
+    assert archive["below"] == 40
+
+
+def test_a_pass_issues_exactly_one_select(archive) -> None:
     seen: list[str] = []
 
     class _Cur:
@@ -355,18 +437,23 @@ FIELDS = ("floor", "total_floors", "has_lift", "has_balcony", "condition")
 
 
 def test_floor_is_converted_from_the_adverts_own_words() -> None:
-    values, dropped = merge({"floor": _cell("3. patro", "ve 3. patře cihlového domu")})
+    values, dropped = merge({"floor": _cell("4. NP", DESCRIPTION[:40])})
     assert values["floor"] == 3
     assert not dropped
 
 
+def test_a_patro_wording_names_no_scale_and_is_refused() -> None:
+    values, dropped = merge({"floor": _cell("3. patro", "ve 3. patře cihlového domu")})
+    assert "floor" not in values
+    assert dropped["floor"] == "floor_words_unreadable"
+
+
 @pytest.mark.parametrize("words,expected", [
-    ("3. patro", 3),
     ("3. NP", 2),      # nadzemní podlaží is 1-indexed from the ground
     ("přízemí", 0),
     ("suterén", -1),
 ])
-def test_the_two_czech_conventions_are_read_by_scraper_floor(words, expected) -> None:
+def test_the_adverts_words_are_read_by_scraper_floor(words, expected) -> None:
     values, _ = merge({"floor": _cell(words, DESCRIPTION[:40])})
     assert values["floor"] == expected
 
@@ -384,7 +471,7 @@ def test_a_bare_number_has_no_convention_and_is_refused() -> None:
 
 def test_a_floor_above_the_stated_total_is_refused() -> None:
     values, dropped = merge({
-        "floor": _cell("9. patro", "ve 3. patře"),
+        "floor": _cell("9. NP", DESCRIPTION[:40]),
         "total_floors": _cell(5, "Dům má celkem 5 pater"),
     })
     assert values == {"total_floors": 5}

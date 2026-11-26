@@ -59,9 +59,9 @@ def _mirror(conn: Any) -> None:
     ):
         units[key] = conn.execute(
             "INSERT INTO ruian_admin_units (level, code, name, name_norm, parent_id, path,"
-            " display_path, valid_from, first_version_id, last_version_id) VALUES"
-            " (%s::ruian_level, %s, %s, %s, %s, %s::ltree, %s, '2020-01-01', %s, %s) RETURNING id",
-            (level, code, name, normalize_name(name), units.get(parent or ""), path, name,
+            " valid_from, first_version_id, last_version_id) VALUES"
+            " (%s::ruian_level, %s, %s, %s, %s, %s::ltree, '2020-01-01', %s, %s) RETURNING id",
+            (level, code, name, normalize_name(name), units.get(parent or ""), path,
              version, version)).fetchone()[0]
         conn.execute(
             "INSERT INTO ruian_name_index (entity_kind, entity_id, registry_version_id, name,"
@@ -138,10 +138,7 @@ def test_a_pick_lands_on_every_ad_a_re_pick_replaces_it_and_a_clear_restores_the
     for ad in ads:
         assert _operator(conn, ad) == {"address_point_id": str(DOOR)}
         assert _resolved(conn, ad)[:4] == ("address_point", DOOR, LIPOVA, 500002)
-    # The picker's preview (`/maps/resolve`'s door label) is the label the row now reads.
-    maps = pytest.importorskip("api.maps")
-    assert result["location"]["label"] == "Lipová 12, Betov" == conn.execute(
-        maps._DOOR_LABEL_SQL, (DOOR,)).fetchone()[0]
+    assert result["location"]["label"] == "Lipová 12, Betov"
     assert conn.execute("SELECT note FROM location_claim_batches WHERE lane ="
                         " 'operator_correction' ORDER BY id DESC LIMIT 1").fetchone() == (
         f"property {prop}: adresni_misto {DOOR} by ci",)

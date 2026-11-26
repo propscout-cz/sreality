@@ -227,6 +227,14 @@ def test_parse_detail_full():
     assert listing.raw["coords"]["source"] == "page"
 
 
+def test_an_unfilled_count_template_is_no_count():
+    page = DETAIL_HTML.replace("<dd>12 podlaží</dd>", "<dd>%1$s podlaží</dd>")
+    assert page != DETAIL_HTML
+    listing = parse_detail(page, source_url=_DETAIL_URL, category_main="byt", category_type="prodej")
+    assert listing.total_floors is None
+    assert listing.floor == 2
+
+
 def test_parse_detail_content_hash_stable_and_bridges_to_ingest():
     a = parse_detail(DETAIL_HTML, source_url=_DETAIL_URL, category_main="byt", category_type="prodej")
     b = parse_detail(DETAIL_HTML, source_url=_DETAIL_URL, category_main="byt", category_type="prodej")

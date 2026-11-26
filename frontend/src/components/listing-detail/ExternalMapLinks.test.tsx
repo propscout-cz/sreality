@@ -9,10 +9,10 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 import ExternalMapLinks from './ExternalMapLinks';
-import * as maps from '@/lib/maps';
+import * as maps from '@/lib/priceMap';
 
-vi.mock('@/lib/maps', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/maps')>();
+vi.mock('@/lib/priceMap', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/priceMap')>();
   return { ...actual, fetchSrealityPriceMap: vi.fn() };
 });
 

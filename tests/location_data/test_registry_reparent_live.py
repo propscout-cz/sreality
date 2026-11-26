@@ -1,0 +1,512 @@
+"""W7's first production SCD-2 close, against a real schema: Praha re-parents under okres 9999.
+
+A mirror loaded in the old shape (obec under its kraj, no okres) is staged again by the W7 loader
+with the okres the pack publishes. The whole subtree closes and reopens, the streets follow, the
+address points update in place, and the readers still answer once per unit.
+
+Gated on TEST_DATABASE_URL: runs in the schema-replay job (.github/workflows/migrations.yml), skips in
+the offline suite. Everything rolls back.
+"""
+
+from __future__ import annotations
+
+import datetime
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+_DB_URL = os.environ.get("TEST_DATABASE_URL")
+
+pytestmark = pytest.mark.skipif(
+    not _DB_URL,
+    reason="TEST_DATABASE_URL not set — the registry re-parent live checks run only in CI's DB job",
+)
+
+from autodedup.incremental_sql import RT_SCOPE_OKRES_OBCE_SQL, RT_SCOPE_PARENT_OBEC_SQL  # noqa: E402
+from location_data import name_index, ruian_load  # noqa: E402
+from location_data.resolver import resolve_db  # noqa: E402
+
+V1_DATE = datetime.date(2026, 9, 30)
+V2_DATE = datetime.date(2026, 10, 31)
+
+STAT, REGION, KRAJ, OTHER_KRAJ = 9_910_001, 9_910_002, 9_910_019, 9_910_027
+PRAHA_OKRES, OTHER_OKRES = 9999, 9_910_205
+PRAHA, TOWN = 9_910_782, 9_910_011
+PART, MOMC, KU = 9_910_067, 9_910_178, 9_910_664
+TOWN_PART, TOWN_KU = 9_910_901, 9_910_902
+STREET, TOWN_STREET = 9_910_536, 9_910_456
+DOOR, TOWN_DOOR = 9_910_278, 9_910_279
+RETIRED = (("spravni_obvod", 9_910_051), ("zsj", 9_910_052), ("orp", 9_910_053), ("pou", 9_910_054))
+
+
+@pytest.fixture
+def conn():
+    import psycopg
+
+    with psycopg.connect(_DB_URL) as c:
+        try:
+            yield c
+        finally:
+            c.rollback()
+
+
+def _version(conn: Any, n: int, source_date: datetime.date) -> int:
+    return int(conn.execute(
+        "INSERT INTO registry_versions (label, kind, source_date, artifact_urls, proj_version, "
+        "proj_pipeline) VALUES (%s, 'baseline', %s, '{}', 'p', 'q') RETURNING id",
+        (f"test:reparent:{n}", source_date),
+    ).fetchone()[0])
+
+
+def _stage_sources(conn: Any, version: int) -> ruian_load.Staging:
+    """The CSV products of one vintage: Praha with no okres, as the chain has it since 2022."""
+    stage = ruian_load.Staging.for_version(version)
+    ruian_load.create_staging(conn, stage)
+    with conn.cursor() as cur:
+        cur.executemany(
+            f"INSERT INTO {stage.adr} (kod_adm, obec_kod, obec_nazev, momc_kod, momc_nazev, "
+            "cobce_kod, cobce_nazev, ulice_kod, ulice_nazev, typ_so, cislo_domovni, psc, "
+            "krovak_y, krovak_x, plati_od, lat, lon) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, "
+            "'č.p.', 1, '16000', 744384.54, 1042569.73, '2020-01-01', 50.08, 14.39)",
+            [(DOOR, PRAHA, "Praha", MOMC, "Praha 6", PART, "Vokovice", STREET, "Evropská"),
+             (TOWN_DOOR, TOWN, "Kolín", None, None, TOWN_PART, "Kolín I", TOWN_STREET, "Husova")],
+        )
+        cur.executemany(
+            f"INSERT INTO {stage.cobce} (cobce_kod, obec_kod, okres_kod, vusc_kod, regsoudr_kod, "
+            "stat_kod) VALUES (%s, %s, %s, %s, %s, %s)",
+            [(PART, PRAHA, None, KRAJ, REGION, STAT),
+             (TOWN_PART, TOWN, OTHER_OKRES, OTHER_KRAJ, REGION, STAT)],
+        )
+        cur.executemany(f"INSERT INTO {stage.katuz} (katuz_kod, obec_kod) VALUES (%s, %s)",
+                        [(KU, PRAHA), (TOWN_KU, TOWN)])
+        cur.execute(f"INSERT INTO {stage.momc} (momc_kod, obec_kod) VALUES (%s, %s)", (MOMC, PRAHA))
+        cur.executemany(f"INSERT INTO {stage.ulice} (ulice_kod, obec_kod) VALUES (%s, %s)",
+                        [(STREET, PRAHA), (TOWN_STREET, TOWN)])
+    return stage
+
+
+def _old_shape_units(conn: Any, stage: ruian_load.Staging) -> None:
+    """The unit rows the pre-W7 loader staged: Praha hanging off its kraj, its KÚ placeholder."""
+    rows = [
+        ("stat", STAT, "1", None, None), ("region_soudrznosti", REGION, "2", "stat", STAT),
+        ("kraj", KRAJ, "19", "region_soudrznosti", REGION),
+        ("kraj", OTHER_KRAJ, "27", "region_soudrznosti", REGION),
+        ("okres", OTHER_OKRES, "205", "kraj", OTHER_KRAJ),
+        ("obec", PRAHA, "Praha", "kraj", KRAJ), ("obec", TOWN, "Kolín", "okres", OTHER_OKRES),
+        ("momc", MOMC, "Praha 6", "obec", PRAHA), ("cast_obce", PART, "Vokovice", "obec", PRAHA),
+        ("cast_obce", TOWN_PART, "Kolín I", "obec", TOWN),
+        ("katastralni_uzemi", KU, str(KU), "obec", PRAHA),
+        ("katastralni_uzemi", TOWN_KU, str(TOWN_KU), "obec", TOWN),
+    ]
+    with conn.cursor() as cur:
+        cur.executemany(
+            f"INSERT INTO {stage.units} (level, code, name, name_norm, parent_level, parent_code, "
+            "is_placeholder) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            [(lvl, code, name, name_index.normalize_name(name), plvl, pcode, name == str(code))
+             for lvl, code, name, plvl, pcode in rows],
+        )
+
+
+def _unit(conn: Any, level: str, code: int) -> list[tuple]:
+    """Every row of a unit, oldest first: (id, parent_id, path, name, valid_to, last_version_id)."""
+    return conn.execute(
+        "SELECT id, parent_id, path::text, name, valid_to, last_version_id FROM ruian_admin_units "
+        "WHERE level = %s::ruian_level AND code = %s ORDER BY id", (level, code),
+    ).fetchall()
+
+
+@dataclass
+class _Mirror:
+    v1: int
+    v2: int
+    before: dict[str, list[tuple]]
+
+
+def _load_w7_over_old_shape(conn: Any) -> _Mirror:
+    v1 = _version(conn, 1, V1_DATE)
+    stage = _stage_sources(conn, v1)
+    _old_shape_units(conn, stage)
+    ruian_load.upsert_units(conn, stage, v1, V1_DATE)
+    ruian_load.upsert_streets(conn, stage, v1, V1_DATE)
+    ruian_load.load_address_points(conn, stage, v1, V1_DATE)
+    conn.execute("UPDATE ruian_admin_units SET name = 'Vokovice', name_norm = 'vokovice' "
+                 "WHERE level = 'katastralni_uzemi' AND code = %s", (KU,))
+    for level, code in RETIRED:  # as migration 718 leaves them, closed before the W7 load
+        conn.execute(
+            "INSERT INTO ruian_admin_units (level, code, name, name_norm, path, valid_from, "
+            "valid_to, retired_at, first_version_id, last_version_id) "
+            "VALUES (%s::ruian_level, %s, %s, %s, %s::ltree, %s, %s, now(), %s, %s)",
+            (level, code, str(code), str(code), f"x{code}", V1_DATE, V2_DATE, v1, v1),
+        )
+    before = {"praha": _unit(conn, "obec", PRAHA), "town": _unit(conn, "obec", TOWN),
+              "part": _unit(conn, "cast_obce", PART), "town_part": _unit(conn, "cast_obce", TOWN_PART)}
+
+    v2 = _version(conn, 2, V2_DATE)
+    stage2 = _stage_sources(conn, v2)
+    pack = {PRAHA: PRAHA_OKRES, TOWN: OTHER_OKRES}
+    assert ruian_load.staged_obec_okres(conn, stage2) == {PRAHA: None, TOWN: OTHER_OKRES}
+    ruian_load.build_unit_rows(conn, stage2, pack)
+    ruian_load.upsert_units(conn, stage2, v2, V2_DATE)
+    ruian_load.upsert_relations(conn, stage2, v2)
+    ruian_load.upsert_streets(conn, stage2, v2, V2_DATE)
+    ruian_load.load_address_points(conn, stage2, v2, V2_DATE)
+    return _Mirror(v1=v1, v2=v2, before=before)
+
+
+def test_build_unit_rows_stages_no_retired_level_and_praha_under_the_packs_okres(conn):
+    version = _version(conn, 1, V1_DATE)
+    stage = _stage_sources(conn, version)
+    ruian_load.build_unit_rows(conn, stage, {PRAHA: PRAHA_OKRES, TOWN: OTHER_OKRES})
+    rows = {(lvl, code): (plvl, pcode) for lvl, code, plvl, pcode in conn.execute(
+        f"SELECT level, code, parent_level, parent_code FROM {stage.units}").fetchall()}
+    assert {lvl for lvl, _ in rows} == set(ruian_load.LEVEL_ORDER)
+    assert rows[("okres", PRAHA_OKRES)] == ("kraj", KRAJ)
+    assert rows[("obec", PRAHA)] == ("okres", PRAHA_OKRES)
+    assert rows[("momc", MOMC)] == ("obec", PRAHA)
+    assert rows[("katastralni_uzemi", KU)] == ("obec", PRAHA)
+
+
+def test_okres_9999_opens_and_praha_closes_and_reopens_under_it(conn):
+    m = _load_w7_over_old_shape(conn)
+    [okres] = _unit(conn, "okres", PRAHA_OKRES)
+    assert okres[2].endswith(f"o{PRAHA_OKRES}") and okres[3] == str(PRAHA_OKRES) and okres[4] is None
+
+    old, new = _unit(conn, "obec", PRAHA)
+    assert old[0] == m.before["praha"][0][0]
+    assert (old[4], old[5]) == (V2_DATE, m.v2)
+    assert new[1] == okres[0] and new[4] is None and new[5] == m.v2
+    assert new[2] == f"{okres[2]}.b{PRAHA}"
+
+
+def test_the_whole_subtree_closes_and_reopens_and_keeps_its_names(conn):
+    m = _load_w7_over_old_shape(conn)
+    _, praha = _unit(conn, "obec", PRAHA)
+    for level, code, name in (("cast_obce", PART, "Vokovice"), ("momc", MOMC, "Praha 6"),
+                              ("katastralni_uzemi", KU, "Vokovice")):
+        old, new = _unit(conn, level, code)
+        assert (old[4], old[5]) == (V2_DATE, m.v2)
+        assert new[1] == praha[0] and new[4] is None and new[3] == name
+    assert _unit(conn, "cast_obce", PART)[1][2] == f"{praha[2]}.c{PART}"
+
+
+def test_an_untouched_town_is_not_closed(conn):
+    m = _load_w7_over_old_shape(conn)
+    for key, level, code in (("town", "obec", TOWN), ("town_part", "cast_obce", TOWN_PART)):
+        [row] = _unit(conn, level, code)
+        assert row[0] == m.before[key][0][0] and row[4] is None and row[5] == m.v2
+    [street] = conn.execute("SELECT valid_to FROM ruian_streets WHERE code = %s",
+                            (TOWN_STREET,)).fetchall()
+    assert street == (None,)
+
+
+def test_a_retired_level_stays_retired(conn):
+    m = _load_w7_over_old_shape(conn)
+    for level, code in RETIRED:
+        [row] = _unit(conn, level, code)
+        assert row[4] == V2_DATE and row[5] == m.v1
+
+
+def test_the_streets_close_and_reopen_on_the_new_town(conn):
+    _load_w7_over_old_shape(conn)
+    _, praha = _unit(conn, "obec", PRAHA)
+    old, new = conn.execute(
+        "SELECT obec_unit_id, valid_to FROM ruian_streets WHERE code = %s ORDER BY id", (STREET,),
+    ).fetchall()
+    assert old[1] == V2_DATE
+    assert new == (praha[0], None)
+
+
+def test_the_address_point_updates_in_place_with_one_change_row(conn):
+    m = _load_w7_over_old_shape(conn)
+    _, praha = _unit(conn, "obec", PRAHA)
+    _, part = _unit(conn, "cast_obce", PART)
+    street = conn.execute("SELECT id FROM ruian_streets WHERE code = %s AND valid_to IS NULL",
+                          (STREET,)).fetchone()[0]
+    assert conn.execute(
+        "SELECT obec_unit_id, cast_obce_unit_id, street_id, last_version_id, valid_to "
+        "FROM ruian_address_points WHERE kod_adm = %s", (DOOR,),
+    ).fetchone() == (praha[0], part[0], street, m.v2, None)
+    [(kind, changed)] = conn.execute(
+        "SELECT change_kind, changed_fields FROM ruian_address_point_changes "
+        "WHERE kod_adm = %s AND registry_version_id = %s", (DOOR, m.v2),
+    ).fetchall()
+    assert kind == "update"
+    assert {"obec_unit_id", "cast_obce_unit_id", "street_id"} <= set(changed)
+    assert conn.execute(
+        "SELECT count(*) FROM ruian_address_point_changes WHERE kod_adm = %s "
+        "AND registry_version_id = %s", (TOWN_DOOR, m.v2),
+    ).fetchone() == (0,)
+
+
+def test_the_readers_answer_once_after_the_first_close(conn):
+    m = _load_w7_over_old_shape(conn)
+    # What a boundary phase does for a placeholder: okres 9999 takes ČÚZK's name.
+    okres_name = "území Hlavního města Prahy"
+    conn.execute("UPDATE ruian_admin_units SET name = %s, name_norm = %s "
+                 "WHERE level = 'okres' AND code = %s",
+                 (okres_name, name_index.normalize_name(okres_name), PRAHA_OKRES))
+    name_index.rebuild(conn, m.v2)
+    kinds = {k for (k,) in conn.execute("SELECT DISTINCT entity_kind::text FROM ruian_name_index")}
+    assert "obec" in kinds and kinds <= set(name_index._UNIT_LEVELS)  # no street row (W8, #2362)
+    view = resolve_db.SqlRegistryView(conn, m.v2)
+
+    _, praha = _unit(conn, "obec", PRAHA)
+    [town] = view.admin_units_by_name("praha", levels=("obec",))
+    assert town.unit_id == praha[0] and town.okres_kod == PRAHA_OKRES
+
+    chain = view.admin_chain_by_code("obec", PRAHA)
+    assert [(u.level, u.code) for u in chain][:2] == [("obec", PRAHA), ("okres", PRAHA_OKRES)]
+
+    assert [tuple(r) for r in conn.execute(
+        RT_SCOPE_OKRES_OBCE_SQL, {"codes": [PRAHA_OKRES]})] == [(PRAHA_OKRES, PRAHA)]
+
+    assert conn.execute(
+        "SELECT name FROM ruian_place_names_public WHERE level = 'okres' AND code = %s",
+        (PRAHA_OKRES,),
+    ).fetchall() == [(okres_name,)]
+    assert conn.execute(
+        "SELECT count(*) FROM ruian_place_names_public WHERE level = 'obec' AND code = %s",
+        (PRAHA,),
+    ).fetchone() == (1,)
+
+
+def _place_facts(conn: Any) -> list[tuple]:
+    return [tuple(r) for r in conn.execute(
+        "SELECT f.level::text, f.code, f.lat, f.lng FROM place_facts f WHERE f.code = ANY(%s) "
+        "ORDER BY f.level::text, f.code",
+        ([KRAJ, PRAHA_OKRES, PRAHA, TOWN, PART, TOWN_PART, MOMC, STREET, TOWN_STREET],)).fetchall()]
+
+
+def test_the_finish_step_gives_own_place_search_the_new_versions_points(conn):
+    """Own place search flies to `place_facts` (#2449), which only the load's finish step refreshes: after the
+    pointer swap Praha's polygon point is read at the new version and the streets, parts and městská část at
+    the mean of their open doors (the staged door sits at 50.08 / 14.39)."""
+    m = _load_w7_over_old_shape(conn)
+    _, (praha, *_) = _unit(conn, "obec", PRAHA)
+    conn.execute(
+        "INSERT INTO ruian_admin_unit_geometries (unit_id, registry_version_id, purpose, "
+        "generalization_tolerance_m, geom, representative_point, inscribed_radius_m, centroid_point, "
+        "containment_radius_m) SELECT %s, %s, 'authoritative', 0, ST_Multi(ST_Expand(p, 0.01)), p, 0, p, 0 "
+        "FROM (SELECT ST_SetSRID(ST_MakePoint(14.4208, 50.088), 4326) AS p) s", (praha, m.v2))
+    ruian_load.publish(conn, m.v2)
+    assert _place_facts(conn) == []
+
+    ruian_load.finish(conn, m.v2, keep_staging=False)
+    assert _place_facts(conn) == [
+        ("cast_obce", PART, 50.08, 14.39), ("cast_obce", TOWN_PART, 50.08, 14.39),
+        ("momc", MOMC, 50.08, 14.39), ("obec", PRAHA, 50.088, 14.4208),
+        ("ulice", TOWN_STREET, 50.08, 14.39), ("ulice", STREET, 50.08, 14.39)]
+
+
+def _walk_up(conn: Any, unit_id: int) -> list[tuple[str, int]]:
+    """(level, code) from a unit up through `parent_id`, as the chain reads walk it."""
+    return [tuple(r) for r in conn.execute(
+        "WITH RECURSIVE c AS (SELECT id, parent_id, level::text AS level, code, 0 AS d "
+        "FROM ruian_admin_units WHERE id = %s UNION ALL SELECT p.id, p.parent_id, p.level::text, "
+        "p.code, c.d + 1 FROM ruian_admin_units p JOIN c ON p.id = c.parent_id) "
+        "SELECT level, code FROM c ORDER BY d", (unit_id,)).fetchall()]
+
+
+def test_the_chain_holds_for_the_live_row_the_closed_row_and_an_untouched_town(conn):
+    """část → obec → okres → kraj through `parent_id`: the live row gains the okres, the closed
+    row keeps the chain it had (a reader pinned to the old version walks that), another town
+    is the same row with the same chain, and the engine's quarter → town read answers once."""
+    _load_w7_over_old_shape(conn)
+    old, new = _unit(conn, "cast_obce", PART)
+    top = [("kraj", KRAJ), ("region_soudrznosti", REGION), ("stat", STAT)]
+    assert _walk_up(conn, new[0]) == [("cast_obce", PART), ("obec", PRAHA),
+                                      ("okres", PRAHA_OKRES), *top]
+    assert _walk_up(conn, old[0]) == [("cast_obce", PART), ("obec", PRAHA), *top]
+    [town_part] = _unit(conn, "cast_obce", TOWN_PART)
+    assert _walk_up(conn, town_part[0]) == [
+        ("cast_obce", TOWN_PART), ("obec", TOWN), ("okres", OTHER_OKRES), ("kraj", OTHER_KRAJ),
+        ("region_soudrznosti", REGION), ("stat", STAT)]
+    assert [tuple(r) for r in conn.execute(
+        RT_SCOPE_PARENT_OBEC_SQL, {"codes": [PART, TOWN_PART]})] in (
+            [(PART, PRAHA), (TOWN_PART, TOWN)], [(TOWN_PART, TOWN), (PART, PRAHA)])
+
+
+def test_a_mid_load_reader_finds_the_old_town_until_its_children_reopen(conn):
+    """Each level commits alone, so between levels a live část points at the closed Praha row.
+    The engine's parent read has no `valid_to` on the parent, so it still answers Praha."""
+    v1 = _version(conn, 1, V1_DATE)
+    stage = _stage_sources(conn, v1)
+    _old_shape_units(conn, stage)
+    ruian_load.upsert_units(conn, stage, v1, V1_DATE)
+    conn.execute("UPDATE ruian_admin_units SET valid_to = %s WHERE level = 'obec' AND code = %s",
+                 (V2_DATE, PRAHA))
+    assert [tuple(r) for r in conn.execute(
+        RT_SCOPE_PARENT_OBEC_SQL, {"codes": [PART]})] == [(PART, PRAHA)]
+
+
+def test_own_search_answers_a_cast_while_a_load_has_its_unit_closed(conn):
+    """The place box asks the current version's index, which names the row a load closed hours before it publishes.
+    Read at that version the část still answers, by its stable code (the binder's part lookup, ported by #2453)."""
+    from location_data import place_search
+
+    v1 = _version(conn, 1, V1_DATE)
+    stage = _stage_sources(conn, v1)
+    _old_shape_units(conn, stage)
+    ruian_load.upsert_units(conn, stage, v1, V1_DATE)
+    name_index.rebuild(conn, v1)
+    ruian_load.publish(conn, v1)
+
+    def parts() -> list[tuple[str, int, str, str | None]]:
+        return [(p.level, p.id, p.name, p.context) for p in place_search.suggest(conn, "Vokovice", limit=10)]
+
+    assert parts() == [("cast_obce", PART, "Vokovice", "Praha")]
+    v2 = _version(conn, 2, V2_DATE)
+    conn.execute("UPDATE ruian_admin_units SET valid_to = %s, last_version_id = %s "
+                 "WHERE level = 'cast_obce' AND code = %s", (V2_DATE, v2, PART))
+    assert parts() == [("cast_obce", PART, "Vokovice", "Praha")]
+
+
+def test_the_migration_retires_by_scd2_and_deletes_only_the_unread_relations(conn):
+    """The statements as shipped, over rows the replay never saw: 718 is idempotent DDL."""
+    version = _version(conn, 1, V1_DATE)
+    units = {}
+    for level, code in (*RETIRED, ("obec", PRAHA), ("katastralni_uzemi", KU)):
+        units[level] = conn.execute(
+            "INSERT INTO ruian_admin_units (level, code, name, name_norm, path, valid_from, "
+            "first_version_id, last_version_id) VALUES (%s::ruian_level, %s, %s, %s, %s::ltree, "
+            "%s, %s, %s) RETURNING id",
+            (level, code, str(code), str(code), f"x{code}", V1_DATE, version, version),
+        ).fetchone()[0]
+    for relation, a, b in (("orp_of", "obec", "orp"), ("pou_of", "obec", "pou"),
+                           ("momc_in_so", "obec", "spravni_obvod"),
+                           ("katastr_in_obec", "katastralni_uzemi", "obec")):
+        conn.execute("INSERT INTO ruian_admin_unit_relations (from_id, to_id, relation_type, "
+                     "registry_version_id) VALUES (%s, %s, %s, %s)",
+                     (units[a], units[b], relation, version))
+
+    for level, _ in RETIRED:
+        conn.execute("INSERT INTO ruian_name_index (entity_kind, entity_id, registry_version_id, "
+                     "name, name_norm, name_kind) VALUES (%s::ruian_level, %s, %s, 'Praha 5', "
+                     "'praha 5', 'official')", (level, units[level], version))
+    view = resolve_db.SqlRegistryView(conn, version)
+    assert len(view.admin_units_by_name("praha 5")) == len(RETIRED)
+
+    sql = next(Path(__file__).resolve().parents[2].glob(
+        "migrations/*_location_w7_registry_read_levels.sql")).read_text()
+    body = sql.split("begin;", 1)[1].rsplit("commit;", 1)[0]
+    conn.execute(body)
+
+    assert view.admin_units_by_name("praha 5") == []  # the old version's gazetteer rows stay
+    for level, _ in RETIRED:
+        row = conn.execute("SELECT valid_to IS NOT NULL, retired_at IS NOT NULL, last_version_id "
+                           "FROM ruian_admin_units WHERE id = %s", (units[level],)).fetchone()
+        assert row == (True, True, version), level
+    assert conn.execute("SELECT valid_to FROM ruian_admin_units WHERE id = %s",
+                        (units["obec"],)).fetchone() == (None,)
+    assert conn.execute(
+        "SELECT relation_type FROM ruian_admin_unit_relations WHERE from_id = ANY(%s)",
+        ([units["obec"], units["katastralni_uzemi"]],),
+    ).fetchall() == [("katastr_in_obec",)]
+
+
+def test_the_dropped_columns_are_gone_and_their_index_with_them(conn):
+    assert conn.execute(
+        "SELECT count(*) FROM information_schema.columns WHERE table_name = ANY(%s) "
+        "AND column_name = ANY(%s)",
+        (["ruian_admin_units", "ruian_address_points"],
+         ["nuts_lau", "definition_point", "has_polygon", "display_path", "praha_obvod_unit_id"]),
+    ).fetchone() == (0,)
+    assert conn.execute("SELECT to_regclass('ruian_admin_units_defpoint')").fetchone() == (None,)
+
+
+def _door_of_another_part(conn: Any, kod_adm: int, part_unit: int, momc_unit: int) -> None:
+    """A clone of DOOR in another část and at the given unit rows; every other column is DOOR's."""
+    conn.execute("CREATE TEMP TABLE door_clone ON COMMIT DROP AS "
+                 "SELECT * FROM ruian_address_points WHERE kod_adm = %s", (DOOR,))
+    conn.execute("UPDATE door_clone SET kod_adm = %s, cast_obce_unit_id = %s, momc_unit_id = %s",
+                 (kod_adm, part_unit, momc_unit))
+    [cols] = conn.execute(
+        "SELECT string_agg(column_name, ', ') FROM information_schema.columns "
+        "WHERE table_name = 'ruian_address_points' AND is_generated = 'NEVER'").fetchone()
+    conn.execute(f"INSERT INTO ruian_address_points ({cols}) SELECT {cols} FROM door_clone")
+    conn.execute("DROP TABLE door_clone")
+
+
+def _pairs(conn: Any) -> list[tuple]:
+    """Own place search's shortcut pairs (#2450): (version, momc code, quarter code, both rows open)."""
+    return [tuple(r) for r in conn.execute(
+        "SELECT r.registry_version_id, m.code, q.code, m.valid_to IS NULL AND q.valid_to IS NULL "
+        "FROM ruian_admin_unit_relations r JOIN ruian_admin_units m ON m.id = r.from_id "
+        "JOIN ruian_admin_units q ON q.id = r.to_id "
+        "WHERE r.relation_type = 'momc_cast_obce' AND m.code = ANY(%s) ORDER BY 1, 2, 3",
+        ([MOMC],)).fetchall()]
+
+
+def test_the_finish_step_lands_a_mestska_cast_s_quarters_at_its_version_and_a_rerun_lands_them_again(conn):
+    """Published without its pairs (as v4 was before #2450), the version gets them from the finish step that a
+    re-dispatch of a current vintage redoes; on the reopened rows, which the version's name index names. A second
+    finish adds nothing."""
+    m = _load_w7_over_old_shape(conn)
+    ruian_load.publish(conn, m.v2)
+    assert _pairs(conn) == []
+
+    ruian_load.finish(conn, m.v2, keep_staging=False)
+    assert _pairs(conn) == [(m.v2, MOMC, PART, True)]
+    ruian_load.finish(conn, m.v2, keep_staging=False)
+    assert _pairs(conn) == [(m.v2, MOMC, PART, True)]
+
+
+def test_the_pairs_join_doors_on_the_stable_code_whichever_row_of_a_unit_a_door_holds(conn):
+    """A load re-points doors in place while it closes and reopens their units: DOOR still holds the closed rows of its
+    městská část and quarter, a second door the open městská část and another quarter. Both pairs land on the rows of
+    the version being finished."""
+    m = _load_w7_over_old_shape(conn)
+    (old_momc, *_), (new_momc, *_) = _unit(conn, "momc", MOMC)
+    (old_part, *_), _ = _unit(conn, "cast_obce", PART)
+    dejvice = conn.execute(
+        "INSERT INTO ruian_admin_units (level, code, name, name_norm, path, valid_from, "
+        "first_version_id, last_version_id) VALUES ('cast_obce', 9910068, 'Dejvice', 'dejvice', "
+        "'x9910068'::ltree, %s, %s, %s) RETURNING id", (V2_DATE, m.v2, m.v2),
+    ).fetchone()[0]
+    conn.execute("UPDATE ruian_address_points SET momc_unit_id = %s, cast_obce_unit_id = %s "
+                 "WHERE kod_adm = %s", (old_momc, old_part, DOOR))
+    _door_of_another_part(conn, DOOR + 100, dejvice, new_momc)
+
+    ruian_load.publish(conn, m.v2)
+    ruian_load.finish(conn, m.v2, keep_staging=False)
+    assert _pairs(conn) == [(m.v2, MOMC, PART, True), (m.v2, MOMC, 9910068, True)]
+
+
+def test_a_retired_door_gives_a_mestska_cast_no_quarter_pair(conn):
+    m = _load_w7_over_old_shape(conn)
+    conn.execute("UPDATE ruian_address_points SET valid_to = %s WHERE kod_adm = %s", (V2_DATE, DOOR))
+    ruian_load.publish(conn, m.v2)
+    ruian_load.finish(conn, m.v2, keep_staging=False)
+    assert _pairs(conn) == []
+
+
+def test_after_the_finish_step_own_place_search_answers_praha_6_as_a_shortcut_with_its_quarter(conn):
+    """The whole path: the load, its gazetteer, the pointer swap, the finish step, then the search (#2450)."""
+    from location_data import place_search
+
+    m = _load_w7_over_old_shape(conn)
+    name_index.rebuild(conn, m.v2)
+    ruian_load.publish(conn, m.v2)
+    ruian_load.finish(conn, m.v2, keep_staging=False)
+    assert [p.item() for p in place_search.suggest(conn, "Praha 6", limit=10) if p.level == "momc"] == [
+        {"level": "momc", "id": MOMC, "name": "Praha 6", "context": "Praha", "point": {"lat": 50.08, "lng": 14.39},
+         "places": [{"level": "cast_obce", "id": PART, "name": "Vokovice", "context": "Praha"}]}]
+
+
+def test_finishing_the_current_version_while_a_later_one_sits_staged_lands_its_pairs_on_its_own_rows(conn):
+    """A re-dispatch of the current vintage while a later load sits staged, killed before its pointer swap: v2 has
+    closed Praha 6 and Vokovice and reopened them, but v1's name index names the rows v2 closed, so v1's pair is on
+    those, the rows that are members of v1."""
+    m = _load_w7_over_old_shape(conn)
+    (old_momc, *_), _ = _unit(conn, "momc", MOMC)
+    (old_part, *_), _ = _unit(conn, "cast_obce", PART)
+    ruian_load.publish(conn, m.v1)
+    ruian_load.finish(conn, m.v1, keep_staging=False)
+    assert _pairs(conn) == [(m.v1, MOMC, PART, False)]
+    assert conn.execute(
+        "SELECT from_id, to_id FROM ruian_admin_unit_relations "
+        "WHERE relation_type = 'momc_cast_obce' AND registry_version_id = %s", (m.v1,),
+    ).fetchall() == [(old_momc, old_part)]

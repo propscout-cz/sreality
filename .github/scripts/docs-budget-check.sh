@@ -12,14 +12,19 @@
 # 95 % of its cap fails until it sets the lower cap printed, and a file the PR does not grow
 # only warns.
 #
-# Usage: .github/scripts/docs-budget-check.sh [repo-root] [base-ref]
-#   Without base-ref only the absolute caps apply (a local run).
+# Usage: .github/scripts/docs-budget-check.sh <repo-root> <base-ref>
+#   Exit 1 is the verdict; a missing or unknown base exits 2, because a run with nothing to judge against is no verdict.
+#   The whole job, annotations only, base worked out: .github/scripts/docs-check.sh
 set -uo pipefail
 
-ROOT="${1:-.}"
-BASE="${2:-}"
+if (( $# != 2 )) || [[ -z "$2" ]]; then
+  echo "usage: docs-budget-check.sh <repo-root> <base-ref>" >&2
+  exit 2
+fi
+ROOT="$1"
+BASE="$2"
 HEAD_SELF=$(<"${BASH_SOURCE[0]}")
-cd "$ROOT" || exit 1
+cd "$ROOT" || exit 2
 
 CLAUDE_MD_BYTES=31250
 ROADMAP_MD_BYTES=15750
@@ -34,20 +39,16 @@ NEW_SKILL_BYTES=24000
 SELF=".github/scripts/docs-budget-check.sh"
 fail=0
 
-if [[ -n "$BASE" ]] && ! git rev-parse -q --verify "${BASE}^{commit}" >/dev/null; then
-  echo "::warning::base ref '${BASE}' not found; checking absolute caps only."
-  BASE=""
+if ! git rev-parse -q --verify "${BASE}^{commit}" >/dev/null; then
+  echo "::error::base ref '${BASE}' not found: nothing to judge growth against. Pass a commit that exists here (fetch it first)."
+  exit 2
 fi
-if [[ -z "$BASE" && -n "${GITHUB_ACTIONS:-}" ]]; then
-  echo "::warning::no base ref: growth is not attributed to this PR and the ratchet only warns. Pass the PR's base (its merge commit's HEAD^1) as the second argument."
-fi
-BASE_SELF=""
-[[ -n "$BASE" ]] && BASE_SELF=$(git show "${BASE}:${SELF}" 2>/dev/null)
+BASE_SELF=$(git show "${BASE}:${SELF}" 2>/dev/null)
 
 round_up_250() { echo $(( ($1 + 249) / 250 * 250 )); }
 
 base_bytes() {
-  [[ -n "$BASE" ]] && git cat-file -e "${BASE}:$1" 2>/dev/null || return 0
+  git cat-file -e "${BASE}:$1" 2>/dev/null || return 0
   git show "${BASE}:$1" | wc -c | tr -d ' '
 }
 

@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useNewTabProps, useSpaLinkDelegation } from '@/lib/linkGestures';
 import { YmPicker, YM_SELECT_CLS } from '@/components/YmPicker';
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
-import { createMap } from '@/lib/basemap';
+import { addBasemapLayers, createMap, openReferencePopup, useBasemapPicks } from '@/lib/basemap';
 import type { HaloPoint } from '@/lib/hoverSync';
 import { haloFeatures, useMapFeatureHover } from '@/lib/useMapFeatureHover';
 import {
@@ -35,33 +35,27 @@ import {
 } from '@/lib/growthChoropleth';
 import HoverChart from '@/components/HoverChart';
 import { SegmentedBar, type SegmentOption } from '@/components/controls';
-import MapOverlayControls, { MapOverlayLegends } from '@/components/MapOverlayControls';
-import { MapLegendCard, OverlayChip, OverlayPanel } from '@/components/OverlayChip';
+import MapOverlayControls, { MapOverlayLegends, TONE_ROW } from '@/components/MapOverlayControls';
+import { MapLegendCard, MapLegendDock, OverlayChip, OverlayPanel } from '@/components/OverlayChip';
+import ErrorBanner from '@/components/ErrorBanner';
+import type { ReadGroupFailure } from '@/lib/readGroup';
 import {
   LayersIcon, MinusIcon, PlusIcon, RailButton, RailFlyout, RailGroup, ShowAllIcon, SlidersIcon, useRailPanel,
 } from '@/components/MapRail';
 import { escapeHtml } from '@/lib/escapeHtml';
-import { usePersistedFlag } from '@/lib/persistedFlag';
 import { circleRing } from '@/lib/geoRing';
 import { listingPopupHtml } from '@/lib/listingPopupHtml';
 import {
-  overlayFillIds,
-  overlayClickOwner,
-  overlayPopupHtml,
+  overlayPopupAt,
   useMapOverlays,
   useMapZoom,
+  useOverlayCursor,
+  useOverlayPlacesAtCenter,
 } from '@/lib/mapOverlayDraw';
-import { parseLayers, type MapOverlayRegistry } from '@/lib/mapOverlays';
-import {
-  drawnUncertaintyRadiusM,
-  isPinExact,
-  uncertaintyPixelsAtZoom0,
-} from '@/lib/uncertaintyCircle';
+import { layerGroupsOn, registrySectionsOn, type MapOverlayRegistry } from '@/lib/mapOverlays';
+import { isPinExact } from '@/lib/pinPrecision';
 
 const psgLayerId = (m: GrowthMetric) => `psg-${m}`;
-
-/* Whether the map's layer keys are folded to their button (per browser). */
-const LEGENDS_FOLDED_KEY = 'sreality.browse.mapLegendsFolded';
 
 /* The reference overlays sit under the growth choropleth's first layer — so
  * under the city polygons and the listings too — where the MF rent map and the
@@ -84,15 +78,6 @@ const viewBounds = (map: maplibregl.Map): MapBounds => {
   const b = map.getBounds();
   return { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() };
 };
-
-/* Fallback shape for a curated city that has no municipality boundary
- * (every city has one today, but a future operator upload might add one
- * before its admin_boundary link is backfilled). */
-const circlePolygonGeom = (
-  lat: number,
-  lng: number,
-  radiusM: number,
-): GeoJSON.Polygon => ({ type: 'Polygon', coordinates: [circleRing(lat, lng, radiusM)] });
 
 const PRAGUE = { lng: 14.4378, lat: 50.0755, zoom: 9.5 };
 
@@ -130,7 +115,7 @@ const formatPriceLabel = (r: MapRow, metric: PriceMetric): string => {
   return `${czPriceCompact.format(r.price_per_m2)}\u00a0${PPM2_UNIT[basis]}`;
 };
 
-/* `pin_exact` picks the pin's black outer contour (lib/uncertaintyCircle.isPinExact):
+/* `pin_exact` picks the pin's black outer contour (lib/pinPrecision.isPinExact):
  * present for a pin placed on a building, absent for anything coarser. Baked per
  * feature so the rule stays in TypeScript, where it is tested, and the paint
  * expression only reads a boolean. `is_active` picks the fill: the pin colour, or white and
@@ -173,27 +158,6 @@ const toFeatureCollection = (rows: MapRow[], metric: PriceMetric): FC => ({
     },
   })),
 });
-
-/* The one uncertainty circle on the map: the pin whose popup is open. Empty
- * otherwise — including for a pin with no circle to draw (building level, or
- * unresolved), whose popup says why in words. */
-const pinPrecisionArea = (
-  row: MapRow | null,
-  at: [number, number] | null,
-): GeoJSON.FeatureCollection<GeoJSON.Point, { px_z0: number }> => {
-  const radiusM = row ? drawnUncertaintyRadiusM(row) : null;
-  return {
-    type: 'FeatureCollection',
-    features:
-      radiusM == null || at == null
-        ? []
-        : [{
-            type: 'Feature',
-            geometry: { type: 'Point', coordinates: at },
-            properties: { px_z0: uncertaintyPixelsAtZoom0(radiusM, at[1]) },
-          }],
-  };
-};
 
 /* Imperative "fly to this place" command. `ts` is a monotonic stamp
  * (Date.now() at the originating event) so back-to-back picks of the
@@ -357,6 +321,10 @@ interface Props {
    * detail when a pin is clicked. */
   cityIndexValuesAll?: Map<string, number>;
   cityIndexDefinitions?: CityIndexDefinition[];
+  /* Set while a read the city layer needs (the towns, their outlines, the
+   * indexes or their values) has failed: the layer would stay empty with no
+   * word of why, so the map says so with a retry instead of the city key. */
+  cityLoadFailure?: ReadGroupFailure | null;
   onToggleShowCities?: (next: boolean) => void;
   onColorByIndexChange?: (indexName: string | null) => void;
   /* What the pin labels show — the total price or the per-m² measure. The
@@ -373,10 +341,12 @@ interface Props {
    * budget the map query was fetched with). */
   pinLimit: number;
   onPinLimitChange?: (next: number) => void;
-  /* Reference overlays (lib/mapOverlays) — the MF rent choropleth among them:
-   * the registry, the canonical `layers` selection, and where a change goes
-   * (the URL + the remembered selection — MapOverlayState.layers). Drawn under
-   * the growth choropleth, the city polygons and the listings. */
+  /* Reference overlays (lib/mapOverlays) — the MF rent choropleth among them —
+   * and the basemap picks (ČÚZK's aerial photo, relief, contours): the registry,
+   * the canonical `layers` selection, and where a change goes (the URL + the
+   * remembered selection — MapOverlayState.layers). The overlays draw under the
+   * growth choropleth, the city polygons and the listings; the basemap picks
+   * under every layer of ours. */
   overlayRegistry?: MapOverlayRegistry;
   overlayLayers?: string;
   onOverlayLayersChange?: (next: string) => void;
@@ -434,6 +404,7 @@ export default function ListingMap({
   cityIndexValues,
   cityIndexValuesAll,
   cityIndexDefinitions,
+  cityLoadFailure = null,
   onToggleShowCities,
   onColorByIndexChange,
   overlayRegistry,
@@ -558,6 +529,7 @@ export default function ListingMap({
     mapRef.current = map;
 
     map.on('load', () => {
+      addBasemapLayers(map);
       /* Price-stats growth overlay — one fill layer per metric, all hidden
        * until the data-effect flips the active one on. Added FIRST: a
        * background layer, below the listing dots + city pins; the reference
@@ -746,41 +718,6 @@ export default function ListingMap({
         data: { type: 'FeatureCollection', features: [] },
       });
 
-      /* HOW FAR OFF THIS PIN MAY BE — for the ONE pin whose popup is open (see
-       * lib/uncertaintyCircle for why it is no longer drawn under every pin). Its
-       * own source holding zero or one point, fed by the `point`
-       * click handler and emptied when that popup closes. A `circle` layer, not
-       * a polygon ring like `center-circle`: the radius interpolates on zoom with
-       * an exponential base of exactly 2, which is EXACT (web-Mercator metres per
-       * pixel halve per zoom level). Added before `point` so the pin always sits
-       * on top of its own circle. */
-      map.addSource('pin-precision', {
-        type: 'geojson',
-        data: pinPrecisionArea(null, null),
-      });
-      map.addLayer({
-        id: 'pin-precision-area',
-        type: 'circle',
-        source: 'pin-precision',
-        paint: {
-          'circle-radius': [
-            'interpolate', ['exponential', 2], ['zoom'],
-            0, ['get', 'px_z0'],
-            20, ['*', ['get', 'px_z0'], 2 ** 20],
-          ],
-          'circle-color': PIN_COLOR,
-          'circle-opacity': 0.08,
-          'circle-stroke-color': PIN_COLOR,
-          'circle-stroke-width': 1.5,
-          'circle-stroke-opacity': 0.6,
-          /* A footprint on the ground, so it stays a circle around the pin when
-             the map is pitched rather than a disc facing the camera. It is never
-             a hit target: no handler binds to this layer, and listingUnderCursor
-             queries ['point', 'counts'] by name. */
-          'circle-pitch-alignment': 'map',
-        },
-      });
-
       /* The black outer contour of an exact pin (building / address). A layer of
        * its own because a circle has ONE stroke, and the white (active) or pin-coloured
        * (inactive) one is taken. A stroke is drawn OUTSIDE the radius, so this
@@ -942,34 +879,22 @@ export default function ListingMap({
         hidePreview();
       });
 
-      const setPinPrecisionArea = (row: MapRow | null, at: [number, number] | null) => {
-        (map.getSource('pin-precision') as GeoJSONSource | undefined)
-          ?.setData(pinPrecisionArea(row, at));
-      };
-
       map.on('click', 'point', (e) => {
         const f = e.features?.[0];
         if (!f || f.geometry.type !== 'Point') return;
         const props = f.properties as unknown as MapRow;
         const at = f.geometry.coordinates as [number, number];
-        /* Removing the previous popup fires its `close`, which clears the
-         * previous circle before this one is drawn; the hover preview gives way. */
         hidePreview();
         popupRef.current?.remove();
-        const popup = new maplibregl.Popup({
+        popupRef.current = new maplibregl.Popup({
           closeButton: true,
           closeOnClick: true,
           maxWidth: '280px',
           className: 'listing-popup',
         })
           .setLngLat(at)
-          .setHTML(listingPopupHtml(props, newTabRef.current));
-        /* The circle lives exactly as long as the popup that explains it: its
-         * ×, a click elsewhere on the map, or the next popup replacing it all
-         * end in `close`. */
-        popup.on('close', () => setPinPrecisionArea(null, null));
-        setPinPrecisionArea(props, at);
-        popupRef.current = popup.addTo(map);
+          .setHTML(listingPopupHtml(props, newTabRef.current))
+          .addTo(map);
       });
 
       /* The circle map area. The polygon source carries an empty ring
@@ -1033,32 +958,21 @@ export default function ListingMap({
        * choropleth (a scale layer) covers every place, though, so inside a
        * curated city it leaves the click to the city's card, as the rent map
        * always has. Registered after the city handler, so this popup replaces
-       * the city's inside any other area. */
+       * the city's inside any other area. With the cadastral map drawn, a click
+       * off the listings also asks for the parcel under it (lib/cadastre), in
+       * the same popup, under the area's card; at that zoom it replaces the
+       * city's card everywhere. */
       map.on('click', (e) => {
-        const registry = overlayRegistryRef.current;
-        if (!registry) return;
-        const fills = overlayFillIds(registry).filter((id) => map.getLayer(id));
-        if (fills.length === 0) return;
-        const top = map.queryRenderedFeatures(e.point, {
-          layers: [...LISTING_HIT_LAYERS, ...fills],
-        })[0];
-        const owner = overlayClickOwner(
-          registry,
-          top?.layer.id ?? null,
-          () => map.queryRenderedFeatures(e.point, { layers: ['city-fill'] }).length > 0,
-        );
-        if (!top || !owner) return;
-        const variant = parseLayers(overlayLayersRef.current).get(owner.layer.key) ?? null;
+        if (listingUnderCursor(e.point)) return;
+        const layers = overlayLayersRef.current;
+        const html = overlayPopupAt(map, e.point, overlayRegistryRef.current, layers, {
+          above: LISTING_HIT_LAYERS,
+          cityHit: () => map.queryRenderedFeatures(e.point, { layers: ['city-fill'] }).length > 0,
+        });
+        const popup = openReferencePopup(map, e.lngLat, html, layers);
+        if (!popup) return;
         popupRef.current?.remove();
-        popupRef.current = new maplibregl.Popup({
-          closeButton: true,
-          closeOnClick: true,
-          maxWidth: '300px',
-          className: 'listing-popup overlay-popup',
-        })
-          .setLngLat(e.lngLat)
-          .setHTML(overlayPopupHtml(owner.section.label, top.properties, owner.layer, variant))
-          .addTo(map);
+        popupRef.current = popup;
       });
 
       /* Locator halo — the card→map "where is it" answer. A separate
@@ -1211,9 +1125,9 @@ export default function ListingMap({
    * by-index, the boundary polygons, or the underlying data. The shared
    * `interpolate` paint expression reads `properties.value`, so a change
    * of colorByIndex is implemented as a fresh setData with new values +
-   * labels. Geometry is the municipality boundary (JSON.parsed from the
-   * ST_AsGeoJSON string), falling back to a radius circle if a city has
-   * no boundary. */
+   * labels. Geometry is the RÚIAN render polygon of the town (JSON.parsed
+   * from the ST_AsGeoJSON string); a city the register cannot draw is not
+   * drawn. */
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
@@ -1230,7 +1144,7 @@ export default function ListingMap({
      * that case (or when no index is selected) so no figure is drawn. */
     const fc: CityFC = {
       type: 'FeatureCollection',
-      features: list.map((c) => {
+      features: list.flatMap((c) => {
         let geometry: GeoJSON.Polygon | GeoJSON.MultiPolygon | null = null;
         const raw = polys.get(c.city_id);
         if (raw) {
@@ -1243,9 +1157,7 @@ export default function ListingMap({
             geometry = null;
           }
         }
-        if (!geometry) {
-          geometry = circlePolygonGeom(c.lat, c.lng, c.default_radius_m);
-        }
+        if (!geometry) return [];
         const v = idxVals.get(c.city_id);
         const hasReading = typeof v === 'number' && Number.isFinite(v);
         /* Below the operator's min threshold → treat as "no reading" so
@@ -1267,8 +1179,8 @@ export default function ListingMap({
         const value = norm ?? -1;
         const valueLabel =
           colorByIndex && passesMin ? (v as number).toFixed(1) : '';
-        return {
-          type: 'Feature',
+        return [{
+          type: 'Feature' as const,
           id: c.city_id,
           geometry,
           properties: {
@@ -1280,7 +1192,7 @@ export default function ListingMap({
             value_label: valueLabel,
             popup_html: cityPopupHtml(c, allDefs, allVals, colorByIndex ?? null),
           },
-        };
+        }];
       }),
     };
     src.setData(fc);
@@ -1394,6 +1306,8 @@ export default function ListingMap({
     map.setLayoutProperty('point-price', 'visibility', priceLabels ? 'visible' : 'none');
   }, [priceLabels, ready]);
 
+  useBasemapPicks(mapRef.current, ready, overlayLayers);
+
   /* Imperative flyTo on each new command (identity-based via ts).
    * Marks didInitialFitRef so the rows-effect doesn't subsequently
    * fitBounds-over the freshly-flown viewport. The rows refetch from
@@ -1456,28 +1370,9 @@ export default function ListingMap({
   useMapFeatureHover(mapRef.current, ready, 'listings', hoveredIds, rows);
 
   useMapOverlays(mapRef.current, ready, overlayRegistry, overlayLayers, OVERLAY_BEFORE_ID);
+  const overlayPlaces = useOverlayPlacesAtCenter(mapRef.current, ready, overlayRegistry, overlayLayers);
 
-  /* A reference area answers a click (the popup above), so it shows the
-   * pointer — over the whole country while the rent map is on, as it always
-   * has. MapLibre skips the ids of sections not drawn yet. */
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !ready || !overlayRegistry) return;
-    const ids = overlayFillIds(overlayRegistry);
-    if (ids.length === 0) return;
-    const enter = () => {
-      map.getCanvas().style.cursor = 'pointer';
-    };
-    const leave = () => {
-      map.getCanvas().style.cursor = '';
-    };
-    map.on('mouseenter', ids, enter);
-    map.on('mouseleave', ids, leave);
-    return () => {
-      map.off('mouseenter', ids, enter);
-      map.off('mouseleave', ids, leave);
-    };
-  }, [ready, overlayRegistry]);
+  useOverlayCursor(mapRef.current, ready, overlayRegistry);
 
   /* Locator halo data: the hovered rows' own points, whatever the map holds. */
   useEffect(() => {
@@ -1526,14 +1421,51 @@ export default function ListingMap({
   };
 
   const rail = useRailPanel<'layers' | 'pins'>();
+  const overlaySectionsOn = registrySectionsOn(overlayLayers, overlayRegistry);
   /* The rail's badge: every layer group that is drawn. */
-  const overlaySectionsOn = useMemo(() => {
-    const sel = parseLayers(overlayLayers);
-    return (overlayRegistry?.sections ?? []).filter((s) => s.layers.some((l) => sel.has(l.key))).length;
-  }, [overlayRegistry, overlayLayers]);
-  const layersOn = (cities && cities.length > 0 && showCities ? 1 : 0) + (showGrowth ? 1 : 0) + overlaySectionsOn;
-  const cityKey = cities && cities.length > 0 && showCities ? colorByIndex ?? null : null;
-  const legendsFolded = usePersistedFlag(LEGENDS_FOLDED_KEY, false);
+  const layersOn =
+    (cities && cities.length > 0 && showCities ? 1 : 0) +
+    (showGrowth ? 1 : 0) +
+    layerGroupsOn(overlayLayers, overlayRegistry);
+  const cityFailure = showCities ? cityLoadFailure : null;
+  const cityKey = !cityFailure && cities && cities.length > 0 && showCities ? colorByIndex ?? null : null;
+  const keysOn = showGrowth || cityKey != null || overlaySectionsOn > 0;
+  /* Browse's own two layers, rows of the Vrstvy list. */
+  const browseRows = (
+    <>
+      {cities && cities.length > 0 && (
+        <div className={TONE_ROW.web}>
+          <CityMapControls
+            showCities={showCities}
+            onToggleShowCities={onToggleShowCities}
+            colorByIndex={colorByIndex ?? null}
+            cityIndexDefinitions={cityIndexDefinitions ?? []}
+            onColorByIndexChange={onColorByIndexChange}
+            colorByMin={colorByMin}
+            onColorByMinChange={setColorByMin}
+            cityCount={cities.length}
+          />
+        </div>
+      )}
+      <div className={TONE_ROW.web}>
+        <GrowthMapControls
+          showGrowth={showGrowth}
+          datasets={growthDatasets ?? []}
+          datasetId={growthDatasetId}
+          metric={growthMetric}
+          from={growthFrom}
+          to={growthTo}
+          onToggle={onToggleShowGrowth}
+          onDatasetChange={onGrowthDatasetChange}
+          onMetricChange={onGrowthMetricChange}
+          onFromChange={onGrowthFromChange}
+          onToChange={onGrowthToChange}
+          chartOnHover={growthChartOnHover}
+          onToggleChartOnHover={onToggleGrowthChartOnHover}
+        />
+      </div>
+    </>
+  );
   const countText = isLoading
     ? 'Načítání…'
     : total == null
@@ -1652,49 +1584,20 @@ export default function ListingMap({
         </div>
         {rail.open === 'layers' && (
           <RailFlyout title="Vrstvy" onClose={rail.close}>
-            <div className="flex flex-col divide-y divide-[var(--color-rule)]">
-              {cities && cities.length > 0 && (
-                <div className="py-1">
-                  <CityMapControls
-                    showCities={showCities}
-                    onToggleShowCities={onToggleShowCities}
-                    colorByIndex={colorByIndex ?? null}
-                    cityIndexDefinitions={cityIndexDefinitions ?? []}
-                    onColorByIndexChange={onColorByIndexChange}
-                    colorByMin={colorByMin}
-                    onColorByMinChange={setColorByMin}
-                    cityCount={cities.length}
-                  />
-                </div>
-              )}
-              <div className="py-1">
-                <GrowthMapControls
-                  showGrowth={showGrowth}
-                  datasets={growthDatasets ?? []}
-                  datasetId={growthDatasetId}
-                  metric={growthMetric}
-                  from={growthFrom}
-                  to={growthTo}
-                  onToggle={onToggleShowGrowth}
-                  onDatasetChange={onGrowthDatasetChange}
-                  onMetricChange={onGrowthMetricChange}
-                  onFromChange={onGrowthFromChange}
-                  onToChange={onGrowthToChange}
-                  chartOnHover={growthChartOnHover}
-                  onToggleChartOnHover={onToggleGrowthChartOnHover}
-                />
-              </div>
-              {onOverlayLayersChange && (
-                <div className="py-1">
-                  <MapOverlayControls
-                    registry={overlayRegistry}
-                    selection={overlayLayers}
-                    onChange={onOverlayLayersChange}
-                    zoom={zoomLevel}
-                  />
-                </div>
-              )}
-            </div>
+            {/* Every map's one list (the basemap, the registry, the terrain), Browse's
+                own two layers inside it under the base. */}
+            {onOverlayLayersChange ? (
+              <MapOverlayControls
+                registry={overlayRegistry}
+                selection={overlayLayers}
+                onChange={onOverlayLayersChange}
+                zoom={zoomLevel}
+              >
+                {browseRows}
+              </MapOverlayControls>
+            ) : (
+              <div className="flex flex-col divide-y divide-[var(--color-rule)]">{browseRows}</div>
+            )}
           </RailFlyout>
         )}
         {rail.open === 'pins' && (
@@ -1712,32 +1615,30 @@ export default function ListingMap({
           </RailFlyout>
         )}
       </div>
-      {/* Bottom-left, over the scale: the key to every layer that is on, so a
-          choropleth reads with the panel closed. It folds to one button (and
-          stays folded in this browser) when the map is too narrow to spare it. */}
-      {(showGrowth || cityKey || overlaySectionsOn > 0) && (
-        <div className="pointer-events-none absolute z-[3] bottom-9 left-2 flex flex-col gap-1.5 items-start max-h-[45%] max-w-[calc(100%-4rem)]">
-          {!legendsFolded.value && (
-            <div className="pointer-events-auto flex flex-col gap-1.5 items-start min-h-0 overflow-y-auto">
+      {/* Bottom-left, over the scale: the key to every layer that is on (and the
+          point an area card reads, while one is on the map). */}
+      {(keysOn || cityFailure) && (
+        <MapLegendDock
+          centreMark={overlayPlaces.size > 0}
+          alert={cityFailure && <CityLoadAlert failure={cityFailure} />}
+        >
+          {keysOn ? (
+            <>
               {showGrowth && <GrowthLegend metric={growthMetric} rowCount={growthRows?.length ?? 0} />}
               {cityKey && <CityIndexLegend index={cityKey} />}
-              <MapOverlayLegends registry={overlayRegistry} selection={overlayLayers} />
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={legendsFolded.toggle}
-            aria-expanded={!legendsFolded.value}
-            className="pointer-events-auto shrink-0 inline-flex items-center gap-1 px-2 py-0.5 text-[0.7rem] rounded-[var(--radius-sm)] bg-[var(--color-paper-3)]/95 backdrop-blur-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] shadow-[0_2px_6px_rgba(0,0,0,0.04)]"
-          >
-            {legendsFolded.value ? 'Ukázat legendu' : 'Skrýt legendu'}
-          </button>
-        </div>
+              <MapOverlayLegends
+                registry={overlayRegistry}
+                selection={overlayLayers}
+                places={overlayPlaces}
+                onChange={onOverlayLayersChange}
+              />
+            </>
+          ) : null}
+        </MapLegendDock>
       )}
     </div>
   );
 }
-
 
 /* The settings of the "Růst cen a nájmů" layer in the Vrstvy panel; its key is
  * GrowthLegend, on the map. */
@@ -1913,6 +1814,20 @@ function CityMapControls({
   );
 }
 
+/* The city layer could not be read, so it draws nothing: said on the map, where the
+ * outlines are missing, in place of their key. The retry re-reads only what failed and
+ * gives way to a "trying again" line while it runs. */
+export function CityLoadAlert({ failure }: { failure: ReadGroupFailure }) {
+  return (
+    <ErrorBanner
+      flush
+      title={null}
+      message={failure.retrying ? 'Města se načítají znovu…' : 'Města se nepodařilo načíst.'}
+      onRetry={failure.retrying ? undefined : failure.retry}
+    />
+  );
+}
+
 /* The city colouring's key. Same stops as the choropleth, from the one shared
  * scale — the gradient used to be a hand-written copy of the ramp and could
  * drift from it silently. The end labels are the definition's real bounds,
@@ -2043,8 +1958,7 @@ function Pill({ children }: { children: React.ReactNode }) {
 const PIN_FACES_HINT =
   'Černý obrys: poloha ověřená na budovu nebo adresu. Bez něj je poloha jen přibližná '
   + '(ulice, část obce, obec…). Purpurový bod je aktivní nabídka, průhledný bílý s purpurovým '
-  + 'obrysem neaktivní. Klikněte na pin: mapa ukáže okruh, ve kterém '
-  + 'nemovitost leží, a popisek řekne, jak je velký.';
+  + 'obrysem neaktivní.';
 
 /* The key to the pin's faces, inside the count pill: the swatches and their
  * counts, the words only on a map wide enough to hold them (the full key is in
@@ -2072,7 +1986,7 @@ function PinPrecisionLegend({ exact, approx, inactive }: { exact: number; approx
 }
 
 /* The same key in full, for the Piny a ceny panel. */
-function PinPrecisionKey({ exact, approx, inactive }: { exact: number; approx: number; inactive: number }) {
+export function PinPrecisionKey({ exact, approx, inactive }: { exact: number; approx: number; inactive: number }) {
   const faces = [
     { exact: true, active: true, label: 'Přesná poloha', n: exact },
     { exact: false, active: true, label: 'Přibližná poloha', n: approx },

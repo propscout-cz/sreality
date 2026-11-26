@@ -1,6 +1,6 @@
 ---
 name: database
-description: Use when working with this project's Postgres/Supabase database — reading data cheaply (psql vs the Supabase MCP), the three connection modes (connect vs connect_session vs the tenant pool, transaction- vs session-mode pooler, prepare_threshold), migrations as the source of truth, the additive-vs-destructive migration safety gate, multi-tenancy (account_id scoping, RLS, tenant role, tenant pool, composite PKs), pooler-safe locking (advisory locks vs lease-row CAS), or schema/column conventions (typed enum labels, geom-derived admin hierarchy, the shared street extractor, stored blocking keys, legacy booleans). Triggers on: migration, apply_migration, ALTER/CREATE TABLE, psycopg, pooler, backfill, PostGIS, RLS, account_id, tenant, tenant pool, advisory lock, connection mode, verifying data with a SELECT, schema or column change.
+description: Use when working with this project's Postgres/Supabase database — reading data cheaply (psql vs the Supabase MCP), the three connection modes (connect vs connect_session vs the tenant pool, transaction- vs session-mode pooler, prepare_threshold), migrations as the source of truth, the additive-vs-destructive migration safety gate, multi-tenancy (account_id scoping, RLS, tenant role, tenant pool, composite PKs), pooler-safe locking (advisory locks vs lease-row CAS), or schema/column conventions (typed enum labels, geom-derived admin hierarchy, the shared street extractor, stored blocking keys, legacy booleans). Triggers on: migration, apply_migration, ALTER/CREATE TABLE, psycopg, pooler, backfill, PostGIS, RLS, account_id, tenant, tenant pool, advisory lock, connection mode, verifying data with a SELECT, schema or column change, compute size (Large/2XL resize).
 ---
 
 # Database
@@ -106,8 +106,7 @@ did within minutes, hence migration 279).
   that outlasts its pass, as the resolver lanes do; one that `renew`s, stops by `Hold.fenced` and ends each transaction
   with `fence` cannot commit under a lapsed lease; the release falls back to a fresh connection; a retired row refuses
   it for good, so the job registry (#2024) retires only rows it registered, `registry_at` set), `claim` / `renew` /
-  `release` for a scheduled job, `job_runs`' unique open-run indexes (per job, per resource) refusing a lost race. `tests/test_lease_census.py` fails CI on lease CAS text anywhere else and
-  ledgers the older copies (`property_maintenance_lease`, `broker_resolution_lock`, until #2267/#2273).
+  `release` for a scheduled job, `job_runs`' unique open-run indexes (per job, per resource) refusing a lost race. `tests/test_lease_census.py` fails CI on lease CAS text anywhere else.
   Under READ COMMITTED each later statement in the CAS's transaction sees rows committed after it: re-check what
   the CAS proved, or let a unique index decide (job_lease's lost-run close, #2022).
 - **Work-queue claim** (many rows, many workers): `FOR UPDATE SKIP LOCKED` (`listing_detail_queue`,
@@ -153,7 +152,7 @@ where a caller needs it. Exception for a hot function: `references/tenancy.md` �
 - **Open with `set local lock_timeout = '5s';` when a migration GRANT/REVOKEs or
   CREATE-OR-REPLACEs a hot or cron-refreshed relation** (any matview, `browse_list`, `listings`).
   Those take ACCESS EXCLUSIVE and a whole-transaction loop holds every lock it already took —
-  without a timeout it queues behind, or blocks, the `*/15` list rebuild or an hourly matview refresh.
+  without a timeout it queues behind, or blocks, the hourly list rebuild (:45) or a matview refresh.
 - **Destructive migrations** (`DROP TABLE`/`COLUMN`, type-changing `ALTER`, `DELETE`
   without `WHERE`, `TRUNCATE`) — **pause for explicit operator OK** ("yes, apply it") and
   back up the affected data *first* (`backup_before_drop.yml`, to R2). There's no staging
@@ -164,7 +163,7 @@ Correct flow for any schema change: (1) write the new numbered migration file in
 `migrations/`; (2) for destructive changes, get explicit approval + back up first;
 (3) apply BEFORE merging — via MCP (`apply_migration`), or with no MCP in the session
 `gh workflow run apply_migration.yml --ref <branch> -f file=NNN_x.sql -f dry_run=false -f confirm=APPLY`
-(`psql -f`, statement autocommit: every statement idempotent, plain `SET lock_timeout`); verify
+(`psql -f`, statement autocommit: every statement idempotent, plain `SET lock_timeout`; default `statement_timeout`: 2 min); verify
 with a SELECT; (4) commit the migration file in the same change; (5) report what was applied.
 
 **APPLY BEFORE YOU MERGE when the code reads the new schema.** Merging and applying are
@@ -175,15 +174,13 @@ crash killed the batch before its counters were written. Order the two so the sc
 never behind the code: apply, verify with a SELECT, then merge.
 
 `verify_pipeline`'s **`migration_drift`** check (2026-08-27) now catches the gap within one
-hourly canary tick, one cell per migration file since Health wave 6, and pushes an alarm. It probes the LIVE CATALOG for the objects the newest 25
-migrations declare — tables, views, indexes, functions, added columns, added constraints,
-policies — parsed by `scripts/migration_objects.py`. It deliberately does NOT read
+hourly canary tick, one cell per migration file since Health wave 6, and pushes an alarm. It probes the LIVE CATALOG for what the newest 25
+migrations declare or drop, parsed by `scripts/migration_objects.py`. It deliberately does NOT read
 `supabase_migrations.schema_migrations`: that ledger's `name` is whatever the applier passed,
 so it matches the repo filename sometimes (`444_listings_discovered_at`) and not others
 (441 is recorded as `stamp_derived_artifact`, unnumbered), and it carries ad-hoc migrations
-with no repo file at all. The catalog cannot lie; the ledger can. Migrations that only drop,
-grant or update data declare nothing probeable and read Not measured ("unverifiable") rather than
-passing; an object a later migration drops is not probed on its creator (613 → 610). A function is probed by NAME only, so a
+with no repo file at all. The catalog cannot lie; the ledger can. A still-present drop is Watch and fails the apply receipt; grants, data and
+function drops read Not measured ("unverifiable"), never passing; an object a later migration drops is not probed on its creator (613 → 610). A function is probed by NAME only, so a
 re-signed or rewritten function (590, 597), like a dropped-and-recreated policy (613), reads present before it is applied: prove those with
 their own `$post$` block and a call with the new arguments.
 
@@ -261,15 +258,14 @@ allowlisted with a reason) + `tests/api/test_account_scope_census.py` (no nullab
 **Browse read model** (migrations 275–278, 283; PRs #705/#707/#711/#714/#724): a
 `properties_public`-style view is fed from `browse_projection` (the column contract,
 defined once) into `browse_list` — an **UNLOGGED
-table**, blue-green rebuilt every 15 minutes by a `SECURITY DEFINER` pg_cron function
+table**, blue-green rebuilt hourly at :45 (mig 740) by a `SECURITY DEFINER` pg_cron function
 (`rebuild_browse_list()`, `pg_try_advisory_xact_lock` guards overlapping runs, `ANALYZE`
 *before* the swap is mandatory or the planner uses stale stats on the fresh table). Since 630 it lays the table out by category, lat, lng, builds `browse_list_map_idx` (the map index is only cheap on a heap in its own order) and, once its DROP holds the lock, re-patches every property a `property_merge_events` row created or undid since the previous run (less 15 min).
 The map reads `browse_list` too: 631 dropped the 30-min `properties_map_mv` matview and its rebuild. (The legacy publication-gate predicate went in migration
 475 with the removed engine, rule #15; `properties.published_at` survives as a frozen historical column that
 constrains nothing. Since 669 `browse_projection`'s WHERE carries rule 16's publication rule, an inline column expression
-(no function, so no per-row call): the live fact is `properties.settled_at` (668), spelled once in `toolkit/publication.py`.) Moving the rebuilds to pg_cron retired the old `scripts/refresh_map_mv.py` GH Actions cron entirely —
-pg_cron runs on-the-minute where GH Actions cron was measured ~2× jittered (see
-`gh-actions-cron-throttle-fleet` if you need the numbers).
+(no function, so no per-row call): the live fact is `properties.settled_at` (668), spelled once in `toolkit/publication.py`.) pg_cron fires on the minute (GH
+Actions cron: ~2× jitter).
 
 **Appending a column to `browse_projection`** (migration 584's recipe; append LAST, each body verbatim from its
 latest definer): take the list rebuild's advisory lock (`statement_timeout` > the 1800 s cron cap); in ONE transaction
@@ -327,9 +323,8 @@ id space and is NOT interchangeable — worth knowing before W7a collapses the i
 DROP+CREATEs `browse_list` every tick, including the `GRANT SELECT ... TO authenticated` (never
 `anon` — migration 299 deliberately narrowed this) and the district/price
 covering indexes (migration 283's 9-column form, not migration 277's original 3-column form).
-Migration 371 copied from an outdated body and silently reintroduced BOTH the anon grant and
-the narrow indexes while its own commit message claimed no behavior change — live-anon-readable
-for an unknown period, fixed in migration 376. Always `CREATE OR REPLACE` from the CURRENT
+Migration 371 copied an outdated body and silently restored BOTH the anon grant and the
+narrow indexes (fixed in 376). Always `CREATE OR REPLACE` from the CURRENT
 function body (`pg_get_functiondef`), never from an old migration file or a design doc's
 emergency-rollback snippet. It also self-checks after granting
 (`if has_table_privilege('anon', ..., 'SELECT') then raise exception`) — a regression RAISEs,
@@ -350,10 +345,9 @@ everything revoked, read by the backend only (the `jobs` check's `artifact/<name
 them; migration 643 dropped its browser view `derived_artifacts_public`). **A new derived artifact needs a registry row**, and
 `tests/test_derived_artifacts_registry.py` goes RED without one — its `_W7_BACKLOG` exemption
 set is now empty and **nothing may be added to it**. One budget is deliberately NOT its
-cadence: `property_sweep` (migration 622,
-the daily full sweep's completed cycle, stamped by `recompute_property_stats`) 38 h, because the
-`jobs` check adds GitHub's 18 h delivery slack to a `github-actions` row: Problem at 56 h, as
-ruled for the two-run cycle. `rent_map_cells`'s `host` is honestly `api-request`:
+cadence: `property_sweep` (migrations 622, 731: the daily full sweep's completed cycle, stamped by
+`recompute_property_stats`) 56 h, ruled for the two-run cycle; `jobs` adds GitHub's 18 h delivery
+slack to a `github-actions` row only. `rent_map_cells`'s `host` is honestly `api-request`:
 it is refreshed inside a FastAPI request handler — don't launder it into a cron string.
 `llm_cost_rollup_state` is a watermark FOR an artifact, not an artifact, and is deliberately
 unregistered.
@@ -376,17 +370,18 @@ which extracts every name literal from both the repo tree and `pg_proc.prosrc` a
 `llm_cost_hour_rollup` keeps its own inline UPDATE because it must pass its own watermark as
 `complete_through`; don't unify it onto the helper without a fourth parameter.
 
-**Matview publication has ONE idiom: `select public.refresh_matview(name)`** (migration 578,
-the Broker Unify sprint's answer to the 2026-09-30 outage — a plain ACCESS EXCLUSIVE REFRESH
-of the broker count book (dropped by 693) blocked every reader for 352 s in working hours). Python
+**Matview publication has ONE idiom: `select public.refresh_matview(name)`** (migration 578;
+its header has the 2026-09-30 outage: a plain REFRESH blocked all readers). Python
 producers call `scraper.db.refresh_matview(conn, name)` and never run
 `refresh materialized view` themselves (`tests/test_matview_refresh_convention.py` fails CI
 on a bypass, and on a plain refresh in any migration after 578). The chokepoint RAISEs on a
-name with no `derived_artifacts` row (so for matviews the silent-no-op stamp hole is closed
-at runtime too), refreshes CONCURRENTLY — plain form only on an unpopulated first populate —
+name with no `derived_artifacts` row (closing the silent-no-op hole at runtime),
+refreshes CONCURRENTLY — plain form only on an unpopulated first populate —
 skips with -1 when a refresh of the same matview is already in flight
 (`pg_try_advisory_xact_lock`: transaction-scoped, so pooler-safe), and stamps rows +
-duration in the refresh's own transaction. **CONCURRENTLY is valid inside a transaction**
+duration in the refresh's own transaction. One stamp skips it: a re-fetch of the file
+`rent_map_cells` serves stamps it via the helper, unrefreshed, checked offline only (#2318).
+**CONCURRENTLY is valid inside a transaction**
 (the restriction people misremember is `CREATE INDEX CONCURRENTLY`'s); two producer comments
 claimed otherwise and drove the blocking design — never re-derive that claim from a comment.
 Every matview therefore needs one plain unique index (`tests/test_matview_indexes.py` pins
@@ -455,14 +450,14 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   `listing_location ll on ll.listing_id = l.id` (from `properties p`, on `p.location_listing_ref_id`, never the
   canonical advert, since 636; a cohort goes spatial-first: `ll` → `properties lp on lp.location_listing_ref_id =
   ll.listing_id and lp.status = 'active'` → `listings l on l.id = lp.repr_listing_ref_id`). The codes are `ll.obec_kod` /
-  `okres_kod` / `kraj_kod` / `cast_obce_kod` / `ulice_kod` (RÚIAN, = `admin_boundaries.id` for obec), the
+  `okres_kod` / `kraj_kod` / `cast_obce_kod` / `ulice_kod` (RÚIAN codes), the
   labels `ll.obec_name` / `okres_name` / `street_name`. One trap: `ll.geom` IS
   `geometry(Point,4326)`, so a metre-based `ST_DWithin`/`ST_Distance` must cast
   `ll.geom::geography` (index `listing_location_geog_gist`, migration 507) or it silently
   measures degrees. The place STRING every surface renders is `location_display_label(...)`
   (migration 503), never a hand-assembled one; every place FILTER is `<level>_id = any(codes)`, five levels.
-  `admin_boundaries` survives for price stats / the rent map / city proximity / the kraje overlay only — it is no
-  longer a location path. `scraper/street.py` still extracts a street from a portal page; that
+  A unit's polygon is `ruian_unit_render` (mig 725: current version, by `(level, code)`), a town's population
+  `obec_population` (by code, year). `scraper/street.py` still extracts a street from a portal page; that
   extraction is now a CLAIM the resolver arbitrates, not a column — and since W18
   (resolver v5.2) `ll.street_name` is **the REGISTER's or NULL**: a claim text that does not bind
   to `ruian_streets` in the anchoring obec is not published, so `street_name IS NOT NULL` implies
@@ -470,8 +465,13 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   worker's own sweep that a bump triggers (W2: no hand dispatch); check `resolver_version`
   before relying on it.
 - **Map reference overlays (mig 600) are a MIRROR, service-role-only:** `map_overlay_{sections,layers,features,tiles}`
-  are rebuilt by `scripts/ingest_map_overlays.py` (the `map_overlays` job; `--sections kraje` after a boundaries ingest;
+  are rebuilt by `scripts/ingest_map_overlays.py` (the `map_overlays` job;
   `rent_map` by every rent-map ingest) and read only through `/map-overlays*`; change a layer in the registry, never the rows.
+- **`place_picks` (mig 737, Q10): service-role-only telemetry**, unwritten since #2453; Stage B drops it (#2455).
+  Architecture § the pick record.
+- **`place_served_counts` + `place_facts` (mig 738): `/places/suggest`'s service-role-only read models.** The first
+  refreshes at :37 (pg_cron), reading `browse_list` via `place_served_rows()` (a dependent matview fails the hourly
+  DROP); the second, facts and not a location store, in `ruian_load.finish`.
 - **Location-data relations (`location_*`, `ruian_*`, `portal_contract*`; migs 380+) are
   service-role-only** — RLS on + explicit `anon`/`authenticated` REVOKEs on every table, sequence
   + function; the SPA reads a listing's place through the public views, never the store.
@@ -481,14 +481,16 @@ So: wrap a gate that sits alongside a column predicate; a standalone gate is alr
   enqueue, `contracts.py --retract`), then that source is re-mined in full.
   The live set is `location_claims`,
   `listing_location`, `location_granularity_rank`, `dirty_locations`, `scheduled_jobs`,
-  `portal_contracts`/`_entries` + RÚIAN. Every heavy batch lane shares the ONE `location-batch`
-  Actions group + arms `SET LOCAL statement_timeout` — **except the resolve DRAIN**: latency-bound
-  not instance-bound, it runs outside the group and from the Railway worker too, serialized ONLY by
-  the `scheduled_jobs` lease + pass lock (pause the row, `paused_until`) — **idle it before a heavy batch**; `full-resolve` DOES stay
-  in the group. RÚIAN loaders + drain run on **`connect_session()`** (the loader refuses the fallback
+  `portal_contracts`/`_entries` + RÚIAN. The heavy lanes (intake, RÚIAN address and building loads) share the
+  runner's `location-heavy` resource + arm `SET LOCAL statement_timeout` —
+  **except the resolve DRAIN**: latency-bound
+  not instance-bound, it runs outside it on the Railway worker, serialized ONLY by
+  the `scheduled_jobs` lease + pass lock (pause the row, `paused_until`) — **idle it before a heavy batch**. RÚIAN loaders + drain run on **`connect_session()`** (the loader refuses the fallback
   — a 3 M-row COPY needs session GUCs). Rationale: `docs/architecture.md` § Location data.
 
 ## See also
 
 - `.claude/skills/database/references/tenancy.md` — full table-by-table RLS migration list,
   policy text, and the `property_pipeline` composite-FK detail.
+- `.claude/skills/database/references/compute-size.md` — read before advising on, or watching, a
+  compute-size switch, and before heavy work that needs 2XL first (seed, backfill, large migration).

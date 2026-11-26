@@ -71,6 +71,7 @@ import TagColorPicker from '@/components/TagColorPicker';
 import ErrorBanner from '@/components/ErrorBanner';
 import { readFailed } from '@/components/ReadFailedMark';
 import { FunnelIcon, InfoIcon } from '@/components/icons';
+import { CalendarIcon } from '@/components/phone/phoneIcons';
 import SizeToggle, {
   LargeImageGlyph,
   MediumImageGlyph,
@@ -97,6 +98,7 @@ import {
   type PipelineShare,
   type PipelineShares,
   type PipelineStage,
+  type PipelineStageRole,
   type TagColor,
 } from '@/lib/types';
 
@@ -1101,6 +1103,7 @@ function StageEditorRow({
   const label = useServerDraft(stage.label, trimDraft);
   const code = useServerDraft(stage.code ?? '', trimDraft);
   const actAs = useActAs();
+  const viewing = stage.role === 'viewing';
 
   const update = useMutation({
     mutationFn: (patch: {
@@ -1109,6 +1112,7 @@ function StageEditorRow({
       is_terminal?: boolean;
       is_entry?: boolean;
       code?: string | null;
+      role?: PipelineStageRole | null;
     }) => updatePipelineStage(stage.id, patch, ...actOpts(actAs)),
     onSuccess: invalidate,
     onError,
@@ -1206,13 +1210,37 @@ function StageEditorRow({
           </button>
           <Hint text={'Vstupní fáze: sem se nemovitost přidá jako záložka („Přidat do pipeline“). Právě jedna fáze může být vstupní.'} />
         </span>
+        {/* The viewing role (migration 734): whatever the stage is called, this is where a
+            property with a viewing belongs; a viewing date offers it. At most one stage, never a closed one. */}
+        <span className="flex shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            onClick={() => update.mutate({ role: viewing ? null : 'viewing' })}
+            disabled={stage.is_terminal}
+            aria-pressed={viewing}
+            title={
+              stage.is_terminal
+                ? 'Koncová fáze nemůže být fází prohlídky'
+                : viewing
+                  ? 'Fáze prohlídky (kliknutím zrušíte)'
+                  : 'Nastavit jako fázi prohlídky'
+            }
+            aria-label="Fáze prohlídky"
+            className="flex w-5 justify-center disabled:cursor-default disabled:opacity-25"
+            style={{ color: viewing ? 'var(--color-copper)' : 'var(--color-ink-4)' }}
+          >
+            <CalendarIcon className="h-4 w-4" />
+          </button>
+          <Hint text={'Fáze prohlídky: sem patří nemovitosti, na které se chystáte na prohlídku, ať se fáze jmenuje jakkoli. Když k nemovitosti přidáte termín prohlídky, aplikace nabídne přesun sem. Nejvýš jedna fáze, nikdy koncová.'} />
+        </span>
         <span className="flex shrink-0 items-center gap-0.5 text-[0.68rem] text-[var(--color-ink-3)]">
           <label className="flex items-center gap-1">
             <input
               type="checkbox"
               checked={stage.is_terminal}
               onChange={(e) => update.mutate({ is_terminal: e.target.checked })}
-              disabled={stage.is_entry}
+              disabled={stage.is_entry || viewing}
+              title={viewing ? 'Fáze prohlídky nemůže být koncová' : undefined}
             />
             konec
           </label>

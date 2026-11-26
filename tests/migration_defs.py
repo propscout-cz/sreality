@@ -21,3 +21,18 @@ def latest_definition(func: str) -> Path:
     hits = [p for p in MIGRATIONS.glob("*.sql") if pat.search(p.read_text(encoding="utf-8"))]
     assert hits, f"no migration defines {func}"
     return max(hits, key=lambda p: int(p.name.split("_", 1)[0]))
+
+
+def _params(text: str, fn: str) -> list[tuple[str, str]]:
+    """`fn`'s (name, type) parameters as `text` defines them."""
+    at = re.search(rf"create or replace function public\.{fn}\(", text, re.I).end()
+    depth, i = 1, at
+    while depth:
+        depth += {"(": 1, ")": -1}.get(text[i], 0)
+        i += 1
+    args = re.sub(r"--[^\n]*", "", text[at: i - 1])
+    out = []
+    for part in re.split(r",\s*(?=[a-z][a-z0-9_]* )", " ".join(args.split())):
+        name, rest = part.split(" ", 1)
+        out.append((name, re.split(r"\s+default\s+", rest, flags=re.I)[0].lower()))
+    return out

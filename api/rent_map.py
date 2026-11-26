@@ -21,12 +21,12 @@ import requests
 
 from scraper import contact
 from scraper import db as scraper_db
+from scraper import hashing
 from scripts.ingest_map_overlays import Refused as OverlayRefused, render_sql_section
 from toolkit.rent_map import (
     MF_INFOGRAPHIC_URL,
     ParsedRentMap,
     parse_rent_map_xlsx,
-    sha256_bytes,
     source_date_from_filename,
 )
 
@@ -95,20 +95,31 @@ def insert_revision(
     """Insert one revision + its values/adjustments, re-render the `rent_map` map
     overlay and refresh `rent_map_cells`, in one transaction.
 
-    Returns the new source_revision, or None when this exact file (by
-    sha256) was already ingested — re-fetching an unchanged file is a no-op.
+    Returns the new source_revision, or None when this exact file (by sha256) was
+    already ingested: no write, bar stamping `rent_map_cells` current when it serves that file.
     """
     territory_count = len({v.ruian_code for v in parsed.values})
     with conn.transaction(), conn.cursor() as cur:
         cur.execute(
-            "select source_revision from rent_map_revisions "
-            "where file_sha256 = %s",
+            "select r.source_revision, exists (select 1 from rent_map_cells c "
+            "where c.source_revision = r.source_revision) "
+            "from rent_map_revisions r where r.file_sha256 = %s",
             (file_sha256,),
         )
         existing = cur.fetchone()
         if existing is not None:
-            LOG.info("rent map sha256 %s already ingested (rev %s)",
-                     file_sha256[:12], existing[0])
+            known, served = existing
+            LOG.info("rent map sha256 %s already ingested (rev %s)", file_sha256[:12], known)
+            # A quiet month (#2318): this file is the revision the cells serve, so they are current now, and
+            # a month without a stamp would read on Health as a dead job. Nothing was refreshed, so rows and
+            # duration go unmeasured and keep the last refresh's figures (migration 441).
+            if served:
+                scraper_db.stamp_derived_artifact(conn, "rent_map_cells")
+            else:
+                LOG.warning("rent map: rev %s is not the revision rent_map_cells serves: either an older file "
+                            "MF offers again, or the latest revision whose ingest refresh was skipped (another "
+                            "refresh in flight), leaving the cells on an older one; rent_map_cells not stamped",
+                            known)
             return RevisionOutcome(None, None)
 
         cur.execute(
@@ -187,7 +198,7 @@ def ingest_bytes(
     parsed = parse_rent_map_xlsx(
         data, source_date=source_date_from_filename(source_filename)
     )
-    file_sha256 = sha256_bytes(data)
+    file_sha256 = hashing.file_sha256(data)
     outcome = insert_revision(
         conn, parsed,
         source_filename=source_filename,

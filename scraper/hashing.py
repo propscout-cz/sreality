@@ -90,6 +90,11 @@ def digest(doc: Mapping[str, Any]) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def file_sha256(data: bytes) -> str:
+    """A stored file's identity (an upload, an agent's produced file, the rent map): sha256 of its bytes, as hex."""
+    return hashlib.sha256(data).hexdigest()
+
+
 def sreality_hash_doc(raw: dict[str, Any]) -> dict[str, Any]:
     """sreality's hash document: the wire payload minus its volatile keys."""
     out = deepcopy(raw)

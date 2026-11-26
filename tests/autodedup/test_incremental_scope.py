@@ -21,6 +21,7 @@ from autodedup import cohort
 from autodedup.incremental import Limits, WorkItem, run_pass
 from autodedup.incremental_lane import (
     CURSOR_CHANGED,
+    CURSOR_ENTER,
     CURSOR_EVIDENCE,
     CURSOR_NEW,
     CURSOR_SCOPE,
@@ -221,6 +222,8 @@ def _feeds_db() -> FakePg:
                                    "inactive_at": None, "is_active": True}
         _place(db, listing_id, obec=obec)
         db.rt_fp[(GEN, listing_id)] = _fp_row()
+        db.snapshots.append({"id": listing_id, "listing_id": listing_id,
+                             "scraped_at": db.now - timedelta(days=9)})
         db.snapshots.append({"id": 100 + listing_id, "listing_id": listing_id,
                              "scraped_at": old})
     for listing_id, obec in ((31, 563510), (32, 999999)):          # flipped
@@ -404,7 +407,7 @@ def test_the_store_keeps_exactly_what_the_batch_lane_keeps() -> None:
     from autodedup.incremental import PairRow
 
     conn = FakePg()
-    store = SqlStore(conn, GEN, store_floor=0.02, calibration_digest="c0ffee", engine_digest="e")
+    store = SqlStore(conn, GEN, store_floor=0.02, calibration_digest="c0ffee")
 
     def _row(lo: int, hi: int, zone: str, score: float) -> PairRow:
         return PairRow(lo=lo, hi=hi, probes=["img"], from_lo=True, from_hi=False,
@@ -429,7 +432,7 @@ def test_a_pair_that_falls_below_the_floor_on_a_re_score_is_deleted() -> None:
     from autodedup.incremental import PairRow
 
     conn = FakePg()
-    store = SqlStore(conn, GEN, store_floor=0.02, calibration_digest="c0ffee", engine_digest="e")
+    store = SqlStore(conn, GEN, store_floor=0.02, calibration_digest="c0ffee")
     kept = PairRow(lo=1, hi=2, probes=["img"], from_lo=True, from_hi=True, zone="band",
                    score=0.4, families=["IMG"], certificate=None, veto="", reason="r",
                    evidence={}, context={"block": "o1"}, fp_lo="a", fp_hi="b")
@@ -579,6 +582,138 @@ def test_the_straggler_sweep_looks_back_a_row_count_not_an_id_range() -> None:
                    enter_slice=0)
     stragglers = [item.listing_id for item in work.claim(50) if item.feed == "straggler"]
     assert stragglers == [40_000, 80_000]
+
+
+# ------------------------------------------- E987: outside a build the entrant feed completes blocks
+
+TOWN, QUARTER = "obec:563510", "cast_obce:490245"
+
+
+def _post_brake_world(town_unread: int, praha_unread: int) -> FakePg:
+    """Production's shape at 2026-11-17 15:15Z: every block's snapshot holds unread adverts above
+    BOTH cursors, the entrant's id cursor ahead of `rt_new`, no walk due. The town's adverts sit
+    at ids the new feed reaches last; Praha's quarter holds the rest."""
+    db = FakePg()
+    db.admin_parents[490245] = 554782
+    resolved = db.now - timedelta(hours=8)
+    town = list(range(5000, 5000 + town_unread))
+    praha = list(range(1001, 1001 + praha_unread))
+    for listing_id in town + praha:
+        db.listings[listing_id] = {"first_seen_at": resolved, "inactive_at": None,
+                                   "is_active": True}
+    for listing_id in town:
+        _place(db, listing_id, obec=563510)
+        db.scope_ids[(GEN, TOWN, listing_id)] = {"resolved_at": resolved}
+    for listing_id in praha:
+        _place(db, listing_id, obec=554782, cast_obce=490245)
+        db.scope_ids[(GEN, QUARTER, listing_id)] = {"resolved_at": resolved}
+    for block in (TOWN, QUARTER):
+        db.scope_scans.append({"generation": GEN, "block_key": block, "scanned_at": db.now,
+                               "rows_found": 0})
+    db.settings[f"rt_scope_pages:{GEN}"] = {block: {"of": 1, "page": 1, "after": 0}
+                                            for block in (TOWN, QUARTER)}
+    db.cursors[CURSOR_NEW] = {"last_listing_id": 1000}
+    db.cursors[CURSOR_ENTER] = {"last_listing_id": 1100, "last_snapshot_id": 0}
+    return db
+
+
+def _entrant_pass(db: FakePg, limit: int) -> SqlWork:
+    """One steady pass: claim, commit, fingerprint what it claimed (as the pass does)."""
+    work = SqlWork(db, SCOPE, GEN, straggler_window=0, revive_slice=0, drift_slice=0,
+                   evidence_slice=0, parents={490245: 554782})
+    items = work.claim(limit)
+    work.commit(items)
+    for item in items:
+        db.rt_fp[(GEN, item.listing_id)] = _fp_row()
+    return work
+
+
+def test_after_a_brake_the_smallest_block_completes_before_the_backlog_is_read() -> None:
+    """2026-11-17: 4,120 unread in 32 of 32 blocks, both cursors below them, no merge from 12:58Z;
+    the entrant feed read in id order behind its own cursor, so no block completed before all did.
+    At a limit of 15 (a fifth: 3) the town's 15 complete in five passes, judged by the reconcile's
+    own predicate, while Praha's 300 still hold their block."""
+    from autodedup.apply import rt_block_reads
+
+    db = _post_brake_world(town_unread=15, praha_unread=300)
+    assert {TOWN, QUARTER} <= rt_block_reads(db, GEN, [TOWN, QUARTER])[1]
+    for _ in range(5):
+        work = _entrant_pass(db, 15)
+    unwalked, unfingerprinted = rt_block_reads(db, GEN, [TOWN, QUARTER])
+    assert TOWN not in unwalked | unfingerprinted, "the town's groups may merge"
+    assert QUARTER in unfingerprinted
+    assert work.unread_blocks_after() == unfingerprinted, "the pass's one scan, handed on"
+    assert db.cursors[CURSOR_ENTER]["last_listing_id"] == 0, "no id cursor outside a build"
+
+
+@pytest.mark.parametrize(("added", "completes"), [(2, True), (3, False), (4, False)])
+def test_a_small_block_the_walks_keep_feeding_completes_only_while_they_add_less_than_a_fifth(
+        added: int, completes: bool) -> None:
+    """Walks add newer unread adverts to the town before every pass. Fewest first, the town takes
+    the entrant's whole fifth (3 at a limit of 15) each pass: fed 2 a pass it is read out and stays
+    complete; fed 3 or more it never completes. The new feed never reaches these ids (they sit
+    below its cursor), so this is the entrant feed's arithmetic alone."""
+    from autodedup.apply import rt_block_reads
+
+    db = _post_brake_world(town_unread=0, praha_unread=300)
+    next_id = iter(range(100, 1000))
+    complete_at: list[int] = []
+    for number in range(40):
+        for _ in range(added):
+            listing_id = next(next_id)
+            db.listings[listing_id] = {"first_seen_at": db.now - timedelta(hours=1),
+                                       "inactive_at": None, "is_active": True}
+            _place(db, listing_id, obec=563510)
+            db.scope_ids[(GEN, TOWN, listing_id)] = {"resolved_at": db.now - timedelta(hours=1)}
+        if number == 0:
+            for listing_id in range(5000, 5015):    # and a backlog of 15 to begin with
+                db.listings[listing_id] = {"first_seen_at": db.now - timedelta(hours=8),
+                                           "inactive_at": None, "is_active": True}
+                _place(db, listing_id, obec=563510)
+                db.scope_ids[(GEN, TOWN, listing_id)] = {
+                    "resolved_at": db.now - timedelta(hours=8)}
+        _entrant_pass(db, 15)
+        if TOWN not in rt_block_reads(db, GEN, [TOWN, QUARTER])[1]:
+            complete_at.append(number)
+    assert bool(complete_at) is completes
+    if completes:
+        # 15 + 2 before the first pass, then 2 in and 3 out a pass: read out after the 15th.
+        assert complete_at == list(range(14, 40)), "and stays complete"
+
+
+def test_no_block_waits_for_ever_behind_a_supply_of_smaller_ones() -> None:
+    """E987's fairness rule: an unread advert resolved `ENTRANT_MAX_WAIT_S` (72 h) ago or more is
+    read before any block order, oldest first. Praha's 300 hold the largest block; small blocks
+    arrive every pass; the Praha adverts past 72 h are still read, three a pass, oldest first. One
+    resolved 30 h ago (11-17's backlog was 16 h old at deploy) is not overdue: it keeps its block's
+    place, so a brake's backlog does not turn the feed into the new feed's id order."""
+    db = _post_brake_world(town_unread=0, praha_unread=300)
+    for listing_id, hours in ((1290, 80), (1291, 76), (1292, 74), (1293, 30)):
+        db.scope_ids[(GEN, QUARTER, listing_id)] = {"resolved_at": db.now - timedelta(hours=hours)}
+    town_ids = iter(range(100, 1000))
+    for listing_id in [next(town_ids) for _ in range(5)]:
+        db.listings[listing_id] = {"first_seen_at": db.now, "inactive_at": None, "is_active": True}
+        _place(db, listing_id, obec=563510)
+        db.scope_ids[(GEN, TOWN, listing_id)] = {"resolved_at": db.now - timedelta(hours=1)}
+    work = SqlWork(db, SCOPE, GEN, straggler_window=0, revive_slice=0, drift_slice=0,
+                   evidence_slice=0, parents={490245: 554782})
+    entered = [item.listing_id for item in work.claim(15) if item.feed == "entered"]
+    assert entered == [1290, 1291, 1292], "the overdue first, oldest first, before the town's 5"
+
+
+def test_the_entrant_order_reads_fewest_unread_blocks_first() -> None:
+    from autodedup.incremental_lane import ENTRANT_MAX_WAIT_S, entrant_order
+
+    hour = 3600.0
+    scan = [("okres:2", 7, "t", True, hour), ("okres:1", 9, "t", True, hour),
+            ("okres:2", 5, "t", True, hour), ("okres:3", 1, "t", True, hour),
+            ("okres:3", 2, "t", True, hour), ("okres:3", 3, "t", True, hour),
+            ("okres:1", 8, "t", False, 10.0),                       # inside the settle lag
+            ("okres:3", 9, "t", True, hour),                        # in two blocks, taken once
+            ("okres:4", 4, "t", True, ENTRANT_MAX_WAIT_S + hour),   # overdue
+            ("okres:4", 6, "t", True, None)]                        # never resolved
+    assert [lid for lid, _at in entrant_order(scan, 10)] == [6, 4, 9, 5, 7, 1, 2, 3]
+    assert [lid for lid, _at in entrant_order(scan, 3)] == [6, 4, 9]
 
 
 def test_a_listing_whose_location_resolves_into_the_scope_later_is_claimed() -> None:

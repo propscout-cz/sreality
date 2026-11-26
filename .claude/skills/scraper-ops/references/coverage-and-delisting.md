@@ -54,8 +54,8 @@ exception, no retry — so `penalize()` never fires and every rail we own stays
 quiet. Twenty-four such stalls consumed 143 of one 160-minute run, with zero
 errors recorded. Residential IP over 26 consecutive requests: no stall at all,
 0.62 pages/s against 0.047. Hence `IdnesClient.USE_PROXY` — but with
-`PROXY_REQUIRED = False`, because idnes only *degrades* without the proxy where
-ceskereality and mmreality hard-403, and the realtime worker skipping a slow
+`PROXY_REQUIRED = False`, because idnes only *degrades* without the proxy
+(ceskereality and mmreality require it), and the realtime worker skipping a slow
 portal would trade degraded data for none.
 
 **The amnesia, which was worse.** A walk starts at the first category's first

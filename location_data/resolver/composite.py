@@ -172,7 +172,9 @@ def _part_inside(
 
 def part_of(unit: AdminUnit, town: int, registry: RegistryView) -> AdminUnit | None:
     """The část a match binds (W5, Q1/Q2): a část itself; a KÚ the one část of its obec its
-    qualifier-free name spells ("Podolí u Mohelnice" -> Podolí); a MOMC or the obec nothing."""
+    qualifier-free name spells ("Podolí u Mohelnice" -> Podolí); a MOMC or the obec nothing.
+    A NAME is read as the place it spells; only a point is asked which units it lies in
+    (`katastr_part`)."""
     if unit.level == "cast_obce":
         return unit
     if unit.level != "katastralni_uzemi":
@@ -181,6 +183,16 @@ def part_of(unit: AdminUnit, town: int, registry: RegistryView) -> AdminUnit | N
     spelled = [u for u in _lookup(registry, key, ("cast_obce",))
                if town_code(u, registry) == town]
     return spelled[0] if len(spelled) == 1 else None
+
+
+def katastr_part(katastr_kod: int, town: int, registry: RegistryView) -> AdminUnit | None:
+    """The one část every door of the KÚ inside the town stands in (v5.11, the door rule, asked
+    for a precise pin's KÚ), else None: a KÚ with no door there, or with doors of two."""
+    parts = registry.katastr_parts(katastr_kod, town)
+    if len(parts) != 1 or parts[0] is None:
+        return None
+    chain = registry.admin_chain_by_code("cast_obce", parts[0])
+    return chain[0] if chain and town_code(chain[0], registry) == town else None
 
 
 def town_code(unit: AdminUnit, registry: RegistryView) -> int | None:
@@ -252,16 +264,27 @@ def _tokens(value: str) -> list[str]:
 #     sides: 1,001 register streets change key and no two streets of one obec share a key
 #     that did not share one before (per entry: csa 19, ceskoslovenske armady 45, nam 597, tr
 #     60, nabr 27, gen 85, kpt 126, plk 25, sidl 30 streets — 0 new collisions each).
-_ABBREVIATIONS = tuple((re.compile(rf"\b{short}\b"), full) for short, full in (
+_ABBREVIATION_PAIRS = (
     ("ceskoslovenske armady", "cs armady"), ("csa", "cs armady"), ("nam", "namesti"),
     ("tr", "trida"), ("nabr", "nabrezi"), ("gen", "generala"), ("kpt", "kapitana"),
-    ("plk", "plukovnika"), ("sidl", "sidliste")))
+    ("plk", "plukovnika"), ("sidl", "sidliste"))
+_ABBREVIATIONS = tuple((re.compile(rf"\b{short}\b"), full) for short, full in _ABBREVIATION_PAIRS)
 
 
 def fold_abbreviations(key: str) -> str:
     for pattern, full in _ABBREVIATIONS:
         key = pattern.sub(full, key)
     return key
+
+
+def abbreviation_spellings(key: str) -> frozenset[str]:
+    """Every spelling `fold_abbreviations` folds onto `key`'s fold: the raw `ruian_streets.name_norm` keys one name may
+    have, for a read that cannot fold the register's side as `register_street_keys` does (place_search, #2451)."""
+    folded = fold_abbreviations(key)
+    spellings = {folded}
+    for short, full in _ABBREVIATION_PAIRS:
+        spellings |= {re.sub(rf"\b{full}\b", short, s) for s in spellings}
+    return frozenset(s for s in spellings if fold_abbreviations(s) == folded)
 
 
 @dataclass(frozen=True, slots=True)

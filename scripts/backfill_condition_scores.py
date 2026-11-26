@@ -13,8 +13,8 @@ LLM spend crosses the cap, the loop exits cleanly with the in-flight
 listings preserved.
 
 Region scope: scoring targets the operator-enabled kraje stored in
-`app_settings.condition_scoring_enabled_region_ids` (admin_boundaries
-kraj ids, edited from the Settings page). `--region-ids` overrides that
+`app_settings.condition_scoring_enabled_region_ids` (RÚIAN kraj codes,
+edited from the Settings page). `--region-ids` overrides that
 list for a one-off run; listings outside the effective list — or with
 `region_id` NULL — are parked, not selected. An empty effective list
 pauses scoring.
@@ -48,7 +48,7 @@ def main() -> int:
     parser.add_argument(
         "--region-ids", default="",
         help=(
-            "Comma-separated list of admin_boundaries kraj ids to "
+            "Comma-separated list of RÚIAN kraj codes to "
             "include. Empty = the Settings-page enabled list "
             "(app_settings.condition_scoring_enabled_region_ids)."
         ),
@@ -216,7 +216,7 @@ _ENABLED_REGIONS_KEY = "condition_scoring_enabled_region_ids"
 
 
 def _enabled_region_ids(conn: Any) -> list[int]:
-    """Operator-enabled admin_boundaries kraj ids from app_settings.
+    """Operator-enabled RÚIAN kraj codes from app_settings.
 
     Missing row or empty array -> [] (scoring paused).
     """

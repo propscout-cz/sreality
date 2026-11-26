@@ -8,9 +8,10 @@ import {
   byDay,
   dayTitle,
   defaultSlot,
+  hasPassed,
+  isDayKey,
   neighbours,
   relativeDay,
-  scoped,
   sectionOrder,
   shortDay,
   slotInstant,
@@ -76,6 +77,7 @@ describe('the words', () => {
     expect(dayTitle('2026-10-24', '2026-10-23')).toBe('Zítra');
     expect(dayTitle('2026-10-22', '2026-10-23')).toBe('Včera');
     expect(dayTitle('2026-10-27', '2026-10-23')).toBe('úterý 27. října');
+    expect(dayTitle('2025-11-27', '2026-01-05')).toBe('čt 27. listopadu 2025');
   });
 });
 
@@ -90,20 +92,27 @@ describe('the order and the days', () => {
     expect(sectionOrder([plain, past, later, soon], now).map((n) => n.id)).toEqual([4, 3, 1, 2]);
   });
 
-  it('scopes to today on, groups by Prague day and finds the neighbouring days', () => {
+  it('groups by Prague day and finds the neighbouring days', () => {
     const all = [
       note(1, '2026-10-20T08:00:00Z'),
       note(2, '2026-10-23T12:00:00Z'),
       note(3, '2026-10-23T07:00:00Z'),
       note(4, '2026-10-23T22:30:00Z'), // 00:30 on the 24th in Prague
     ];
-    expect(scoped(all, 'upcoming', now).map((n) => n.id)).toEqual([2, 3, 4]);
-    expect(scoped(all, 'all', now)).toHaveLength(4);
     const days = byDay(all);
     expect([...days.keys()]).toEqual(['2026-10-20', '2026-10-23', '2026-10-24']);
     expect(days.get('2026-10-23')!.map((n) => n.id)).toEqual([3, 2]);
     expect(neighbours([...days.keys()], '2026-10-22')).toEqual({ prev: '2026-10-20', next: '2026-10-23' });
     expect(neighbours([...days.keys()], '2026-10-23')).toEqual({ prev: '2026-10-20', next: '2026-10-24' });
     expect(neighbours([...days.keys()], '2026-10-25')).toEqual({ prev: '2026-10-24', next: null });
+  });
+
+  it('knows a passed viewing to the minute and a real day key from a lookalike', () => {
+    expect(hasPassed('2026-10-23T07:59:00Z', now)).toBe(true);
+    expect(hasPassed('2026-10-23T08:00:00Z', now)).toBe(true);
+    expect(hasPassed('2026-10-23T08:01:00Z', now)).toBe(false);
+    expect(isDayKey('2026-10-23')).toBe(true);
+    expect(isDayKey('2028-02-29')).toBe(true);
+    for (const bad of ['2026-00-10', '2026-13-01', '2026-02-30', '2026-1-01', 'dnes']) expect(isDayKey(bad)).toBe(false);
   });
 });

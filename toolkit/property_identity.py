@@ -31,7 +31,6 @@ from location_data import operator_corrections
 from scraper.db import create_singleton_properties
 from scripts.recompute_property_stats import properties_changed
 from toolkit import property_carriers as carriers
-from toolkit.publication import CAP_SQL
 from toolkit.property_carriers import MergeSource, Route  # re-exported: callers read them here
 from toolkit.room_taxonomy import category_main_compatible
 
@@ -141,23 +140,23 @@ WHERE l.property_id = %(retired)s
 
 _REPOINT_SQL = "UPDATE listings SET property_id = %s WHERE property_id = %s"
 
-# One carry record row per curation row a step moved or folded (migration 589, MS14).
+# One carry record row per curation row a step moved or folded (migration 589, MS14). It keeps
+# whether the property the row came from was on the market as this merge saw it (migration 777):
+# written before the retire, so `is_active` is still that property's own rollup.
 _CARRY_SQL = """
 INSERT INTO property_merge_carries (merge_group_id, table_name, row_key, row_at, account_id,
-    from_property_id, to_property_id, kind, snapshot)
+    from_property_id, to_property_id, kind, snapshot, from_on_market)
 VALUES (%(group)s, %(table)s, %(row_key)s, %(row_at)s, %(account_id)s, %(from_property)s,
-        %(survivor)s, %(kind)s, %(snapshot)s)
+        %(survivor)s, %(kind)s, %(snapshot)s,
+        (SELECT p.is_active FROM properties p WHERE p.id = %(from_property)s))
 """
 
-# Publication never regresses on a merge, and never moves later (migration 668): a settled retired
-# property's stamp passes to a survivor not yet settled, only when that publishes the survivor
-# before its own cap would (the survivor is the oldest record, so the cap may have published it long
-# ago; a stamp younger than that would move its visibility forward, and tell a watchdog a property
-# it could already see).
+# Publication never regresses on a merge or a split (migrations 668/747): a published retired
+# property's stamp passes to a survivor not yet published, a published property's to the one a
+# split bears from it.
 _CARRY_SETTLED_SQL = (
     "UPDATE properties s SET settled_at = r.settled_at FROM properties r "
-    "WHERE s.id = %s AND r.id = %s AND s.settled_at IS NULL AND r.settled_at IS NOT NULL "
-    f"AND r.settled_at < s.first_seen_at + {CAP_SQL}"
+    "WHERE s.id = %s AND r.id = %s AND s.settled_at IS NULL AND r.settled_at IS NOT NULL"
 )
 
 # One statement touching `status` and `is_active` together: a retired property is never left
@@ -623,6 +622,8 @@ def merge_property_set(
                     "cluster_key": key, "generation": gen, "member_ids": members,
                     "verdict": "same", "note": f"operator merge {group}", "reasons": [],
                     "decided_by": str(decided_by)} for key, gen, members in sets])
+        # Inside this transaction on purpose: a return this merge makes is stamped at the instant its
+        # carry rows are (`api/notifications._HELD_AT_THE_RETURN` tells the two memberships apart by it).
         properties_changed(conn, [survivor, *retired])
 
     return {
@@ -838,6 +839,7 @@ def _born(
     (born,) = create_singleton_properties(conn, [listing_id])
     group = str(uuid.uuid4())
     with conn.cursor() as cur:
+        cur.execute(_CARRY_SETTLED_SQL, (born, current))
         cur.execute(_INGEST_GROUPING_SQL, {
             "group": group, "left": current, "born": born, "by": decided_by,
             "listing": listing_id, "reason": "split_new" if live else "ingest_grouping",

@@ -24,7 +24,8 @@
  * use open the ONE split dialog (`SplitPanel`, MS18) over every advert the page
  * shows, so a newcomer the lane merged in meanwhile refuses it (`stale`). */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { RegisterMark } from '@/components/register/RegisterMark';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
@@ -47,7 +48,7 @@ import {
 import { imageSrc } from '@/lib/imageUrl';
 import { areaKindOf } from '@/lib/measure';
 import { mergeOriginLabel, mergedAdvertsKeys, splitPlan } from '@/lib/mergedAdverts';
-import { portalBadge } from '@/lib/portals';
+import { advertLink, portalBadge } from '@/lib/portals';
 import { fetchListingsForListingIds } from '@/lib/queries';
 import { ROUTES, withQuery } from '@/lib/routes';
 import type { ImagePublic, ListingPublic, PropertySource } from '@/lib/types';
@@ -284,6 +285,7 @@ function MergedAdvertRow({
   }, [opened]);
   const panelId = `merged-advert-${source.id}`;
   const portal = portalBadge(source.source, source.source_url, 'long');
+  const link = advertLink(source);
   const facts = [
     detail?.area_m2 != null ? fmtArea(detail.area_m2, areaKindOf(detail.category_main)) : null,
     detail?.disposition ?? null,
@@ -351,9 +353,9 @@ function MergedAdvertRow({
               </span>
             </span>
           </button>
-          {source.source_url && (
+          {link && (
             <a
-              href={source.source_url}
+              href={link}
               target="_blank"
               rel="noopener noreferrer"
               aria-label={`Na portálu ${portal}`}
@@ -405,18 +407,22 @@ function MergedAdvertRow({
           />
           <div className="min-w-0 space-y-2">
             <dl className="grid max-w-[24rem] grid-cols-2 gap-x-3 gap-y-0.5 text-[0.75rem]">
-              {[
+              {([
                 ['Cena', priceLabel(source.price_czk, detail?.category_type)],
                 [
                   'Plocha',
                   detail ? fmtArea(detail.area_m2, areaKindOf(detail.category_main)) : '—',
                 ],
                 ['Dispozice', detail?.disposition ?? '—'],
-                ['Patro', fmtFloor(detail?.floor, detail?.total_floors) ?? '—'],
-              ].map(([label, value]) => (
+                [
+                  'Podlaží',
+                  fmtFloor(detail?.floor, detail?.total_floors) ?? '—',
+                  detail ? <RegisterMark key="mark" propertyId={source.property_id} adId={source.id} fact="floors" /> : null,
+                ],
+              ] as [string, string, ReactNode?][]).map(([label, value, mark]) => (
                 <div key={label} className="flex items-baseline justify-between gap-2">
                   <dt className="text-[var(--color-ink-4)]">{label}</dt>
-                  <dd className="font-mono tabular-nums text-[var(--color-ink-2)]">{value}</dd>
+                  <dd className="font-mono tabular-nums text-[var(--color-ink-2)]">{value}{mark}</dd>
                 </div>
               ))}
             </dl>
@@ -429,7 +435,7 @@ function MergedAdvertRow({
             )}
             <BrokerLine read={brokerRead} />
             {originRead && <OriginLine read={originRead} />}
-            {!source.source_url && (
+            {!link && (
               <p className="text-[0.75rem] text-[var(--color-ink-4)]">Odkaz na portál chybí</p>
             )}
           </div>

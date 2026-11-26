@@ -32,7 +32,7 @@ what tests/test_sql_placeholders.py exists to reject.
 
 from __future__ import annotations
 
-from autodedup.text_facts import MAX_CODE_POPULATION, MIN_CODE_LEN
+from autodedup.text_facts import MAX_CODE_POPULATION, MIN_CODE_LEN, STRUCTURED_CODE_PREFIXES
 
 # ---------------------------------------------------------------- clusters (the groups view)
 
@@ -192,8 +192,48 @@ WHERE c.generation = %(generation)s::text
            AND """
     + _VERDICT_MATCHES
     + """ AND v.applies))
+  -- HELD BY APPLY: the group's NEWEST ledger row that is not a dry run is not a merge. The
+  -- newest row and never any row, because a group skipped and then merged is not held; a
+  -- merge later undone is not a hold either. Driven from the ledger's few non-merge rows:
+  -- asking every group for its newest row took 3.3 s on 110k groups, this form 0.4 s.
+  AND (%(hold)s::text IS NULL OR c.cluster_key IN (
+       SELECT k.cluster_key
+         FROM (SELECT DISTINCT a0.cluster_key
+                 FROM autodedup.applied_merges a0
+                WHERE a0.generation = %(generation)s::text AND NOT a0.dry_run
+                  AND a0.outcome <> 'applied') k
+        CROSS JOIN LATERAL (
+               SELECT a.outcome, a.error
+                 FROM autodedup.applied_merges a
+                WHERE a.generation = %(generation)s::text AND a.cluster_key = k.cluster_key
+                  AND NOT a.dry_run
+                ORDER BY a.applied_at DESC, a.id DESC
+                LIMIT 1) h
+        WHERE h.outcome <> 'applied'
+          AND (%(hold)s::text = 'any' OR h.outcome = %(hold)s::text
+               OR (h.outcome = 'skipped' AND h.error = %(hold)s::text))))
 """
 )
+
+# WHY apply did not merge each group of one page: its newest non-dry-run ledger row when it
+# is not a merge. `plan_json` is apply's own plan, so the properties and the reason's detail
+# are the ones it judged, never a second reading of the group.
+HOLD_COLUMNS: tuple[str, ...] = (
+    "cluster_key", "outcome", "reason", "held_at", "property_ids", "detail",
+)
+GROUP_HOLDS_SQL = """
+SELECT k.cluster_key, h.outcome, h.error, h.applied_at,
+       h.plan_json -> 'property_ids', h.plan_json -> 'detail'
+  FROM unnest(%(keys)s::bigint[]) AS k(cluster_key)
+ CROSS JOIN LATERAL (
+       SELECT a.outcome, a.error, a.applied_at, a.plan_json
+         FROM autodedup.applied_merges a
+        WHERE a.generation = %(generation)s::text AND a.cluster_key = k.cluster_key
+          AND NOT a.dry_run
+        ORDER BY a.applied_at DESC, a.id DESC
+        LIMIT 1) h
+ WHERE h.outcome <> 'applied'
+"""
 
 # Default sort: the WEAKEST accepted edge first, because that is where the errors live (§8).
 # `min_edge_score` is nullable (a singleton cluster has no edge), so the sort key coalesces to
@@ -877,10 +917,12 @@ _RESIDUAL_PHOTOS = (
 
 
 def _order_code(ref: str) -> str:
-    """`listings.ad_reference` as one comparable code: portal prefix and spaces dropped, upper-cased."""
+    """`listings.ad_reference` as one comparable code: portal prefix and spaces dropped, upper-cased.
+    The engine's twin is `text_facts.structured_code`."""
     return (
         f"upper(regexp_replace(regexp_replace(regexp_replace(btrim({ref}),"
-        " '^(IDNES|REALITYMIX)-', '', 'i'), '^ID\\s+', '', 'i'), '\\s', '', 'g'))"
+        f" '^({'|'.join(STRUCTURED_CODE_PREFIXES)})-', '', 'i'), '^ID\\s+', '', 'i'),"
+        " '\\s', '', 'g'))"
     )
 
 

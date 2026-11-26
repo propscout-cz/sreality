@@ -39,21 +39,17 @@ from pathlib import Path
 import pytest
 
 from api.location_filter import LEVEL_COLUMN
+from tests._read_contract import (
+    QUERIES_TS,
+    _latest_migration_defining,
+    _latest_migration_matching,
+    _projection_columns,
+    _sortable_fields,
+    _strip_comments,
+)
 from toolkit.filter_registry import REGISTRY, Agenda
 
-REPO = Path(__file__).resolve().parents[1]
-MIGRATIONS = REPO / "migrations"
-QUERIES_TS = REPO / "frontend" / "src" / "lib" / "queries.ts"
-BROWSE_SORT_TS = REPO / "frontend" / "src" / "lib" / "browseSort.ts"
 GATE_CALL = re.compile(r"publication_gate_enabled\s*\(\s*\)", re.IGNORECASE)
-# Strip line comments so a comment that merely *describes* the bad pattern
-# ("...a BARE call: publication_gate_enabled()...") isn't flagged. `--` covers
-# SQL, `#` covers Python sources that embed build SQL.
-LINE_COMMENT = re.compile(r"(--|#).*$", re.MULTILINE)
-
-
-def _strip_comments(src: str) -> str:
-    return LINE_COMMENT.sub("", src)
 
 
 def _assert_no_gate(raw: str, where: str) -> None:
@@ -72,26 +68,6 @@ def _assert_no_gate(raw: str, where: str) -> None:
         f"longer exists, so this cannot even resolve. It was also a SECURITY DEFINER "
         f"call the planner cannot inline — how PR-#707 turned one predicate into ~87k "
         f"per-row evaluations. Context: ...{sql[max(0, m.start() - 40):m.end() + 5]!r}"
-    )
-
-
-def _latest_migration_matching(pattern: str, what: str) -> Path:
-    pat = re.compile(pattern, re.IGNORECASE)
-    hits = [p for p in MIGRATIONS.glob("*.sql") if pat.search(p.read_text())]
-    assert hits, f"no migration defines {what}"
-    # Numeric prefix orders them; the highest-numbered is the effective one.
-    return max(hits, key=lambda p: int(p.name.split("_", 1)[0]))
-
-
-def _latest_migration_defining(view: str) -> Path:
-    # `(public\.)?` is load-bearing: migration 425 writes
-    # `create or replace view public.properties_public`, and without the optional
-    # schema prefix this resolved the "effective" definition to migration 375 —
-    # one column stale, so the read-contract check below was reading the wrong
-    # select list. Found while removing the gate (2026-09-05).
-    return _latest_migration_matching(
-        rf"create\s+(or\s+replace\s+)?(materialized\s+)?view\s+(public\.)?{re.escape(view)}\b",
-        view,
     )
 
 
@@ -281,53 +257,12 @@ def test_the_effective_list_definition_carries_the_published_rule() -> None:
 
 # ------------------------------------------------------------- read contract --
 
-def _projection_columns() -> set[str]:
-    """Parse browse_projection's output column names from its latest migration.
-    Paren-depth-aware split of the top-level SELECT list; alias = the `as X`
-    name when present, else the token after the final dot."""
-    src = _strip_comments(
-        _latest_migration_defining("browse_projection").read_text()
-    ).lower()
-    start = src.index("view browse_projection as")
-    body = src[start:]
-    body = body[body.index("select") + len("select"):]
-    body = body[: re.search(r"\n\s*from properties", body).start()]
-    items, depth, cur = [], 0, []
-    for ch in body:
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-        if ch == "," and depth == 0:
-            items.append("".join(cur))
-            cur = []
-        else:
-            cur.append(ch)
-    items.append("".join(cur))
-    cols: set[str] = set()
-    for item in items:
-        item = " ".join(item.split())
-        m = re.search(r"\bas\s+([a-z_0-9]+)\s*$", item)
-        if m:
-            cols.add(m.group(1))
-        else:
-            cols.add(item.rsplit(".", 1)[-1].strip())
-    return cols
-
-
 def _ts_string_const(name: str) -> str:
     """Extract a `const NAME = '...' + '...';` string constant from queries.ts."""
     src = QUERIES_TS.read_text()
     m = re.search(rf"const {name} =([^;]+);", src)
     assert m, f"queries.ts: const {name} not found"
     return "".join(re.findall(r"'([^']*)'", m.group(1)))
-
-
-def _sortable_fields() -> set[str]:
-    src = BROWSE_SORT_TS.read_text()
-    m = re.search(r"const SORTABLE_FIELDS[^;]+;", src)
-    assert m, "browseSort.ts: SORTABLE_FIELDS not found"
-    return set(re.findall(r"'(\w+)'", m.group(0)))
 
 
 # Columns applyFilters / districtsFilterClause / applyPrefilters dispatch on

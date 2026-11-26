@@ -14,7 +14,7 @@ import pytest
 
 from api.broker_board import MIXED_CATEGORY, OUTCOME_SELECTED, BoardArgs, board
 from scripts.recompute_property_stats import properties_changed
-from tests._live_property import REQUIRED_DB, _advert, _property
+from tests._live_property import REQUIRED_DB, _advert, _mirror_unit, _property, _snapshot
 from tests.test_location_ad_readers_live import _placed
 from toolkit import brokers
 from toolkit.measures import wilson_lower
@@ -159,8 +159,7 @@ def test_a_brokers_own_numbers_are_the_boards_over_every_category(cur: Any, seed
     """Ruling 4: the dossier, search and Outreach read the broker's book, which over every category is the unfiltered
     board's count, any status and active (every seed is served); by region (a property without one counts only in the
     totals) and by category; a firm counts the brokers its filter selects."""
-    cur.execute("INSERT INTO admin_boundaries (id, level, name, geom) VALUES (999102, 'kraj', 'Lp kraj', "
-                "ST_Multi(ST_MakeEnvelope(15, 49.5, 15.1, 49.6, 4326))::geography)")
+    _mirror_unit(cur, "kraj", 999102, "Lp kraj", (15, 49.5, 15.1, 49.6))
     cur.execute("SELECT property_id FROM broker_book WHERE broker_id = %s", (seeded["C"],))
     c_pids = [r[0] for r in cur.fetchall()]
     cur.execute("UPDATE listing_location SET kraj_kod = 999102 WHERE listing_id IN "
@@ -213,3 +212,33 @@ def test_a_brokers_own_numbers_are_bounded_reads_too(cur: Any, monkeypatch: pyte
     monkeypatch.setattr(outreach, "footprint", lambda c, _: c.execute(_BOUND_PROBE))
     with pytest.raises(psycopg.errors.DivisionByZero):
         outreach._broker_context(cur.connection, broker_id)
+
+
+def test_the_inventory_is_the_brokers_book_one_row_per_property(cur: Any, seeded: dict[str, int]) -> None:
+    """`broker_properties`: a row per property of the book that Browse serves, however many ads the broker runs on
+    it, with the broker's own status and portals; live spells first; the type and the deal narrow it; pages join
+    without a repeat."""
+    rows = brokers.broker_properties(cur.connection, seeded["B"])["data"]
+    assert len(rows) == 4 and all(r["is_active"] for r in rows)
+    both = [r for r in rows if r["all_sources"] == ["idnes", "sreality"]]
+    assert [r["active_sources"] for r in both] == [["sreality"]]
+    # No priced snapshot of the broker's own yet: no price and no change, whatever the property's row says.
+    assert {(r["price_czk"], r["price_change_pct"], r["price_change_count"]) for r in rows} == {(None, None, 0)}
+
+    every = brokers.broker_properties(cur.connection, seeded["C"])["data"]
+    assert [r["is_active"] for r in every] == [True, True, True, False]
+    cur.execute("SELECT l.id, l.property_id FROM listings l JOIN broker_identities bi ON bi.id = l.broker_identity_id "
+                "WHERE bi.broker_id = %s AND l.category_type = 'pronajem'", (seeded["C"],))
+    ad, pid = cur.fetchone()
+    _snapshot(cur, ad, 25_000, 30 * 24)
+    _snapshot(cur, ad, 20_000, 10 * 24)
+    properties_changed(cur.connection, [pid])
+    rent = brokers.broker_properties(cur.connection, seeded["C"], category_type="pronajem")["data"]
+    assert [(r["property_id"], r["price_czk"], r["price_change_pct"], r["price_change_count"]) for r in rent] == [
+        (pid, 20_000, pytest.approx(-20.0), 1)]
+
+    first = brokers.broker_properties(cur.connection, seeded["C"], limit=3)
+    last = brokers.broker_properties(cur.connection, seeded["C"], limit=3, after=tuple(first["metadata"]["next_after"]))
+    assert [r["property_id"] for r in (*first["data"], *last["data"])] == [r["property_id"] for r in every]
+    assert last["metadata"]["next_after"] is None
+

@@ -14,25 +14,13 @@ from api.capabilities.entry import Caller
 from api.capabilities.schema import portable
 from api.filter_args import agenda_ids
 from tests.api._script_conn import ScriptConn
-from tests.api.test_capabilities_census import _distinct
+from tests.api._tool_fixtures import _distinct, head, is_board
 from toolkit import filter_registry as fr
 from toolkit.measures import EXIT_CLEAN_SINCE, EXIT_MARGIN_DAYS, wilson_lower
 from toolkit.stats_registry import MIN_N
 
 # The board's own options, beside the registry filters (frontend/src/lib/brokerBoard.test.ts pins the same names).
 OPTIONS = {"bounds", "circle", "horizon_days", "sort", "min_properties", "limit", "firm_ids", "broker_id"}
-
-
-def is_board(sql: str) -> bool:
-    return "FROM c JOIN broker_book b USING (property_id)" in sql
-
-
-def head(**over: Any) -> dict[str, Any]:
-    """The board statement's one row with no broker: the cohort's totals."""
-    return {"cohort_properties": 0, "mixed_main": False, "mixed_type": False, "data_freshness": None,
-            "uncovered_portals": [], "attributed_properties": 0, "market_exited": 0, "market_not_exited": 0,
-            "market_unknown": 0, "broker_id": None, "properties": None, "exited": None, "not_exited": None,
-            "unknown": None, **over}
 
 
 def _row(broker: int, properties: int, exited: int, not_exited: int, unknown: int = 0, **totals: Any) -> dict:

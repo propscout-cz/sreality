@@ -607,17 +607,19 @@ def test_the_cached_view_answers_every_question_the_protocol_declares():
     assert not missing, missing
 
 
-def test_the_protocol_is_twelve_questions():
+def test_the_protocol_is_fourteen_questions():
     """Fifteen query kinds became nine: three went with the engines they served, one with an
     unreachable rung, one with the epoch, and two folded into `admin_chain`. A question added
-    back is a round trip per listing, and each of the three that were earns its one:
+    back is a round trip per listing, and each of the five that were earns its one:
     `nearest_obec_within` is BIND's last rung, the thing that keeps a border pin from having
     no town (rule 25); `street_point` (W18) is the whole of "a bound street decides the
     point", asked for the WINNER only and cached per STREET; `part_point` (MF PR-B's door
     rule, v5.8's position) is the same derivation over a část obce's doors, asked ONLY for a
     row bound to a část that no pin placed or whose obec spans several KÚ, once per část per
     run — every other `katastr_kod` answer rides a read FILL already makes (the address
-    point, the street point, the chain)."""
+    point, the street point, the chain). v5.11's two (operator ruling B, 2026-11-24):
+    `katastr_at` is asked only of a precise pin on a row the words bound to its town only, and
+    `katastr_parts` (the door rule, KÚ -> část) only for such a row, once per KÚ and town per run."""
     from location_data.resolver.types import RegistryView
 
     declared = {
@@ -628,7 +630,7 @@ def test_the_protocol_is_twelve_questions():
         "address_point", "address_points_by_number", "streets_in_obec",
         "admin_units_by_name", "admin_chain", "admin_chain_by_code",
         "obec_codes_for_psc", "containing_obec", "in_czechia_polygon",
-        "nearest_obec_within", "street_point", "part_point",
+        "nearest_obec_within", "street_point", "part_point", "katastr_at", "katastr_parts",
     }
     for gone in ("parcels", "distance_to_admin_boundary_m",
                  "cast_obce_for_point", "cast_obce_extent_m", "admin_unit",
@@ -690,12 +692,12 @@ def test_the_cache_memory_rail_cannot_change_an_answer():
 
 def test_a_name_is_asked_once_however_many_ways_it_is_narrowed():
     """The level tuple used to be part of the key, so `praha` asked for `('obec',)`, then for
-    `('obec','cast_obce','momc','zsj')`, then unnarrowed, was three round trips for one
+    `('obec','cast_obce','momc')`, then unnarrowed, was three round trips for one
     immutable answer. One query, narrowed in Python."""
     inner = _CountingMirror()
     view = resolve_db.CachedRegistryView(inner, resolve_db.RunCache())
     view.admin_units_by_name("praha", levels=("obec",))
-    view.admin_units_by_name("praha", levels=("obec", "cast_obce", "momc", "zsj"))
+    view.admin_units_by_name("praha", levels=("obec", "cast_obce", "momc"))
     view.admin_units_by_name("praha")
     view.admin_units_by_name("praha", levels=("katastralni_uzemi",))
     assert inner.calls == 1

@@ -151,6 +151,31 @@ def test_product_skew_is_a_trend_signal_not_a_page():
     assert not item.ok and item.route == "digest" and not item.blocking
 
 
+def test_the_okres_partition_holds_when_the_pack_fills_prahas_csv_gap():
+    item = load_assertions.okres_partition({554782: None, 563889: 3505},
+                                           {554782: 9999, 563889: 3505}, {9999, 3505})
+    assert item.ok and item.blocking
+
+
+def test_an_obec_with_no_okres_in_the_pack_fails_the_partition():
+    item = load_assertions.okres_partition({554782: None}, {}, {9999})
+    assert not item.ok and item.blocking
+    assert "1 obce" in item.actual and "554782" in item.actual
+
+
+def test_a_pack_okres_outside_okresy_p_fails_the_partition():
+    item = load_assertions.okres_partition({554782: None}, {554782: 9999}, {3505})
+    assert not item.ok and item.blocking
+    assert "9999" in item.actual
+
+
+def test_csv_pack_disagreements_are_counted_never_blocking_and_a_blank_is_none():
+    csv = {554782: None, 563889: 3505, 500011: 3100}
+    pack = {554782: 9999, 563889: 3505, 500011: 3608}
+    assert load_assertions.okres_csv_disagreements(csv, pack) == [(500011, 3100, 3608)]
+    assert load_assertions.okres_partition(csv, pack, {9999, 3505, 3608}).ok
+
+
 def test_golden_constants_match_the_recon_corpus():
     assert krovak.GOLDEN_KOD_ADM == 21690278
     assert krovak.GOLDEN_KROVAK_POSITIVE == (744384.54, 1042569.73)

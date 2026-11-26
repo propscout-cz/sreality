@@ -15,21 +15,31 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 
 import Panel from '@/components/Panel';
+import { SegmentedBar } from '@/components/controls';
+import SaveContactButton from '@/components/SaveContactButton';
+import BrokerAvatar from '@/components/phone/BrokerAvatar';
+import { ContactAddIcon } from '@/components/phone/phoneIcons';
 import DayRule from '@/components/phone/DayRule';
 import { CardRoll } from '@/components/phone/CardRoll';
 import { RollEmpty, RollSkeleton } from '@/components/phone/RollParts';
+import { brokerContact } from '@/lib/brokerContact';
 import { browseKeys } from '@/lib/browseKeys';
 import {
+  BROKER_PRICE_SCOPES,
+  categoryShareLabel,
   contactState,
   fetchBrokerDossier,
+  useBrokerPriceSlice,
   prettyPhone,
+  telHref,
   type BrokerCategoryShare,
   type BrokerMembership,
+  type BrokerPriceFigures,
+  type BrokerPriceScope,
   type BrokerPublic,
   type BrokerRegionShare,
   type ContactState,
 } from '@/lib/brokers';
-import { categoryMainLabelPlural, categoryTypeLabel } from '@/lib/enums';
 import { FEED_ALL_FILTERS, dayRuleLabel, pragueDayKey } from '@/lib/feed';
 import type { ListingFilters } from '@/lib/filters';
 import { COPY_WORDS, copyText } from '@/lib/clipboard';
@@ -42,7 +52,6 @@ import { ROUTES } from '@/lib/routes';
 import { useInfiniteList } from '@/lib/useInfiniteList';
 import { useListHold } from '@/lib/useListHold';
 
-import { Initials } from './PhoneBrokers';
 
 const MASKED_TITLE = 'Kontakt je viditelný jen pro administrátory.';
 
@@ -108,6 +117,9 @@ export default function PhoneBrokerDetail() {
       <Facts b={b} />
       {/* Section cards like the phone property page's (operator ruling 2026-10-28). */}
       <div className="space-y-4 border-t border-[var(--color-rule)] p-4">
+        <Panel title="Změna ceny">
+          <PriceChange figures={dossier.price_change} />
+        </Panel>
         <Panel title="Působnost">
           <Footprint shares={dossier.region_shares} />
           <Types rows={dossier.categories} />
@@ -125,7 +137,7 @@ function Dossier({ b }: { b: BrokerPublic }) {
   return (
     <header className="px-4 pb-4 pt-5">
       <div className="flex items-center gap-3">
-        <Initials name={b.display_name} size="lg" />
+        <BrokerAvatar name={b.display_name} size="lg" />
         <div className="min-w-0">
           <h2 className="font-display text-[22px] font-medium leading-[1.15] tracking-[-0.01em] text-[var(--color-ink)]">
             {b.display_name ?? 'Neznámý makléř'}
@@ -143,7 +155,30 @@ function Dossier({ b }: { b: BrokerPublic }) {
       )}
       <PhoneLine state={contactState(b.primary_phone, b.has_phone)} />
       <EmailLine state={contactState(b.primary_email, b.has_email)} />
+      <SaveContact b={b} />
     </header>
+  );
+}
+
+/* "Uložit kontakt" (lib/brokerContact): the .vcf the property page's broker strip saves;
+ * nothing while the contact is masked. */
+function SaveContact({ b }: { b: BrokerPublic }) {
+  const contact = brokerContact({
+    brokerId: b.broker_id,
+    name: b.display_name,
+    firm: b.firm_name ?? b.firm_domain,
+    phone: b.primary_phone,
+    email: b.primary_email,
+  });
+  if (!contact) return null;
+  return (
+    <SaveContactButton
+      contact={contact}
+      className="mt-2 inline-flex h-9 items-center gap-2 text-[13px] font-medium text-[var(--color-copper)]"
+    >
+      <ContactAddIcon className="h-4 w-4" />
+      Uložit kontakt
+    </SaveContactButton>
   );
 }
 
@@ -179,7 +214,7 @@ function PhoneLine({ state }: { state: ContactState }) {
     <div className="mt-4 flex items-center justify-between gap-2 rounded-[var(--radius-sm)] border border-[var(--color-rule)] bg-[var(--color-inset)] py-1 pl-3 pr-1">
       <a
         ref={numRef}
-        href={`tel:${pretty.replace(/\s/g, '')}`}
+        href={telHref(state.value)}
         aria-label={`Zavolat ${pretty}`}
         className="min-w-0 select-all truncate font-mono text-[15px] tabular-nums text-[var(--color-ink)]"
       >
@@ -272,6 +307,22 @@ function NumberRows({ rows }: { rows: Array<{ key: string | number; label: strin
   );
 }
 
+/* The desktop tile's figures (lib/brokers useBrokerPriceSlice), one slice at a time. */
+function PriceChange({ figures }: { figures: Record<BrokerPriceScope, BrokerPriceFigures> }) {
+  const { scope, setScope, share, median, hint } = useBrokerPriceSlice(figures);
+  return (
+    <div>
+      <SegmentedBar fill tone="phone" label="Změna ceny podle stavu" options={BROKER_PRICE_SCOPES} value={scope}
+        onChange={setScope} />
+      <p className="mt-3 font-mono text-[20px] leading-none tabular-nums text-[var(--color-ink)]">
+        {share}
+        {median && <span className="text-[13px] text-[var(--color-ink-3)]"> · {median}</span>}
+      </p>
+      <p className="mt-1.5 text-[12px] text-[var(--color-ink-3)]">{hint}</p>
+    </div>
+  );
+}
+
 function SubHead({ label, aside }: { label: string; aside?: string }) {
   return (
     <p className="mb-1.5 flex items-baseline justify-between gap-2 text-[12px] text-[var(--color-ink-3)]">
@@ -312,12 +363,7 @@ function Types({ rows }: { rows: BrokerCategoryShare[] }) {
         <NumberRows
           rows={rows.map((c) => ({
             key: `${c.category_main ?? ''}|${c.category_type ?? ''}`,
-            label: [
-              c.category_main ? categoryMainLabelPlural(c.category_main) : 'Ostatní',
-              c.category_type ? categoryTypeLabel(c.category_type).toLowerCase() : null,
-            ]
-              .filter(Boolean)
-              .join(' · '),
+            label: categoryShareLabel(c),
             value: <Pair active={c.active_properties} total={c.properties} />,
           }))}
         />

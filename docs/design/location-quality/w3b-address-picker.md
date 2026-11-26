@@ -15,7 +15,9 @@ this block records where the build differs and what it measured.
     next statement, inside the claim transaction (a detach or merge, which lock it `FOR UPDATE`, waits, so
     a pick never lands on an ad that just left), then resolves the location ad, reads it back and sets
     `held`. The route only maps it to HTTP.
-  - `_DOOR_LABEL_SQL` has no `LIMIT`: `kod_adm` is the mirror's primary key.
+  - `_DOOR_LABEL_SQL` has no `LIMIT`: `kod_adm` is the mirror's primary key. (Since #2451 it is
+    `DOOR_LABEL_SQL` in `location_data/place_search.py`, shared with own place search's door rows; `api/maps.py`
+    imports it.)
   - The phone's location query keys are one factory, `propertyLocationKeys` (`phone/propertyLocation.ts`),
     which the picker invalidates.
   - The door's orientation letter must equal the pick's when the pick names a číslo orientační (no letter

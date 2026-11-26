@@ -178,7 +178,7 @@ is read from its own table; the two domains stay separate.
 
 ## 2026-09-30 — the realtime worker cannot freeze silently (shipped with this PR)
 
-The worker went silent 2026-09-29 23:42 → 07:22 UTC without exiting: ceskereality 403s pushed
+The worker went silent 2026-09-29 23:42 → 07:22 UTC without exiting: penalties pushed
 the shared rate ledger an hour ahead, abandoned probe/drain passes leaked a thread each into the
 default executor until it filled, and the heartbeat starved behind them while the loop lived on.
 Fixed in one PR: a watchdog thread that `os._exit(1)`s after 300 s without a finished beat or a
@@ -188,7 +188,7 @@ all seven locks through one `_PassLock` whose age keeps a wedged lane in `in_fli
 worker's probe, drain and sold_comps refuse (never park on) a ledger wait over 120 s, and its
 drain refuses past its deadline, while the Actions walks and drains stay unbounded; the retry
 after a 403 leases one slot and a drain's lease is sized to its claims. Detail: `docs/design/realtime-scrapers.md` § Liveness.
-- **Next:** a per-portal circuit breaker (stop re-probing a portal that 403s everything), Health
+- **Next:** a per-portal circuit breaker (stop re-probing a portal whose every request fails), Health
   alerts on `budget_refused` / `portal_rate_state.next_slot_at` running ahead, and a standing
   `faulthandler` timer for a GIL-holding stall the watchdog thread cannot see.
 
@@ -1103,3 +1103,133 @@ Migration drift reads 643 and 663 Not measured (a drop declares nothing it can p
 - **Excluded:** the 20 autodedup decision modules (`incremental.DECISION_MODULES`; a byte edit moves the live engine
   digest), held equal to that tuple by `tests/test_ruff_config.py`. **Next:** lint them with the next real engine
   change; a second rule tier (B023, B904, PLE) is a ruling.
+
+## 2026-11-02 — drop migrations are probed for absence (#2237, R6a of #2207; shipped with this PR)
+
+- **`migration_drift`** now reads what a file drops as well as what it creates, in one probe statement: a still-present
+  drop is Watch ("Drop not applied: N of M dropped objects still exist; apply it once its last reader is live"), never
+  Problem, because destructive applies follow their deploy by design. Functions stay out (the probe matches by name).
+- **`apply_migration_receipt`** exits 1 on a still-present drop and closes with one notice line: "receipt OK: N
+  present, M dropped-absent", or UNVERIFIABLE. The hollow "0 objects" line is gone.
+- **The parser reads every clause of an ALTER TABLE**, so 590's many-clause re-add of 561's columns counts as a
+  re-creation. Over a full local replay of all 735 files, no expected-absent object exists.
+- **Today's window starts at 692**, past the spec's examples: drop-only 707 and 719 become measured, and 693, 697, 699
+  and 703 gain absence probes. 679, 686, 687, 688 and 689 have left the window; a read of production on 11-02 found
+  their drops, and every drop and create in the window, as expected.
+- **Deleted:** the duplicate drift suite in the harness tests (the platform checks' suite covers it).
+
+## 2026-11-05 — the database can change size without breaking (#2404, #2405, #2406; shipped with this PR)
+
+- **Why:** the operator downsized Supabase 2XL → Large on 11-04 20:23Z to stop paying for idle capacity. The hot set
+  (~29 GB) no longer fit in 8 GB: about 238 statement timeouts in 7 h. The engine stalled on an exact row count of
+  `pairs`, text extraction failed about one pass in three, and the publishing, dedup and coverage checks went
+  "Not measured". The operator went back to 2XL at 11-05 03:40Z and ruled that sizes must switch "2–3 times a
+  month … without coding or breaking things".
+- **Shipped:**
+  - The engine reports estimated row counts for its report-only tables (#2404).
+  - Location refetch has a 600 s read (#2405).
+  - The Health checks' scans and budgets fit a smaller instance (#2406).
+  - One reading, `scripts/coordinator/compute_reading.sql` (`LOAD` / `STRAINED` / `QUIET`), and the switch
+    procedure: `.claude/skills/database/references/compute-size.md`.
+  - Text extraction walks the last 24 h every pass and the archive 25k ads a pass. Before, every pass walked all
+    217k bazos ads: 600k buffers, 27 statement timeouts on Large. The heaviest pass is now 215k buffers. Every
+    text change, a reparse heal included, is still re-read, within ~45 min (ruling 2026-11-05).
+- **Next:**
+  - One supervised Large trial on a quiet day; until it holds, Large is unproven on the current data.
+
+## 2026-11-14 — Browse rebuild hourly; the cap's releases reach Browse through the dirty queue (#2505, spec #2503)
+
+- **Why:** on Large the */15 Browse rebuild was the largest reader measured (96 runs a day at 320–400 s; 23.5 % of
+  shared-block reads in the 11-13 one-hour diff). Operator ruling 2026-11-14: hourly, paired with a `dirty_properties`
+  entry for every property the 6 h cap publishes; new-property freshness must not get worse than the ~22 min of before.
+- **Shipped:** migration 740 (`browse-list-rebuild` at `45 * * * *` as a fresh pg_cron job, so Health judges it on
+  hourly history; `derived_artifacts.browse_list` 130 min) and the maintenance pass's `_enqueue_published`: a cap
+  release is in Browse ~30 s after its 6 h mark. The daily sweep, which holds the lease the pass needs (up to its
+  6,000 s budget on Large), runs the same enqueue and drain after each batch. Apply 740 only after the code is live
+  on the worker.
+- **Cost:** what reaches Browse only through the rebuild (a resolver re-place of an older property, the operator's
+  location corrections included; city proximity; `tom_days`; a non-new patch a swap superseded) waits up to ~65 min
+  instead of ~22.
+- **Next:** let Health see a failed enqueue. A property published over ~10 min ago and still missing from
+  `browse_list` reads as the expected `unpublished` stage until the next rebuild starts (up to ~65 min), so a broken
+  `_enqueue_published` would only warn in the worker log. Proposal: judge `unpublished` at
+  `greatest(<newest rebuild start>, now() - 10 min)` in `scripts/checks/publishing.py`, or count the enqueue in the
+  pass result and heartbeat.
+
+## 2026-11-15 — Health budgets that fit Large, a cheaper delisting read, a stale alarm for gauges (#2512 of #2503; shipped with this PR)
+
+- **Why:** on Large (11-11 to 11-13) publishing timed out in 74 % of runs, delisting in 29 %, description reading in
+  83 %, and the location scorecard went 34.8 h unmeasured with no incident: the watcher's `stale:<key>` judged alarms
+  only.
+- **Shipped:** publishing and delisting every 30 min on 75 s, description reading every 6 h on 120 s (registry
+  constants); the in-dwell read drops a gone verdict older than the ad's latest flip before probing listings (42k probes
+  to 11k, 171k buffers to 49k, the same 6,050 ads, read on production 11-14); migration 745 gives every gauge a
+  `stale:<key>` cell on its own budget (three cadences on the worker: 18 h for a 6-hourly gauge).
+- **Next:** read each key's timed-out share and the `stale:` onsets for 24 h after the deploy; move the photo-tags
+  cohort to its own key only if publishing stays above 10 % timed out.
+
+## 2026-11-15 — a given-up photo download is terminal; the images claim stops walking it (#2510, spec #2503)
+
+- **Why:** a photo whose download failed 5 times kept `unavailable_reason` NULL, so it stayed in
+  `images_pending_actionable_idx` and every images claim walked it: 26,648 of the index's 26,680 rows (99 % iDNES on
+  inactive ads), 23,232 buffers to return 24 rows, a 4.7 s mean in a cold hour on Large.
+- **Shipped:** `db.mark_image_attempt` writes the terminal `unavailable_reason = 'download_given_up'` on the fifth
+  failed attempt, and migration 742 labels the rows already given up; a labelled row leaves the partial index. The
+  claim and `photo_assessment` keep their `download_attempts < 5`, so the code and 742 land in either order without a
+  given-up photo being fetched again. A gone sreality ad still relabels its given-up photos `listing_taken_down`, and a
+  detail refetch re-arms any unstored photo, as before.
+- **Next:** after 742 is applied, confirm in an hour-later `pg_stat_statements` diff that the claim's buffers fell,
+  and again after images autovacuum empties the index's leaf pages (n_dead_tup 3.11M of a ~3.39M threshold on 11-15).
+
+## 2026-11-16 — the sweep rewrites only a changed row; 744 drops 15 never-read indexes and two retired lease tables (#2514, spec #2503)
+
+- **Why:** the property rollup rewrote every row it recomputed, the ~470k inactive properties the daily sweep reaches
+  among them, whether or not a value moved. Fifteen indexes (645 MB) were never read in at least 95 days while every
+  write still maintained them, and two lease tables stayed behind after the 11-03 move to `scheduled_jobs` (#2267,
+  #2273).
+- **Shipped:** `scripts/recompute_property_stats.py` renders the rollup's SET list and its IS DISTINCT FROM guard from
+  one dict, so a batch writes only the rows whose rollup changed (ids 600001–601000: 650 rows to 97, read on
+  production); the dirty-set drain runs the same text. The unused `db.mark_properties_dirty` goes. Migration 744 drops
+  the fifteen indexes CONCURRENTLY and the two tables (destructive half: the operator's yes, 2026-11-16); it applies
+  before the merge, through `apply_migration.yml`; revert: `migrations/reverts/744_revert_dead_indexes_and_lease_tables.sql`.
+- **Cost:** `properties.stats_computed_at` now dates the last change, not the last recompute (nothing reads it), and
+  the `property_sweep` artifact's `last_rows` counts rewritten rows (displayed, never judged).
+- **Next:** measure the WAL, full-page-write and vacuum saving: snapshot pg_stat_wal and the properties table's
+  n_tup_upd / n_tup_hot_upd around the 03:00 sweep the night before the deploy and the night after.
+  `listings_is_active_last_seen_at_idx` stays for #2511: the delisting orphan nomination still reads it, so it drops
+  only after that query's plan without it is measured off production.
+
+## 2026-11-16 — listings drops its (is_active, last_seen_at) index; the walk's touch can be a HOT update (#2511, spec #2503)
+
+- **Why:** `listings_is_active_last_seen_at_idx` was the one listings index on `last_seen_at`, which every index-walk
+  touch rewrites, so no touch could be a HOT update (0.4 % of listings' updates were HOT, read 11-16). Operator ruling
+  2026-11-16: drop it.
+- **Shipped:** migration 743, `drop index concurrently`, no code change. Apply first (workflow, `--ref` the branch),
+  then merge.
+- **Cost (read on production 11-16, 2XL):** the delisting orphan nomination (`db.orphan_candidates`) goes from ~0.1 s
+  to ~0.4 s a call warm (~1.3 s partly cold), the same rows, a few calls a day. Every other reader used the index only
+  as an `is_active` index, i.e. read the whole active set; each such read takes the partial
+  `listings_subtype_active_idx` instead, in about the same time and, where measured, half the buffers. The ones read
+  in the plans: Health's unnominated count, Coverage's held count, the `location_position_mv` refresh, comparables
+  with `max_age_days`, the location-refetch lane (`db.location_refetch_candidates`), the parked admin
+  condition-scoring count. That list is what a search found, not a census.
+- **Next:** a day after the apply, read listings' `n_tup_hot_upd / n_tup_upd` delta (0.4 % cumulative before) and the
+  touch statement's mean in `pg_stat_statements`. If HOT stays low because pages are full, a listings fillfactor below
+  100 is a separate ticket.
+
+## 2026-11-16 — the engine's refused-set read gets a partial index; E41 stays (#2525, spec #2503)
+
+- **Why:** `LEDGER_HISTORY_SQL` (E41) ran once a pass as a parallel seq scan of `autodedup.applied_merges` (339 MB,
+  344k rows) to find 0 rows: 1.0 s a call warm on 2XL (gate #2527, ~113 s/h); since 2026-08-11 14,244 calls, 141,221 s,
+  23.1M blocks read from disk. The operator's "proceed with #2525" (2026-11-16) is read as the recommended option:
+  keep the mechanism, make the read free.
+- **Shipped:** migration 746, `create index concurrently` on `(generation) where outcome = 'refused' and not dry_run`
+  (one empty page), no code change; `tests/test_autodedup_refused_read_plan.py` EXPLAINs the read on CI's replayed
+  schema, bound and generic. Apply with the workflow (`--ref` the branch) inside the coordinator's brake BEFORE the
+  Large retry's resize, receipt OK before the click; missed, after the trial ends. Then the light, then merge.
+- **Next:** right after the apply, `indisvalid` and a plain EXPLAIN showing `Index Scan using
+  autodedup_applied_merges_refused_idx`. The cost is a RATE between two `pg_stat_statements` snapshots of queryid
+  -8415569063472714520 a few hours apart once the engine runs again, `(total_exec_time₂ − total_exec_time₁) /
+  (calls₂ − calls₁)`, never its mean (a running average since 2026-08-11: 9,914 ms, which the index barely moves);
+  its own `gate` ticket, blocked by #2525. `RC_OUTCOME_HISTORY_SQL` (queryid -350548904177584120: 13,655 calls,
+  14,463 s, mean 1,059 ms) is the remaining once-a-pass scan of the ledger.

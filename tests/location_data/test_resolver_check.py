@@ -236,9 +236,9 @@ def test_a_part_with_no_doors_stands_at_its_towns_point_and_a_momc_is_no_part():
     a reach (v5.8). A claimed MOMC is a key, never the quarter (W5, ruling Q1): obec grain."""
     mirror = mm.default_mirror()
     mirror.units += [mm._unit(98, "cast_obce", 490999, "Prázdná", "prazdna",
-                              "k19.o3100.b554782.c490999", parent=13),
+                              "k19.o9999.b554782.c490999", parent=13),
                      mm._unit(99, "momc", 500178, "Praha 6", "praha 6",
-                              "k19.o3100.b554782.m500178", parent=13)]
+                              "k19.o9999.b554782.m500178", parent=13)]
     for part, kod, grain in (("Prázdná", 490999, "cast_obce_or_quarter"),
                              ("Praha 6", None, "obec")):
         resolution = _resolve([
@@ -357,6 +357,56 @@ def test_text_that_says_foreign_over_a_czech_town_is_a_conflict_never_a_silent_f
     ])
     assert resolution.country_status == "cz"
     assert resolution.disputed == "country_conflict"
+
+
+@pytest.mark.parametrize(
+    "region",
+    [("okres_name", "Liberec"), ("kraj_name", "Ústecký kraj")],
+    ids=["okres", "kraj"],
+)
+def test_another_country_over_a_czech_region_alone_is_foreign_at_its_own_pin(region):
+    """Listing 46640: the page says Malé Kunčice, Polsko and its pin is in Poland, and the store
+    keeps Ostrava-město from the weeks the same ad read Czech (W3: a value the page stops stating
+    is kept). No Czech town bound, so the region word decides nothing: a foreign row carries no
+    Czech hierarchy and does not stand on the point of the region it was refused."""
+    resolution = _resolve([
+        mm.claim(1, "obec_name", value_text="Malé Kunčice"),
+        mm.claim(2, region[0], value_text=region[1]),
+        mm.claim(3, "country", value_text="Polsko"),
+        mm.claim(4, "coordinate", lat=49.853287, lon=18.639005),
+    ])
+    assert (resolution.country_status, resolution.country_code) == ("foreign", "PL")
+    assert resolution.disputed is None
+    assert resolution.granularity == "country"
+    assert (resolution.okres_kod, resolution.kraj_kod, resolution.obec_kod) == (None, None, None)
+    assert (resolution.lat, resolution.lon) == (49.853287, 18.639005)
+
+
+def test_another_country_over_a_czech_region_with_no_pin_has_no_position():
+    resolution = _resolve([
+        mm.claim(1, "okres_name", value_text="Liberec"),
+        mm.claim(2, "country", value_text="Polsko"),
+    ])
+    assert (resolution.country_status, resolution.country_code) == ("foreign", "PL")
+    assert (resolution.lat, resolution.lon) == (None, None)
+
+
+def test_another_country_over_a_bound_town_stays_a_conflict():
+    """The town stays and the row says it disagrees with itself, whether the words or the pin
+    bound the town: BIND asks the pin (R7) before it falls back to a bare region (R9)."""
+    worded = _resolve([
+        mm.claim(1, "obec_name", value_text="Praha"),
+        mm.claim(2, "okres_name", value_text="Liberec"),
+        mm.claim(3, "country", value_text="Polsko"),
+    ])
+    pinned = _resolve([
+        mm.claim(1, "okres_name", value_text="Liberec"),
+        mm.claim(2, "country", value_text="Polsko"),
+        mm.claim(3, "coordinate", lat=50.09, lon=14.45),
+    ])
+    for resolution in (worded, pinned):
+        assert (resolution.country_status, resolution.disputed) == ("cz", "country_conflict")
+        assert resolution.obec_name == "Praha"
 
 
 def test_the_containment_test_asks_about_the_pin_and_never_about_the_published_point():

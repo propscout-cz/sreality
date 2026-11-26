@@ -79,8 +79,8 @@ production.
 - **One table**: `scheduled_jobs` = `location_jobs` renamed (migration, with a temporary alias view). Added:
   `argv`, `offset_s`, `timeout_s`, `memory_mb`, `cpus`, `due_at`, `paused_until` (finite, with a
   note and author), `requested_at/args/by`, `registry_at`, `retired_at`, a `resource` column for jobs that
-  must never overlap (intake, the RÚIAN load, the retire tool share `location-heavy`; it replaces the GitHub
-  `location-batch` group). `last_outcome` gains `timeout`, `interrupted`, `lost`. The dead columns
+  must never overlap (the intake and the RÚIAN address and building loads share `location-heavy`, and the retire tool did until #2223
+  deleted it; it replaces the GitHub `location-batch` group). `last_outcome` gains `timeout`, `interrupted`, `lost`. The dead columns
   (`enabled`, `concurrency_group`, `alert_route`, `note`) drop under R6b behind a backup receipt.
 - **One history table**: `job_runs` (closed in place; pruned daily by the runner after 90 days): holder, version
   (`RAILWAY_GIT_COMMIT_SHA`),
@@ -101,7 +101,7 @@ production.
   (`tests/scraper/test_job_registry.py`): every argv parses; walk set = `PORTAL_CLASSES`; static co-tenancy
   (the largest `RUNNER_MAX_CONCURRENT` memory declarations, one per resource, ≤ 81 % of a replica, 70 % until #2155); no two
   DB-heavy jobs in one hour (a wait for a shared resource and the kill grace counted; scheduled runs and their
-  retries, not a deploy's at-once re-run of an interrupted one); the API's stuck-run
+  retries, not a deploy's at-once re-run of an interrupted one, which waits instead: #2027's heavy turn); the API's stuck-run
   cutoff (`STUCK_RUN_CUTOFF_MINUTES`) exceeds the longest walk timeout (the walks are the `scrape_runs`
   writers) plus `STUCK_RUN_GRACE_S`; the GitHub schedule set is exactly {verify_pipeline,
   scrape_price_stats} once the files still running a waiting job are set aside, so it tightens by itself
@@ -148,9 +148,10 @@ production.
   runs back off exponentially from 60 s, capped at the cadence and the next slot; a timeout retries on that
   backoff floored at the job's own `timeout_s`; a lost run (lease expired) is re-run once, then backs off. A
   DB-heavy job's failure, timeout and lost retries wait for its own hour (the next day at most); its interrupted
-  run is due at once like any other (#2024 R-a). A SIGKILL the runner did not send (likely the OOM killer) is
+  run is due at once like any other (#2024 R-a), and no DB-heavy job starts while another's run is open (#2027). A SIGKILL the runner did not send (likely the OOM killer) is
   `failed`, with the peak in its error. A pure request run never moves the schedule (its exit 75 only pulls it to
-  60 s); a request that also took a due slot advances it; an interrupted or lost request is not re-filed.
+  60 s), nor does its loss (#2317) unless its row was paused and already due when it started: `due_at` then moves on,
+  never earlier. A request that also took a due slot advances it; an interrupted or lost request is not re-filed.
 - **Manual runs and pauses**: `python -m scraper.job_runner request <job> [--by WHO] -- <args>` writes a request
   row the runner executes on the same host (args appended to the registry's, so they override its flags
   unchecked; a second is refused while one waits; one filed during a run waits for it); one request-only GitHub
@@ -298,6 +299,19 @@ GitHub group and the last `SCRAPE_CHAIN_TOKEN` users deleted. (The full location
 sweeps itself; nothing to move.) The sweeps reach the runner on consolidated leases (operator ruling 2026-10-26):
 the property sweep's moved onto `job_lease` in #2107, with #2267 dropping the old acquire after gate #2110, and the
 broker sweep's in #2108, with #2273 doing the same after gate #2111.
+**Built (#2027, PR #2410):** property_sweep at 03:00 UTC (T 150 min, 1.5× its budget) and broker_sweep at 06:00 UTC
+(T 75 min, from its measured phases) on the runner, their two workflows deleted; migration 731 re-hosts the
+`property_sweep` artifact at 56 h with no slack (the same fail line). `job_lease` starts no DB-heavy job while another
+DB-heavy run is open, so a recovery, a deploy's re-run or a request waits instead of overlapping (the #2122 review's
+fix (b)). Their 7-day measurement is its gate ticket.
+**As built (#2028), one PR on the merge light, no migration:** `location_intake` hourly at :35 on the runner, `timeout_s`
+4200 for its 2400 s budget (the ⅔ line, now an argv census), 4 CPUs (GitHub's pool width), fetch width 32 set by its
+main; exit 75 on the chain's own progress rule (`claims_intake.more_remains`), 143 on the runner's SIGTERM after
+stamping its cursor; a requested full walk is carried on by the scheduled runs, one portal's included; every run but a
+dry one projects the image's contracts first. Deleted: `location_claims_intake.yml` with its chain and yield bash, the
+`location-batch` group, the worker's yield (`running_batch_id`; migration 730's index it read: dropped by 776, #2419). The retire tool left with the
+location programme's W3 (#2223), so only the RÚIAN load claims `location-heavy` off the runner, in its own main
+(`job_lease.held_job`); the reaper now closes any host's lapsed run on a resource.
 **Gate (7 days):** derived artifacts fresh; `location_town_coverage` not worse; sweep durations ± 20 %; a
 backlog drains at least as fast as the chain did; no two DB-heavy jobs overlap; intake reads `held by
 sibling` during a registry load instead of red.
@@ -308,7 +322,22 @@ realitymix, ceskereality, bazos, idnes last. Walk argv drops `--max-seconds`; th
 walk timeout is the one budget (this is #2029's "budget derived from the timeout"; the registry's argv census
 refuses a walk `--max-seconds`). A batch flips its walks' host without a portal name in `jobs.py`; a
 per-portal host attribute would be a third code-only per-portal value and needs a ruling.
-**Gate per walk (7 days):** pages, reached-end and nominations per cycle ± 10 %; 403/429 share from
+**As built (#2029), batch 1: web, maxima, bezrealitky.** One cutoff, `jobs.RUNNER_WALK_TIMEOUT_S` (30 min): a walk whose
+`walk_timeout_s` fits it is generated on `job-runner`, the rest stay `github-actions-until-moved`, so a batch raises one
+constant and names no portal; `test_a_walks_host_is_the_cutoffs` refuses a per-portal host value. `web_index_walk.yml`,
+`scrape_maxima.yml` and `scrape_bezrealitky.yml` and their groups (`web-index-walk`, `maxima-scrape`, `bezrealitky-scrape`)
+are deleted; their dispatch inputs (`--max-pages`, `--max-seconds`) are request args now. Timeouts stay the workflows'
+(15, 30, 30 min) against a GitHub p95 of 3, 40 and 137 s (7 days to 11-25). None of the three is proxied and the runner
+already carries `SUPABASE_DB_URL` and the R2 set (#2032): no `.railway/` change, no migration. **remax is held to a later
+batch:** its sold/let measurement gate #2647 reads remax until 2026-11-29, and a new host, cadence and egress would
+confound it. A cutoff moves walks in `walk_timeout_s` order (sreality 40; remax, mmreality 60; bazos 130; realitymix,
+ceskereality 180; idnes 240), so 60 min takes sreality with remax and mmreality; #2030's listed set and this section's
+order after it (realitymix before bazos) are not one cutoff, and ceskereality needs the `browser` extra the runner image
+lacks: later batches need a ruling on their order or the image. GitHub's throttled cron fired these walks
+about twice a day (14 runs each in those 7 days), the runner's grid four times, so the gate reads nominations per day
+beside per cycle (#2029's gate ticket).
+**Gate per walk (7 days):** pages and reached-end per cycle, nominations per day (a moved walk keeps its declared
+cadence), ± 10 %; 403/429 share from
 Railway ≤ the GitHub baseline; 0 `ended_at NULL` after ≥ 5 mid-walk deploys; proxy GB/day within its band;
 delisting and coverage cells unchanged; aggregate peak ≤ 70 % of a replica.
 
@@ -340,6 +369,12 @@ stamped and vectored; Watch at most while `clip` is paused, then judged on the p
 re-embeds a frozen 100-image sample read-only; it runs while `clip` is paused "AC2 pending" from its
 registration, and the pause lifts on a pass. No hold for a GitHub run in flight (both writers are idempotent and
 stamp last), and no migration.
+**As built (#2033), the registry load:** `ruian_load` flips to `job-runner` (daily at 10:00 UTC, 6 h,
+`location-heavy`, DB-heavy: a 30-day grid would drift off the 1st and skip a month; the days with no new vintage only
+finish, ~20 s) and `location_registry_load.yml` is deleted. The runner claims its resource, so
+`job_lease.held_job`, its only off-runner caller gone, is deleted with its tests. Migration 775 re-hosts the
+`place_facts` artifact row, keeping its fail line. A dry run of the 2026-11 vintage peaked at 342 MB (declared 2,048)
+and wrote 918 MB to its temporary directory. A by-hand run is `request ruian_load -- --vintage YYYYMMDD`.
 **Gate:** CLIP lag p90 ≤ 45 min; a 100-image re-embed identical within fp32 tolerance; both GitHub-hosted
 jobs show cells; `location_refetch` runs once a day across ≥ 3 deploys; **the flip gate: 7 days of billed
 GitHub run-rate under 50,000 min/month.**

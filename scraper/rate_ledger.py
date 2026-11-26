@@ -22,10 +22,10 @@ raises RateBudgetUnavailable on that acquire and every later one; one built with
 a `deadline` does the same for every acquire after it and every window starting
 after it (`refused_reason` "cap" or "deadline" says which). Only the realtime worker
 passes either; the Actions walks and drains wait as long as the ledger says. A stop
-signal refuses any limiter ("stop", scraper/stop.py), never overwriting a "cap". On
-2026-09-29 ceskereality answered 403 to everything, each retry leased a fresh
-batch, the frontier ran an hour ahead and every caller slept there: the worker's
-probe and drain threads never came back and starved its thread pool.
+signal refuses any limiter ("stop", scraper/stop.py), never overwriting a "cap".
+Unbounded, a run of failing requests leases a fresh batch per retry, the frontier
+runs an hour ahead and every caller sleeps there: the worker's probe and drain
+threads once never came back and starved its thread pool.
 
 Failure posture: politeness must never depend on DB availability. Any DB error
 in lease/penalize logs once and permanently falls back to pure-local pacing for

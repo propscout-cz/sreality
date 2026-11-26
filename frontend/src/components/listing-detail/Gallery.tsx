@@ -1,20 +1,17 @@
-import { useCallback, useState } from 'react';
+import { useState } from 'react';
 import type { ImagePublic } from '@/lib/types';
 import { imageSrc } from '@/lib/imageUrl';
 import ImageTagBadge from '@/components/ImageTagBadge';
-import ImageLightbox from '@/components/ImageLightbox';
+import { OFF_MARKET_DIM, usePhotoViewer } from './PhotoViewer';
 
 interface Props {
   images: ImagePublic[];
   isActive: boolean;
 }
 
+/* The Fotky tab's grid: every photo, each opening the viewer on itself (PhotoViewer). */
 export default function Gallery({ images, isActive }: Props) {
-  const [openAt, setOpenAt] = useState<number | null>(null);
-  const opaque = isActive ? '' : 'opacity-70';
-
-  const openAtIndex = useCallback((i: number) => setOpenAt(i), []);
-  const close = useCallback(() => setOpenAt(null), []);
+  const { open, viewer } = usePhotoViewer(images, isActive);
 
   return (
     <div>
@@ -23,20 +20,13 @@ export default function Gallery({ images, isActive }: Props) {
           <li key={img.id}>
             <Thumbnail
               image={img}
-              onClick={() => openAtIndex(i)}
+              onClick={() => open(i)}
               dim={!isActive}
             />
           </li>
         ))}
       </ul>
-      {openAt != null && (
-        <ImageLightbox
-          images={images}
-          startIndex={openAt}
-          onClose={close}
-          dim={opaque}
-        />
-      )}
+      {viewer}
     </div>
   );
 }
@@ -71,7 +61,7 @@ function Thumbnail({
             onError={() => setErrored(true)}
             className={[
               'w-full h-full object-cover transition-transform duration-200',
-              dim ? 'opacity-70' : '',
+              dim ? OFF_MARKET_DIM : '',
               'group-hover:scale-[1.02]',
             ].join(' ')}
           />

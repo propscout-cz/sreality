@@ -210,7 +210,7 @@ def test_parse_detail_extracts_floor_from_description():
     html = (
         "<html><body>"
         '<h1 class="nadpisdetail">Prodám byt 2+kk</h1>'
-        '<div class="popisdetail">Byt se nachází ve 3. patře cihlového domu.</div>'
+        '<div class="popisdetail">Byt se nachází ve 4. NP cihlového domu.</div>'
         "</body></html>"
     )
     listing = parse_detail(

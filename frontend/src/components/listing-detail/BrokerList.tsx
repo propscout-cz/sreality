@@ -10,6 +10,7 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
+import { brokerContact, type ContactAbout } from '@/lib/brokerContact';
 import { propertyBrokers } from '@/lib/brokers';
 import { useListingBrokers } from '@/lib/hydration';
 import type { PropertySource } from '@/lib/types';
@@ -21,11 +22,14 @@ export default function BrokerList({
   canonicalId,
   advertsFailed,
   onRetryAdverts,
+  about,
 }: {
   adverts: PropertySource[];
   canonicalId: number;
   advertsFailed: boolean;
   onRetryAdverts: () => void;
+  /* The property a saved contact names (lib/brokerContact). */
+  about: ContactAbout;
 }) {
   const ids = useMemo(() => adverts.map((a) => a.id), [adverts]);
   const read = useListingBrokers(ids);
@@ -86,7 +90,20 @@ export default function BrokerList({
                 {b.broker_firm_label ?? 'nezávislý / neznámá kancelář'}
               </p>
             </div>
-            <BrokerContactCard broker={b} ads={b.ads} bare />
+            <BrokerContactCard
+              broker={b}
+              ads={b.ads}
+              bare
+              saveAs={brokerContact({
+                brokerId: b.broker_id,
+                name: b.broker_display_name,
+                firm: b.broker_firm_label,
+                phone: b.primary_phone,
+                email: b.primary_email,
+                ads: b.ads,
+                about,
+              })}
+            />
           </li>
         ))}
       </ul>

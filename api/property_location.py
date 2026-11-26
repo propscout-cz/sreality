@@ -1,6 +1,6 @@
 """Where a property is: its location ad's point (`properties.location_listing_ref_id`, the place the page, Browse
-and the map show) from `listing_location`, rule 25's one store, with its granularity, the page's place label and the
-zoom the phone opens at. A detail-by-id read: no served-location predicate (rule 25 keeps those reachable)."""
+and the map show) from `listing_location`, rule 25's one store, with its granularity and the page's place label. A
+detail-by-id read: no served-location predicate (rule 25 keeps those reachable)."""
 
 from __future__ import annotations
 
@@ -12,13 +12,13 @@ NOTE_OBEC = "Poloha jen na úrovni obce"
 NOTE_QUARTER = "Poloha jen na úrovni části obce"
 NOTE_COARSE = "Poloha jen přibližná, hrubší než obec"
 
-# How finely a point is known, finest first, and the zoom + note each opens with. A point coarser
+# How finely a point is known, finest first, and the note each carries. A point coarser
 # than a town (okres, kraj, country) is never labelled as one.
-PRECISIONS: dict[str, tuple[int, str | None]] = {
-    "street": (16, None),
-    "quarter": (14, NOTE_QUARTER),
-    "town": (12, NOTE_OBEC),
-    "coarse": (10, NOTE_COARSE),
+PRECISIONS: dict[str, str | None] = {
+    "street": None,
+    "quarter": NOTE_QUARTER,
+    "town": NOTE_OBEC,
+    "coarse": NOTE_COARSE,
 }
 
 # Granularity is compared through location_granularity_rank.rank, never enum order: the row
@@ -35,7 +35,6 @@ select st_y(ll.geom) as lat,
        (select t.rank from location_granularity_rank t
          where t.granularity = 'obec') as obec_rank,
        ll.country_status::text as country_status,
-       ll.uncertainty_radius_m,
        location_display_label(ll.street_name, ll.house_number_cp, ll.house_number_co,
                               ll.obec_name, ll.cast_obce_name, ll.country_code,
                               ll.country_status) as label
@@ -69,8 +68,7 @@ def load_location(conn: Any, property_id: int) -> dict[str, Any]:
     if row["lat"] is None or row["lon"] is None:
         raise NoLocation("no_location", "Bez polohy")
     level = precision(row["granularity_rank"], row["street_rank"], row["quarter_rank"], row["obec_rank"])
-    zoom, note = PRECISIONS[level]
-    radius = row["uncertainty_radius_m"]
+    note = PRECISIONS[level]
     return {
         "lat": float(row["lat"]),
         "lon": float(row["lon"]),
@@ -78,8 +76,6 @@ def load_location(conn: Any, property_id: int) -> dict[str, Any]:
         "granularity_rank": row["granularity_rank"],
         "precision": level,
         "country_status": row["country_status"],
-        "uncertainty_radius_m": None if radius is None else float(radius),
         "label": row["label"],
-        "zoom": zoom,
         "note": note,
     }

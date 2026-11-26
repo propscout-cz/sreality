@@ -1,8 +1,11 @@
 """Hermetic tests for scraper.ceskereality_client: URL building (?strana paging)
 + retry/penalize + the ceskereality gone signals (404, redirect off the .html
-detail path, body marker).
+detail path, body marker) + the interstitial classification.
 
-No network: a fake session feeds canned responses. Mirrors test_idnes_client.py.
+No network and no chromium: a fake FETCHER feeds canned responses. Since 2026-10-31
+this portal's bytes arrive through a headless browser rather than `requests`
+(`scraper.browser_fetch`), so the injection point is `fetcher=`, not `_session` —
+the behaviour asserted here is otherwise unchanged. Mirrors test_idnes_client.py.
 """
 
 from __future__ import annotations
@@ -35,21 +38,33 @@ class FakeResponse:
             raise requests.HTTPError(str(self.status_code), response=self)
 
 
-class FakeSession:
+class FakeFetcher:
+    """Stands in for the headless browser: hands back canned responses and records the
+    URLs it was asked for, so retry counting still reads the same way."""
+
     def __init__(self, responses: list[FakeResponse]):
         self._responses = list(responses)
         self.calls: list[str] = []
-        self.headers: dict[str, str] = {}
+        self.closed = 0
+        self.rotations: list[str] = []
 
-    def get(self, url: str, timeout: float | None = None) -> FakeResponse:
+    def fetch(self, url: str) -> FakeResponse:
         self.calls.append(url)
         return self._responses.pop(0)
 
+    def close(self) -> None:
+        self.closed += 1
+
+    def rotate(self, reason: str = "") -> None:
+        self.rotations.append(reason)
+
 
 def _client(responses: list[FakeResponse], **kw) -> CeskerealityClient:
-    c = CeskerealityClient(**kw)
-    c._session = FakeSession(responses)
-    return c
+    return CeskerealityClient(fetcher=FakeFetcher(responses), **kw)
+
+
+def _calls(client: CeskerealityClient) -> list[str]:
+    return client._fetcher.calls
 
 
 def test_index_url_building():
@@ -79,7 +94,7 @@ def test_fetch_index_ok():
     text, status = c.fetch_index("prodej", "byty")
     assert text == "<html>index</html>"
     assert status == 200
-    assert c._session.calls == ["https://www.ceskereality.cz/prodej/byty/"]
+    assert _calls(c) == ["https://www.ceskereality.cz/prodej/byty/"]
 
 
 def test_fetch_detail_ok():
@@ -93,7 +108,7 @@ def test_fetch_detail_gone_404_raises_immediately():
     c = _client([FakeResponse(404, "not found")])
     with pytest.raises(ListingGoneError):
         c.fetch_detail(_DETAIL)
-    assert len(c._session.calls) == 1  # no retry on a gone status
+    assert len(_calls(c)) == 1  # no retry on a gone status
 
 
 def test_fetch_detail_redirect_off_html_is_gone():
@@ -123,7 +138,7 @@ def test_retry_then_success_penalizes_on_429(monkeypatch):
     text, status = c.fetch_detail(_DETAIL)
     assert text == "ok"
     assert status == 200
-    assert len(c._session.calls) == 2
+    assert len(_calls(c)) == 2
     assert limiter.interval > base  # penalize widened the interval
 
 
@@ -132,7 +147,7 @@ def test_retry_exhausted_raises(monkeypatch):
     c = _client([FakeResponse(500), FakeResponse(500)], max_retries=1)
     with pytest.raises(requests.HTTPError):
         c.fetch_detail(_DETAIL)
-    assert len(c._session.calls) == 2
+    assert len(_calls(c)) == 2
 
 
 def test_fetch_detail_archived_page_is_gone():
@@ -149,7 +164,7 @@ def test_fetch_detail_archived_page_is_gone():
 
 
 def test_sends_chrome_client_hints_matching_its_ua():
-    """2026-09-29: the site's nginx 403s a Chrome UA without sec-ch-ua hints."""
+    """The client sends the sec-ch-ua hints derived from its Chrome UA."""
     headers = CeskerealityClient()._session.headers
     major = re.search(r"Chrome/(\d+)", headers["User-Agent"]).group(1)
     assert headers["sec-ch-ua"] == client_hints(headers["User-Agent"])["sec-ch-ua"]
@@ -165,3 +180,114 @@ def test_client_hints_leave_the_other_headers_unchanged():
     assert ours["User-Agent"] == base["User-Agent"]
     assert ours["Accept-Language"] == base["Accept-Language"] == "cs,en;q=0.9"
     assert ours["Accept"] == CeskerealityClient.ACCEPT
+
+
+# --- the interstitial (2026-10-31 wall; #2479) -------------------------------------
+
+CHALLENGE_HTML = (
+    '<html><head><title>Ujišťujeme se, že nejste robot!</title></head><body>'
+    '<script id="anubis_challenge" type="application/json">{"rules":{"difficulty":2}}'
+    "</script></body></html>"
+)
+
+
+def test_a_challenged_page_is_a_failed_fetch_not_an_empty_index(monkeypatch):
+    """The wall answers 200 with challenge HTML. If that reached the parser it would read
+    as a page with no ads, which is what stopped walks reaching the portal's end (#2479).
+    It must fail the fetch instead, whatever status it was served with."""
+    monkeypatch.setattr(time, "sleep", lambda *a, **k: None)
+    c = _client([FakeResponse(200, CHALLENGE_HTML)] * 2, max_retries=1)
+    with pytest.raises(requests.HTTPError):
+        c.fetch_search(index_url("prodej", "byty"))
+    assert len(_calls(c)) == 2, "a challenged page is retried like any throttle"
+
+
+def test_a_challenge_that_clears_on_a_retry_returns_the_real_page(monkeypatch):
+    monkeypatch.setattr(time, "sleep", lambda *a, **k: None)
+    c = _client(
+        [FakeResponse(200, CHALLENGE_HTML), FakeResponse(200, "<html>index</html>")],
+        max_retries=2,
+    )
+    text, status = c.fetch_search(index_url("prodej", "byty"))
+    assert (text, status) == ("<html>index</html>", 200)
+
+
+def test_a_challenged_page_penalizes_the_shared_limiter(monkeypatch):
+    """It is a 403, so the walk backs off the portal rather than hammering the wall."""
+    monkeypatch.setattr(time, "sleep", lambda *a, **k: None)
+    limiter = RateLimiter(1000.0)
+    base = limiter.interval
+    c = _client(
+        [FakeResponse(200, CHALLENGE_HTML), FakeResponse(200, "<html>ok</html>")],
+        limiter=limiter, max_retries=2,
+    )
+    c.fetch_search(index_url("prodej", "byty"))
+    assert limiter.interval > base
+
+
+def test_close_releases_the_browser_and_is_idempotent():
+    c = _client([FakeResponse(200, "<html>ok</html>")])
+    fetcher = c._fetcher
+    c.close()
+    c.close()
+    assert fetcher.closed == 1, "closed once, and a second close must not raise"
+
+
+def test_no_browser_is_launched_until_the_first_fetch():
+    """A run that never reaches this portal must pay no browser cost, and constructing a
+    client must not need playwright installed."""
+    assert CeskerealityClient()._fetcher is None
+
+
+def test_a_run_of_refusals_retires_the_exit_ip() -> None:
+    """A 403 here is the portal refusing the IP, NOT an unsolved interstitial (the browser
+    solved 1,558 of 1,558 on 2026-11-16; the refusals were nginx, in front of Anubis).
+    Retrying the same blocked exit IP is what turned one block into a 30-minute outage, so
+    a run of them retires the session and the next attempt leaves on a fresh IP."""
+    c = _client([FakeResponse(403, "<html>nope</html>")] * 4)
+    with pytest.raises(Exception):
+        c.fetch_index("prodej", "byty")
+    assert c._fetcher.rotations, "a blocked exit IP must be retired, not retried forever"
+
+
+def test_a_single_refusal_does_not_retire_the_exit_ip() -> None:
+    """One 403 among successes is noise; rotating on it would throw away a good IP and pay
+    a fresh interstitial solve for nothing."""
+    c = _client([FakeResponse(403, "<html>nope</html>"), FakeResponse(200, "<html>index</html>")])
+    c.fetch_index("prodej", "byty")
+    assert c._fetcher.rotations == []
+
+
+def test_a_gone_status_never_retires_the_exit_ip() -> None:
+    """404/410 is the LISTING speaking, not the portal refusing us — rotating would be
+    wrong and would cost a solve on every delisted ad the drain verifies."""
+    c = _client([FakeResponse(404, "<html>gone</html>")])
+    with pytest.raises(Exception):
+        c.fetch_index("prodej", "byty")
+    assert c._fetcher.rotations == []
+
+
+def _intro(*badges: str) -> str:
+    items = "".join(f'<li> <div class="badge --gray"> <span class="badge__title">{b}</span> </div> </li>'
+                    for b in badges)
+    return (f'<div class="s-estate-detail-intro__badges"> <ul class="g-badges --horizontal"> {items} '
+            '</ul> </div> <header class="s-estate-detail-intro__header"><h1>Prodej bytu</h1></header>')
+
+
+# The "Podobné nemovitosti" slider: other ads' badges, below the ad's own intro.
+_SLIDER = ('<section class="s-estates-slide"><article class="i-estate"><div class="i-estate__image-badges">'
+           '<div class="badge --gray"> <span class="badge__title">Prodáno</span> </div></div></article></section>')
+
+
+@pytest.mark.parametrize("badges", [("Prodáno",), ("Pronajato",), ("Developerský projekt", "Prodáno")])
+def test_a_page_whose_own_intro_badge_says_sold_or_let_is_gone(badges):
+    c = _client([FakeResponse(200, f"<html>{_intro(*badges)}</html>", url=_DETAIL)])
+    with pytest.raises(ListingGoneError):
+        c.fetch_detail(_DETAIL)
+
+
+@pytest.mark.parametrize("badges", [(), ("Rezervováno",), ("Novinka",)])
+def test_a_live_or_reserved_page_beside_a_sold_slider_card_is_returned(badges):
+    body = f"<html>{_intro(*badges)}<p>Hala 1 je již prodána.</p>{_SLIDER}</html>"
+    c = _client([FakeResponse(200, body, url=_DETAIL)])
+    assert c.fetch_detail(_DETAIL) == (body, 200)

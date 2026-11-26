@@ -53,7 +53,7 @@ on:
           - "ingest"
           - "submit"
       region_ids:
-        description: "[submit] Comma-separated admin_boundaries kraj ids (empty = the Settings-page enabled list)"
+        description: "[submit] Comma-separated RÚIAN kraj codes (empty = the Settings-page enabled list)"
         required: false
         default: ""
         type: string

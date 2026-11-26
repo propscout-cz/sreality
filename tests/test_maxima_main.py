@@ -11,9 +11,13 @@ import time
 from types import SimpleNamespace
 from typing import Any
 
-from scraper import maxima_main, portal_runner
+import pytest
+
+from scraper import maxima_main, portal_runner, stop
 from scraper.maxima_main import MaximaPortal
 from scraper.portal import PortalConfig
+
+pytestmark = pytest.mark.usefixtures("no_sighted_rearm")
 
 
 class _Conn:
@@ -494,6 +498,16 @@ def test_deadline_is_our_stop(monkeypatch):
     reached_end = _reached_end(
         monkeypatch, portal, pages, deadline=time.monotonic() - 1)
     assert reached_end is False
+    assert portal._agenda_cache[1].stop == "deadline"
+
+
+def test_the_runners_stop_signal_is_our_stop_without_a_deadline(monkeypatch):
+    """W4 (#2029): on the job runner the walk carries no --max-seconds; the runner's SIGTERM at timeout_s (the stop
+    event) is its one budget, and reaches the page loop through deadline_reached(None)."""
+    stop.EVENT.set()
+    portal = _portal()
+    pages = [_page(10, [_item("b1")], next_offset=2)]
+    assert _reached_end(monkeypatch, portal, pages) is False
     assert portal._agenda_cache[1].stop == "deadline"
 
 

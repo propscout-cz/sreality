@@ -45,10 +45,10 @@ from scraper.portal import (
     deadline_reached, stop_is_portal_end, walk_coverage, walk_reached_end,
 )
 from scraper.portal_base import ListingGoneError
-from scraper.portal_runner import DrainItem
+from scraper.portal_runner import DrainItem, IndexPrice
 from scraper.rate_limit import RateLimiter
 from scraper.remax_client import RemaxClient, detail_url, index_url
-from scraper.remax_parser import category_of, index_price, parse_detail, parse_index
+from scraper.remax_parser import category_of, parse_detail, parse_index, read_price
 
 LOG = logging.getLogger(__name__)
 SOURCE = "remax"
@@ -61,10 +61,12 @@ class _AgendaWalk:
 
     def __init__(
         self, native_ids: list[str], ref_map: dict[str, str],
-        price_map: dict[str, int | None], cat_map: dict[str, str | None],
+        price_map: dict[str, IndexPrice], cat_map: dict[str, str | None],
         total: int | None, pages: int, stop_reason: StopReason, reached_end: bool,
+        closed: frozenset[str] = frozenset(),
     ) -> None:
         self.native_ids = native_ids
+        self.closed = closed  # sold/let cards: collected, never sighted (rule #3)
         self.ref_map = ref_map
         self.price_map = price_map
         self.cat_map = cat_map  # id -> category_main (from the card title)
@@ -144,8 +146,9 @@ class RemaxPortal(portal_runner.PortalDefaults):
                 LOG.warning("INDEX archive preload failed: %s", exc)
         native_ids: list[str] = []
         ref_map: dict[str, str] = {}
-        price_map: dict[str, int | None] = {}
+        price_map: dict[str, IndexPrice] = {}
         cat_map: dict[str, str | None] = {}
+        closed: set[str] = set()
         total: int | None = None
         pages = 0
         page = 1
@@ -194,10 +197,12 @@ class RemaxPortal(portal_runner.PortalDefaults):
                     native_ids.append(nid)
                     new_on_page += 1
                 ref_map[nid] = detail_url(item.detail_path)
-                # Same clamps as the stored price so the unchanged-compare can't
-                # see a value the write boundary would have nulled.
-                price_map[nid] = db.sane_price_czk(index_price(item.price_text))
+                # As stated; reconcile_sightings resolves it against the stored row and
+                # applies the write boundary's clamps before it compares.
+                price_map[nid] = read_price(item.price_text)
                 cat_map[nid] = category_of(None, item.title)
+                if item.closed:
+                    closed.add(nid)
             if self._max_pages and pages >= self._max_pages:
                 stop_reason = "page_cap"
                 break
@@ -256,7 +261,8 @@ class RemaxPortal(portal_runner.PortalDefaults):
                 sale, len(native_ids), total, coverage, reason,
             )
         walk = _AgendaWalk(
-            native_ids, ref_map, price_map, cat_map, total, pages, reason, reached_end)
+            native_ids, ref_map, price_map, cat_map, total, pages, reason, reached_end,
+            frozenset(closed))
         self._agenda_cache[sale] = walk
         return walk, pages
 
@@ -318,7 +324,8 @@ class RemaxPortal(portal_runner.PortalDefaults):
         sale = int(category.get("sale") or 1)
         walk, pages = self._walk_agenda(sale, conn, limiter, deadline)
 
-        native_ids = [n for n in walk.native_ids if self._belongs(walk.cat_map.get(n), cm)]
+        native_ids = [n for n in walk.native_ids
+                      if n not in walk.closed and self._belongs(walk.cat_map.get(n), cm)]
         seen = set(native_ids)
         counts = portal_runner.reconcile_sightings(
             conn, SOURCE, {n: (walk.ref_map[n], walk.price_map.get(n)) for n in native_ids},

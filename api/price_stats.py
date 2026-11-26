@@ -108,10 +108,8 @@ def dataset_city_metrics(conn: "psycopg.Connection", dataset_id: int) -> dict[st
     return analysis.dataset_city_metrics(conn, dataset_id)
 
 
-def dataset_city_series(
-    conn: "psycopg.Connection", dataset_id: int, entity_type: str, entity_id: int
-) -> dict[str, Any]:
-    return analysis.dataset_city_series(conn, dataset_id, entity_type, entity_id)
+def dataset_city_series(conn: "psycopg.Connection", dataset_id: int, obec_id: int) -> dict[str, Any]:
+    return analysis.dataset_city_series(conn, dataset_id, obec_id)
 
 
 def run_dataset_now(conn: "psycopg.Connection", dataset_id: int) -> dict[str, Any]:

@@ -102,9 +102,20 @@ ADMIN_ONLY_RELATIONS: tuple[str, ...] = (
     # The push device registry and its delivery ledger (migration 654).
     "push_subscriptions",
     "notification_deliveries",
+    # An account's own ČÚZK login, its password encrypted (migration 759).
+    "account_cuzk_logins",
+    # The ledger and budget of ČÚZK login checks (migration 762).
+    "account_cuzk_login_checks",
+    # Cadastre prices an account bought, and the ledger of its requests (migration 763): the buyer's alone.
+    "cadastre_price_purchases",
+    "cadastre_deeds",
+    "cadastre_unit_facts",
     # The scheduled-jobs lease and its run history (migration 675): holders, host names and log tails.
     "scheduled_jobs",
     "job_runs",
+    # The location position audit (migration 733): every ad's point kind, read by the admin list view and the
+    # service-role scorecard only.
+    "location_position_mv",
 )
 
 Kind = Literal["view", "matview", "function"]
@@ -177,7 +188,7 @@ UNGATED: dict[str, Ungated] = {
         "A write-only maintenance function returning void; EXECUTE revoked from every browser role.",
         dropped_in="502_location_w2b_drop_old_projection.sql"),
     "sold_coverage": Ungated(
-        "function", "reachable", ("545_sold_comps_read_surface.sql",),
+        "function", "reachable", ("545_sold_comps_read_surface.sql", "725_location_w8_readers_on_mirror.sql"),
         "The operator's listing page says when we last looked there. SECURITY DEFINER and narrow: a point in, four "
         "facts about the one municipality containing it out; never a cell list, a bbox, `error` or `pages`, so it "
         "cannot be walked to enumerate which towns are being worked."),
@@ -203,7 +214,8 @@ UNGATED: dict[str, Ungated] = {
     "health_liveness": Ungated(
         "function", "acl",
         ("620_health_liveness.sql", "621_platform_checks.sql", "633_health_explicit_cells.sql",
-         "655_health_liveness_without_api_cell.sql", "675_scheduled_jobs_expand.sql", "682_health_job_cells.sql"),
+         "655_health_liveness_without_api_cell.sql", "675_scheduled_jobs_expand.sql", "682_health_job_cells.sql",
+         "745_health_stale_gauges.sql"),
         "Reads the health ledgers and the worker heartbeat, writes one pipeline_check_results row; EXECUTE revoked "
         "from public, anon and authenticated."),
     "health_job_cells": Ungated(
@@ -215,6 +227,13 @@ UNGATED: dict[str, Ungated] = {
         ("630_one_browse_read_model.sql", "649_web_portal.sql", "658_rebuild_browse_list_without_notice.sql"),
         "Reads property_merge_events only to re-patch browse_list_next; EXECUTE revoked from public, anon and "
         "authenticated (590)."),
+    "location_position_mv": Ungated(
+        "matview", "acl", ("733_location_w6c_position_audit.sql",), _OPS_MATVIEW),
+    "location_quality_by_source": Ungated(
+        "view", "acl", ("733_location_w6c_position_audit.sql", "749_publication_stamp_scorecard.sql"),
+        "The location scorecard (698, restated by 733 with the position metric), read by the location gauge as "
+        "service_role; security invoker, every privilege revoked from public, anon and authenticated. The browser "
+        "reads the gauge's stored cells and, for the list, the admin-gated location_position_audit_public."),
     "location_jobs": Ungated(
         "view", "acl", ("675_scheduled_jobs_expand.sql",),
         "The temporary alias of scheduled_jobs that keeps the pre-rename deployment on its lease; security invoker "

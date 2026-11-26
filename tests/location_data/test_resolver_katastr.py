@@ -4,10 +4,10 @@
 entity kind: an address point (its own KÚ; one with no coordinates, its část's), a KÚ unit (the
 KÚ on its chain), an obec
 (its one KÚ child, else nothing), a street or část obce (the KÚ holding every one of its
-RÚIAN doors — operator Q7, 2026-09-25). What is NOT an entity is a portal pin: 66,165 idnes
-`no_exact_address` and 13,176 sreality `not_address` pins read as "precise"
-(`core.pin_is_precise`), so the B1 regression below puts such a pin exactly ON a door and
-still expects NULL.
+RÚIAN doors — operator Q7, 2026-09-25). Since v5.11 (operator ruling B, 2026-11-24) a pin the
+portal declares precise is a point too, on a row bound to its town only: it gives the KÚ
+covering it and that KÚ's část by the door rule (the one část all its doors in the town stand
+in). A pin declared blurred, or declared nothing, still decides nothing.
 
 Praha is the multi-KÚ town (Vokovice + Veleslavín here), Krásný Les u Frýdlantu the one-KÚ
 one. A fixture point's `katastr_kod` stands in for the SQL point-in-KÚ.
@@ -29,6 +29,8 @@ from tests.location_data import mini_mirror as mm
 VOKOVICE_KU = 729418
 VELESLAVIN_KU = 729353
 KRASNY_LES_KU = 673986
+VOKOVICE_U_PRAHY_KU = 729901
+VELESLAVIN_U_PRAHY_KU = 729902
 
 
 def _mirror() -> mm.MiniMirror:
@@ -36,13 +38,13 @@ def _mirror() -> mm.MiniMirror:
     units = [
         *base.units,
         mm._unit(40, "katastralni_uzemi", VOKOVICE_KU, "Vokovice", "vokovice",
-                 "k19.o3100.b554782", parent=13),
+                 "k19.o9999.b554782", parent=13),
         mm._unit(41, "katastralni_uzemi", VELESLAVIN_KU, "Veleslavín", "veleslavin",
-                 "k19.o3100.b554782", parent=13),
+                 "k19.o9999.b554782", parent=13),
         mm._unit(43, "cast_obce", 490211, "Veleslavín", "veleslavin",
-                 "k19.o3100.b554782.c490211", parent=13),
+                 "k19.o9999.b554782.c490211", parent=13),
         mm._unit(44, "cast_obce", 490999, "Prázdná", "prazdna",
-                 "k19.o3100.b554782.c490999", parent=13),
+                 "k19.o9999.b554782.c490999", parent=13),
     ]
     points = [
         replace(p, katastr_kod=VOKOVICE_KU) if p.ulice_kod == 101 else p
@@ -59,7 +61,31 @@ def _mirror() -> mm.MiniMirror:
                      street_name="Livornská", cislo_domovni=402, cast_obce_unit_id=43,
                      cast_obce_kod=490211, katastr_kod=VELESLAVIN_KU),
     ]
-    return replace(base, units=units, points=points)
+    # Two KÚ the words can name by a qualified name: Vokovice u Prahy holds Vokovice's doors
+    # only, Veleslavín u Prahy doors of two parts; a name binds the part it spells either way.
+    units += [
+        mm._unit(45, "katastralni_uzemi", VOKOVICE_U_PRAHY_KU, "Vokovice u Prahy",
+                 "vokovice u prahy", "k19.o9999.b554782", parent=13),
+        mm._unit(46, "katastralni_uzemi", VELESLAVIN_U_PRAHY_KU, "Veleslavín u Prahy",
+                 "veleslavin u prahy", "k19.o9999.b554782", parent=13),
+    ]
+    points += [
+        AddressPoint(kod_adm=21690501, obec_unit_id=13, obec_kod=554782, psc="16000",
+                     lat=None, lon=None, cast_obce_unit_id=14, cast_obce_kod=490067,
+                     katastr_kod=VOKOVICE_U_PRAHY_KU),
+        AddressPoint(kod_adm=21690502, obec_unit_id=13, obec_kod=554782, psc="16000",
+                     lat=None, lon=None, cast_obce_unit_id=14, cast_obce_kod=490067,
+                     katastr_kod=VELESLAVIN_U_PRAHY_KU),
+        AddressPoint(kod_adm=21690503, obec_unit_id=13, obec_kod=554782, psc="16200",
+                     lat=None, lon=None, cast_obce_unit_id=43, cast_obce_kod=490211,
+                     katastr_kod=VELESLAVIN_U_PRAHY_KU),
+    ]
+    # The KÚ polygons a pin is asked against: Vokovice holds doors of two parts (Nad
+    # Bořislavkou's and one Livornská door), Veleslavín one part's.
+    return replace(base, units=units, points=points, katastr_polygons={
+        VOKOVICE_KU: (50.10100, 14.34800, 400.0),
+        VELESLAVIN_KU: (50.09800, 14.31500, 400.0),
+    })
 
 
 def _resolve(claims, mirror=None):
@@ -176,28 +202,121 @@ def test_a_cast_obce_follows_the_door_rule(part, expected):
     assert resolution.katastr_kod == expected
 
 
-# ------------------------------------------------------------------ never a pin (B1)
+# ------------------------------------------------------------------ a precise pin (v5.11)
 
 
-@pytest.mark.parametrize("label", ["no_exact_address", "not_address", "gps"])
-def test_a_pin_on_a_door_never_decides_the_ku(label):
-    """The B1 regression. The pin sits ON a Vokovice door and the portal may even call it
-    precise — but nothing BOUND a door, so the town-level row has no KÚ."""
+def test_a_precise_pin_gives_its_ku_and_the_part_its_doors_stand_in():
     resolution = _resolve([
         mm.claim(1, "obec_name", value_text="Praha"),
-        mm.claim(2, "coordinate", lat=50.10100, lon=14.34800, declared_precision_label=label),
+        mm.claim(2, "coordinate", lat=50.09810, lon=14.31510, declared_precision_label="gps"),
     ])
-    assert resolution.obec_kod == 554782
-    assert resolution.ruian_adm_kod is None
-    assert resolution.katastr_kod is None
+    assert (resolution.obec_kod, resolution.katastr_kod) == (554782, VELESLAVIN_KU)
+    assert (resolution.cast_obce_kod, resolution.granularity) == (490211, "cast_obce_or_quarter")
+    assert (resolution.lat, resolution.lon) == (50.09810, 14.31510)
 
 
-def test_a_pin_alone_gets_its_town_and_no_ku():
+def test_a_ku_holding_doors_of_two_parts_gives_its_ku_and_no_part():
     resolution = _resolve([
-        mm.claim(1, "coordinate", lat=50.10100, lon=14.34800, declared_precision_label="gps"),
+        mm.claim(1, "obec_name", value_text="Praha"),
+        mm.claim(2, "coordinate", lat=50.10100, lon=14.34800, declared_precision_label="gps"),
+    ])
+    assert (resolution.katastr_kod, resolution.cast_obce_kod) == (VOKOVICE_KU, None)
+    assert (resolution.ruian_adm_kod, resolution.granularity) == (None, "obec")
+
+
+@pytest.mark.parametrize(
+    ("label", "blur"),
+    [("no_exact_address", "declared"), ("not_address", "declared"), ("quarter", "declared"),
+     (None, "none")],
+)
+def test_a_pin_no_portal_declares_precise_decides_nothing(label, blur):
+    """The B1 regression, kept for the pins it still covers: a label its contract lists as
+    blurred carries `blur_evidence='declared'` (every one of them on production, read
+    2026-11-24: idnes `no_exact_address` 31,459, sreality `not_address` 14), and a pin with no
+    declaration is not precise."""
+    resolution = _resolve([
+        mm.claim(1, "obec_name", value_text="Praha"),
+        mm.claim(2, "coordinate", lat=50.09810, lon=14.31510, declared_precision_label=label,
+                 blur_evidence=blur),
     ])
     assert resolution.obec_kod == 554782
-    assert resolution.katastr_kod is None
+    assert (resolution.katastr_kod, resolution.cast_obce_kod) == (None, None)
+
+
+def test_a_precise_pin_alone_names_its_town_ku_and_part():
+    resolution = _resolve([
+        mm.claim(1, "coordinate", lat=50.09810, lon=14.31510, declared_precision_label="gps"),
+    ])
+    assert (resolution.obec_kod, resolution.katastr_kod) == (554782, VELESLAVIN_KU)
+    assert resolution.cast_obce_kod == 490211
+
+
+def test_a_part_the_words_name_is_never_replaced_by_the_pin():
+    """The words decide: the part they name keeps its own door-rule KÚ, wherever the pin is."""
+    resolution = _resolve([
+        mm.claim(1, "obec_name", value_text="Praha"),
+        mm.claim(2, "cast_obce_name", value_text="Vokovice"),
+        mm.claim(3, "coordinate", lat=50.09810, lon=14.31510, declared_precision_label="gps"),
+    ])
+    assert (resolution.cast_obce_kod, resolution.katastr_kod) == (490067, VOKOVICE_KU)
+
+
+def test_a_ku_the_words_name_is_never_replaced_by_the_pin():
+    """Ruling B refines a row whose words name no část; a KÚ the words name counts. Its name is
+    read as the place it spells (Veleslavín), whatever its doors hold; the pin decides nothing."""
+    resolution = _resolve([
+        mm.claim(1, "obec_name", value_text="Praha"),
+        mm.claim(2, "cast_obce_name", value_text="Veleslavín u Prahy"),
+        mm.claim(3, "coordinate", lat=50.10100, lon=14.34800, declared_precision_label="gps"),
+    ])
+    assert resolution.cast_obce_kod == 490211
+
+
+def test_a_ku_with_no_door_in_the_town_gives_nothing():
+    """A pin on the town's border can lie in the neighbour's KÚ: no door of it in the town, so
+    neither its KÚ nor a část is the row's."""
+    mirror = _mirror()
+    mirror.katastr_polygons[999001] = (50.05000, 14.50000, 400.0)
+    resolution = _resolve([
+        mm.claim(1, "obec_name", value_text="Praha"),
+        mm.claim(2, "coordinate", lat=50.05000, lon=14.50000, declared_precision_label="gps"),
+    ], mirror)
+    assert resolution.obec_kod == 554782
+    assert (resolution.katastr_kod, resolution.cast_obce_kod) == (None, None)
+
+
+def test_a_part_of_another_town_is_never_the_rows():
+    """The door rule names a část by code; one the register hangs under another town (a
+    re-parent) is refused, so the words' town is never replaced through the část's chain."""
+    mirror = _mirror()
+    mirror.katastr_polygons[999002] = (50.05000, 14.50000, 400.0)
+    mirror.points.append(AddressPoint(kod_adm=21690601, obec_unit_id=13, obec_kod=554782,
+                                      psc="10000", lat=None, lon=None, cast_obce_unit_id=99,
+                                      cast_obce_kod=599999, katastr_kod=999002))
+    mirror.units.append(mm._unit(99, "cast_obce", 599999, "Jinde", "jinde",
+                                 "k80.o3804.b599212.c599999", parent=10))
+    resolution = _resolve([
+        mm.claim(1, "obec_name", value_text="Praha"),
+        mm.claim(2, "coordinate", lat=50.05000, lon=14.50000, declared_precision_label="gps"),
+    ], mirror)
+    assert (resolution.obec_kod, resolution.cast_obce_kod) == (554782, None)
+    assert resolution.katastr_kod == 999002
+
+
+@pytest.mark.parametrize(
+    ("ku", "expected"),
+    [("Vokovice u Prahy", 490067), ("Veleslavín u Prahy", 490211)],
+    ids=["one-part", "two-parts"],
+)
+def test_a_ku_the_words_name_binds_the_part_its_name_spells(ku, expected):
+    """A name is read as the place it spells, never by the doors its KÚ holds (operator
+    2026-11-24: the door rule for words, Q2, is dropped; its wave shadow flipped a town and
+    contradicted the words, e.g. Zaječov -> Kvaň)."""
+    resolution = _resolve([
+        mm.claim(1, "obec_name", value_text="Praha"),
+        mm.claim(2, "cast_obce_name", value_text=ku),
+    ])
+    assert resolution.cast_obce_kod == expected
 
 
 # ------------------------------------------------------------------ masking
@@ -250,8 +369,9 @@ def test_the_katastr_rule_carries_its_own_resolver_version():
     the corpus and no existing row ever gets its KÚ (v5.4) — nor the W2 town rule (v5.5), nor
     W4's parts and streets (v5.7), nor a část placed at its own doors (v5.8), nor one claim per
     type read with no tie rule (v5.9.1, W3), nor a pin placing a row only inside the town the
-    words bound, the quarter a část and the grain the finest key (v5.10, W5)."""
-    assert RESOLVER_VERSION == "resolver:v5.10"
+    words bound, the quarter a část and the grain the finest key (v5.10, W5), nor a precise pin
+    giving its KÚ and that KÚ's door-rule část (v5.11)."""
+    assert RESOLVER_VERSION == "resolver:v5.11"
 
 
 # ------------------------------------------------------------------ the SQL side
@@ -278,9 +398,10 @@ def test_every_ku_answer_rides_a_read_fill_already_makes():
     assert "ku.code" in _flat(resolve_db._ADDRESS_POINT_SQL)
 
 
-def test_the_ku_is_only_ever_asked_of_a_registry_geometry():
-    """No portal coordinate reaches a KÚ question: the point-keyed statements (the ones that
-    take the listing's own lat/lon arrays) never name the KÚ level."""
+def test_the_slice_point_statements_never_ask_the_ku():
+    """The point-keyed statements of the slice (the ones that take the listing's own lat/lon
+    arrays) never name the KÚ level: the one KÚ question a pin reaches is `_KATASTR_AT_SQL`,
+    asked per precise pin on a town-only row (v5.11)."""
     from location_data.resolver import resolve_db
 
     for sql in (resolve_db.CONTAINING_OBEC_SQL, resolve_db._NEAREST_OBEC_SQL,

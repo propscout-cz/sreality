@@ -1,7 +1,7 @@
 """HTTP client for sreality's `ceny-nemovitosti` statistics API.
 
-`localities/suggest` (public) resolves a city name to a sreality entity;
-`estate_prices` (login-gated) returns the per-locality monthly series. Reuses
+`estate_prices` (login-gated) returns the per-locality monthly series, a town
+named by its sreality key from `ruian_translation`. Reuses
 `BasePortalClient` for the session / retry / adaptive-throttle machinery, adds
 the logged-in cookie + the `Referer` the API expects, and walks the history in
 date chunks so we don't depend on any single-call window cap (the API spans
@@ -16,23 +16,14 @@ from typing import TYPE_CHECKING, Any
 import requests
 
 from scraper.portal_base import BasePortalClient
-from scraper.price_stats_parser import (
-    build_estate_prices_params,
-    parse_estate_prices,
-    parse_suggest_municipalities,
-    parse_suggest_municipality,
-)
+from scraper.price_stats_parser import build_estate_prices_params, parse_estate_prices
 
 if TYPE_CHECKING:
     from scraper.rate_limit import RateLimiter
 
 LOG = logging.getLogger(__name__)
 
-SUGGEST_URL = "https://www.sreality.cz/api/v1/localities/suggest"
 ESTATE_PRICES_URL = "https://www.sreality.cz/api/v1/estate_prices"
-_SUGGEST_CATEGORIES = (
-    "region_cz,district_cz,municipality_cz,quarter_cz,ward_cz,street_cz,area_cz"
-)
 
 
 class AuthExpiredError(Exception):
@@ -58,36 +49,6 @@ class PriceStatsClient(BasePortalClient):
     def set_cookies(self, cookies: dict[str, str]) -> None:
         for name, value in cookies.items():
             self._session.cookies.set(name, value, domain=".sreality.cz")
-
-    def suggest_municipality(self, phrase: str) -> dict[str, Any] | None:
-        """Resolve a city name to a municipality entity (id + geo). Public API."""
-        resp = self._request(
-            SUGGEST_URL,
-            params={
-                "phrase": phrase,
-                "category": _SUGGEST_CATEGORIES,
-                "lang": "cs",
-                "limit": 10,
-            },
-        )
-        return parse_suggest_municipality(resp.json(), phrase=phrase)
-
-    def suggest_municipalities(self, phrase: str, *, limit: int = 80) -> list[dict[str, Any]]:
-        """ALL municipality entities matching a name (each with its own geo), so
-        same-name obce can be resolved individually by coordinate. Queries the
-        municipality_cz category ALONE: sreality caps the suggest response at ~50
-        results, and the full category lets wards/streets crowd out muni results
-        — muni-only returns every bearer (e.g. all 34 'Nová Ves')."""
-        resp = self._request(
-            SUGGEST_URL,
-            params={
-                "phrase": phrase,
-                "category": "municipality_cz",
-                "lang": "cs",
-                "limit": limit,
-            },
-        )
-        return parse_suggest_municipalities(resp.json())
 
     def fetch_window(
         self,

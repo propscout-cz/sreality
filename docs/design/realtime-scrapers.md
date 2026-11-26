@@ -69,8 +69,9 @@ the API's loop), so the API's one loop is the health teller*). It runs, as conti
    stored, with a timeout fallback for listings that genuinely have no photos. — *superseded
    2026-10-23 by the publication rule (rule 16, migrations 668/669, `toolkit/publication.py`): the
    maintenance lane's pass stamps `properties.settled_at` once a property's first photo is stored
-   (or it has none) and the engine is done with its ads, and Browse, the map, stats and the
-   watchdog serve a property once it is settled or 6 h old; the image gate is deleted.*
+   (or it has none) and the engine is done with its ads, or it is 6 h old and the engine has read
+   every in-scope ad on it (2026-11-17), and Browse, the map, stats and the watchdog serve a
+   property once it is stamped; the image gate is deleted.*
 4. **Targeted gone-probes** for watchdog/pipeline/collection properties (the per-listing
    `ListingGoneError` → immediate inactive flip already exists) — minutes-grade delisting
    for WATCHED properties; market-wide delisting stays completeness-gated on the walks.
@@ -108,8 +109,8 @@ budget and a 429/403 penalty propagates. Probes are net-polite: ~1 page/host/int
 far below today's accepted walk volume.
 
 **Explicitly rejected:** Playwright/headless (all 9 portals serve complete data over plain
-HTTP; the mmreality/ceskereality blocker is IP reputation, which only residential egress
-fixes — 10–50× per-page cost for nothing) and any new queue infrastructure (Redis etc. —
+HTTP, mmreality and ceskereality through residential egress — 10–50× per-page cost for
+nothing) and any new queue infrastructure (Redis etc. —
 Postgres SKIP LOCKED is the industry-standard substrate and already proven here).
 
 ## SLOs (operator-accepted 2026-07-02)
@@ -229,9 +230,10 @@ transaction pooler, several times slower, and says so once in the log and every 
 `worker_heartbeats.details->'location_resolve'->'last'->>'session_pooler'`.
 
 Two caveats this lane accepts rather than fixes:
-- **The `location-batch` Actions concurrency group does not reach Railway** (that is the point of
-  Decision 8). The worker drain can now run concurrently with the registry load, claim intake and
-  Mapy inventory, which the 2026-08-10 incident deliberately serialized. Mitigations already in
+- **The heavy-lane exclusion does not reach the worker** (that is the point of Decision 8; it was
+  the `location-batch` Actions group, the job runner's `location-heavy` resource since #2028). The
+  worker drain can now run concurrently with the registry load and the claim intake, which the
+  2026-08-10 incident deliberately serialized. Mitigations already in
   place: a bounded number of connections (`LOCATION_RESOLVE_WORKERS`, default 4 since W2-a5 — set it
   to 1 to restore the single-connection posture), batch 250, `SET LOCAL
   statement_timeout`/`lock_timeout` on every batch transaction, and
@@ -249,8 +251,8 @@ Two caveats this lane accepts rather than fixes:
 
 **Location-intake-fast lane (W7-a, ships LIVE):** the claim lane's change-driven listing scan
 (`location_data.claims_intake.run`, `mode="incremental"`) also runs from this worker, every ~60 s.
-Not a second lane — a second SCHEDULE for the same module. The hourly `location_claims_intake.yml`
-plus its 15-minute snapshot lag left a listing written 45 s after a tick with no claims and no
+Not a second lane — a second SCHEDULE for the same module. The hourly run (then a GitHub workflow,
+the job runner's `location_intake` since #2028) plus its 15-minute snapshot lag left a listing written 45 s after a tick with no claims and no
 verdict for up to ~75 minutes, and under W5 the consumers serve only resolved locations, so that is
 ~75 minutes invisible in Browse (measured 2026-09-13). The worker pass is the payload half only —
 `skip_bodies=True`: no bodies-first drain, no R2 client, no `forkserver` pool — with a **2-minute**
@@ -283,16 +285,24 @@ lag, a 45 s budget and 2 000-row batches. Env knobs on the Railway service:
 - **The contracts are projected from the image once at lane start** (`contracts/` is in the Docker
   image already, for `payload_norm`), idempotent per `(portal, contract_version)`. A failure is a
   WARNING, never a dead lane: the projection raises by design when a contract's governed bytes moved
-  without a version bump, and `location_claims_intake.yml` is the authoritative projector.
+  without a version bump, and the hourly `location_intake` job, which projects before every run and
+  fails on it, is the authoritative projector.
 - **Latency, detail write to Browse:** ≤2 min lag → ≤1 min tick → the resolve lane (~15 s) →
-  `browse_list`'s `*/15` pg_cron rebuild. Claim and verdict in ~3–4 minutes; the read model is now
+  `browse_list`'s pg_cron rebuild, hourly at :45 since migration 740 (the maintenance pass's published
+  enqueue first, for a property first seen within the 6 h cap plus two hours). Claim and verdict in
+  ~3–4 minutes; the read model is now
   the slowest hop, not the claim lane.
 
 **Location-refetch lane (location simplification W8; W2 of the quality programme made its tick a
-constant):** every hour (`LOCATION_REFETCH_TICK_SECONDS` = 3600), queue the active ads with no town
+constant):** every 6 h (`LOCATION_REFETCH_TICK_SECONDS` = 21600, #2506), queue the active ads with no town
 (rule 25) whose newest page or payload is at least `LOCATION_REFETCH_MIN_AGE_S` (6 h) old for ONE
-more detail fetch, at most `LOCATION_REFETCH_CAP_PER_SOURCE` (500) per portal — so a townless ad is
-re-read every 6 h or more while it stays townless. The predicate bounds the traffic, not the tick.
+more detail fetch, at most `LOCATION_REFETCH_CAP_PER_SOURCE` (500) per portal. The predicate and the
+tick bound the traffic together: a townless ad is queued for its second look 6-12 h after its
+discovery fetch, and while it stays townless it is re-read about every 12 h, not 6 — the drain's
+fetch lands after the tick that queued it, so the next tick finds that page a little under 6 h old
+(a worker boot runs one pass too). Health reads the lane late after 18 h without a completed pass,
+and only once the worker has been up 18 h (backend merges redeploy it, so that cell is mostly
+quiet; a failed pass is a Problem at once).
 
 - **Why.** ceskereality and realitymix geocode an ad after publishing it; our detail fetch ran at
   discovery, read empty location fields, and the index card never changed, so no re-fetch was ever
@@ -307,7 +317,10 @@ re-read every 6 h or more while it stays townless. The predicate bounds the traf
 - **Bounded per portal, oldest-fetched first.** `LOCATION_REFETCH_CAP_PER_SOURCE` (500) rows per
   portal per tick, so bazos's dead ads (their page answers with the category listing →
   `ListingGoneError` → delisted by the same fetch) drain over days instead of flooding one drain
-  pass. The heartbeat's `last` carries the UNCAPPED per-portal backlog beside what it queued.
+  pass. At four ticks a day that is a ceiling of 2,000 rows per portal per day plus one pass per
+  worker boot (12,000 at the hourly tick before #2506): kept, because these rows share
+  `QUEUE_PRIORITY_VERIFY` and its reserve with the presence checks, and the backlog was 0 when the
+  tick changed. The heartbeat's `last` carries the UNCAPPED per-portal backlog beside what it queued.
 - **It enqueues and nothing else.** `db.enqueue_location_refetch` writes at
   `QUEUE_PRIORITY_VERIFY` with `LEAST` on priority and `given_up=false, attempts=0` (the rows it
   most wants are the ones the drain gave up on; nothing else re-arms them). `claim_detail_batch`
@@ -334,14 +347,14 @@ one `app_settings` integer, `realtime_sold_comps_interval_seconds`, seeded 0 by 
   fail-safe reason, sharpened here: a settings blip must not spend another site's bandwidth.
 - **The work-list is a query, not a queue** (`sold_db.sold_comp_cells`): obec cells of properties
   holding ANY account's pipeline card at a non-terminal, non-archived stage, active, `byt`/`dum`,
-  with a resolved point AND an `admin_boundaries` polygon, minus the cells whose NEWEST ledger row
+  with a resolved point AND a `ruian_unit_render` polygon, minus the cells whose NEWEST ledger row
   is `ok` within 35 days or `failed` within 6 hours; stalest first, 5 cells a pass. The source
   republishes a transfer ~30 days after the sale, so 35 days is not a guess — asking sooner cannot
   find anything new. The boundary join is the one clause that is about the QUEUE rather than the
   work: an unboxable cell can only be skipped, a skip writes no ledger row, and `NULLS FIRST` would
   then hand back the same starved cell at the head of every pass for ever.
 - **The cell is the unit, and the ledger is the run record.** The box is the obec's
-  `admin_boundaries` envelope widened by 5,000 m (`sold_db.MAX_READ_RADIUS_M` = the read surface's
+  RÚIAN render polygon's envelope widened by 5,000 m (`sold_db.MAX_READ_RADIUS_M` = the read surface's
   largest radius). `sold_fetch.fetch_cell` NEVER raises: ok, failed or skipped, every attempt that
   has a box ends as a `sold_transaction_fetches` row — a cell that failed silently would be
   indistinguishable from a cell that holds no sales. And an `ok` row says what it COVERED: a walk
@@ -516,7 +529,7 @@ nothing else.
   and `skipped: daily cap` + `unfinished` (every due block the pass never reached and every block
   inside a cycle) when the cap stopped the pass; null when the pass walked
   nothing and no block is mid-cycle)}`; an
-  absent store (migrations 539/540/596/604) = `skipped: store_absent` + one warning. A change of the reconcile state is logged once, and the
+  absent store (migrations 539/540/596/604/616/769) = `skipped: store_absent` + one warning. A change of the reconcile state is logged once, and the
   engine logs each release of a dead predecessor's lease.
 - **Latency floor.** The engine ignores rows younger than its settle lag (`SETTLE_LAG_S`, 300 s,
   E73), and a photo-dependent merge waits until every photograph carries its pHash, CLIP vector
@@ -589,10 +602,10 @@ reads `beat_at` for every worker, plus the `health` entry (`last_pass_at`, `fail
 `last_error`, `in_flight_s`) and the row's `started_at` for its `health_lane` cell (migration 621).
 
 **Liveness — the worker cannot freeze silently (2026-09-30).** From 2026-09-29 23:42 to 07:22 UTC
-the worker wrote no heartbeat and ran no lane, yet never exited. ceskereality answered 403 to
-every request; each 403 penalized the shared ledger and each retry leased a fresh batch, so
-`next_slot_at` ran an hour ahead and every caller slept in `RateLimiter.acquire` until it. The
-probe lane reached ceskereality (third in `REALTIME_SOURCES`) every pass; `_lane_loop` abandoned
+the worker wrote no heartbeat and ran no lane, yet never exited. Penalized requests on one
+portal each widened the shared ledger and each retry leased a fresh batch, so `next_slot_at`
+ran an hour ahead and every caller slept in `RateLimiter.acquire` until it. The probe lane
+reached that portal (third in `REALTIME_SOURCES`) every pass; `_lane_loop` abandoned
 the pass at `LANE_PASS_TIMEOUT_SECONDS` but the thread slept on, and with no pass lock every pass
 added one (eighteen by 23:15, plus drain threads) until asyncio's default executor
 (min(32, cpu+4)) was full. The heartbeat write and every lane's interval read ran on that same
@@ -618,7 +631,13 @@ Four changes, each closing one link:
   on why an item failed, so an item whose own error lands after the refusal is handed back too,
   without an attempt charge (a retry, never a lost attempt). The sold_comps tick stops at
   the refused cell (`fetch_cell` re-raises the refusal and writes no ledger row) instead of
-  failing every remaining cell one by one. The Actions walks and drains and the `reas_main` CLI
+  failing every remaining cell one by one. A deploy's SIGTERM is the same refusal since #2438:
+  the worker's handler sets `scraper.stop` (armed at boot; the event loop owns the signals), so
+  a drain chunk in flight hands back what it has not fetched (`refused_reason = "stop"`,
+  `DRAIN stop signal mid-chunk`, counted `deadline_stopped`) and flushes the rest, a probe
+  stops without a `budget_refused`, and a sold_comps cell the stop cut writes no ledger row,
+  where before the chunk fetched on until SIGKILL and its claims waited out the 30-min
+  reclaim. The Actions walks and drains and the `reas_main` CLI
   pass no bound (NULL) and wait as long as the ledger says: a walk is built to wait, and a sticky
   refusal would abandon the rest of a three-hour walk (at penalty > 1x a healthy frontier can
   pass 120 s on the slowest ledger portal). Two changes cut the frontier's growth for every
@@ -659,11 +678,11 @@ Four changes, each closing one link:
   default-action signal sent to PID 1, so a `signal.alarm` backstop kills nothing. The timer
   dumps to /dev/null: it fires only when the dump into stderr is stuck, and its own write into
   that pipe would block it too.
-Not done here, follow-ups: a per-portal circuit breaker (trip a portal that 403s everything
-instead of re-probing it each pass), Health alerts on `budget_refused` / `portal_rate_state`
+Not done here, follow-ups: a per-portal circuit breaker (trip a portal whose every request
+fails instead of re-probing it each pass), Health alerts on `budget_refused` / `portal_rate_state`
 running ahead, handing unused leased slots back when a run ends, and a standing `faulthandler`
 timer, re-armed by each beat, for a C call that holds the GIL (the watchdog thread cannot run to
-arm its own then). After a blocked
+arm its own then). After a penalized
 portal recovers, reset its `portal_rate_state` row (`penalty_factor = 1`, `next_slot_at = now()`)
 before lifting the kill switches: a refused lease does not decay the penalty.
 

@@ -6,16 +6,24 @@
 2. Recompute, ONE RULE PER FIELD (docs/design/merge-sprint/PROGRAM.md MS11). The canonical advert
    is rank 1 of `property_canonical_listings(property_id)` (migration 588, MS5: active, a map
    point, earliest first seen among active / latest last seen among inactive, trust, id). Every
-   advert field is its own: price, area (no fallback), layout, category, subtype, source,
-   condition with both derived levels (rule 14), furnished, and `repr_listing_ref_id`, through
-   which the read models take floor, description, photos, broker and link. The location advert
+   advert field is its own: price, area (no fallback), layout, category, source, both derived
+   condition levels (rule 14, parked), furnished, and `repr_listing_ref_id`, through
+   which the read models take description, photos, broker and link. The house type and the
+   condition are each the value MOST adverts state, a tie going to the canonical order (#2574: the
+   canonical advert alone decided, so a switch of it moved a property in and out of a filter with
+   nothing changed on the market): the house type among the adverts of the canonical advert's
+   category, the condition among the active adverts, or among all when none is active. The storey and the
+   above-ground count are each the value MOST adverts state, a tie going to the advert first in
+   the canonical order (#2552: 2,400 of 17,134 multi-advert flats held adverts that disagreed,
+   and the canonical one decided alone). The location advert
    (`location_listing_ref_id`) is rank 1 of the same function's location order (migration 635:
    a map point, then determined foreign, then the finest rung, then the canonical order), set in
    the same statement as the canonical advert, so both are set or neither is; every read model
-   takes a property's place from it. The six amenities are a union over every advert (MS6);
-   every other physical fact is the first non-empty value in the canonical order. The price
-   figures are the canonical advert's lineage (MS10): its own and its same-portal predecessors'
-   `listing_price_steps` plus one handover step per link, the total compounded. Lifecycle: any advert active, min/max seen, newest snapshot;
+   takes a property's place from it. The six amenities are a union over every advert and the
+   energy rating the best class any advert states (MS6); every other physical fact is the first
+   non-empty value in the canonical order. The price
+   figures are the canonical advert's lineage (MS10): `listing_price_history` (migration 768), its own and its
+   same-portal predecessors' `listing_price_steps` plus one handover step per link, the total compounded. Lifecycle: any advert active, min/max seen, newest snapshot;
    the portal lists and one newest-advert date per offered portal (MS19). `repr_since` is
    stamped when the canonical advert changes, or when a property the full sweep reset to no ads
    gains one (the price alerts start there). `city_proximity_computed_at` is cleared when the
@@ -25,13 +33,16 @@
    a row whose location advert moved while it ran (migration 636). The broker book
    (`broker_book`, migration 692: one row per property and canonical broker) is stored from its
    one view beside every rollup, in the same transaction.
-3. Settle (the incremental pass only, after the drain): stamp `settled_at` once on each fresh
-   property the pipeline is done with and patch its Browse row at once (`_settle_fresh`,
-   migrations 668/669). A property is published once settled or 6 h old (`toolkit/publication.py`).
+3. Settle (after the drain): stamp `settled_at` once on each property the pipeline is done with
+   and patch its Browse row at once (`_settle_fresh`, migrations 668/747). The stamp IS publication
+   (`toolkit/publication.py`). The incremental pass opens by queueing what is published and served
+   but not yet in Browse (`_enqueue_published`: a place resolved after the stamp, a lost patch), so
+   its drain patches it in. The full sweep, which holds the lease the pass needs, settles, queues
+   and drains after each batch (`_drain_published`).
 
 Batched by property-id range so each statement stays well under the
 transaction-pooler statement timeout. autocommit=True means each batch
-commits independently -- a workflow timeout preserves completed batches.
+commits independently -- a timeout preserves completed batches.
 
 Liveness (2026-08-06 incident): the maintenance lease is a SHORT (15 min) TTL
 heartbeat-renewed every batch/slice — never a runtime-sized grant — so a
@@ -42,8 +53,8 @@ release the lease. The next run continues that CYCLE from the cursor instead
 of id 1 (2026-10-03: four daily runs in a row stopped near id 540k of 927k,
 each restarting at 1, so the tail went days without a reconcile). The first
 stop of a cycle exits 0 with a warning; a resumed run that stops again, or a
-run that stops before its first batch (nothing to resume), exits RED (GH
-reports a timeout kill as `cancelled`, which alerts nobody). The jobs
+run that stops before its first batch (nothing to resume), exits RED, a
+`failed` run on its job cell rather than a kill at timeout_s. The jobs
 check's `artifact/property_sweep` cell (scripts/checks/platform.py) watches
 the completion stamp (derived_artifacts, migration 622) independently.
 
@@ -51,12 +62,12 @@ Two run modes (Phase 3 -- real-time properties):
 
   * --incremental (by hand; the realtime worker's maintenance lane runs it every 30 s): attach new stragglers + recompute
     ONLY the properties queued in `dirty_properties` by the writers + settle. O(changes).
-  * full (default, daily reconcile, recompute_property_stats.yml): attach (again after
+  * full (default, daily reconcile, the job runner's property_sweep): attach (again after
     every batch) + recompute EVERY property (one cycle, resumed across runs when the budget
     cuts it) + reconcile childless + clear the queue. The self-healing backstop
     for anything the incremental pass missed.
 
-Usage (typically via the workflows above):
+Usage (typically via the jobs above):
 
     python -m scripts.recompute_property_stats --batch-size 2000       # full
     python -m scripts.recompute_property_stats --incremental            # dirty-set
@@ -76,10 +87,11 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
+from location_data.claims_common import served_location_predicate
 from scraper import db, job_lease
 from toolkit.browse_read_model import sync_browse_list
 from toolkit.filter_registry import PORTAL_OPTIONS
-from toolkit.publication import CAP_SQL
+from toolkit.publication import CAP_SQL, published_predicate
 
 LOG = logging.getLogger("recompute_property_stats")
 
@@ -102,8 +114,66 @@ _STRAGGLERS_SQL = "SELECT id FROM listings WHERE property_id IS NULL LIMIT %(lim
 _NEWEST_AD_AT_AGG = "\n".join(
     f"        max(k.first_seen_at) FILTER (WHERE k.source = '{o.value}') AS newest_ad_at_{o.value},"
     for o in PORTAL_OPTIONS)
-_NEWEST_AD_AT_SET = "\n".join(
-    f"      newest_ad_at_{o.value} = r.newest_ad_at_{o.value}," for o in PORTAL_OPTIONS)
+
+# What the rollup writes, column by column. The SET list and the guard that skips a row whose
+# rollup is unchanged (no dead tuple, WAL or index entries for it) are rendered from this one dict,
+# so they cannot drift; `stats_computed_at` is stamped beside them, so only when a row changes. The
+# expressions read the stored row, as a SET does (the `p.` in `repr_since`, `city_proximity_computed_at`).
+_ROLLUP = {
+    "is_active": "r.is_active",
+    "source_count": "r.source_count",
+    "first_seen_at": "r.first_seen_at",
+    "last_seen_at": "r.last_seen_at",
+    "repr_listing_id": "c.sreality_id",
+    "repr_since": "CASE WHEN p.repr_listing_ref_id <> c.id OR p.source_count = 0 THEN now() "
+                  "ELSE p.repr_since END",
+    "city_proximity_computed_at": "CASE WHEN p.location_listing_ref_id IS DISTINCT FROM la.id "
+                                  "THEN NULL ELSE p.city_proximity_computed_at END",
+    "repr_listing_ref_id": "c.id",
+    "location_listing_ref_id": "la.id",
+    "category_main": "c.category_main",
+    "category_type": "c.category_type",
+    "category_sub_cb": "c.category_sub_cb",
+    "subtype": "sd.subtype",
+    "disposition": "c.disposition",
+    "area_m2": "c.area_m2",
+    "current_price_czk": "c.price_czk",
+    "condition": "sd.condition",
+    "building_condition_level": "c.building_condition_level",
+    "apartment_condition_level": "c.apartment_condition_level",
+    "furnished": "c.furnished",
+    "source": "c.source",
+    "all_sources": "r.all_sources",
+    "active_sources": "r.active_sources",
+    "has_lift": "r.has_lift",
+    "has_balcony": "r.has_balcony",
+    "has_parking": "r.has_parking",
+    "terrace": "r.terrace",
+    "garage": "r.garage",
+    "cellar": "r.cellar",
+    "usable_area": "r.usable_area",
+    "estate_area": "r.estate_area",
+    "garden_area": "r.garden_area",
+    "parking_lots": "r.parking_lots",
+    "building_type": "r.building_type",
+    "ownership": "r.ownership",
+    "energy_rating": "r.energy_rating",
+    "floor": "sy.floor",
+    "total_floors": "sy.total_floors",
+    "price_drop_count": "coalesce(ph.drops, 0)",
+    "price_rise_count": "coalesce(ph.rises, 0)",
+    "max_price_drop_pct": "ph.max_drop_pct",
+    "price_change_count": "coalesce(ph.changes, 0)",
+    "price_change_count_30d": "coalesce(ph.changes_30d, 0)",
+    "price_change_count_90d": "coalesce(ph.changes_90d, 0)",
+    "price_change_count_365d": "coalesce(ph.changes_365d, 0)",
+    "total_price_change_pct": "ph.change_pct",
+    "last_change_at": "coalesce(ch.last_change_at, r.first_seen_at)",
+    **{f"newest_ad_at_{o.value}": f"r.newest_ad_at_{o.value}" for o in PORTAL_OPTIONS},
+}
+_ROLLUP_SET = "\n".join(f"      {column} = {value}," for column, value in _ROLLUP.items())
+_ROLLUP_CHANGED = (f"({', '.join(f'p.{column}' for column in _ROLLUP)})\n"
+                   f"        IS DISTINCT FROM ({', '.join(_ROLLUP.values())})")
 
 _RECOMPUTE_BATCH_SQL = f"""
     WITH batch AS (
@@ -125,8 +195,8 @@ _RECOMPUTE_BATCH_SQL = f"""
       SELECT * FROM kids WHERE location_rank = 1
     ),
     -- Lifecycle and the portals over every advert, active or not; the six amenities are a union
-    -- (yes when any advert says yes, MS6); every other physical fact is the first non-empty value
-    -- in the canonical order.
+    -- (yes when any advert says yes) and the energy rating the best class any advert states
+    -- (MS6); every other physical fact is the first non-empty value in the canonical order.
     child_agg AS (
       SELECT
         k.property_id              AS pid,
@@ -150,83 +220,54 @@ _RECOMPUTE_BATCH_SQL = f"""
         (array_agg(k.parking_lots ORDER BY k.canonical_rank) FILTER (WHERE k.parking_lots IS NOT NULL))[1] AS parking_lots,
         (array_agg(k.building_type ORDER BY k.canonical_rank) FILTER (WHERE k.building_type IS NOT NULL))[1] AS building_type,
         (array_agg(k.ownership ORDER BY k.canonical_rank) FILTER (WHERE k.ownership IS NOT NULL))[1] AS ownership,
-        (array_agg(k.energy_rating ORDER BY k.canonical_rank) FILTER (WHERE k.energy_rating IS NOT NULL))[1] AS energy_rating
+        min(k.energy_rating)       AS energy_rating
       FROM kids k
       GROUP BY k.property_id
     ),
-    -- The canonical advert and its same-portal predecessors (MS10): each predecessor is the advert
-    -- on that portal last seen latest, strictly before the later link was first seen, so adverts
-    -- that ran at the same time never link; first_seen_at falls along the chain, so it ends.
-    lineage AS (
-      WITH RECURSIVE link AS (
-        SELECT c.property_id AS pid, c.id, c.source, c.first_seen_at, 0 AS hop FROM canon c
-        UNION ALL
-        SELECT k.pid, pre.id, k.source, pre.first_seen_at, k.hop + 1
-        FROM link k
-        CROSS JOIN LATERAL (
-          SELECT l.id, l.first_seen_at FROM listings l
-          WHERE l.property_id = k.pid AND l.source = k.source
-            AND l.last_seen_at < k.first_seen_at AND l.first_seen_at < k.first_seen_at
-          ORDER BY l.last_seen_at DESC, l.id DESC
-          LIMIT 1
-        ) pre
-      )
-      SELECT * FROM link
+    -- The storey and the building's count: the value most adverts state, a tie going to the
+    -- advert first in the canonical order. A count the chosen storey reaches never votes
+    -- (`scraper.floor.total_floors_from_portal`'s rule, at the property's grain), so one
+    -- advert's storey is never shown against another's contradicting count.
+    storey_votes AS (
+      SELECT k.property_id AS pid, f.fact, f.value,
+             count(*) AS ads, min(k.canonical_rank) AS first_rank
+      FROM kids k
+      CROSS JOIN LATERAL (VALUES ('floor', k.floor), ('total', k.total_floors)) f(fact, value)
+      WHERE f.value IS NOT NULL
+      GROUP BY k.property_id, f.fact, f.value
     ),
-    -- Each priced link's first and last price over its own snapshots, dated by the first.
-    members AS (
-      SELECT g.pid, g.hop,
-        (array_agg(s.price_czk ORDER BY s.scraped_at, s.id))[1]           AS first_price,
-        min(s.scraped_at)                                                 AS first_at,
-        (array_agg(s.price_czk ORDER BY s.scraped_at DESC, s.id DESC))[1] AS last_price,
-        count(*)                                                          AS price_points
-      FROM lineage g
-      JOIN listing_snapshots s ON s.listing_id = g.id
-      WHERE s.price_czk IS NOT NULL
-      GROUP BY g.pid, g.hop
+    storey AS (
+      SELECT v.pid, s.floor,
+        (array_agg(v.value ORDER BY v.ads DESC, v.first_rank)
+           FILTER (WHERE v.fact = 'total' AND (s.floor IS NULL OR v.value > s.floor)))[1] AS total_floors
+      FROM storey_votes v
+      LEFT JOIN (
+        SELECT pid, (array_agg(value ORDER BY ads DESC, first_rank))[1] AS floor
+        FROM storey_votes WHERE fact = 'floor' GROUP BY pid
+      ) s USING (pid)
+      GROUP BY v.pid, s.floor
     ),
-    -- The steps the price figures count: each link's OWN steps (`listing_price_steps`, migration
-    -- 559, the one step definition the alerts read too) plus one handover step into each priced
-    -- link from the last price of the next older priced link, dated at the newer link's first.
-    steps AS (
-      SELECT g.pid, ps.scraped_at, ps.price_czk, ps.prev_price_czk
-      FROM lineage g
-      JOIN listing_price_steps ps ON ps.listing_id = g.id
-      UNION ALL
-      SELECT h.pid, h.first_at, h.first_price, h.prev_price_czk
-      FROM (SELECT m.pid, m.first_at, m.first_price,
-                   lead(m.last_price) OVER (PARTITION BY m.pid ORDER BY m.hop) AS prev_price_czk
-            FROM members m) h
-      WHERE h.first_price <> h.prev_price_czk
-    ),
-    -- Each step dated by its own scraped_at. The windowed counts decay as events age out, so they
-    -- are only as fresh as the last recompute of the row -- the daily full sweep is the bound.
-    price_hist AS (
-      SELECT
-        ps.pid,
-        count(*) FILTER (WHERE ps.price_czk < ps.prev_price_czk) AS drops,
-        count(*) FILTER (WHERE ps.price_czk > ps.prev_price_czk) AS rises,
-        count(*)                                                 AS changes,
-        count(*) FILTER (WHERE ps.scraped_at >= now() - interval '30 days')  AS changes_30d,
-        count(*) FILTER (WHERE ps.scraped_at >= now() - interval '90 days')  AS changes_90d,
-        count(*) FILTER (WHERE ps.scraped_at >= now() - interval '365 days') AS changes_365d,
-        max((ps.prev_price_czk - ps.price_czk)::numeric / ps.prev_price_czk * 100)
-          FILTER (WHERE ps.price_czk < ps.prev_price_czk)        AS max_drop_pct
-      FROM steps ps
-      GROUP BY ps.pid
-    ),
-    -- The headline delta, compounded over those steps: it telescopes to the oldest priced link's
-    -- first price against the canonical advert's last. (No literal percent sign in this comment on
-    -- purpose -- prose percent inside executed SQL is an `incomplete placeholder` crash in
-    -- psycopg; tests/test_sql_placeholders.py guards it.) NULL under two priced snapshots or with
-    -- an unpriced canonical advert.
-    lineage_span AS (
-      SELECT pid,
-        (array_agg(first_price ORDER BY hop DESC))[1]     AS first_price,
-        (array_agg(last_price) FILTER (WHERE hop = 0))[1] AS last_price,
-        sum(price_points)                                 AS price_points
-      FROM members
-      GROUP BY pid
+    -- The house type and the condition: the value most adverts state, a tie going to the advert
+    -- first in the canonical order. A house type belongs to one category, so only the adverts of
+    -- the canonical advert's category vote; for the condition the active adverts vote, and every
+    -- advert only when no active one states it.
+    stated AS (
+      SELECT v.pid,
+        (array_agg(v.value ORDER BY v.ads DESC, v.first_rank) FILTER (WHERE v.fact = 'subtype'))[1] AS subtype,
+        (array_agg(v.value ORDER BY v.live DESC, CASE WHEN v.live > 0 THEN 0 ELSE v.ads END DESC, v.first_rank)
+           FILTER (WHERE v.fact = 'condition'))[1] AS condition
+      FROM (
+        SELECT k.property_id AS pid, f.fact, f.value, count(*) AS ads,
+               count(*) FILTER (WHERE k.is_active) AS live, min(k.canonical_rank) AS first_rank
+        FROM kids k
+        JOIN canon c ON c.property_id = k.property_id
+        CROSS JOIN LATERAL (VALUES
+          ('subtype', CASE WHEN k.category_main IS NOT DISTINCT FROM c.category_main THEN k.subtype END),
+          ('condition', k.condition)) f(fact, value)
+        WHERE f.value IS NOT NULL
+        GROUP BY k.property_id, f.fact, f.value
+      ) v
+      GROUP BY v.pid
     ),
     -- Last content change = the newest snapshot of any advert (snapshots are content-change
     -- only, rule 2): the "recently changed" timestamp Browse filters on (migration 158).
@@ -236,65 +277,28 @@ _RECOMPUTE_BATCH_SQL = f"""
       JOIN listings l ON l.id = s.listing_id
       JOIN batch b ON b.id = l.property_id
       GROUP BY l.property_id
+    ),
+    -- The price figures are the canonical advert's history (MS10, migration 768): the one definition
+    -- the broker book and the broker inventory read too, here over every same-portal predecessor.
+    -- MATERIALIZED, one call per canonical advert: as a lateral in the UPDATE's FROM the planner put
+    -- it on the outer side of a nested loop and re-ran every aggregate above once per advert.
+    prices AS MATERIALIZED (
+      SELECT c.property_id AS pid, h.*
+      FROM canon c
+      CROSS JOIN LATERAL listing_price_history(c.id, NULL) h
     )
     UPDATE properties p SET
-      is_active           = r.is_active,
-      source_count        = r.source_count,
-      first_seen_at       = r.first_seen_at,
-      last_seen_at        = r.last_seen_at,
-      repr_listing_id     = c.sreality_id,
-      repr_since          = CASE WHEN p.repr_listing_ref_id <> c.id OR p.source_count = 0 THEN now() ELSE p.repr_since END,
-      city_proximity_computed_at = CASE WHEN p.location_listing_ref_id IS DISTINCT FROM la.id THEN NULL ELSE p.city_proximity_computed_at END,
-      repr_listing_ref_id = c.id,
-      location_listing_ref_id = la.id,
-      category_main       = c.category_main,
-      category_type       = c.category_type,
-      category_sub_cb     = c.category_sub_cb,
-      subtype             = c.subtype,
-      disposition         = c.disposition,
-      area_m2             = c.area_m2,
-      current_price_czk   = c.price_czk,
-      condition           = c.condition,
-      building_condition_level  = c.building_condition_level,
-      apartment_condition_level = c.apartment_condition_level,
-      furnished           = c.furnished,
-      source              = c.source,
-      all_sources         = r.all_sources,
-      active_sources      = r.active_sources,
-      has_lift            = r.has_lift,
-      has_balcony         = r.has_balcony,
-      has_parking         = r.has_parking,
-      terrace             = r.terrace,
-      garage              = r.garage,
-      cellar              = r.cellar,
-      usable_area         = r.usable_area,
-      estate_area         = r.estate_area,
-      garden_area         = r.garden_area,
-      parking_lots        = r.parking_lots,
-      building_type       = r.building_type,
-      ownership           = r.ownership,
-      energy_rating       = r.energy_rating,
-      price_drop_count    = coalesce(ph.drops, 0),
-      price_rise_count    = coalesce(ph.rises, 0),
-      max_price_drop_pct  = ph.max_drop_pct,
-      price_change_count      = coalesce(ph.changes, 0),
-      price_change_count_30d  = coalesce(ph.changes_30d, 0),
-      price_change_count_90d  = coalesce(ph.changes_90d, 0),
-      price_change_count_365d = coalesce(ph.changes_365d, 0),
-      total_price_change_pct  = CASE
-          WHEN cs.price_points >= 2 AND cs.first_price > 0
-          THEN (cs.last_price - cs.first_price)::numeric / cs.first_price * 100
-      END,
-      last_change_at      = coalesce(ch.last_change_at, r.first_seen_at),
-{_NEWEST_AD_AT_SET}
+{_ROLLUP_SET}
       stats_computed_at   = now()
     FROM child_agg r
     JOIN canon c ON c.property_id = r.pid
     JOIN loc la ON la.property_id = r.pid
-    LEFT JOIN price_hist ph ON ph.pid = r.pid
-    LEFT JOIN lineage_span cs ON cs.pid = r.pid
+    LEFT JOIN storey sy ON sy.pid = r.pid
+    LEFT JOIN stated sd ON sd.pid = r.pid
     LEFT JOIN changes ch ON ch.pid = r.pid
+    LEFT JOIN prices ph ON ph.pid = r.pid
     WHERE p.id = r.pid
+      AND {_ROLLUP_CHANGED}
 """
 
 # Dirty-set recompute (Phase 3), derived from the batch SQL by scoping its `batch` CTE
@@ -314,7 +318,7 @@ _RECOMPUTE_SCOPED_SQL = _RECOMPUTE_BATCH_SQL.replace(
 _BROKER_BOOK_BATCH_SQL = """
     WITH spells AS (
       SELECT property_id, broker_id, is_active, all_sources, active_sources,
-             started_at, ended_at, tom_observed
+             started_at, ended_at, tom_observed, first_price_czk, last_price_czk, price_changes
       FROM broker_book_projection
       WHERE property_id >= %(lo)s AND property_id < %(hi)s
     ), gone AS (
@@ -325,17 +329,20 @@ _BROKER_BOOK_BATCH_SQL = """
     )
     INSERT INTO broker_book AS b
       (property_id, broker_id, is_active, all_sources, active_sources,
-       started_at, ended_at, tom_observed)
+       started_at, ended_at, tom_observed, first_price_czk, last_price_czk, price_changes)
     SELECT * FROM spells
     ORDER BY property_id, broker_id
     ON CONFLICT (property_id, broker_id) DO UPDATE
       SET is_active = EXCLUDED.is_active, all_sources = EXCLUDED.all_sources,
           active_sources = EXCLUDED.active_sources, started_at = EXCLUDED.started_at,
-          ended_at = EXCLUDED.ended_at, tom_observed = EXCLUDED.tom_observed
+          ended_at = EXCLUDED.ended_at, tom_observed = EXCLUDED.tom_observed,
+          first_price_czk = EXCLUDED.first_price_czk, last_price_czk = EXCLUDED.last_price_czk,
+          price_changes = EXCLUDED.price_changes
       WHERE (b.is_active, b.all_sources, b.active_sources, b.started_at, b.ended_at,
-             b.tom_observed)
+             b.tom_observed, b.first_price_czk, b.last_price_czk, b.price_changes)
             IS DISTINCT FROM (EXCLUDED.is_active, EXCLUDED.all_sources, EXCLUDED.active_sources,
-                              EXCLUDED.started_at, EXCLUDED.ended_at, EXCLUDED.tom_observed)
+                              EXCLUDED.started_at, EXCLUDED.ended_at, EXCLUDED.tom_observed,
+                              EXCLUDED.first_price_czk, EXCLUDED.last_price_czk, EXCLUDED.price_changes)
 """
 _BROKER_BOOK_SCOPED_SQL = _BROKER_BOOK_BATCH_SQL.replace(
     "property_id >= %(lo)s AND property_id < %(hi)s", "property_id = ANY(%(ids)s)")
@@ -446,16 +453,17 @@ def properties_changed(conn: Any, property_ids: Iterable[int]) -> None:
     book selects adverts by their property AFTER the writer moved them (an identity writer
     passes both sides, so the side an advert left loses its book row). The Browse
     patch is best-effort (`sync_browse_list` unwinds only itself) and a fast path, not a guarantee:
-    without it a recompute waited a measured mean 11.7 min (worst 36.6) for the */15 wholesale
-    rebuild, and a patch committed while a rebuild is in flight (61.9 s of every 900 s, measured
-    2026-10-19) lands on the doomed table: since migration 630 the rebuild re-patches identity
-    changes before its swap, and any other patch is superseded until the next rebuild. A full
+    without it a recompute waited a measured mean 11.7 min (worst 36.6) for the then */15 wholesale
+    rebuild (hourly since migration 740), and a patch committed while a rebuild is in flight (61.9 s
+    of every 900 s, measured 2026-10-19) lands on the doomed table: since migration 630 the rebuild
+    re-patches identity changes before its swap, and any other patch is superseded until the next
+    rebuild (a new property's until the next pass's `_enqueue_published`). A full
     drain slice (2000 ids, only after a backlog;
     the live depth is a couple of dozen) costs ~100-270 ms of ROW EXCLUSIVE on `browse_list`, the
     lock the rebuild's drop waits behind. That is the uncontended cost. The rebuild's drop runs
     with lock_timeout 0, so it queues behind any in-flight `browse_list` reader (up to 120 s on
-    the API role), and the patch queues behind it while the caller still holds these
-    properties' row locks; a merge or split of one of them waits too. The drain bounds that wait
+    the API role), and the patch queues behind it while the caller still holds the row locks of
+    the properties its rollup changed; a merge or split of one of them waits too. The drain bounds that wait
     (`_DRAIN_LOCK_TIMEOUT`); the identity writers inherit their caller's lock_timeout.
     """
     ids = sorted({int(p) for p in property_ids if p is not None})
@@ -523,14 +531,62 @@ def _attach_stragglers(conn: Any, limit: int = STRAGGLER_BATCH, hold: job_lease.
     return len(born)
 
 
-# The drain slice's ceiling on any one lock wait. Its Browse patch can queue behind a */15
-# rebuild's swap, holding the slice's `properties` row locks (properties_changed's docstring),
+# The drain slice's ceiling on any one lock wait. Its Browse patch can queue behind a rebuild's
+# swap, holding the row locks of the slice's properties its rollup changed (properties_changed's docstring),
 # and the slice is mostly recently-dirtied properties — the ones the autodedup lane (5 s
 # lock_timeout) and a split (5 s, busy 409) are likeliest to touch. A patch that times out
 # unwinds only its savepoint and the next rebuild carries the row; a recompute that times out
-# rolls the slice back and the next pass replays it. The drain and the settle step only: the full
-# sweep and the straggler attach share `_bounded` and keep the session default.
+# rolls the slice back and the next pass replays it. The drain, the published enqueue and the
+# settle step only: the full sweep and the straggler attach share `_bounded` and keep the session
+# default.
 _DRAIN_LOCK_TIMEOUT = "5s"
+
+
+# Rule 20's mark for the changes that dirty nothing: a place resolved after the stamp (the resolver
+# never patches browse_list) and a settle patch a rebuild's swap superseded. This is
+# browse_projection's WHERE (status, the served rule on the location ad, the publication rule) less
+# what browse_list already holds, over properties first seen within the cap plus two hours. No
+# watermark: a row drops out once its patch lands. Anything older waits for the hourly rebuild
+# (pg_cron, migration 740).
+_ENQUEUE_PUBLISHED_SQL = f"""
+    INSERT INTO dirty_properties (property_id)
+    SELECT p.id FROM properties p
+     WHERE p.first_seen_at > now() - {CAP_SQL} - interval '2 hours'
+       AND p.status = 'active'
+       AND {served_location_predicate("p.location_listing_ref_id")}
+       AND {published_predicate("p")}
+       AND NOT EXISTS (SELECT 1 FROM browse_list b WHERE b.property_id = p.id)
+    ON CONFLICT (property_id) DO NOTHING
+"""
+
+
+def _enqueue_published(conn: Any, hold: job_lease.Hold | None = None) -> None:
+    """Queue every property published but not yet in Browse (`_ENQUEUE_PUBLISHED_SQL`), ahead of the
+    pass's cutoff, so this pass's drain patches it in. It reads `browse_list`, so it waits behind a
+    rebuild's swap no longer than the drain does. A database error costs this step only (the next pass
+    retries, the hourly rebuild meanwhile); a lost lease still stops it."""
+    import psycopg
+
+    try:
+        with _bounded(conn), conn.cursor() as cur:
+            cur.execute(f"SET LOCAL lock_timeout = '{_DRAIN_LOCK_TIMEOUT}'")
+            cur.execute(_ENQUEUE_PUBLISHED_SQL)
+            _fence(conn, hold)
+    except psycopg.Error as exc:
+        LOG.warning("MAINTENANCE published enqueue failed, the next pass retries: %s", exc)
+
+
+def _drain_published(conn: Any, batch_size: int, hold: job_lease.Hold | None = None) -> int:
+    """The full sweep's Browse half, run after each of its batches: the sweep holds the maintenance
+    lease for its whole run (20 min on 2XL, its whole 6,000 s budget on Large, 2026-11-13) and the
+    lane skips meanwhile, so publication, and every change the drain carries, would otherwise wait
+    for the run's end. The order: settle, queue, cut off, drain."""
+    _settle_fresh(conn, hold)
+    _enqueue_published(conn, hold)
+    with conn.cursor() as cur:
+        cur.execute("SELECT now()")
+        cutoff = cur.fetchone()[0]
+    return _drain_dirty(conn, batch_size, cutoff, hold)
 
 
 def _drain_dirty(
@@ -571,49 +627,75 @@ def _drain_dirty(
     return total
 
 
-# The publication stamp (migration 668, operator rulings 2026-10-23): a property is served once
-# the pipeline has SETTLED it, or once it is CAP old (`toolkit/publication.py`; browse_projection
-# carries the rule from migration 669, the watchdog renders it). Settled is read off what the
-# pipeline has already written, never a judgement of our own:
-#   - its first photo is stored, or none of its ads has a photo to wait for (ruling 3: the
-#     images-first alert gate folds into this);
-#   - the engine has read every ad (an `rt_fp` row in its generation);
+# The publication stamp (migrations 668/747, operator rulings 2026-10-23 and 2026-11-17): a property
+# is served once it carries `settled_at` (`toolkit/publication.py`), and this statement alone
+# writes it. Everything is read off what the pipeline has already written, never a judgement of
+# our own.
+# NEVER stamped while an ad on it AWAITS THE ENGINE'S READ: an ad with no `rt_fp` row in the
+# engine's generation whose place is not determined yet (the served rule; the scope cannot be
+# judged) or lies inside the engine's scope (`rt_scope`, the lane's own predicate on
+# `listing_location` by primary key). Such an ad may be a re-list of a property already told, and
+# only the engine can say; no clock ends this wait (dedup:unread_arrivals alarms on it). An ad
+# outside the scope is never read and never waited for.
+# Otherwise stamped when SETTLED:
+#   - its first photo is stored, or none of its ads has a photo to wait for;
+#   - the engine has read every ad (so none is outside the scope);
 #   - the engine holds no pending question about any of them (a pair held for evidence);
 #   - no engine group puts one of its ads with an ad on another property, or on none yet: the
-#     merge that would retire it, or fold another into it, has not landed. Outside the apply scope
-#     it never lands and the cap publishes the property (ruling 4: no special case).
-# Only active, unsettled properties first seen within the cap are candidates: past it a stamp
-# changes nothing, so the cap bounds the statement (~1.7k rows, 134 ms measured) and it takes no
-# LIMIT. ONE query judges and locks: the row lock lands only on the rows that settle (a few per
-# pass), never on every candidate; a property a merge, split or drain slice holds is skipped
-# (SKIP LOCKED) and taken next pass; the engine's tables are read, never locked. Stamped once: no
-# later change takes it back.
+#     merge that would retire it, or fold another into it, has not landed;
+# or when CAP has passed since it was first seen AND since the engine first read each of its ads
+# (`rt_fp.first_decided_at`): the one bounded wait, for photos and for an engine decision, and the
+# whole wait outside the scope (ruling 4, 2026-10-23: no special case there). A decision can only
+# be waited for once the engine has read the ad, so a late read restarts the wait: counted from
+# first sight alone, an ad read after its cap would be published with no decision wait at all.
+# Every unstamped property is a candidate, off `properties_unsettled_idx` (migration 747): the
+# fresh ones and those waiting for the engine. ONE query judges and locks: the row lock lands only
+# on the rows it stamps, never on every candidate; a property a merge, a split or a drain slice's
+# changed rollup holds is skipped (SKIP LOCKED) and taken next pass; the engine's tables are read,
+# never locked. Stamped once: no later change takes it back.
+_UNREAD_SQL = """NOT EXISTS (SELECT 1 FROM autodedup.rt_fp f
+                                            WHERE f.generation = %(generation)s
+                                              AND f.listing_id = l.id)"""
 _SETTLE_SQL = f"""
     WITH settled AS (
       SELECT p.id FROM properties p
-      WHERE p.settled_at IS NULL AND p.status = 'active'
-        AND p.first_seen_at >= now() - {CAP_SQL}
-        AND (EXISTS (SELECT 1 FROM listings l JOIN images i ON i.listing_id = l.id
-                      WHERE l.property_id = p.id AND i.storage_path IS NOT NULL)
-             OR NOT EXISTS (SELECT 1 FROM listings l JOIN images i ON i.listing_id = l.id
-                             WHERE l.property_id = p.id))
+      WHERE p.settled_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM listings l
                          WHERE l.property_id = p.id
-                           AND NOT EXISTS (SELECT 1 FROM autodedup.rt_fp f
-                                            WHERE f.generation = %(generation)s
-                                              AND f.listing_id = l.id))
-        AND NOT EXISTS (SELECT 1 FROM listings l
-                          JOIN autodedup.pairs x
-                            ON x.generation = %(generation)s AND x.decision = %(held)s
-                           AND (x.listing_lo = l.id OR x.listing_hi = l.id)
-                         WHERE l.property_id = p.id)
-        AND NOT EXISTS (SELECT 1 FROM listings l
-                          JOIN autodedup.cluster_members m
-                            ON m.generation = %(generation)s AND m.listing_id = l.id
-                          JOIN autodedup.cluster_members o
-                            ON o.generation = m.generation AND o.cluster_key = m.cluster_key
-                          JOIN listings ol ON ol.id = o.listing_id
-                         WHERE l.property_id = p.id AND ol.property_id IS DISTINCT FROM p.id)
+                           AND {_UNREAD_SQL}
+                           AND (NOT {served_location_predicate("l.id")}
+                                OR %(all_scope)s::boolean
+                                OR EXISTS (SELECT 1 FROM listing_location ll
+                                            WHERE ll.listing_id = l.id
+                                              AND (ll.obec_kod = any(%(obec)s::bigint[])
+                                                   OR ll.cast_obce_kod = any(%(cast_obce)s::bigint[])
+                                                   OR ll.okres_kod = any(%(okres)s::bigint[])))))
+        AND ((p.first_seen_at <= now() - {CAP_SQL}
+              AND NOT EXISTS (SELECT 1 FROM listings l
+                                JOIN autodedup.rt_fp f
+                                  ON f.generation = %(generation)s AND f.listing_id = l.id
+                               WHERE l.property_id = p.id
+                                 AND f.first_decided_at > now() - {CAP_SQL}))
+             OR ((EXISTS (SELECT 1 FROM listings l JOIN images i ON i.listing_id = l.id
+                           WHERE l.property_id = p.id AND i.storage_path IS NOT NULL)
+                  OR NOT EXISTS (SELECT 1 FROM listings l JOIN images i ON i.listing_id = l.id
+                                  WHERE l.property_id = p.id))
+                 AND NOT EXISTS (SELECT 1 FROM listings l
+                                  WHERE l.property_id = p.id
+                                    AND {_UNREAD_SQL})
+                 AND NOT EXISTS (SELECT 1 FROM listings l
+                                   JOIN autodedup.pairs x
+                                     ON x.generation = %(generation)s AND x.decision = %(held)s
+                                    AND (x.listing_lo = l.id OR x.listing_hi = l.id)
+                                  WHERE l.property_id = p.id)
+                 AND NOT EXISTS (SELECT 1 FROM listings l
+                                   JOIN autodedup.cluster_members m
+                                     ON m.generation = %(generation)s AND m.listing_id = l.id
+                                   JOIN autodedup.cluster_members o
+                                     ON o.generation = m.generation AND o.cluster_key = m.cluster_key
+                                   JOIN listings ol ON ol.id = o.listing_id
+                                  WHERE l.property_id = p.id
+                                    AND ol.property_id IS DISTINCT FROM p.id)))
       FOR NO KEY UPDATE OF p SKIP LOCKED
     )
     UPDATE properties p SET settled_at = now()
@@ -622,29 +704,50 @@ _SETTLE_SQL = f"""
     RETURNING p.id
 """
 
+_ENGINE_SCOPE_SQL = "SELECT s.value FROM autodedup.settings s WHERE s.key = %s"
+
+
+def _engine_scope(conn: Any) -> dict[str, Any]:
+    """The four parameters of the engine's scope predicate, as its lane takes them. No scope row:
+    the engine reads nothing (a pass without one refuses itself), so no ad awaits it. A row that
+    cannot be parsed raises `ScopeError`: the caller stamps nothing rather than guess."""
+    from autodedup.incremental import GENERATION
+    from autodedup.incremental_lane import parse_scope, scope_setting_key
+
+    with conn.cursor() as cur:
+        cur.execute(_ENGINE_SCOPE_SQL, (scope_setting_key(GENERATION),))
+        row = cur.fetchone()
+    if row is None or row[0] is None:
+        return {"all_scope": False, "obec": [], "cast_obce": [], "okres": []}
+    return parse_scope(row[0]).params()
+
 
 def _settle_fresh(conn: Any, hold: job_lease.Hold | None = None) -> int:
-    """Stamp the fresh properties the pipeline is done with (`_SETTLE_SQL`), then patch their Browse
+    """Stamp the properties the pipeline is done with (`_SETTLE_SQL`), then patch their Browse
     rows in; returns how many it stamped. The stamp commits ALONE: it row-locks what it stamps, and
     the engine's reconcile merges under a 5 s lock_timeout, so a merge waits behind one statement at
     most (autodedup session, 2026-10-23). The patch is `sync_browse_list` on its own -- no recompute
-    (a stamp changes no rolled-up fact), no row lock, best-effort (the next rebuild carries a lost
-    patch). A database error in the stamp costs this step only (the next pass retries, and the cap
-    publishes a property meanwhile), never the pass; a lost lease still stops it."""
+    (a stamp changes no rolled-up fact), no row lock, best-effort (the next pass's
+    `_enqueue_published` carries a lost patch). A database error in the stamp, or an engine scope
+    that cannot be read, costs this step only (the next pass retries; nothing is published
+    meanwhile), never the pass; a lost lease still stops it."""
     import psycopg
 
     from autodedup.incremental import EVIDENCE_HOLD_REASON, GENERATION
+    from autodedup.incremental_scope import ScopeError
 
-    if hold is not None:
-        _renew_lease(conn, hold)
     try:
+        scope = _engine_scope(conn)
+        if hold is not None:
+            _renew_lease(conn, hold)
         with _bounded(conn):
             with conn.cursor() as cur:
                 cur.execute(f"SET LOCAL lock_timeout = '{_DRAIN_LOCK_TIMEOUT}'")
-                cur.execute(_SETTLE_SQL, {"generation": GENERATION, "held": EVIDENCE_HOLD_REASON})
+                cur.execute(_SETTLE_SQL, {"generation": GENERATION, "held": EVIDENCE_HOLD_REASON,
+                                          **scope})
                 ids = [int(r[0]) for r in cur.fetchall()]
             _fence(conn, hold)
-    except psycopg.Error as exc:
+    except (psycopg.Error, ScopeError) as exc:
         LOG.warning("MAINTENANCE settle failed, the next pass retries: %s", exc)
         return 0
     sync_browse_list(conn, ids)
@@ -691,13 +794,13 @@ def _resume_point(saved: tuple[Any, ...] | None, max_id: int) -> tuple[int, int,
 # TRY the lease and skip when held (the next tick is seconds away); the daily full
 # sweep WAITS (bounded) until it holds it — the backstop must not be skipped.
 #
-# ONE short TTL, HEARTBEAT-renewed between transactions. The full sweep used to
-# take a single 3-hour grant sized to its whole runtime and release it in a
-# `finally` — but a GH Actions timeout kill escalates SIGINT→SIGTERM→SIGKILL
-# faster than the release round-trip, so every timeout stranded the lease and
-# froze ALL property maintenance (worker lane + both crons) for hours
-# (2026-08-06 incident: 5 kills in 4 days, each a multi-hour freeze). Cleanup-
-# on-death cannot be relied on; cheap-death can: every writer takes the same
+# ONE short TTL, HEARTBEAT-renewed between transactions. The full sweep used to take
+# a single 3-hour grant sized to its whole runtime and release it in a `finally` —
+# but a timeout kill (then GitHub's SIGINT→SIGTERM→SIGKILL, now the runner's SIGKILL
+# 90 s after its SIGTERM) can beat the release round-trip, so every timeout stranded
+# the lease and froze ALL property maintenance (worker lane + both crons) for hours
+# (2026-08-06 incident: 5 kills in 4 days, each a multi-hour freeze).
+# Cleanup-on-death cannot be relied on; cheap-death can: every writer takes the same
 # 15-minute TTL and renews it between batches, so a kill at ANY point strands the
 # row for at most 15 minutes. A renewal refuses a lapsed lease, so the TTL less
 # job_lease.FENCE_MARGIN_S must comfortably exceed one batch's worst case — a sweep
@@ -711,25 +814,19 @@ _LEASE_TTL_S = 900
 # Both describe the row only, for whichever writer creates it first.
 _LEASE_CADENCE = "30 seconds"
 _LEASE_RUNNER = "railway-realtime-worker"
-# The cutover (#2107): code from before this lease moved takes only the row of migration 279, so this code takes
-# that row FIRST and then the new one, each waiting up to its own bound, and gives them back in reverse, so the two
-# cannot deadlock. `_TRY_LEASE_SQL`,
-# `_RELEASE_LEASE_SQL`, `_LEASE_TTL`, `_try_lease`, `_wait_lease` and `_release_lease*` go in #2267, once gate #2110 passes.
-_LEASE_TTL = "15 minutes"
-_LEASE_RETRY_SECONDS = 10.0
 # A dispatched sweep that cannot get the lease within this budget fails RED
 # instead of burning its whole job retrying (observed 2026-08-06: a 30-min run
-# spent 100% of its budget in _wait_lease against a dead holder's 3h grant).
+# spent 100% of its budget waiting on a dead holder's 3h grant).
 # Every holder now renews a 15-min TTL, so 20 min of waiting means something
 # is genuinely wrong, not merely slow.
 _MAX_LEASE_WAIT_SECONDS = 1200.0
 
-# Ceiling for --max-seconds. The workflow's timeout-minutes (130) is sized as
-# budget + one in-flight batch + prelude + finalize headroom FOR THIS
-# CEILING; an unclamped dispatch input above it would let the runner
-# SIGKILL a healthy sweep before its clean-stop fires — a silent `cancelled`,
-# the exact mode this script exists to eliminate. Raising the ceiling means
-# raising timeout-minutes in the same change.
+# Ceiling for --max-seconds. The property_sweep entry's timeout_s
+# (scraper/jobs.py) is sized as budget + one in-flight batch + prelude +
+# finalize headroom FOR THIS CEILING; an unclamped request argument above it
+# would let the runner kill a healthy sweep before its clean-stop fires — the
+# exact mode this script exists to eliminate. Raising the ceiling means
+# raising timeout_s in the same change.
 #
 # 6000s (100 min), raised from 4200s: the six sweeps to 2026-08-10 measured
 # 3502/3777/4044/3890/3626s — 83-96% of the old 4200s ceiling, i.e. one bad day
@@ -761,44 +858,24 @@ _BOOK_STATEMENT_TIMEOUT = "2min"
 # Retry budget for ONE recompute batch (db.run_resilient defaults to 4). A batch
 # runs under the 10-min ceiling above, so four attempts could burn 40 minutes
 # inside a single loop iteration — the deadline is only checked at a batch
-# BOUNDARY, so that would sail past the workflow's outer timeout and re-create
-# the silent `cancelled` this script exists to eliminate. Two attempts keeps the
+# BOUNDARY, so that would sail past the runner's timeout_s and re-create
+# the kill mid-batch this script exists to eliminate. Two attempts keeps the
 # useful part of the budget (a dropped connection or a passing lock wait replays
 # once) and bounds the in-flight worst case at 2 x (_BATCH_STATEMENT_TIMEOUT +
-# _BOOK_STATEMENT_TIMEOUT), which is what the workflow's timeout-minutes is sized
+# _BOOK_STATEMENT_TIMEOUT), which is what the runner's timeout_s is sized
 # for. A range that times out twice is the poisoned range the error log names,
 # not a blip. 24 min also exceeds _LEASE_TTL_S, which is why the lease renewal runs
 # INSIDE the retried op (main()'s `renewed`) rather than once per loop iteration.
 _BATCH_RESILIENT_ATTEMPTS = 2
-
-_TRY_LEASE_SQL = """
-    UPDATE property_maintenance_lease
-       SET holder = %(holder)s, expires_at = now() + %(lease)s::interval
-     WHERE id = 1
-       AND (holder IS NULL OR expires_at < now() OR holder = %(holder)s)
-    RETURNING 1
-"""
-
-_RELEASE_LEASE_SQL = """
-    UPDATE property_maintenance_lease
-       SET holder = NULL, expires_at = NULL
-     WHERE id = 1 AND holder = %(holder)s
-"""
 
 
 def _new_holder(kind: str) -> str:
     return f"{kind}:{job_lease.holder_id()}"
 
 
-def _try_lease(conn: Any, holder: str, lease: str) -> bool:
-    with conn.cursor() as cur:
-        cur.execute(_TRY_LEASE_SQL, {"holder": holder, "lease": lease})
-        return cur.fetchone() is not None
-
-
 def _renew_lease(conn: Any, hold: job_lease.Hold) -> None:
     """Heartbeat between transactions; raises if it misses: the lease lapsed mid-work, this process stalled >15 min."""
-    if not (job_lease.renew(conn, hold) and _try_lease(conn, hold.holder, _LEASE_TTL)):
+    if not job_lease.renew(conn, hold):
         raise job_lease.LeaseLost(
             "maintenance lease lost mid-work (it lapsed or another writer took "
             "it) — aborting rather than recomputing concurrently"
@@ -811,99 +888,28 @@ def _fence(conn: Any, hold: job_lease.Hold | None) -> None:
         job_lease.fence(conn, hold)
 
 
-def _wait_lease(
-    conn: Any, holder: str, lease: str,
-    max_wait_seconds: float = _MAX_LEASE_WAIT_SECONDS,
-) -> None:
-    # Wall-clock anchored: the CAS round trips themselves can be slow exactly
-    # when this path runs (degraded DB), and counting only the sleeps would
-    # let the wait silently outgrow the job budget.
-    entered = time.monotonic()
-    while not _try_lease(conn, holder, lease):
-        waited = time.monotonic() - entered
-        if waited >= max_wait_seconds:
-            raise RuntimeError(
-                f"maintenance lease still held after {waited:.0f}s of waiting — "
-                "failing RED instead of burning the job budget; every holder "
-                "renews a 15-min TTL, so this indicates a real fault"
-            )
-        LOG.info("MAINTENANCE lease held by another writer; retrying in %.0fs",
-                 _LEASE_RETRY_SECONDS)
-        time.sleep(_LEASE_RETRY_SECONDS)
-
-
-def _release_lease_cas(conn: Any, holder: str) -> None:
-    with conn.cursor() as cur:
-        cur.execute(_RELEASE_LEASE_SQL, {"holder": holder})
-
-
-def _release_lease(conn: Any, holder: str,
-                   reconnect: Callable[[], Any] | None = None) -> None:
-    """Best-effort release, with ONE reconnect fallback. Callers run this from a
-    `finally:`, so a raise here (a dead connection makes even `conn.cursor()` throw)
-    would replace the real failure with a crash-during-cleanup. The lease's
-    correctness never rested on the release landing: the holder-guarded CAS plus the
-    short renewed TTL are the guarantee, and a missed release costs at most one TTL
-    of frozen maintenance.
-
-    The fallback covers the case `step`'s `nonlocal conn` narrows but cannot remove:
-    when run_resilient exhausts its budget on a DROPPED connection it closes both the
-    original and its replacement, so there is no live handle left to release on. One
-    fresh connection, one holder-guarded CAS, close it again."""
-    exc: BaseException | None = None
-    try:
-        _release_lease_cas(conn, holder)
-        return
-    except Exception as e:  # noqa: BLE001 - best-effort; the TTL is the real guarantee
-        exc = e
-    if reconnect is not None:
-        fresh: Any = None
-        try:
-            fresh = reconnect()
-            _release_lease_cas(fresh, holder)
-            return
-        except Exception as e:  # noqa: BLE001 - still best-effort
-            exc = e
-        finally:
-            if fresh is not None:
-                try:
-                    fresh.close()
-                except Exception:  # noqa: BLE001
-                    pass
-    # exc_info=exc, not True: we are outside the except block here, so sys.exc_info()
-    # would be empty and the traceback lost.
-    LOG.warning("MAINTENANCE: lease release failed (holder=%s) — self-heals when "
-                "the %s TTL expires", holder, _LEASE_TTL, exc_info=exc)
-
-
 @contextmanager
 def _maintenance_lease(
     conn: Any, kind: str, *, wait_s: float = 0.0,
     reconnect: Callable[[], Any] | None = None,
 ) -> Iterator[job_lease.Hold | None]:
     """Yields this writer's hold on the maintenance lease, or None when another
-    writer holds it (past `wait_s`) or it is paused. The cutover row comes first and goes last."""
-    holder = _new_holder(kind)
-    if not wait_s and not _try_lease(conn, holder, _LEASE_TTL):
-        yield None
-        return
-    try:
-        if wait_s:
-            _wait_lease(conn, holder, _LEASE_TTL, wait_s)
-        with job_lease.held(conn, MAINTENANCE_LEASE, cadence=_LEASE_CADENCE, runner=_LEASE_RUNNER,
-                            ttl_s=_LEASE_TTL_S, holder=holder, wait_s=wait_s) as hold:
-            yield hold
-    finally:
-        _release_lease(conn, holder, reconnect)
+    writer holds it (past `wait_s`) or it is paused. A release on a dead `conn` falls
+    back to `reconnect` when given, else to `held`'s own one-attempt connection."""
+    fallback = {} if reconnect is None else {"connect": reconnect}
+    with job_lease.held(conn, MAINTENANCE_LEASE, cadence=_LEASE_CADENCE, runner=_LEASE_RUNNER,
+                        ttl_s=_LEASE_TTL_S, holder=_new_holder(kind), wait_s=wait_s, **fallback) as hold:
+        yield hold
 
 
 def run_incremental_pass(conn: Any, batch_size: int = 2000) -> dict[str, Any]:
     """ONE incremental property-maintenance pass — THE shared implementation
     behind `--incremental` and the realtime worker's
-    maintenance lane: attach new stragglers, then bring the dirty set current through
-    `properties_changed` (recompute, broker book, `browse_list` patch), so a change reaches
-    Browse on this lane's cadence rather than at the next */15 wholesale rebuild, then settle
-    the fresh properties the pipeline is done with (`_settle_fresh`).
+    maintenance lane: queue what is published but not in Browse (`_enqueue_published`), attach new stragglers,
+    then bring the dirty set current through `properties_changed` (recompute, broker book,
+    `browse_list` patch), so a change reaches Browse on this lane's cadence rather than at the
+    next hourly wholesale rebuild, then stamp the properties the pipeline is done with
+    (`_settle_fresh`): the stamp is publication.
     Serialized by the maintenance lease; a caller that
     finds the lease held returns {"skipped": True} — the concurrent pass is
     doing the same work, and the next tick is seconds away. A pass normally
@@ -913,6 +919,7 @@ def run_incremental_pass(conn: Any, batch_size: int = 2000) -> dict[str, Any]:
     with _maintenance_lease(conn, "incremental") as hold:
         if hold is None:
             return {"skipped": True, "attached": 0, "recomputed": 0, "settled": 0}
+        _enqueue_published(conn, hold)
         with conn.cursor() as cur:
             cur.execute("SELECT now()")
             cutoff = cur.fetchone()[0]
@@ -947,19 +954,19 @@ def main() -> int:
              "covered, saves where the next run resumes the cycle, and releases "
              "the lease; a resumed run that runs out again, or a run that runs out "
              "before its first batch, exits RED (1) — a "
-             "visible failure instead of a silent timeout-minutes `cancelled` kill. "
-             f"Clamped to {int(_MAX_BUDGET_SECONDS)}s: the workflow's "
-             "timeout-minutes backstop is sized for that ceiling, and a "
-             "larger budget would let the runner SIGKILL the job before the "
-             "clean-stop fires (raising both requires editing the yml).",
+             "visible failure instead of a kill mid-batch at the runner's timeout_s. "
+             f"Clamped to {int(_MAX_BUDGET_SECONDS)}s: the job runner's "
+             "timeout_s is sized for that ceiling, and a larger budget would "
+             "let the runner kill the job before the clean-stop fires "
+             "(raising both requires editing scraper/jobs.py).",
     )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
-    # SIGTERM (the middle step of GH's SIGINT→SIGTERM→SIGKILL cancel ladder)
-    # defaults to instant death — no finally, lease stranded. Route it through
-    # SystemExit so the release path gets its chance; the short renewed TTL is
-    # the guarantee for when even this loses the race.
+    # SIGTERM (the job runner's stop at a deploy or timeout_s, 90 s before its
+    # SIGKILL) defaults to instant death — no finally, lease stranded. Route it
+    # through SystemExit so the release path gets its chance; the short renewed
+    # TTL is the guarantee for when even this loses the race.
     signal.signal(signal.SIGTERM, _sigterm_to_systemexit)
 
     logging.basicConfig(
@@ -1075,6 +1082,9 @@ def main() -> int:
             def attach(c: Any) -> int:
                 return _attach_stragglers(c, hold=hold)
 
+            def drain(c: Any) -> int:
+                return _drain_published(c, args.batch_size, hold)
+
             # attempts=2, like sweep.batch: a doomed attach reds in ~4 min instead of ~8.
             # Bounded batches until one comes back short: each is its own transaction.
             attached = 0
@@ -1089,8 +1099,8 @@ def main() -> int:
             if budget < args.max_seconds:
                 LOG.warning(
                     "RECOMPUTE --max-seconds %.0f clamped to %.0f — the "
-                    "workflow's timeout-minutes backstop is sized for this "
-                    "ceiling; raise both together in the yml",
+                    "job runner's timeout_s is sized for this ceiling; raise "
+                    "both together in scraper/jobs.py",
                     args.max_seconds, budget,
                 )
             deadline = started_at + budget
@@ -1114,12 +1124,12 @@ def main() -> int:
                 start_lo, runs, cycle_started_at = 1, 0, cutoff
             ranges = list(_batch_ranges(max_id, args.batch_size, start_lo))
             total_batches = len(ranges)
-            batches = recomputed = 0
+            batches = recomputed = drained = 0
 
             for lo, hi in ranges:
                 # Budget clean-stop (the detail drains' --max-seconds pattern):
                 # stop batching with enough headroom left to finalize + release,
-                # instead of being SIGKILLed mid-statement by timeout-minutes.
+                # instead of being killed mid-statement at the runner's timeout_s.
                 batch_started = time.monotonic()
                 if batch_started >= deadline:
                     incomplete_at = lo
@@ -1157,6 +1167,15 @@ def main() -> int:
                     raise
                 except Exception as exc:  # noqa: BLE001 - see above
                     LOG.warning("RECOMPUTE sweep.attach failed after batch=%d-%d: %s", lo, hi, exc)
+                # The lane's Browse half, on the same terms (`_drain_published`): what the cap
+                # published and every queued change reach Browse within a batch, not at the run's
+                # end or the hourly rebuild (#2505).
+                try:
+                    drained += step(renewed(drain), "sweep.drain", attempts=2)
+                except job_lease.LeaseLost:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - as the attach above
+                    LOG.warning("RECOMPUTE sweep.drain failed after batch=%d-%d: %s", lo, hi, exc)
 
             # The finalize block is wrapped too: a drop here would throw away an
             # otherwise-complete sweep's completion stamp and red the health check.
@@ -1234,8 +1253,8 @@ def main() -> int:
         return 0
     if incomplete_at is not None:
         # RED on purpose: a resumed run that runs out again means the cycle needs three or
-        # more runs — genuinely too slow, not a partial success. GH only emails on
-        # scheduled-run FAILURES (a timeout kill lands as `cancelled` and alerts nobody,
+        # more runs — genuinely too slow, not a partial success, so its job cell shows a
+        # `failed` run (on GitHub a timeout kill landed as `cancelled` and alerted nobody,
         # which is how 5 dead sweeps went unnoticed for 4 days). The id tail above
         # `incomplete_at` keeps its pre-sweep stats until a cycle completes; the jobs
         # check's `artifact/property_sweep` cell tracks that staleness.
@@ -1245,7 +1264,7 @@ def main() -> int:
             "cursor saved at id %d (resumed by a run within %s of the cycle's start, else "
             "the next run starts over at id 1); exiting RED — investigate per-batch cost "
             "first (see the progress logs); raising the budget past %.0fs requires editing "
-            "BOTH --max-seconds and the workflow's timeout-minutes",
+            "BOTH --max-seconds and the job runner's timeout_s (scraper/jobs.py)",
             elapsed, start_lo, incomplete_at - 1, max_id, batches, total_batches,
             runs + 1, cycle_started_at, incomplete_at, _CURSOR_MAX_AGE,
             _MAX_BUDGET_SECONDS,
@@ -1253,9 +1272,9 @@ def main() -> int:
         return 1
     LOG.info(
         "RECOMPUTE done max_property_id=%d from_id=%d cycle_runs=%d batches=%d "
-        "avg_batch_s=%.1f attached=%d elapsed=%.1fs",
+        "avg_batch_s=%.1f attached=%d drained=%d elapsed=%.1fs",
         max_id, start_lo, runs + 1, batches, elapsed / batches if batches else 0.0,
-        attached, elapsed,
+        attached, drained, elapsed,
     )
     return 0
 

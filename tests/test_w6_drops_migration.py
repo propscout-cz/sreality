@@ -132,7 +132,7 @@ def test_section_0s_production_half_names_what_its_owners_name() -> None:
     lost check would pass. Each names the worker's brake, the lane's lease and the full sweep's
     holder as their owners write them, and raises its refusal."""
     from scraper.realtime_worker import AUTODEDUP_INTERVAL_SETTING
-    from scripts.recompute_property_stats import _TRY_LEASE_SQL, _new_holder
+    from scripts.recompute_property_stats import _new_holder
 
     pre = _flat(_block("pre"))
     production = pre[pre.index("if not v_populated then"):]
@@ -149,8 +149,6 @@ def test_section_0s_production_half_names_what_its_owners_name() -> None:
         "and idx_scan > 0)",
     ):
         assert check + refuse in production, check
-    assert "UPDATE property_maintenance_lease" in _TRY_LEASE_SQL
-    assert "expires_at < now()" in _TRY_LEASE_SQL
     assert _new_holder("full").startswith("full:")
 
 

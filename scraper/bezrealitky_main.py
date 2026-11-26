@@ -33,6 +33,7 @@ from scraper.bezrealitky_parser import (
     ESTATE_TYPE,
     OFFER_TYPE,
     SOURCE,
+    advert_price,
     parse_advert,
 )
 from scraper.portal import (
@@ -43,7 +44,7 @@ from scraper.portal import (
     walk_reached_end,
 )
 from scraper.portal_base import ListingGoneError
-from scraper.portal_runner import DrainItem
+from scraper.portal_runner import DrainItem, IndexPrice
 from scraper.rate_limit import RateLimiter
 
 LOG = logging.getLogger(__name__)
@@ -54,8 +55,8 @@ INDEX_PAGE_SIZE = 100
 # conditional on something the API says (an empty page, a positive declared
 # count) or on a knob the scheduled lane may not pass (--max-seconds,
 # --max-pages), so a degraded resolver that serves rows while declaring
-# `totalCount: 0` would page forever until the job timeout SIGKILLs the run
-# (no scrape_runs row, no drain). 4,000 pages is ~400,000 adverts, two orders
+# `totalCount: 0` would page until the job timeout cut every cycle short, so
+# no cycle would ever reach its end. 4,000 pages is ~400,000 adverts, two orders
 # of magnitude above bezrealitky's largest category, and it stops as `page_cap`
 # — a stop of OURS, so hitting it can never nominate.
 INDEX_PAGE_CEILING = 4_000
@@ -163,7 +164,7 @@ class BezrealitkyPortal(portal_runner.PortalDefaults):
             )
 
         native_ids: list[str] = []
-        price_map: dict[str, int | None] = {}
+        price_map: dict[str, IndexPrice] = {}
         offset = 0
         # Latched ONLY from a page that returned items AND declared a positive
         # count: a barren page reports totalCount 0, and letting it overwrite the
@@ -191,9 +192,9 @@ class BezrealitkyPortal(portal_runner.PortalDefaults):
                 if nid not in price_map:
                     native_ids.append(nid)
                     new_on_page += 1
-                # Same clamps as the stored price so the unchanged-compare can't
-                # see a value the write boundary would have nulled.
-                price_map[nid] = db.sane_price_czk(adv.get("price"))
+                # As stated, currency included; reconcile_sightings converts it the way
+                # the detail parse does and applies the write boundary's clamps.
+                price_map[nid] = advert_price(adv)
             offset += len(adverts)
             # Items-first: an items-less 200 shares its shape with a soft block,
             # so it gets its own arm and has to be corroborated before it may

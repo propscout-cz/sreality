@@ -21,12 +21,12 @@ from api import dependencies as deps
 from tests.api._jwt import mint
 from api import feedback as api_feedback
 from api import main as api_main
-from api import maps as api_maps
 from api import pipeline as api_pipeline
 from api import saved_sets as api_saved_sets
 from api import shares as api_shares
 from api.routes import stats_dashboards as api_stats_dashboards
 from api import tenant_pool
+from location_data import place_search
 
 
 @pytest.fixture()
@@ -241,12 +241,9 @@ def client(monkeypatch):
         lambda conn, charts, *, account_id: {"charts": charts, "updated_at": "t"},
     )
 
-    monkeypatch.setattr(api_maps, "suggest", lambda *a, **kw: {"items": []})
-    monkeypatch.setattr(
-        api_maps,
-        "resolve",
-        lambda *a, **kw: {"level": None, "id": None, "name": None, "context": None},
-    )
+    # Own place search opens its connection in the route, not as a dependency (a refused one is its own 503).
+    monkeypatch.setattr(deps, "open_background_conn", lambda: contextlib.nullcontext(object()))
+    monkeypatch.setattr(place_search, "suggest", lambda *a, **kw: [])
 
     yield TestClient(api_main.app)
     api_main.app.dependency_overrides.clear()
@@ -258,7 +255,6 @@ _VERIFY_BODY = {"sreality_id": 1, "max_age_hours": 24}
 _COMPARE_BODY = {"sreality_id": 1}
 _ANCHORS_BODY = {"lat": 50.0, "lng": 14.0}
 _CREATE_ESTIMATION_BODY = {"spec": {"lat": 50.0, "lng": 14.0, "area_m2": 50.0}}
-_RESOLVE_BODY = {"lat": 50.0, "lng": 14.0, "type": "regional.municipality", "name": "x"}
 _CREATE_COLLECTION_BODY = {"name": "test"}
 _PATCH_COLLECTION_BODY = {"name": "renamed"}
 _ADD_PROPERTIES_BODY = {"property_ids": [1]}
@@ -278,8 +274,7 @@ def _gated_calls(client) -> list:
         ("POST", "/tools/compare_snapshots", _COMPARE_BODY),
         ("POST", "/tools/find_anchor_amenities", _ANCHORS_BODY),
         ("GET", "/estimations", None),
-        ("GET", "/maps/suggest?query=foo", None),
-        ("POST", "/maps/resolve", _RESOLVE_BODY),
+        ("POST", "/places/suggest", {"query": "Brno"}),
     ]
 
 

@@ -1,6 +1,14 @@
-import { useId, type ReactNode } from 'react';
+import { useContext, type ReactNode } from 'react';
 
-import { MapLegendCard, OverlayChip, OverlayPanel } from '@/components/OverlayChip';
+import { SegmentedBar, type SegmentOption } from '@/components/controls';
+import {
+  MapControlsToneContext,
+  MapLegendCard,
+  OverlayChip,
+  OverlayPanel,
+  useMapControlsTone,
+  type MapControlsTone,
+} from '@/components/OverlayChip';
 import {
   OVERLAY_DASH,
   OVERLAY_FILL_OPACITY,
@@ -9,8 +17,10 @@ import {
   formatOverlayNumber,
   overlayDataDate,
   overlayScaleWords,
+  type OverlayPlaces,
 } from '@/lib/mapOverlayDraw';
 import {
+  type BasemapPicks,
   type LayerSelection,
   type MapOverlayRegistry,
   type OverlayLayer,
@@ -18,25 +28,37 @@ import {
   type OverlayScale,
   type OverlaySection,
   activeVariant,
+  CADASTRE_MINZOOM,
+  CONTOURS_MINZOOM,
+  basemapPicks,
   layersOf,
+  overlayHasAreaCard,
   parseLayers,
+  pickVariant,
   readRememberedVariant,
   serializeLayers,
-  writeRememberedVariant,
+  withBasemap,
 } from '@/lib/mapOverlays';
+
 
 type Edit = (apply: (next: Map<string, string | null>) => void) => void;
 
-/* The reference-overlay toggles: one chip per registry section, checked when
- * every layer of it is on. While any is on, the panel under the chip holds the
- * per-layer toggles, variant radios, the legend, the zoom hint, the source's
- * caveats and its provenance. `compact` is the chips alone. */
+/* Every layer a map offers, in one list (docs/design/map-overlays.md): the base
+ * (Podklad: Mapa | Letecká), then `children` (Browse's own Města and Růst cen a
+ * nájmů), then one toggle per registry section, checked when every layer of it is
+ * on, then ČÚZK's Reliéf a vrstevnice and Katastrální mapa. While a section is on, the panel under it
+ * holds the per-layer toggles, the zoom hint, the source's caveats and its
+ * provenance (a layer's variant is picked on its area card, on the map). Every
+ * pick is a key of the one `layers` selection. `compact` is the chips alone (the
+ * comparables map); `tone` sizes the list for the phone's sheet. */
 export default function MapOverlayControls({
   registry,
   selection,
   onChange,
   zoom = null,
   compact = false,
+  tone = 'web',
+  children,
 }: {
   registry: MapOverlayRegistry | undefined;
   selection: string;
@@ -44,28 +66,205 @@ export default function MapOverlayControls({
   /* The map's floored zoom; below a section's minzoom its panel says to zoom in. */
   zoom?: number | null;
   compact?: boolean;
+  tone?: MapControlsTone;
+  children?: ReactNode;
 }) {
   const sections = (registry?.sections ?? []).filter((s) => s.layers.length > 0);
-  if (sections.length === 0) return null;
   const sel = layersOf(parseLayers(selection), registry);
   const edit: Edit = (apply) => {
     const next = new Map(sel);
     apply(next);
     onChange(serializeLayers(layersOf(next, registry)));
   };
-  return (
-    <div className={compact ? 'flex flex-wrap gap-1' : 'flex flex-col'}>
-      {sections.map((section) => (
-        <SectionControl
-          key={section.key}
-          section={section}
-          sel={sel}
-          zoom={zoom}
-          compact={compact}
-          edit={edit}
+  const picks = basemapPicks(selection);
+  const setPicks = (patch: Partial<BasemapPicks>) => onChange(withBasemap(selection, patch));
+  const sectionControls = sections.map((section) => (
+    <SectionControl key={section.key} section={section} sel={sel} zoom={zoom} compact={compact} edit={edit} />
+  ));
+  if (compact) {
+    return (
+      <div className="flex flex-wrap gap-1">
+        <OverlayChip compact label="Letecká" checked={picks.aerial} onChange={(aerial) => setPicks({ aerial })} />
+        {sectionControls}
+        <OverlayChip
+          compact
+          label="Reliéf a vrstevnice"
+          checked={picks.relief && picks.contours}
+          indeterminate={picks.relief !== picks.contours}
+          onChange={(checked) => setPicks({ relief: checked, contours: checked })}
         />
-      ))}
+        <OverlayChip
+          compact
+          label="Katastrální mapa"
+          checked={picks.cadastre}
+          onChange={(cadastre) => setPicks({ cadastre })}
+        />
+      </div>
+    );
+  }
+  const row = TONE_ROW[tone];
+  return (
+    <MapControlsToneContext.Provider value={tone}>
+      <div className="flex flex-col divide-y divide-[var(--color-rule)]">
+        <div className={row}>
+          <BasemapPick aerial={picks.aerial} onChange={(aerial) => setPicks({ aerial })} />
+        </div>
+        {children}
+        {sectionControls.length > 0 && <div className={`${row} flex flex-col`}>{sectionControls}</div>}
+        <div className={row}>
+          <TerrainControls relief={picks.relief} contours={picks.contours} zoom={zoom} onChange={setPicks} />
+        </div>
+        <div className={row}>
+          <CadastreControls on={picks.cadastre} zoom={zoom} onChange={(cadastre) => setPicks({ cadastre })} />
+        </div>
+      </div>
+    </MapControlsToneContext.Provider>
+  );
+}
+
+/* A row of the list; Browse's own rows (MapOverlayControls' children) wear it too. */
+export const TONE_ROW: Record<MapControlsTone, string> = { web: 'py-1', phone: 'py-1.5' };
+
+const BASES: ReadonlyArray<SegmentOption<'map' | 'aerial'>> = [
+  { value: 'map', label: 'Mapa' },
+  { value: 'aerial', label: 'Letecká' },
+];
+
+/* The base the map is drawn on: OpenFreeMap's map, or ČÚZK's aerial photo over it. */
+function BasemapPick({ aerial, onChange }: { aerial: boolean; onChange: (aerial: boolean) => void }) {
+  const phone = useContext(MapControlsToneContext) === 'phone';
+  return (
+    <div className={`flex items-center justify-between gap-3 ${phone ? 'min-h-11' : 'py-1'}`}>
+      <span className={phone ? 'text-[15px] text-[var(--color-ink-2)]' : 'text-[0.8rem] text-[var(--color-ink)]'}>
+        Podklad
+      </span>
+      <SegmentedBar
+        tone={phone ? 'phone' : 'desktop'}
+        label="Podklad mapy"
+        options={BASES}
+        value={aerial ? 'aerial' : 'map'}
+        onChange={(v) => onChange(v === 'aerial')}
+      />
     </div>
+  );
+}
+
+/* ČÚZK's terrain, drawn like a registry section of two layers: one tri-state row turns
+ * both on, and while either is, the panel under it holds each one's own box, the
+ * contours' zoom hint and the source. */
+export function TerrainControls({
+  relief,
+  contours,
+  zoom,
+  onChange,
+}: {
+  relief: boolean;
+  contours: boolean;
+  zoom: number | null;
+  onChange: (patch: { relief?: boolean; contours?: boolean }) => void;
+}) {
+  const tone = useMapControlsTone();
+  const toggle = `inline-flex items-center gap-1.5 ${tone.sub} cursor-pointer`;
+  return (
+    <div className="flex flex-col">
+      <OverlayChip
+        label="Reliéf a vrstevnice"
+        checked={relief && contours}
+        indeterminate={relief !== contours}
+        onChange={(checked) => onChange({ relief: checked, contours: checked })}
+      />
+      {(relief || contours) && (
+        <OverlayPanel>
+          <div className="flex flex-col gap-1">
+            <label className={toggle}>
+              <input
+                type="checkbox"
+                className={tone.box || undefined}
+                checked={relief}
+                onChange={(e) => onChange({ relief: e.target.checked })}
+              />
+              <span>Stínovaný reliéf</span>
+            </label>
+            <label className={toggle}>
+              <input
+                type="checkbox"
+                className={tone.box || undefined}
+                checked={contours}
+                onChange={(e) => onChange({ contours: e.target.checked })}
+              />
+              <span>Vrstevnice</span>
+            </label>
+          </div>
+          <div className="flex flex-col gap-1">
+            {contours && zoom != null && zoom < CONTOURS_MINZOOM && (
+              <p
+                className={`${tone.hint} font-medium text-[var(--color-ink-2)]`}
+                title={`Vrstevnice se kreslí od přiblížení ${CONTOURS_MINZOOM}`}
+              >
+                Vrstevnice: přibližte mapu
+              </p>
+            )}
+            <CuzkCredit />
+          </div>
+        </OverlayPanel>
+      )}
+    </div>
+  );
+}
+
+/* ČÚZK's cadastral map: one row; while it is on, the panel under it holds the zoom hint
+ * (ČÚZK draws parcels only from CADASTRE_MINZOOM), what a click on a parcel does
+ * (lib/cadastre) and the source. */
+export function CadastreControls({
+  on,
+  zoom,
+  onChange,
+}: {
+  on: boolean;
+  zoom: number | null;
+  onChange: (on: boolean) => void;
+}) {
+  const tone = useMapControlsTone();
+  return (
+    <div className="flex flex-col">
+      <OverlayChip label="Katastrální mapa" checked={on} onChange={onChange} />
+      {on && (
+        <OverlayPanel>
+          <div className="flex flex-col gap-1">
+            {zoom != null && zoom < CADASTRE_MINZOOM ? (
+              <p
+                className={`${tone.hint} font-medium text-[var(--color-ink-2)]`}
+                title={`Katastrální mapa se kreslí od přiblížení ${CADASTRE_MINZOOM}`}
+              >
+                Přibližte mapu
+              </p>
+            ) : (
+              <p className={`${tone.hint} text-[var(--color-ink-2)]`}>Klikněte na parcelu pro její číslo a výměru</p>
+            )}
+            <CuzkCredit />
+          </div>
+        </OverlayPanel>
+      )}
+    </div>
+  );
+}
+
+/* The source line of ČÚZK's own layers (terrain, cadastral map). */
+function CuzkCredit() {
+  const tone = useMapControlsTone();
+  return (
+    <p className={`${tone.foot} text-[var(--color-ink-3)]`}>
+      Jen území ČR ·{' '}
+      <a
+        href="https://geoportal.cuzk.gov.cz/"
+        target="_blank"
+        rel="noreferrer"
+        title="CC BY 4.0"
+        className="underline-offset-2 hover:underline hover:text-[var(--color-ink-2)]"
+      >
+        © ČÚZK
+      </a>
+    </p>
   );
 }
 
@@ -143,27 +342,6 @@ function SectionPanel({
       ),
     });
   }
-  for (const layer of section.layers) {
-    if (!sel.has(layer.key)) continue;
-    if ((layer.variants?.length ?? 0) > 1) {
-      const pick = (variant: string) => {
-        writeRememberedVariant(layer.key, variant);
-        edit((next) => {
-          next.set(layer.key, variant);
-        });
-      };
-      blocks.push({
-        key: `variants-${layer.key}`,
-        node: (
-          <VariantRadios
-            layer={layer}
-            value={activeVariant(layer, sel.get(layer.key))?.key ?? null}
-            onChange={pick}
-          />
-        ),
-      });
-    }
-  }
   blocks.push({ key: 'about', node: <SectionAbout section={section} zoom={zoom} /> });
   return (
     <OverlayPanel>
@@ -175,14 +353,23 @@ function SectionPanel({
 }
 
 /* The keys of the layers that are on, one card per section for the map's
- * corner: a layer's scale, or its classes (a multi-layer section lists the
- * class of each layer drawn). The card names the variant shown. */
+ * corner: a layer's area card (a scale with variants), its scale, or its
+ * classes (a multi-layer section lists the class of each layer drawn).
+ * `places` = what lies under the map's centre; `onChange` lets an area card
+ * pick the variant the map is painted by. */
 export function MapOverlayLegends({
   registry,
   selection,
+  places,
+  onChange,
+  inline = false,
 }: {
   registry: MapOverlayRegistry | undefined;
   selection: string;
+  places?: OverlayPlaces;
+  onChange?: (next: string) => void;
+  /* Under the map rather than on it (MapLegendCard). */
+  inline?: boolean;
 }) {
   const sel = layersOf(parseLayers(selection), registry);
   return (
@@ -191,17 +378,20 @@ export function MapOverlayLegends({
         const on = section.layers.filter((layer) => sel.has(layer.key));
         if (on.length === 0) return null;
         const classes = on.filter((layer) => !layer.scale).flatMap((layer) => layer.legend);
-        const scales = on.filter((layer) => layer.scale);
-        if (classes.length === 0 && scales.length === 0) return null;
-        const variants = on
-          .filter((layer) => (layer.variants?.length ?? 0) > 1)
-          .map((layer) => activeVariant(layer, sel.get(layer.key))?.label)
-          .filter(Boolean);
+        const cards = on.filter(overlayHasAreaCard);
+        const scales = on.filter((layer) => layer.scale && !overlayHasAreaCard(layer));
+        if (classes.length === 0 && scales.length === 0 && cards.length === 0) return null;
         return (
-          <MapLegendCard
-            key={section.key}
-            title={variants.length ? `${section.label} · ${variants.join(', ')}` : section.label}
-          >
+          <MapLegendCard key={section.key} title={section.label} inline={inline}>
+            {cards.map((layer) => (
+              <AreaCard
+                key={layer.key}
+                layer={layer}
+                variantKey={sel.get(layer.key) ?? null}
+                place={places?.get(layer.key) ?? null}
+                onPick={onChange && ((variant) => onChange(pickVariant(selection, registry, layer.key, variant)))}
+              />
+            ))}
             {scales.map((layer) => <ScaleLegend key={layer.key} scale={layer.scale!} />)}
             {classes.length > 0 && <ClassLegend legend={classes} />}
           </MapLegendCard>
@@ -211,24 +401,122 @@ export function MapOverlayLegends({
   );
 }
 
+const figureOf = (v: unknown): number | null => {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
+
+const textOf = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v : null);
+
+const NUMBER = 'font-mono tabular-nums text-right';
+
+/* A scale layer's key read where the map's centre is: the place, every
+ * variant's figure (and its second one, the rent map's new-build rent) under
+ * the scale's unit, the shown variant lit — a click on another paints the map
+ * by it — then the shown one's worked example and the ramp. */
+function AreaCard({
+  layer,
+  variantKey,
+  place,
+  onPick,
+}: {
+  layer: OverlayLayer;
+  variantKey: string | null;
+  place: Record<string, unknown> | null;
+  onPick?: (variant: string) => void;
+}) {
+  const scale = layer.scale!;
+  const variants = layer.variants ?? [];
+  const words = overlayScaleWords(scale.unit, place?.level);
+  const shown = activeVariant(layer, variantKey);
+  const name = textOf(place?.name);
+  const kraj = textOf(place?.kraj);
+  const alt = variants.some((v) => v.alt_prop);
+  const cols = alt ? 'grid-cols-[minmax(0,1fr)_2.25rem_3.6rem]' : 'grid-cols-[minmax(0,1fr)_2.25rem]';
+  const cell = (prop: string | null | undefined) => {
+    const n = prop ? figureOf(place?.[prop]) : null;
+    return n == null ? '—' : formatOverlayNumber(n);
+  };
+  const m2 = shown?.example_m2 ?? null;
+  const value = shown ? figureOf(place?.[shown.prop]) : null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col">
+        <span className="text-[0.62rem] text-[var(--color-ink-3)] leading-snug">
+          {name ? [words.place, kraj].filter(Boolean).join(' · ') : 'Střed mapy'}
+        </span>
+        <span className="text-[0.75rem] font-semibold text-[var(--color-ink)] leading-snug">{name ?? 'Bez údajů'}</span>
+      </div>
+      <div className="flex flex-col gap-0.5">
+        {words.caption && <span className="text-[0.62rem] text-[var(--color-ink-3)]">{words.caption}</span>}
+        <div
+          aria-hidden="true"
+          className={`grid ${cols} gap-x-1.5 px-1.5 text-[0.6rem] whitespace-nowrap text-[var(--color-ink-3)]`}
+        >
+          <span />
+          <span className="text-right">{words.main}</span>
+          {alt && <span className="text-right">{words.alt}</span>}
+        </div>
+        <div role="group" aria-label={words.variants ?? layer.label} className="flex flex-col gap-px">
+          {variants.map((variant) => {
+            const lit = variant.key === shown?.key;
+            return (
+              <button
+                key={variant.key}
+                type="button"
+                aria-pressed={lit}
+                disabled={!onPick}
+                onClick={() => onPick?.(variant.key)}
+                className={`grid ${cols} gap-x-1.5 items-baseline px-1.5 py-0.5 rounded-[var(--radius-sm)] text-left text-[0.7rem] ${
+                  lit
+                    ? 'bg-[var(--color-copper)] text-[var(--color-on-copper)]'
+                    : 'text-[var(--color-ink-2)] enabled:hover:text-[var(--color-ink)] enabled:hover:bg-[var(--color-inset)]'
+                }`}
+              >
+                <span>{variant.label}</span>
+                <span className={NUMBER}>{cell(variant.prop)}</span>
+                {alt && <span className={NUMBER}>{cell(variant.alt_prop)}</span>}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      {words.total && m2 != null && value != null && (
+        <p
+          className="text-[0.65rem] text-[var(--color-ink-2)]"
+          title={words.example ? `${formatOverlayNumber(m2)} m² je ${words.example} ${shown?.label}` : undefined}
+        >
+          Příklad: <span className="font-mono tabular-nums">{formatOverlayNumber(m2)}</span> m² ×{' '}
+          <span className="font-mono tabular-nums">{formatOverlayNumber(value)}</span> ={' '}
+          <span className="font-semibold text-[var(--color-ink)] whitespace-nowrap">
+            <span className="font-mono tabular-nums">{formatOverlayNumber(m2 * value)}</span> {words.total}
+          </span>
+        </p>
+      )}
+      <ScaleLegend scale={scale} compact />
+    </div>
+  );
+}
+
 /* Why the layer may not show yet, what the source says about itself, and whose
  * data it is as of when. */
 function SectionAbout({ section, zoom }: { section: OverlaySection; zoom: number | null }) {
+  const tone = useMapControlsTone();
   const date = overlayDataDate(section);
   return (
     <div className="flex flex-col gap-1">
       {zoom != null && zoom < section.minzoom && (
         <p
-          className="text-[0.68rem] font-medium text-[var(--color-ink-2)]"
+          className={`${tone.hint} font-medium text-[var(--color-ink-2)]`}
           title={`Vrstva se kreslí od přiblížení ${section.minzoom}`}
         >
           Přibližte mapu
         </p>
       )}
       {section.note && (
-        <p className="text-[0.65rem] leading-snug text-[var(--color-ink-3)]">{section.note}</p>
+        <p className={`${tone.note} leading-snug text-[var(--color-ink-3)]`}>{section.note}</p>
       )}
-      <p className="text-[0.62rem] text-[var(--color-ink-3)]">
+      <p className={`${tone.foot} text-[var(--color-ink-3)]`}>
         {date ? `Data k ${date} · ` : ''}
         {/^https?:\/\//.test(section.source_url) ? (
           <a
@@ -257,44 +545,19 @@ function LayerToggle({
   checked: boolean;
   onChange: (next: boolean) => void;
 }) {
+  const tone = useMapControlsTone();
   const only = !layer.scale && layer.legend.length === 1 ? layer.legend[0] : null;
   return (
-    <label className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-ink-2)] cursor-pointer">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+    <label className={`inline-flex items-center gap-1.5 ${tone.sub} cursor-pointer`}>
+      <input
+        type="checkbox"
+        className={tone.box || undefined}
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+      />
       {only && <LegendSwatch entry={only} />}
       <span>{only?.label ?? layer.label}</span>
     </label>
-  );
-}
-
-function VariantRadios({
-  layer,
-  value,
-  onChange,
-}: {
-  layer: OverlayLayer;
-  value: string | null;
-  onChange: (variantKey: string) => void;
-}) {
-  // A literal radio `name` is page-global; two mounted maps would share one group.
-  const name = useId();
-  return (
-    <div role="radiogroup" aria-label={layer.label} className="flex flex-col gap-1">
-      {(layer.variants ?? []).map((variant) => (
-        <label
-          key={variant.key}
-          className="inline-flex items-center gap-1.5 text-[0.75rem] text-[var(--color-ink-2)] cursor-pointer"
-        >
-          <input
-            type="radio"
-            name={name}
-            checked={value === variant.key}
-            onChange={() => onChange(variant.key)}
-          />
-          <span>{variant.label}</span>
-        </label>
-      ))}
-    </div>
   );
 }
 
@@ -315,25 +578,41 @@ function ClassLegend({ legend }: { legend: readonly OverlayLegendEntry[] }) {
 }
 
 /* A scale's key: what it measures, the gradient, and the two ends of the
- * scale — for the rent map, word for word the legend it has always had. */
-function ScaleLegend({ scale }: { scale: OverlayScale }) {
+ * scale. `compact` (an area card, which names the unit above its figures): no
+ * caption, the ends beside the gradient. */
+function ScaleLegend({ scale, compact = false }: { scale: OverlayScale; compact?: boolean }) {
   const stops = [...scale.stops].sort((a, b) => a[0] - b[0]);
   if (stops.length === 0) return null;
   const colors = stops.map(([, color]) => color);
   const { caption } = overlayScaleWords(scale.unit);
+  const ends = 'text-[0.65rem] text-[var(--color-ink-3)] tabular-nums';
+  const low = <span className={ends}>{formatOverlayNumber(stops[0][0])}</span>;
+  const high = <span className={ends}>{formatOverlayNumber(stops[stops.length - 1][0])}</span>;
+  const ramp = (
+    <div
+      aria-hidden="true"
+      className={`h-1.5 rounded-sm ${compact ? 'flex-1' : ''}`}
+      style={{
+        background: `linear-gradient(to right, ${(colors.length > 1 ? colors : [colors[0], colors[0]]).join(', ')})`,
+      }}
+    />
+  );
+  if (compact) {
+    return (
+      <div className="flex items-center gap-1.5">
+        {low}
+        {ramp}
+        {high}
+      </div>
+    );
+  }
   return (
     <div className="flex flex-col gap-1">
       {caption && <span className="text-[0.65rem] text-[var(--color-ink-3)]">{caption}</span>}
-      <div
-        aria-hidden="true"
-        className="h-1.5 rounded-sm"
-        style={{
-          background: `linear-gradient(to right, ${(colors.length > 1 ? colors : [colors[0], colors[0]]).join(', ')})`,
-        }}
-      />
-      <div className="flex justify-between text-[0.65rem] text-[var(--color-ink-3)] tabular-nums">
-        <span>{formatOverlayNumber(stops[0][0])}</span>
-        <span>{formatOverlayNumber(stops[stops.length - 1][0])}</span>
+      {ramp}
+      <div className="flex justify-between">
+        {low}
+        {high}
       </div>
     </div>
   );

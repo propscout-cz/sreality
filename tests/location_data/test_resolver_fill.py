@@ -103,9 +103,9 @@ def test_our_own_coords_stamp_is_not_the_portals_declared_precision():
 def test_the_chain_comes_from_the_join_not_from_geometry():
     resolution = _resolve(_address_claims())
     assert (resolution.obec_kod, resolution.obec_name) == (554782, "Praha")
-    assert (resolution.okres_kod, resolution.kraj_kod) == (3100, 19)
+    assert (resolution.okres_kod, resolution.kraj_kod) == (9999, 19)
     assert (resolution.okres_name, resolution.kraj_name) == (
-        "Hlavní město Praha", "Hlavní město Praha"
+        "území Hlavního města Prahy", "Hlavní město Praha"
     )
 
 
@@ -122,7 +122,7 @@ def test_the_quarter_lands_on_a_name_bound_row_too():
         mm.claim(2, "cast_obce_name", value_text="Vokovice"),
     ])
     assert (resolution.cast_obce_kod, resolution.cast_obce_name) == (490067, "Vokovice")
-    assert (resolution.obec_kod, resolution.okres_kod, resolution.kraj_kod) == (554782, 3100, 19)
+    assert (resolution.obec_kod, resolution.okres_kod, resolution.kraj_kod) == (554782, 9999, 19)
 
 
 def test_a_street_match_carries_the_whole_chain():

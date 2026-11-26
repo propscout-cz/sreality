@@ -43,11 +43,11 @@ OFFICE = EMPTY | {"category_main": "komercni", "category_type": "pronajem", "sub
                   "disposition": "2+kk", "area_m2": 180, "condition": "dobry", "floor": 2}
 STREET = {
     "lat": 50.08, "lon": 14.42, "granularity": "address_point", "granularity_rank": 100,
-    "precision": "street", "country_status": "cz", "uncertainty_radius_m": 5.0,
-    "label": "Vinohradská 12, Praha", "zoom": 16, "note": None,
+    "precision": "street", "country_status": "cz",
+    "label": "Vinohradská 12, Praha", "note": None,
 }
 TOWN = STREET | {"granularity": "obec", "granularity_rank": 40, "precision": "town",
-                 "uncertainty_radius_m": 2500.0, "note": "Poloha jen na úrovni obce"}
+                 "note": "Poloha jen na úrovni obce"}
 
 
 def _build(subject: dict[str, Any], location: dict[str, Any] = STREET,
@@ -592,7 +592,7 @@ def test_get_returns_the_editor_and_the_callers_history(client, world, store, mo
     body = client.get("/properties/7/valuo", headers=AUTH).json()
     assert body["environment"] == "sandbox" and body["refusal"] is None
     assert body["subject"]["location"] == {"label": "Vinohradská 12, Praha", "granularity": "address_point",
-                                           "uncertainty_radius_m": 5.0, "note": None}
+                                           "note": None}
     rating = next(f for f in body["fields"] if f["name"] == "rating")
     assert rating["required"] and rating["group"] == "basic"
     assert {"value": "very_good", "label": "Velmi dobrý"} in rating["options"]

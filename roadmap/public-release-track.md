@@ -397,7 +397,7 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
      / pipeline-bookmark for signed-in extension users — all three were 404'ing because
      `resolve_active_property_ids`' walk over `properties` returned zero rows under RLS
      deny-all (found while shipping this, not yet reported by the operator). `list_estimation_runs`
-     turned out **not** degraded (runs on the service-role conn). `admin_boundaries` left
+     turned out **not** degraded (runs on the service-role conn). `admin_boundaries` (dropped 729) left
      un-policied until a tenant-conn consumer needs it (Wave 3 matcher). Live regression:
      `test_a5_properties_readable_listings_still_deny_all`.
    - ~~**W1-3 (async job lane + periodic zombie sweep — Amendment A10)**~~ — **SHIPPED,
@@ -676,7 +676,10 @@ remediation R3 closes that. Full spec: `docs/design/public-release-remediation-2
 
 **Housekeeping done 2026-07-20:** operator enabled Supabase Auth's leaked-password-protection
 toggle (Authentication → Sign In / Providers → Email → "Prevent use of leaked passwords").
-12. **Waitlist landing page on propscout.cz — LIVE 2026-10-31 17:52Z (#2248, merge a4de3157; DNS switched by the operator).**
+12. **Waitlist landing page on propscout.cz — TAKEN DOWN 2026-11-09 (operator ask), backed up as the git tag
+    `landing-page-v1`; was LIVE 2026-10-31 17:52Z (#2248, merge a4de3157; DNS switched by the operator).** The bare domain
+    now 302s to the app except the privacy page `/soukromi` (the Chrome Web Store listing and the extension link it);
+    the source stays built and tested, and bringing it back is the tag's bare-domain Caddy block (`frontend/Caddyfile`).
     Operator ask: a conversion-oriented pre-launch page for Facebook/Instagram ads, primary action a waitlist signup.
     Copy follows Joanna Wiebe's method (one reader: Czech flip + buy-to-rent investors; voice-of-customer mined from
     1,233 Czech portal-app reviews and investor forums; vykání). Visuals are simplified redraws of production phone

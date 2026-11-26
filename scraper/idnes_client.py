@@ -10,12 +10,10 @@ the HTML `Accept` header, the idnes URL builders, and the removed-listing signal
 
 from __future__ import annotations
 
-import logging
+import re
 import urllib.parse
 
-from scraper.portal_base import BasePortalClient, ListingGoneError
-
-LOG = logging.getLogger(__name__)
+from scraper.portal_base import BasePortalClient, gone_phrases
 
 BASE_URL = "https://reality.idnes.cz"
 
@@ -101,10 +99,13 @@ def detail_url(path_or_url: str) -> str:
 
 class IdnesClient(BasePortalClient):
     ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    # idnes 302-redirects a removed listing to the search results page.
+    DETAIL_URL = re.compile(r"/detail/")
+    GONE_PAGE = (gone_phrases(*_GONE_MARKERS),)
     # Route every request through the residential proxy in SCRAPER_PROXY_URL.
     #
-    # idnes does not block our datacenter (GitHub Actions) IP the way ceskereality
-    # and mmreality do — it SOFT-throttles it, which is worse, because nothing in
+    # idnes does not block our datacenter (GitHub Actions) IP the way mmreality
+    # does — it SOFT-throttles it, which is worse, because nothing in
     # the response says so. MEASURED 2026-08-27 on the 08-26 13:17 walk: pages
     # arrive in ~2.3s each for exactly 20 requests, then one request stalls for
     # ~390 SECONDS and returns 200. No 429, no 403, no retry, no penalize() — the
@@ -120,8 +121,8 @@ class IdnesClient(BasePortalClient):
     # = direct IP (logs a warn), which is the throttled-but-working status quo,
     # so a missing secret degrades rather than breaks.
     USE_PROXY = True
-    # …and unlike ceskereality/mmreality, the direct IP still WORKS here — every
-    # page arrives, just 13x slower. So the realtime worker must keep probing
+    # …and unlike ceskereality/mmreality, the proxy is not REQUIRED here — every
+    # page arrives direct, just 13x slower. So the realtime worker must keep probing
     # idnes when the proxy is absent: skipping it would trade slow data for none.
     PROXY_REQUIRED = False
 
@@ -143,14 +144,4 @@ class IdnesClient(BasePortalClient):
         return response.text, response.status_code
 
     def fetch_detail(self, path_or_url: str) -> tuple[str, int]:
-        url = detail_url(path_or_url)
-        response = self._request(url)
-        # idnes 302-redirects a removed listing to the search results page; after
-        # requests follows it the status is 200 but the URL is off /detail/.
-        final_url = getattr(response, "url", url) or url
-        if "/detail/" not in final_url:
-            raise ListingGoneError(url, response.status_code)
-        text = response.text
-        if any(marker in text.lower() for marker in _GONE_MARKERS):
-            raise ListingGoneError(url, response.status_code)
-        return text, response.status_code
+        return self._fetch_detail_page(detail_url(path_or_url))

@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from scraper import delist_policy, portal_factory, portal_runner, stop
 from scraper.portal import deadline_reached
 from scraper.portal_runner import DrainItem
+from scripts.failure_signature import reason_line
 
 
 class _Conn:
@@ -260,6 +261,7 @@ def test_walk_counts_from_reconcile_reach_by_category(monkeypatch):
         lambda _c, _s, ids: {n: stored[n] for n in ids if n in stored})
     monkeypatch.setattr(portal_runner.db, "touch_listings_by_id", lambda _c, ids: len(ids))
     monkeypatch.setattr(portal_runner.db, "enqueue_detail", lambda _c, _s, entries: len(entries))
+    monkeypatch.setattr(portal_runner.db, "rearm_sighted_given_up", lambda _c, _s, _ids: 0)
     p = _ReconcilingPortal(reached_end=False)
     _rc, agg = portal_runner.run_index_walk(p, dry_run=False)
     assert [(c["listings_found_new"], c["listings_enqueued"]) for c in agg["by_category"]] == [
@@ -899,23 +901,22 @@ def _scraped(native_id, **fields):
 
 
 def test_a_content_free_page_is_a_failed_fetch_not_a_write(monkeypatch):
-    """ceskereality's "Ujišťujeme se, že nejste robot!" interstitial (2026-10-30) parsed to a
-    ScrapedListing with no price, no area, no params, no images and no description, and the
-    drain wrote it into 51 live ads: blanked content, `last_seen_at` bumped, the queue row
-    completed as written. Such a page is a failed attempt: no write, no completion, the
+    """A page that parses to a ScrapedListing with no price, no area, no params, no images and
+    no description, written as the ad, would blank it, bump `last_seen_at` and complete the
+    queue row as written. Such a page is a failed attempt: no write, no completion, the
     queue's attempts bump, and the portal's failure seam is told, exactly as a fetch error."""
-    cap = _patch_queue(monkeypatch, [[("ok", None, None, None), ("robot", None, None, None)]])
+    cap = _patch_queue(monkeypatch, [[("ok", None, None, None), ("blank", None, None, None)]])
     p = _ParsedPortal({
         "ok": _scraped("ok", price_czk=4_500_000, usable_area=72.0, description="Byt 3+kk",
                        raw={"params": {"Stav": "dobrý"}, "image_urls": ["https://img/1.jpg"]}),
-        "robot": _scraped("robot", raw={"params": {}, "image_urls": [],
-                                        "title": "Ujišťujeme se, že nejste robot!"}),
+        "blank": _scraped("blank", raw={"params": {}, "image_urls": [],
+                                        "title": "Načítání stránky"}),
     })
     rc, agg = portal_runner.run_detail_drain(p, None, False, detail_workers=1, detail_rate=1.0)
     assert rc == 0
     assert p.calls["write"] == [["ok"]]
     assert cap["complete"] == [["ok"]]
-    assert cap["fail"] == [["robot"]] and p.calls["failure"] == ["robot"]
+    assert cap["fail"] == [["blank"]] and p.calls["failure"] == ["blank"]
     assert agg["errors"] == 1 and agg["listings_scraped_new"] == 1
 
 
@@ -1049,6 +1050,67 @@ def test_detail_drain_hands_back_what_the_ledger_refused_and_stops(
     assert (agg["budget_refused"], agg["deadline_stopped"], agg["errors"]) == (
         refused, stopped, 0)
     assert line in caplog.messages
+
+
+def test_the_worker_deploy_stop_hands_back_a_drain_chunk_in_flight(monkeypatch, caplog):
+    """#2438: a deploy's SIGTERM, as the worker's event loop delivers it, reaches a drain pass parked in its limiter
+    mid-chunk. It hands back the claims it has not started, first, then flushes what it fetched and returns, instead
+    of fetching on until SIGKILL and stranding the chunk for the claim expiry."""
+    import asyncio
+    import threading
+
+    from scraper import realtime_worker as rw
+
+    cap = _patch_queue(monkeypatch, [
+        [("1", None, None, None), ("2", None, None, None), ("3", None, None, None)],
+        [("4", None, None, None)],
+    ])
+    events: list[str] = []
+    monkeypatch.setattr(portal_runner.db, "release_claims", lambda _c, _src, ids: (
+        events.append("release:" + ",".join(sorted(ids))) or len(ids)))
+
+    class _Paced(_FakePortal):
+        def make_client(self, limiter):
+            self.limiter = limiter
+            return object()
+
+        def fetch_detail(self, client, native_id, ref):
+            try:
+                self.limiter.acquire()  # every portal client paces here before its request
+            except stop.StopRequested as exc:  # and every fetch_detail turns a raise into an error item
+                return DrainItem(native_id=native_id, kind="error", error=str(exc))
+            return super().fetch_detail(client, native_id, ref)
+
+        def write_details(self, conn, items):
+            events.append("write:" + ",".join(sorted(it.native_id for it in items)))
+            return super().write_details(conn, items)
+
+    p = _Paced()
+    # One fetch every 5 s on one thread: the second claim's fetch waits in the limiter when the stop arrives.
+    monkeypatch.setattr(rw, "_load_config", lambda s: SimpleNamespace(
+        limits=SimpleNamespace(detail_workers=1, detail_rate=0.2)))
+    monkeypatch.setattr(rw, "_build_portal", lambda s, c: p)
+    monkeypatch.setattr(rw, "_read_drain_slice", lambda: 200)
+    monkeypatch.setattr(rw, "_read_drain_disabled_sources", lambda: set())
+    monkeypatch.setattr(rw, "_claimable_by_source", lambda: {"sreality": 4})
+    monkeypatch.setattr(rw, "_AUTODEDUP_STOPPING", threading.Event())
+    stop.arm()  # as the worker's boot does, before it takes its signals
+
+    async def deploy() -> tuple[dict[str, Any], float]:
+        stop_event, state = asyncio.Event(), rw._new_state()
+        asyncio.get_running_loop().call_later(0.2, rw._on_stop_signal, stop_event)
+        started = time.monotonic()
+        await rw._drain_pass(stop_event, state)
+        return state["lanes"]["drain"]["last"], time.monotonic() - started
+
+    with caplog.at_level("INFO", logger="scraper.portal_runner"):
+        last, took = asyncio.run(deploy())
+    assert took < 3.0, "the stop ends the limiter's 5 s wait at once"
+    assert events == ["release:2,3", "write:1"]
+    assert len(cap["claim_n"]) == 1 and cap["complete"] == [["1"]]
+    assert cap["fail"] == [] and p.calls["failure"] == []  # a handed-back claim spends no attempt
+    assert (last["new"], last["deadline_stopped"], last["budget_refused"], last["errors"]) == (1, 1, 0, 0)
+    assert "DRAIN stop signal mid-chunk; 2 claims handed back source=fake" in caplog.messages
 
 
 @pytest.mark.parametrize("max_claims,lease_n", [(3, 3), (200, 20), (None, 20)])
@@ -1687,3 +1749,62 @@ def test_a_clean_phase_keeps_its_own_return_code(monkeypatch):
     _PhaseRecorder(monkeypatch)
     assert portal_runner.run_phase(_FakePortal(), "index", lambda portal, dry_run, **kw: (1, {}), False) == 1
 
+
+# --- a walk that collected nothing --------------------------------------------
+
+
+class _EmptyWalkPortal(_FakePortal):
+    """Every category fetched `pages` pages and collected `ids`; the portal still declares a count,
+    as a page without listings can by echoing the site's meta text."""
+
+    def __init__(self, *, pages: int, ids: set[str] | None = None, **kw: Any) -> None:
+        super().__init__(categories=["A"], result_size=867, **kw)
+        self._pages = pages
+        self._ids = ids or set()
+
+    def walk_category(self, c, conn, dry_run, limiter, deadline=None):
+        return (set(self._ids), {}, self._result_size, self._pages, self._reached_end)
+
+
+def test_a_walk_of_100_pages_collecting_nothing_fails_despite_its_declared_count(monkeypatch, caplog):
+    cap = _nominations(monkeypatch)
+    rc, agg = portal_runner.run_index_walk(_EmptyWalkPortal(pages=100, reached_end=False), dry_run=False)
+    assert (rc, agg["errors"], agg["index_pages"]) == (1, 1, 100)
+    assert agg["by_category"][0]["sreality_result_size"] == 867
+    # Rule #3 is untouched: the walk did not reach the end, so it nominates nothing.
+    assert cap["candidates"] == [] and cap["queued"] == []
+    assert sum(c["listings_to_verify"] for c in agg["by_category"]) == 0
+    assert not agg["by_category"][0]["walk_reached_end"]
+    # The cell's reason line names the fault, not "exit code 1".
+    line = next(r.getMessage() for r in caplog.records if "empty_walk" in r.getMessage())
+    assert reason_line(f"2026-11-02 06:35:16,344 ERROR scraper.portal_runner {line}\n##[error]exit 1").endswith(
+        "CHECK empty_walk status=fail: fake collected 0 ads from 100 pages; failing the run")
+
+
+@pytest.mark.parametrize(("pages", "ids"), [(99, set()), (100, {"a"}), (0, set())])
+def test_a_small_empty_walk_or_one_that_collected_an_ad_stays_a_success(monkeypatch, pages, ids):
+    _nominations(monkeypatch)
+    rc, agg = portal_runner.run_index_walk(_EmptyWalkPortal(pages=pages, ids=ids), dry_run=False)
+    assert (rc, agg["errors"]) == (0, 0)
+
+
+def test_an_empty_walk_claiming_the_end_reads_red_and_still_nominates_nothing(monkeypatch):
+    """The runner's own guard already refuses an empty seen set (it would nominate the whole scope)."""
+    cap = _nominations(monkeypatch)
+    rc, _agg = portal_runner.run_index_walk(_EmptyWalkPortal(pages=100, reached_end=True), dry_run=False)
+    assert rc == 1
+    assert cap["queued"] == []
+
+
+def test_the_finished_empty_walk_still_finalizes_its_run(monkeypatch):
+    """It completed, so `ended_at` is stamped and the crash path stays out of it; only the exit is red."""
+    finalized: list[dict[str, Any]] = []
+    monkeypatch.setattr(portal_runner, "_finalize_run", lambda run_id, agg, drain=False: finalized.append(agg))
+    monkeypatch.setattr(portal_runner, "_record_run_crash", lambda *a, **k: pytest.fail("not a crash"))
+    monkeypatch.setattr(portal_runner.db, "connect", lambda *a, **k: _Conn())
+    monkeypatch.setattr(portal_runner.db, "scrape_run_start", lambda *a, **k: 1)
+    _nominations(monkeypatch)
+    rc = portal_runner.run_phase(
+        _EmptyWalkPortal(pages=149, reached_end=False), "index", portal_runner.run_index_walk, False)
+    assert rc == 1
+    assert finalized[0]["errors"] == 1

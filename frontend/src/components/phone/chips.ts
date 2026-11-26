@@ -2,7 +2,7 @@
  * sideways, pressed = ink on inset, never colour (colour on these screens
  * means the stage). Shared by the feed's and Makléři's Filtry chips and the
  * feed's preset/portal rows so they read as one control. A pick-one (Makléři's
- * Řadit and horizon, Prohlídky's scope, the account sheet's Vzhled) is not a
+ * Řadit and horizon, the account sheet's Vzhled) is not a
  * chip row but the one joined bar in its phone tone (`SegmentedBar
  * tone="phone"`, system.md § Option groups), the same ink-on-inset rule; the
  * feed's scope row stays chips by ruling (each chip loads a saved view). */

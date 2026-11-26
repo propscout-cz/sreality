@@ -32,6 +32,8 @@ CLOSING_QUERY = (
     "{closedByPullRequestsReferences(first:20,includeClosedPrs:true){nodes{number state isDraft headRefName}}}}}"
 )
 OK, TAKEN, USAGE, NOT_OPEN, GH_ERROR = 0, 1, 2, 3, 4
+FRONTIER_SKIP = frozenset({"gate", "needs-triage", "needs-info", "ready-for-human", "wontfix"})
+EVERY_READY = 0  # bare --frontier; GitHub numbers issues from 1
 EXIT_HELP = (
     "exit codes: 0 yours or free, 1 another session holds it / claimed first / an open PR from another branch "
     "closes it, 2 usage or unknown session name, 3 closed / a PR / not found, 4 GitHub or other error"
@@ -391,7 +393,35 @@ def release(n: int, me: Session, reason: str) -> int:
     return OK
 
 
-def status(numbers: list[int], me: Session | None, mine: bool, frontier: bool, branch: str) -> int:
+def print_frontier(parent: int, me: Session | None, branch: str) -> int:
+    """Print the claimable tickets in order: the parent's sub-issues, or with EVERY_READY the ready-for-agent ones."""
+    if parent == EVERY_READY:
+        rows = _paged(f"{REPO}/issues?state=open&labels=ready-for-agent&sort=created&direction=asc")
+    else:
+        rows = _paged(f"{REPO}/issues/{parent}/sub_issues")
+        if not rows:
+            print(
+                f"#{parent} has no sub-issues: link a spec's or map's tickets to it as sub-issues when drafting them "
+                "(docs/agents/issue-tracker.md, Drafting tickets)",
+                file=sys.stderr,
+            )
+            return USAGE
+    for r in rows:
+        if r.get("state") != "open" or "pull_request" in r or FRONTIER_SKIP & {lb["name"] for lb in r.get("labels") or []}:
+            continue
+        try:
+            blocked, children = r["issue_dependencies_summary"]["blocked_by"], r["sub_issues_summary"]["total"]
+        except (KeyError, TypeError) as exc:
+            raise GhError(f"#{r.get('number')}: the issue listing has no blocker or sub-issue count") from exc
+        if blocked or children:
+            continue
+        t = read_ticket(r["number"])
+        if t.verdict.holder is None and not t.open_prs():
+            print(describe(t, me, branch))
+    return OK
+
+
+def status(numbers: list[int], me: Session | None, mine: bool, frontier: int | None, branch: str) -> int:
     """Print who holds each ticket; exit 1 when any named ticket is taken, 3 when one is not an open issue."""
     code = OK
     for n in numbers:
@@ -409,19 +439,8 @@ def status(numbers: list[int], me: Session | None, mine: bool, frontier: bool, b
                 t = read_ticket(r["number"])
                 if t.verdict.holder and t.verdict.holder.who.same(me):
                     print(describe(t, me, branch))
-    if frontier:
-        for r in _paged(f"{REPO}/issues?state=open&labels=ready-for-agent&sort=created&direction=asc"):
-            if "pull_request" in r or "gate" in {lb["name"] for lb in r.get("labels") or []}:
-                continue
-            try:
-                blocked, children = r["issue_dependencies_summary"]["blocked_by"], r["sub_issues_summary"]["total"]
-            except (KeyError, TypeError) as exc:
-                raise GhError(f"#{r.get('number')}: the issue listing has no blocker or sub-issue count") from exc
-            if blocked or children:
-                continue
-            t = read_ticket(r["number"])
-            if t.verdict.holder is None and not t.open_prs():
-                print(describe(t, me, branch))
+    if frontier is not None:
+        return print_frontier(frontier, me, branch) or code
     return code
 
 
@@ -441,8 +460,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("numbers", type=_number, nargs="*")
     s.add_argument("--mine", action="store_true", help="open tickets this session holds")
     s.add_argument(
-        "--frontier", action="store_true",
-        help="open ready-for-agent tickets with no gate label, no sub-issues and no open blocker, claimable",
+        "--frontier", nargs="?", type=_number, const=EVERY_READY, metavar="PARENT",
+        help="claimable tickets, first line first: PARENT's sub-issues in its order, any label; without PARENT, open "
+        "ready-for-agent tickets. Both skip gate and triage labels, tickets with sub-issues, an open blocker, a claim or "
+        "an open closing PR. A number right after this flag is PARENT, so put ticket numbers first",
     )
     for sp in (c, r, s):
         sp.add_argument(
@@ -456,7 +477,7 @@ def main(argv: list[str] | None = None) -> int:
         why = "no session name found" if raw is None else f"session name {raw!r} slugs to {slug(raw)!r}, not a claim name"
         print(f"{why}: pass --as <name> (a-z, 0-9 and '-', at most 40)", file=sys.stderr)
         return USAGE
-    if args.cmd == "status" and not (args.numbers or args.mine or args.frontier):
+    if args.cmd == "status" and not (args.numbers or args.mine or args.frontier is not None):
         p.error("status needs ticket numbers, --mine or --frontier")
     try:
         if args.cmd == "claim":

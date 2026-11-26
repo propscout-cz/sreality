@@ -186,6 +186,15 @@ def test_only_the_worker_and_the_runner_declare_a_start_command() -> None:
     assert "jobRunner(sreality)" in worker, "the runner is a resource of the worker's project"
 
 
+def test_the_api_runs_with_uvicorn_access_log_off() -> None:
+    """#2444: an access line holds the request URL, query string and all, so a place typed into suggest would reach
+    the deploy log. The API runs the image's own command (the test above), so that command is every deployed one;
+    Railway's HTTP log keeps the path without the query."""
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    [command] = [line for line in dockerfile.splitlines() if line.startswith("CMD ")]
+    assert "uvicorn api.main:app" in command and "--no-access-log" in command, command
+
+
 def test_the_runner_drain_outlasts_its_own_fallback() -> None:
     """The runner checks its own drain only between ticks, then forgets its heartbeat: Railway's SIGKILL comes after
     a guard poll, that drain, a tick, one stopping tick and the forget, and not much later (a deploy waits on it)."""
@@ -206,17 +215,25 @@ def test_the_runner_replica_is_the_registrys_replica() -> None:
     assert "cpu: RUNNER_CPUS" in runner and "memoryBytes: RUNNER_MEMORY_BYTES" in runner
 
 
-def test_the_runner_watches_every_tree_the_dockerfile_copies() -> None:
-    """A watch-skipped deploy keeps the old image, so a runner that misses a tree its image copies runs stale code.
-    `COPY --from=<stage>` copies from a build stage, not the repo; .railway/ stays out (applies are by hand)."""
+def _dockerfile_copy_sources() -> set[str]:
+    """Each COPY source as a watch pattern; `COPY --from=<stage>` copies from a build stage, not the repo."""
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    lines = re.findall(r"^COPY\b.*$", dockerfile, re.M)
+    assert not [line for line in lines if line.endswith("\\") or "[" in line], "a COPY form this census cannot read"
     copied: set[str] = set()
-    for line in re.findall(r"^COPY (?:\S+ )*\S+$", dockerfile, re.M):
+    for line in lines:
         if "--from=" in line:
             continue
         for source in [w for w in line.split()[1:-1] if not w.startswith("--")]:
             first = Path(source).parts[0]
             copied.add(f"/{first}/**" if (ROOT / first).is_dir() else f"/{first}")
+    return copied
+
+
+def test_the_runner_watches_every_tree_the_dockerfile_copies() -> None:
+    """A watch-skipped deploy keeps the old image, so a runner that misses a tree its image copies runs stale code.
+    .railway/ stays out (applies are by hand)."""
+    copied = _dockerfile_copy_sources()
     watch = iac_constant("BACKEND_WATCH")
     assert len(watch) == len(set(watch))
     assert sorted(copied - set(watch)) == [], "the runner would not redeploy on these"
@@ -224,16 +241,25 @@ def test_the_runner_watches_every_tree_the_dockerfile_copies() -> None:
     assert "watchPatterns: BACKEND_WATCH" in iac_entry("jobRunner")
 
 
+@pytest.mark.parametrize("service", ["worker", "jobRunner"])
+def test_a_backend_service_watches_the_whole_image_or_nothing(service: str) -> None:
+    """The worker shares this image. No watch list deploys it on every merge; any other list than BACKEND_WATCH would
+    skip a deploy its image needs, and the skip still posts `success`. scripts/check_worker_version.py reads this list."""
+    assert _dockerfile_copy_sources() <= set(iac_constant("BACKEND_WATCH"))
+    assert set(re.findall(r"watchPatterns: (\S+?)\b", iac_entry(service))) <= {"BACKEND_WATCH"}
+
+
 def test_the_runner_reads_the_workers_secrets_by_reference() -> None:
     """#2025-R3: the runner stores no secret of its own; it references the worker's SUPABASE_DB_URL and its R2 set
-    (#2032: clip downloads photos), so a rotation changes one place (and redeploys the runner after the worker)."""
+    (#2032: clip downloads photos; #2028: location_intake reads archived bodies back, and without R2 it mines no page
+    and says so only in its log), so a rotation changes one place (and redeploys the runner after the worker)."""
     runner = iac_entry("jobRunner")
     env = re.search(r"\benv: \{ (.*?) \},", runner, re.S)
     assert env, "the runner declares its variables inline"
     declared = re.findall(r"(\w+): ", env.group(1))
     assert len(declared) == len(set(declared))
     plain = {"EXTRAS", "HF_HUB_OFFLINE"}
-    assert set(declared) == plain | {"SUPABASE_DB_URL", *image_storage.R2_ENV_VARS}
+    assert set(declared) == plain | {"SUPABASE_DB_URL", "SUPABASE_DB_SESSION_URL", *image_storage.R2_ENV_VARS}
     worker_kept = re.search(r"\bkept\((.*?)\)", iac_entry("worker"), re.S)
     assert worker_kept, "the worker keeps its secrets"
     kept_names = set(re.findall(r'"(\w+)"', worker_kept.group(1)))
@@ -243,6 +269,16 @@ def test_the_runner_reads_the_workers_secrets_by_reference() -> None:
     assert not re.search(r"preserve\(|kept\(|ctx\.shared", runner)
 
 
+def test_a_location_load_on_the_runner_has_its_session_mode_url() -> None:
+    """#2604: `loader_db.open_loader_connection` refuses the transaction pooler, so a location-heavy job on the
+    runner aborts at its first line unless the runner names a session-mode URL."""
+    from scraper import jobs
+
+    loads = [j.name for j in jobs.runner_jobs() if j.resource == jobs.LOCATION_HEAVY]
+    assert loads, "the census proves nothing without a location load on the runner"
+    assert "SUPABASE_DB_SESSION_URL: sreality.env.SUPABASE_DB_SESSION_URL" in iac_entry("jobRunner"), loads
+
+
 def test_the_api_and_the_worker_pass_their_extras_to_the_root_dockerfile_build() -> None:
     """Railway has no build-args field: a service variable reaches the Dockerfile ARG of the same name. Unset,
     the image installs `api` as before, and the build log's echo tells a delivered value from the fallback."""
@@ -250,10 +286,26 @@ def test_the_api_and_the_worker_pass_their_extras_to_the_root_dockerfile_build()
     assert "ARG EXTRAS\n" in dockerfile
     assert 'echo "EXTRAS=${EXTRAS:-unset}"' in dockerfile
     assert 'pip install ".[${EXTRAS:-api}]"' in dockerfile
-    for name in ("api", "worker"):
-        assert 'EXTRAS: "api"' in iac_entry(name), name
+    assert 'EXTRAS: "api"' in iac_entry("api")
+    # The worker also takes `browser`: it drains ceskereality, whose pages sit behind a JS
+    # proof-of-work interstitial, so that image bakes chromium (#2529). The API never
+    # scrapes, so it must NOT carry the extra (and the weight).
+    assert 'EXTRAS: "api,browser"' in iac_entry("worker")
+    assert "browser" not in iac_entry("api")
     assert 'EXTRAS: "api,clip,geo"' in iac_entry("jobRunner")
     assert 'EXTRAS: "api"' not in iac_entry("jobRunner")
+
+
+def test_the_browser_layer_installs_libatomic_before_it_runs_playwright() -> None:
+    """`playwright install --with-deps` resolves chromium's system libraries, but it runs on playwright's own
+    bundled node, which this slim base cannot load without libatomic.so.1 — so --with-deps dies at exit 127
+    before resolving anything (2026-11-16). apt must supply that one library first, by hand."""
+    final = (ROOT / "Dockerfile").read_text(encoding="utf-8").rsplit("\nFROM ", 1)[1]
+    layer = final[final.index('case ",${EXTRAS}," in *,browser,*)'):]
+    layer = layer[:layer.index("esac")]
+    assert layer.index("libatomic1") < layer.index("playwright install"), layer
+    assert "--with-deps" in layer, "chromium's own libraries still come from playwright, not a hand-kept apt list"
+    assert "BROWSER baked" in layer, "the build must still launch chromium, so a broken bake fails the build"
 
 
 def test_the_runner_image_is_cpu_torch_baked_and_offline() -> None:
@@ -332,6 +384,18 @@ def test_the_api_image_is_proven_free_of_clip() -> None:
     assert "test ! -e /root/.cache/huggingface" in check, "a verdict, not a print"
     assert "||" not in check, "nothing in the verdict step may swallow its exit status"
     assert "docker image inspect -f '{{.Size}}'" in runs and "pip freeze" in runs
+
+
+def test_the_api_image_is_proven_to_verify_cuzks_certificate() -> None:
+    """#2595: the ČÚZK client verifies against certifi's bundle over stdlib HTTPS. CI asserts it inside the built
+    API image with no network, and builds that image whenever the client changes."""
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "runner_image.yml").read_text(encoding="utf-8"))
+    steps = [s.get("run", "") for job in workflow["jobs"].values() for s in job["steps"]]
+    check, = [r for r in steps if "tls_context()" in r]
+    assert "docker run --rm --network none api-head" in check
+    assert all(part in check for part in ("ssl.CERT_REQUIRED", "check_hostname", "certifi.where()", "get_ca_certs()"))
+    assert check.count("assert ") == 3 and "||" not in check, "verdicts, and nothing swallows their exit status"
+    assert "api/wsdp_client.py" in workflow[True]["pull_request"]["paths"]
 
 
 def test_the_runner_image_workflow_builds_on_every_image_input() -> None:

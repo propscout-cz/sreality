@@ -48,7 +48,7 @@ in before starting. Deep per-territory rationale: `docs/architecture.md` § Terr
   `require_token` route still returns no identity, admin or per-account data (those take `verify_jwt`/`tenant_conn`; routes still breaking
   this: `roadmap/public-release-track.md` item 11).
   Reads run as `authenticated` (`anon` gets nothing): `*_public` views, RLS'd tables, read models granted with no RLS (`browse_list`,
-  `location_pin_audit_mv`, `ingest_bulk_days`), INVOKER RPCs, DEFINER RPCs only if admin-gated or registered ungated in `tests/_admin_gate_registry.py`.
+  `ingest_bulk_days`), INVOKER RPCs, DEFINER RPCs only if admin-gated or registered ungated in `tests/_admin_gate_registry.py`.
   Writes go via the API by convention, not grant (`database` skill), except the run tables, which are writes-by-grant (mig 679: the browser INSERTs
   no run and UPDATEs only `estimation_runs.scenario`). Design tokens (`styles/tokens.css`) need operator OK. Backend rules don't apply.
 - **Chrome extension** (`chrome-extension/`) — MV3, **vanilla TS only** (no React/Tailwind);
@@ -86,10 +86,9 @@ operator can watch, and work to completion.
 - **Database changes** have their own gate (the `database` skill: additive migrations are
   autonomous; destructive ones pause for confirmation + a backup).
 - **A merge is not a deploy.** After a PR merges to `main`, confirm Railway's rollout with
-  `gh api repos/{owner}/{repo}/commits/<sha>/status` — Railway posts a per-service commit
-  status (`<project> - <service>`), each with `state` + a live URL, no Railway token
-  needed. For frontend-visible changes, follow with a real-browser check against the
-  production URL — read-only only; never drive a mutating action (merge/unmerge, delete,
+  `scripts/rollout_wait.sh <merge-sha>` (exit 0 = every service green; any other exit goes to
+  the operator). For frontend-visible changes, follow with
+  `node frontend/scripts/smoke-check.mjs --page <path> --expect <text>` — read-only only; never drive a mutating action (merge/unmerge, delete,
   send, …) against production autonomously. `.railway/` deploys only by the operator's wizard apply, never a Railway dashboard or MCP edit (exceptions: architecture § Railway service configuration).
 ## Fetching live state (fetch, don't ask)
 
@@ -124,17 +123,17 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
    DESC, id DESC`). Payload-free writes never snapshot (derived/enrichment/link/lifecycle columns; `scripts/reparse.py` heals of
    a stored page); each outside `scraper/db.py`'s lifecycle writers is ledgered in `tests/scraper/test_listing_write_census.py`.
 3. **Never delete; delist via `is_active=false`.** History is sacred. **Since 2026-09-07 index absence NOMINATES,
-   the page DECIDES** (`portal_runner._queue_presence_checks`); **since 2026-09-08 the gate is STRUCTURAL, not
+   the page DECIDES** (`portal_runner._queue_presence_checks`; a sold/let card is no sighting); **since 2026-09-08 the gate is STRUCTURAL, not
    numeric** — a walk that REACHED THE PORTAL'S END (`scraper.portal.walk_reached_end`: every unit walked, each page
    loop out on a portal terminator, no stop of OURS — deadline / page cap / `--limit` / slice subset / a loop-ending
    error (one refused page per place is evidence) / uncorroborated empty page) queues every active row it did not see into `listing_detail_queue` at
    `QUEUE_PRIORITY_VERIFY` (last, 20% reserve); the drain fetches the page: a POSITIVE gone signal (404/410,
-   redirect off the listing, the portal's "no longer active" text → `ListingGoneError`) is RECORDED in
-   `detail_queue_completions` and **since 2026-10-09 flips that one listing only when the ledger already holds an
+   redirect off the listing, a "no longer active" text, its OWN slot reading sold/let → `ListingGoneError`) is RECORDED in
+   `detail_queue_completions` and **since 2026-10-09 flips that one listing only when the ledger holds an
    earlier gone verdict ≥ `delist_policy.GONE_DWELL` (12 h) old with no sighting since** (`db.gone_evidence`;
-   portals blink — sreality took 35–70% of its "gone" ads back within hours), a live page refreshes it, an error
-   waits. `walk_coverage` is a logged `COVERAGE` warning, NEVER a gate. No staleness rail, no absence sweep, no
-   `supports_complete_walk` gate (an `indexless` portal — `web` — nominates via its own `presence_candidates` seam). `delist_flip_cap` (10%, floor 2k) THROTTLES nominations per walk (rest deferred;
+   portals blink: sreality took back 35–70% within hours), a live page refreshes it, an error
+   waits. `walk_coverage` is a logged warning, NEVER a gate. No staleness rail/absence sweep/
+   `supports_complete_walk` gate (an `indexless` portal — `web` — nominates live ads via the orphan recheck). `delist_flip_cap` (10%, floor 2k) THROTTLES nominations per walk (rest deferred;
    `.overrides` lift it). Budget + gone-rate breaker + effective dwell `max(GONE_DWELL, RECHECK_THROTTLE)` = 24 h:
    `scraper/delist_policy.py`; every flip goes through `db.mark_listing_inactive` (guarded, stamps `inactive_at` once, dirties the property).
 4. **`last_seen_at` is driven by index sightings + successful detail fetches only; failed fetches never
@@ -184,7 +183,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     `toolkit/filter_compiler.compile_filter_where`; Browse's TS + RPCs are pinned per shared predicate. Portal + broker filters select ADS, rows stay
     properties, under the PROPERTY's status: P asks for an ad on P in that status (`active_sources` under active, else `all_sources`), a broker likewise,
     both met by one ad (estimation cohorts stay per-ad). **A property is SERVED (Browse, map, stats, the watchdog) only once PUBLISHED**
-    (`toolkit/publication.py`: `properties.settled_at`, stamped by the maintenance pass once photos and the engine are done, or 6 h old); detail by id
+    (`toolkit/publication.py`: `properties.settled_at`, stamped by the maintenance pass, never before the engine READ its in-scope ads); detail by id
     stays ungated. `notification_dispatches` is the event table, append-only for its producers' events (bar the deletions on record; account and
     collection deletion still cascade): three producers (`watchdog`; `collection_monitor`, anchored on `monitor_since` so a pre-membership change never
     fires; `share`, written only by `api/shares.py`) write facts, never routing; system alerts are no producer. ONE identity index
@@ -192,8 +191,8 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     marks a duplicate, never deletes; a deleted watchdog is retired. Feed, badge and push read `VISIBLE_SQL` (`REACHABLE_SQL` minus a 'new' a merge
     withdrew); only a tap by id reads `REACHABLE_SQL`. Delivery is separate from detection: in-app is the row, push is `notification_deliveries`
     (§ rule 16 in `docs/architecture.md`).
-17. **City-quality indexes are a normalized, operator-curated time series** (`curated_cities` + `city_index_*`
-    + `city_population`) — a new index needs no migration; latest revision wins; agenda-gated to **Browse +
+17. **City-quality indexes are a normalized, operator-curated time series** (`curated_cities` + `city_index_*`;
+    population from ČSÚ in `obec_population`) — a new index needs no migration; latest revision wins; agenda-gated to **Browse +
     Watchdog, and since 2026-10-25 to agents that RANK (ADR-0002) — never inside a price estimate** (the estimator never sees them, preserving deterministic estimates).
 18. **Operator curation is PROPERTY-grain and dedup-stable** (`collections`, `tags`, `property_notes`, all keyed on `property_id`). Every
     property-anchored operator-state row follows a merge through ONE ordered list, `PROPERTY_CARRIERS` (`toolkit/property_carriers.py`), inside the merge
@@ -211,8 +210,8 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
     through the shared `portal_runner` on the source-generic queue.
 20. **Property maintenance is dirty-set incremental, not full-table.** Every child-changing write (content change, revival,
     delist, column heal, re-attribution, broker re-point) enqueues `property_id` into `dirty_properties` (migration 106) in its own transaction (exceptions: the census ledger, and a crawler change confined to unhashed columns, which waits for the daily sweep — architecture § rule 20); the worker's maintenance lane (`run_incremental_pass`, 30 s)
-    attaches new singletons + recomputes only queued properties (O(changes)); the daily full sweep (04:15; it births stragglers per batch too) is
-    the reconcile backstop. Both take the `property_maintenance` lease row, so they never overlap. Merge/detach/split recompute inline through the drain's own after-step (`properties_changed`: rollup, broker book, Browse row) and never enqueue `dirty_properties`.
+    attaches new singletons + recomputes only queued properties (O(changes)); the daily full sweep (03:00; it births stragglers per batch too) is
+    the reconcile backstop. Both hold the `property_maintenance` job_lease row, never overlapping. Merge/detach/split recompute inline through the drain's own after-step (`properties_changed`: rollup, broker book, Browse row) and never enqueue `dirty_properties`.
 21. **Every portal runs through ONE shared framework (Phase 4: `portal_base` / `portal` / `portal_runner`, one
     source-generic `listing_detail_queue`); per-portal code is a client (fetch + pacing) + a parser + a `Portal`
     adapter + a config row (`PortalConfig`/`PortalLimits` = its politeness); shared code grows NO new portal-name
@@ -253,7 +252,7 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
 ## Coding conventions
 
 - Type hints on every signature (CI's ruff ANN check enforces it outside tests and `autodedup.incremental.DECISION_MODULES`, which ruff excludes — never `noqa` one: any byte edit moves the engine digest). `requests` for HTTP, `psycopg` for DB — don't add `httpx` / `aiohttp` / `sqlalchemy` / `supabase-py` lightly (rule #7).
-- No comments unless the WHY is non-obvious; no multi-paragraph docstrings (one-liners fine).
+- No comments unless the WHY is non-obvious; no multi-paragraph def/class docstrings.
 - Small single-purpose files: `<portal>_client.py` = HTTP only, `parser.py` / `<portal>_parser.py` = payload→row only;
   `db.py` is for DB I/O — put new policy beside its caller (the policy + dead sweep it still holds are owed, scraper track).
 ## How to test changes
@@ -264,12 +263,12 @@ history: `docs/architecture.md` § Architectural rules — read it BEFORE modify
 - Scraper smoke: `python -m scraper.sreality_main --index-only --dry-run --max-seconds 60` writes nothing; `--drain-only --max-detail 10` is a small live run (other `scraper.<portal>_main`s alike).
 ## Secrets
 
-Never commit secrets (`.env` is gitignored; gitleaks hooks: `git config core.hooksPath .githooks` once per clone).
+Never commit secrets (`.env` is gitignored; git hooks: `git config core.hooksPath .githooks` once per clone).
 API keys are **backend-only** — never `VITE_*`-prefix a backend secret. **Full env-var / secrets reference:** the
 `toolkit-api` skill.
 ## Agent skills
 
-- **Issue tracker:** GitHub Issues, via `gh` — always with `--json` (plain `gh issue view` / `gh pr view` exit 1 here). Before you work on, create or close a ticket or merge a PR, read `docs/agents/issue-tracker.md`: a ticket is yours once `python3 -m scripts.ticket_claim claim <n>` exits 0; each post-merge gate is its own `gate` ticket.
+- **Issue tracker:** GitHub Issues, via `gh`. Before you pick, work on, create or close a ticket or merge a PR, read `docs/agents/issue-tracker.md`: a ticket is yours once `python3 -m scripts.ticket_claim claim <n>` exits 0; each post-merge gate is its own `gate` ticket.
 - **Triage labels:** the five default role names (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
 - **Domain docs:** single-context — root `GLOSSARY.md` + `docs/adr/`; the numbered rules above bind as ADRs do. See `docs/agents/domain.md`.
 ## What is explicitly out of scope right now

@@ -53,9 +53,11 @@ _PREPARABLE = {"SELECT", "INSERT", "UPDATE", "DELETE", "WITH", "VALUES", "TABLE"
 # (origin-substring, sql-substring) pair with a documented reason. Keep tiny.
 _ALLOWLIST: list[tuple[str, str, str]] = [
     (
-        "load_obec_population",
-        "_obec_pop",
-        "references a session-local TEMP TABLE created earlier in the same script",
+        "location_data/ruian_buildings.py",
+        "stage_",
+        "the building load COPYs one obec into two temp tables it creates in its own transaction "
+        "(stage_buildings, stage_links); the replayed schema can't see them. These statements run "
+        "for real in tests/location_data/test_ruian_buildings_live.py",
     ),
     (
         "backfill_listing_surrogate_id.py",

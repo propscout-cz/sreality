@@ -122,6 +122,14 @@ export function SlidersIcon(p: IconProps) {
   );
 }
 
+export function SortIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M8 19V5M4.5 8.5 8 5l3.5 3.5M16 5v14M12.5 15.5 16 19l3.5-3.5" />
+    </Svg>
+  );
+}
+
 /* A place filter. */
 export function PinIcon(p: IconProps) {
   return (
@@ -183,6 +191,36 @@ export function DownloadIcon(p: IconProps) {
   return (
     <Svg {...p}>
       <path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14" />
+    </Svg>
+  );
+}
+
+/* A handset: the call action. */
+export function PhoneCallIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M6.6 3.5h2.6l1.5 4-2 1.3a11 11 0 0 0 6.5 6.5l1.3-2 4 1.5v2.6a2 2 0 0 1-2.2 2A17 17 0 0 1 4.6 5.7a2 2 0 0 1 2-2.2z" />
+    </Svg>
+  );
+}
+
+/* A person with a plus: save to the phone's contacts. */
+export function ContactAddIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <circle cx="10" cy="8" r="3.5" />
+      <path d="M3 20.5c.8-3.8 3.6-6 7-6 1.4 0 2.6.4 3.7 1M18.5 14v6M15.5 17h6" />
+    </Svg>
+  );
+}
+
+/* A map's layers: three sheets stacked (MapRail's LayersIcon, at the phone's grammar). */
+export function LayersIcon(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M12 3.5 21 8.3 12 13.1 3 8.3Z" />
+      <path d="M3 12.4 12 17.2 21 12.4" />
+      <path d="M3 16.6 12 21.4 21 16.6" />
     </Svg>
   );
 }

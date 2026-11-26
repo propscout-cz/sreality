@@ -28,9 +28,10 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              without R2 env vars the lane logs once and idles (the proxy-skip
              posture).
 - maintenance: every `realtime_maintenance_interval_seconds` (default 30), one
-             incremental property-maintenance pass — straggler attach + dirty-set
-             recompute + settle (`settled_at` on fresh properties the pipeline is
-             done with, migration 668), via scripts.recompute_property_stats.
+             incremental property-maintenance pass — queue what is published
+             but not in Browse (`_enqueue_published`) + straggler attach + dirty-set
+             recompute + settle (`settled_at`, the publication stamp, on properties
+             the pipeline is done with, migrations 668/747), via scripts.recompute_property_stats.
              run_incremental_pass — the pass's only scheduled runtime: it is
              what delivers "a new/changed listing reaches properties (and the
              Browse read model) within minutes". Safe beside the daily sweep
@@ -62,14 +63,14 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              scheduled_jobs lease.
 - location_intake_fast: every `LOCATION_INTAKE_FAST_INTERVAL_S` (default 60),
              ONE bounded pass of THE claim lane's incremental listing scan
-             (location_data.claims_intake.run, the same code
-             location_claims_intake.yml runs) — payload half only, no bodies
-             pass, a SHORT `LOCATION_INTAKE_FAST_LAG_S` (default 120) snapshot
+             (location_data.claims_intake.run, the same code the job
+             runner's hourly location_intake runs) — the payload half, then bodies
+             in what is left, a SHORT `LOCATION_INTAKE_FAST_LAG_S` (default 120) snapshot
              lag and a `LOCATION_INTAKE_FAST_BUDGET_S` (default 45) budget,
              under its own `claims_intake.FAST_LANE` cursor. LIVE by default
              (`LOCATION_INTAKE_FAST_ENABLED=0` idles it). One lane, two
              schedules: see the constant block below.
-- location_refetch: every hour (`LOCATION_REFETCH_TICK_SECONDS`, a constant), queue
+- location_refetch: every 6 h (`LOCATION_REFETCH_TICK_SECONDS`, a constant), queue
              the active ads with no town
              (rule 25, `location_steps.town_missing_sql`) for ONE more detail fetch, at
              db.QUEUE_PRIORITY_VERIFY and capped at
@@ -78,8 +79,8 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              so a listing fetched at discovery carried no location and nothing
              ever re-read it; the drain does the rest (a bazos category page
              raises ListingGoneError: a gone verdict, rule #3). The predicate (a
-             page at least `LOCATION_REFETCH_MIN_AGE_S` old) bounds the traffic,
-             not the tick.
+             page at least `LOCATION_REFETCH_MIN_AGE_S` old) and the tick bound the
+             traffic together: see the constant block below.
 - sold_comps: every `realtime_sold_comps_interval_seconds` (DARK: the seeded row is
              0), fetch registered sales from reas.cz for up to 5 obec cells — the
              towns where the deal pipeline holds a live card, stalest first, minus
@@ -115,10 +116,11 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              the next begins, which is when a raised pass's memory goes (E949).
 - notifications: every NOTIFICATIONS_TICK_SECONDS (300, a constant), the three
              notification producers of api/notifications (notifications push program
-             W2a): watchdog_new (a live watchdog's matches first seen in the last 24 h,
-             once published: migrations 668/669), price (the canonical advert's price
-             steps of the last 7 days, for watchdogs and monitored collections) and
-             monitor (a monitored property gone for a day, back, or on a new portal).
+             W2a): watchdog_new (each property entering a watchdog's slice, once
+             published: migrations 668/669, 735), price (the canonical advert's price
+             steps of the last 7 days) and lifecycle (a property gone for a day, back,
+             or on a new portal), the last two for monitored collections and for the
+             watchdogs set to tell them (migration 735).
              Each step its own connection and transaction; a failing step is its own
              `portal_errors` cell.
              The producers' one clock: the API runs none since W2b.
@@ -132,7 +134,8 @@ quantization for the latency-critical path. Settings-paced asyncio lanes, each o
              `unconfigured` and touches nothing. Steps fan_out / claim / send are its
              `portal_errors` cells, recorded by exception class only: an endpoint is a
              secret and never reaches the heartbeat or the log.
-- heartbeat: every 30s, upsert this worker's beat + per-lane fields into
+- heartbeat: every 30s, upsert this worker's beat, per-lane fields and the commit it
+             runs (`version`) into
              worker_heartbeats (migration 269) — the Health-page liveness hook — and
              record its own pass like every lane. Every lane in LANES has an entry from
              boot, seeded from the previous row, so a deploy resets no counter. It
@@ -178,7 +181,7 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from scraper import (
-    db, image_storage, portal_factory, portal_runner, sold_db, sold_fetch,
+    db, image_storage, portal_factory, portal_runner, sold_db, sold_fetch, stop,
 )
 from scraper.cgroup import memory_limit_mb as _memory_limit_mb
 from scraper.portal import PortalConfig
@@ -463,13 +466,20 @@ _INTAKE_FAST_CONTRACTS_PROJECTED = False
 # database is what lets the lane ship LIVE.
 LOCATION_REFETCH_MIN_AGE_ENV = "LOCATION_REFETCH_MIN_AGE_S"
 LOCATION_REFETCH_CAP_ENV = "LOCATION_REFETCH_CAP_PER_SOURCE"
-# One constant tick (W2). The predicate bounds traffic per listing (a page younger than
-# MIN_AGE is skipped), so the tick rate costs one ~1 s SELECT an hour and nothing else; an
-# hourly tick is what makes the lane's liveness judgeable (Watch after 3 h, not 3 days).
-LOCATION_REFETCH_TICK_SECONDS = 3600.0
+# One constant tick (W2), the predicate's own 6 h (#2506): a page younger than MIN_AGE is
+# skipped, so an hourly tick re-read every active ad's location (25-120 s on Large) to find
+# almost nothing. Tick == MIN_AGE means a STILL-townless ad is re-read about every 12 h, not 6:
+# the drain's fetch lands after the tick that queued it, so the next tick finds its page a little
+# under 6 h old (a worker boot runs a pass too). Liveness reads it late after 18 h, and only once
+# the worker has been up 18 h.
+LOCATION_REFETCH_TICK_SECONDS = 21600.0
+# The candidates read joins every active ad to its location row. That is seconds on an instance
+# whose memory holds the listings heap and minutes on one that reads it from disk (Supabase Large,
+# 2026-11-04: the 120 s default cancelled it, and one failed pass is a Jobs Problem).
+# One read-only SELECT every 6 h that touches no Browse table can afford the wait.
+LOCATION_REFETCH_STATEMENT_TIMEOUT_S = 600
 # Older than this and the page is worth re-reading. Six hours, not a day: it is well past
-# the portals' geocoding lag, and it means a listing discovered today gets its second look
-# on TOMORROW's tick rather than waiting for the day after.
+# the portals' geocoding lag, and a listing discovered now is queued for its second look 6-12 h later.
 LOCATION_REFETCH_MIN_AGE_DEFAULT = 21600
 LOCATION_REFETCH_CAP_DEFAULT = 500
 
@@ -526,11 +536,13 @@ LOCATION_READINGS_FAST_STATEMENT_TIMEOUT_S = 60
 # lane's shape: no app_settings row, so no read that can fail; the brake is a deploy.
 HEALTH_TICK_SECONDS = 60.0
 # The watcher's health_lane cell fails a pass in flight past 600 s and a lane with no completed
-# pass for 600 s (migration 621): 500 s plus the 60 s tick and the heartbeat's 30 s lag stays
-# under both. Every hosted ALARM due at once owes scripts.verify_pipeline.WORKER_ALARMS_DUE_AT_ONCE_S,
-# past this budget since curation sync (migration 696): all but the last alarm (parsing) fit, and
-# it, like a gauge that does not fit the rest, is deferred to the next 60 s tick, never started
-# short (run_due). The harness stays a lazy import of `_health_sync`, so the figure is read there.
+# pass for 600 s (migration 621, c_lane_dead in 682's health_liveness): 500 s plus the 60 s tick and
+# the heartbeat's 30 s lag stays under both, so the pass cannot grow to hold every alarm at once.
+# Every hosted ALARM due at once owes scripts.verify_pipeline.WORKER_ALARMS_DUE_AT_ONCE_S, 730 s
+# since #2512 (the arithmetic is there): all but the last alarm
+# (parsing, 300 s) fit, 430 s, and it, like a gauge that does not fit the rest, is deferred to the
+# next 60 s tick, never started short (run_due); due alone, its 300 s fits. The harness stays a lazy
+# import of `_health_sync`, so the figure is read there.
 HEALTH_PASS_BUDGET_SECONDS = 500.0
 # Check results are kept 35 days (Q5, ruled 2026-10-18): pruned once a day per process, in
 # batches, so no one statement holds the table.
@@ -558,7 +570,7 @@ NOTIFICATIONS_TICK_SECONDS = 300.0
 NOTIFICATIONS_STEPS: dict[str, str] = {
     "watchdog_new": "match_once",
     "price": "match_changes_once",
-    "monitor": "match_monitored_collections_once",
+    "lifecycle": "match_lifecycle_once",
 }
 # A step's producers share one pass, so an abandoned pass must never overlap the next.
 _NOTIFICATIONS_PASS_LOCK = _PassLock("notifications")
@@ -679,6 +691,7 @@ _CLIENT_CLASSES = {
 
 # log-once-per-process guard for proxied portals skipped without SCRAPER_PROXY_URL.
 _PROXY_WARNED: set[str] = set()
+_BROWSER_WARNED: set[str] = set()
 
 # log-once-per-process guard when R2 env vars are absent on the worker.
 _R2_WARNED: set[str] = set()
@@ -964,6 +977,31 @@ def _skip_for_proxy(source: str) -> bool:
     return True
 
 
+def _skip_for_browser(source: str) -> bool:
+    """True when the portal is fetched through a headless browser and playwright is not
+    installed — every claim would only raise, and each raise burns one of a queue row's
+    five attempts (50k rows written off within hours).
+
+    The code and the image's `browser` extra deploy separately (the extra arrives with the
+    operator's `.railway/` apply), so this is the window between them, and the same guard
+    covers a later revert. Symmetrical to `_skip_for_proxy`.
+    """
+    mod_name, cls_name = _CLIENT_CLASSES[source]
+    cls = getattr(importlib.import_module(mod_name), cls_name)
+    if not getattr(cls, "USE_BROWSER", False):
+        return False
+    from scraper.browser_fetch import playwright_available
+
+    if playwright_available():
+        return False
+    if source not in _BROWSER_WARNED:
+        _BROWSER_WARNED.add(source)
+        LOG.warning(
+            "playwright is not installed; skipping browser-fetched portal %s "
+            "(the image needs the 'browser' extra + chromium)", source)
+    return True
+
+
 # --- lane passes (sync halves run in a thread) --------------------------------
 
 
@@ -1131,7 +1169,7 @@ def _probe_sync(disabled: set[str], stop_event: asyncio.Event) -> dict[str, Any]
             # is_set() is a plain attribute read, safe off the loop's thread.
             if stop_event.is_set():
                 break
-            if source in disabled or _skip_for_proxy(source):
+            if source in disabled or _skip_for_proxy(source) or _skip_for_browser(source):
                 totals["skipped"] += 1
                 continue
             attempted.append(source)
@@ -1193,7 +1231,7 @@ def _drain_sync(
             claimable = counts.get(source, 0)
             if claimable <= 0:
                 continue
-            if source in disabled or _skip_for_proxy(source):
+            if source in disabled or _skip_for_proxy(source) or _skip_for_browser(source):
                 totals["skipped"] += 1
                 continue
             attempted.append(source)
@@ -1667,15 +1705,15 @@ def _project_contracts_once() -> bool:
     """Project contracts/portals/*.yaml into portal_contracts, ONCE per process.
 
     The extractor reads the DB PROJECTION of the contracts, not the files, and the hourly
-    workflow re-projects from git before every run (02 §2.1.8: git is the store of record).
+    runner job re-projects from its image before every run (02 §2.1.8: git is the store of record).
     This image carries contracts/ for the same reason payload_norm does, so the worker can
     do the equivalent — idempotent per (portal, contract_version), so on the steady state it
     is a handful of no-op reads at startup.
 
     A FAILURE IS A WARNING, NEVER A DEAD LANE. The projection raises by design when a
     contract's governed bytes changed without a version bump, and the authoritative
-    projector is still the workflow: a worker that refused to start its lane over a
-    condition another lane will report would trade a loud failure for a silent one.
+    projector is the hourly job, which fails on it: a worker that refused to start its lane
+    over a condition another job will report would trade a loud failure for a silent one.
     """
     global _INTAKE_FAST_CONTRACTS_PROJECTED
     if _INTAKE_FAST_CONTRACTS_PROJECTED:
@@ -1690,10 +1728,10 @@ def _project_contracts_once() -> bool:
         with db.connect() as conn:
             for contract in parsed:
                 contracts.project(conn, contract, git_ref=git_ref)
-    except Exception as exc:  # noqa: BLE001 - the workflow is the authoritative projector
+    except Exception as exc:  # noqa: BLE001 - the hourly job is the authoritative projector
         LOG.warning(
             "LOCATION_INTAKE_FAST could not project the portal contracts (%s); the lane "
-            "runs against whatever projection location_claims_intake.yml last loaded", exc)
+            "runs against whatever projection the hourly location_intake job last loaded", exc)
         return False
     _INTAKE_FAST_CONTRACTS_PROJECTED = True
     LOG.info("LOCATION_INTAKE_FAST projected the portal contracts from the image")
@@ -1761,22 +1799,12 @@ def _location_intake_fast_sync() -> dict[str, Any]:
 
 def _intake_fast_pass(conn: Any) -> dict[str, Any]:
     """The tick itself, on an open connection — the lock and the connection are the
-    caller's. Split out so the yield below is the FIRST thing the tick does."""
+    caller's. It never stands aside for the hourly job (#2028): that one drains a backlog
+    run after run for hours, a cut run is due again within a minute, and its batches retry
+    a lost lock (W12)."""
     from location_data import claims_intake
 
     global _INTAKE_FAST_LAST_IDLE
-
-    # THE GITHUB RUN OWNS THE LANE WHILE IT IS WALKING (W12). Both schedules write claims and
-    # bump the same `dirty_locations` rows, and the hourly/full run is the one that cannot be
-    # re-dispatched cheaply — a `mode=full` walk is hours of work. So the minute lane stands
-    # aside while one is in flight: nothing is lost (the hourly run re-reads its own
-    # 15-minute-lag slice), and the cost is that a new listing waits for that run instead of a
-    # minute. One read, no lock, no write.
-    yielded_to = claims_intake.running_batch_id(conn)
-    if yielded_to is not None:
-        LOG.info("LOCATION_INTAKE_FAST yielding: batch %d of the %s lane is still running",
-                 yielded_to, claims_intake.LANE)
-        return {"ran": False, "yielded_to": yielded_to}
 
     _project_contracts_once()
     # The lane's own fetch width, not the hourly runner's 32. `setdefault`, so the
@@ -1798,7 +1826,7 @@ def _intake_fast_pass(conn: Any) -> dict[str, Any]:
         bodies_first=False,
         bodies_cap=_read_location_intake_fast_bodies_cap(),
         bodies_budget_share=1.0,
-        # The run-end backlog `count(*)` is the hourly chain's signal. At a 60 s cadence
+        # The run-end backlog `count(*)` is the hourly job's readout. At a 60 s cadence
         # it would cost more than the drain it measures.
         backlog_readout=False,
         readings=False,  # the full readings half is hourly (5 s gate); text_extract mines its own
@@ -1850,10 +1878,10 @@ async def _location_intake_fast_pass(
 
 
 def _location_refetch_sync() -> dict[str, Any]:
-    """One hourly tick: read the active ads with no town whose newest page or payload is at
+    """One tick: read the active ads with no town whose newest page or payload is at
     least LOCATION_REFETCH_MIN_AGE_S old, and queue them for one more detail fetch at VERIFY
     priority, at most LOCATION_REFETCH_CAP_PER_SOURCE per portal — so a townless ad is re-read
-    every 6 h or more while it stays townless.
+    about every 12 h while it stays townless (the constant block says why).
 
     No lease and no in-process lock: the pass is one SELECT plus one INSERT per portal,
     the enqueue is idempotent on (source, native_id), and a second caller would at worst
@@ -1864,7 +1892,8 @@ def _location_refetch_sync() -> dict[str, Any]:
     conn = db.connect()
     try:
         rows = db.location_refetch_candidates(
-            conn, min_age_seconds=min_age, cap_per_source=cap)
+            conn, min_age_seconds=min_age, cap_per_source=cap,
+            statement_timeout_s=LOCATION_REFETCH_STATEMENT_TIMEOUT_S)
         by_source: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             by_source.setdefault(row["source"], []).append(row)
@@ -1919,8 +1948,8 @@ def _sold_comps_sync() -> dict[str, Any]:
     No lease (the location_refetch lane's reason: one SELECT and a handful of
     idempotent cell writes), but one in-process lock — an abandoned pass has written
     no ledger row, so nothing else can stop the next tick re-walking its cells beside
-    it. `fetch_cell` raises only the shared ledger's refusal, which ends the tick; any
-    other bad cell costs its own ledger row.
+    it. `fetch_cell` raises only the shared ledger's refusal or a stop, which end the tick;
+    any other bad cell costs its own ledger row.
     """
     global _SOLD_COMPS_STORE_WARNED
 
@@ -1951,6 +1980,8 @@ def _sold_comps_sync() -> dict[str, Any]:
                     except RateBudgetUnavailable:
                         # Sticky for the client: every later cell would be refused too.
                         refused = True
+                        break
+                    except stop.StopRequested:
                         break
             return {
                 "ran": True,
@@ -2183,6 +2214,12 @@ def _autodedup_outcome(
             chunks=counts.get("chunks"),
             chunk_rss_mb=summary.get("chunk_rss_mb"),
             chunk_vectored=summary.get("chunk_vectored"),
+            # Where the pass's seconds went (refresh, retrieve, score, cluster, rail) and the
+            # adverts each feed gave it: seconds per advert is refresh + retrieve over the claim.
+            timings=summary.get("timings"),
+            feeds=summary.get("feeds"),
+            # The pass's slowest statements: name -> [calls, seconds, rows].
+            sql=summary.get("sql"),
             # E952: the claims the pass made (each the pair budget refused re-claims a quarter
             # of the claim made, E75), each one's wanted pair set and the last's, and why the
             # pass stopped (None: committed).
@@ -2288,8 +2325,9 @@ def _autodedup_run(started: float) -> dict[str, Any]:
             if not _AUTODEDUP_STORE_WARNED:
                 _AUTODEDUP_STORE_WARNED = True
                 LOG.warning(
-                    "AUTODEDUP: the autodedup real-time store (migrations 539/540/596/604/616) is "
-                    "absent on this database; the lane skips every tick")
+                    "AUTODEDUP: the autodedup real-time store (migrations "
+                    "539/540/596/604/616/769) is absent on this database; the lane skips every "
+                    "tick")
             return _autodedup_outcome(started, skipped="store_absent")
         _AUTODEDUP_STORE_WARNED = False
         # Read every pass (E948b): a resize that reaches a running process is seen by its
@@ -2390,9 +2428,12 @@ def _autodedup_release_on_stop() -> threading.Thread | None:
 
 
 def _on_stop_signal(stop_event: asyncio.Event) -> None:
-    """SIGTERM / SIGINT: no lane starts another pass, and the autodedup lease of a pass in
-    flight is released at once (E941; the mechanism is documented at `_AUTODEDUP_HOLDER`)."""
+    """SIGTERM / SIGINT: no lane starts another pass, a pass in flight stops at its next
+    portal-client request (`scraper.stop`: a drain hands back the claims it has not fetched and
+    flushes the rest, #2438), and the autodedup lease of a pass in flight is released at once
+    (E941; the mechanism is documented at `_AUTODEDUP_HOLDER`)."""
     stop_event.set()
+    stop.EVENT.set()
     _autodedup_release_on_stop()
 
 
@@ -2480,7 +2521,8 @@ def _beat_sync(state: dict[str, Any]) -> None:
                 cur.execute(_HEARTBEAT_SQL, {
                     "worker": WORKER_NAME,
                     "started_at": state["started_at"],
-                    "details": Jsonb(_lane_snapshot(state["lanes"])),
+                    "details": Jsonb({**_lane_snapshot(state["lanes"]),
+                                      "version": os.environ.get("RAILWAY_GIT_COMMIT_SHA")}),
                 })
         finally:
             with contextlib.suppress(Exception):
@@ -2896,11 +2938,13 @@ def _new_state() -> dict[str, Any]:
 async def _amain() -> int:
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
+    stop.arm()  # the loop owns the signals, so `scraper.stop` is armed, never installed
     for sig in (signal.SIGTERM, signal.SIGINT):
         # Railway sends SIGTERM on redeploy and SIGKILL `drainingSeconds` later: no lane starts
         # another pass, one in flight finishes if the drain lets it — the autodedup pass stops
-        # at its next checkpoint and rolls back instead — and the autodedup lease is released
-        # at once (E941; why, at `_AUTODEDUP_HOLDER`).
+        # at its next checkpoint and rolls back instead, a probe, drain or sold_comps pass at
+        # its next request (#2438) — and the autodedup lease is released at once (E941; why, at
+        # `_AUTODEDUP_HOLDER`).
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, _on_stop_signal, stop_event)
     loop.set_default_executor(ThreadPoolExecutor(max_workers=LANE_EXECUTOR_THREADS))
@@ -2963,9 +3007,9 @@ async def _amain() -> int:
             lambda: _location_intake_fast_pass(stop_event, state),
             state,
             default_interval=LOCATION_INTAKE_FAST_INTERVAL_DEFAULT)),
-        # Hourly, a constant (W2): the predicate bounds the traffic, the tick only decides
-        # how soon a townless ad's second look is queued and how soon liveness notices a
-        # dead lane (Watch after 3 h).
+        # Every 6 h, a constant (W2, #2506): with the 6 h page-age predicate it sets how often a
+        # townless ad is re-read (about every 12 h) and how soon liveness notices a dead lane
+        # (late after 18 h, once the worker has been up that long).
         ("location_refetch", lambda: _lane_loop(
             "location_refetch", stop_event, lambda: LOCATION_REFETCH_TICK_SECONDS,
             lambda: _location_refetch_pass(stop_event, state),

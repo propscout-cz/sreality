@@ -9,19 +9,22 @@ Three shapes over one row:
 * `claim` / `renew` / `release` — a scheduled job, driven by the job runner (`scraper.job_runner`).
   A claim takes a DUE row (its `due_at` passed and it is not paused, or a request is waiting: a
   request is a person asking, a pause only stops the schedule), never a retired one, never while a
-  sibling sharing its `resource` holds a live lease, and opens one `job_runs` row; the database's
+  sibling sharing its `resource` holds a live lease or, for a DB-heavy job, while another DB-heavy
+  job's run is open, and opens one `job_runs` row; the database's
   unique indexes allow one open run per job and per resource, so a lost race is a refused claim.
   The holder renews and fences itself (`Lease.fenced`, on the shared `clock`) before the lease can
   expire under it. The release closes the run and moves `due_at` by a due kind (`DUE_KINDS`): the
   next slot of the epoch-anchored `cadence` grid, now (an interrupted run), a minute (exit 75), a
   backoff doubling from a minute and capped at the cadence and the next slot, a retry floored at the
   job's own `timeout_s` (a timeout), or the job's own hour (a DB-heavy job's retries); a pure request
-  run never moves the schedule. A cancelled, interrupted or skipped run is not a failure.
+  run (it took no due slot) never moves the schedule, nor does its loss unless its row was paused and
+  already due when it started (`due_at` then moves on, never earlier). A cancelled, interrupted or
+  skipped run is not a failure.
   The runner's boot `register`s its registry (adopting a lane-era row, skipping one the database
   refuses) and `retire`s only rows it registered; `due` lists free rows with no open run, oldest
   first; `reap_lost` closes a run whose lease lapsed as `lost` (a failure), re-run at once, then
-  backed off on a second loss in a row. Every runner-facing call is one transaction under
-  `STATEMENT_TIMEOUT_S` (`_bounded`).
+  backed off on a second loss in a row (a pure request's loss: as above). Every runner-facing call is
+  one transaction under `STATEMENT_TIMEOUT_S` (`_bounded`).
 * `held` — a leased lane with no schedule (the location resolver drain, run every few seconds by the realtime worker
   and by `location_resolve.yml`): no due time and no run history, just mutual exclusion and the last outcome. It yields
   a `Hold`. A lane that never renews needs a TTL that outlasts its pass (the resolver lanes); one that `renew`s, stops
@@ -78,6 +81,13 @@ STATEMENT_TIMEOUT_S = 5
 
 _FREE = "(j.lease_holder IS NULL OR j.lease_expires_at IS NULL OR j.lease_expires_at < now())"
 _UNPAUSED = "(j.paused_until IS NULL OR j.paused_until <= now())"
+# A DB-heavy job never starts beside another DB-heavy job's open run (#2027): a recovery after hours down, a deploy's
+# re-run or a request would otherwise find two due at once. No unique index spans two jobs, so a heavy claim first
+# takes _HEAVY_TURN_SQL: two replicas' heavy claims take turns, and the second reads the first's committed run.
+_ONE_HEAVY = """(j.job_name <> ALL(%(heavy)s::text[]) OR NOT EXISTS (
+         SELECT 1 FROM job_runs h
+          WHERE h.ended_at IS NULL AND h.job_name = ANY(%(heavy)s::text[]) AND h.job_name <> j.job_name))"""
+_HEAVY_TURN_SQL = "SELECT pg_advisory_xact_lock(hashtext('job_runner_db_heavy'))"
 
 # The next slot strictly after now() on the grid anchored at the Unix epoch: missed slots are skipped.
 _NEXT_SLOT_SQL = (
@@ -95,6 +105,7 @@ UPDATE scheduled_jobs j
    AND j.retired_at IS NULL
    AND ((j.due_at <= now() AND {_UNPAUSED}) OR j.requested_at <= now())
    AND {_FREE}
+   AND {_ONE_HEAVY}
    AND (j.resource IS NULL OR NOT EXISTS (
          SELECT 1 FROM scheduled_jobs s
           WHERE s.resource = j.resource AND s.job_name <> j.job_name
@@ -230,9 +241,9 @@ _BACKOFF_SQL = (
     f"least(now() + make_interval(secs => least({_BACKOFF_S}, extract(epoch from j.cadence))), {_NEXT_SLOT_SQL})"
 )
 
-# A pure request run (it took no due slot) never moves the schedule; an exit 75 only pulls it nearer. The SET
-# expressions read the old row, so the first failure waits BACKOFF_BASE_S, then twice that, never past the cadence
-# or the next slot; a timeout waits at least its own timeout_s.
+# A pure request run (it took no due slot) never moves the schedule (its loss: `_REAP_LOST_SQL`); an exit 75 only
+# pulls it nearer. The SET expressions read the old row, so the first failure waits BACKOFF_BASE_S, then twice
+# that, never past the cadence or the next slot; a timeout waits at least its own timeout_s.
 _RELEASE_RUN_SQL = f"""
 UPDATE scheduled_jobs j
    SET lease_holder = NULL,
@@ -304,10 +315,15 @@ RETURNING job_name
 # Open runs whose holder no longer holds a live lease, on every row this runner owns (paused, not due and retired
 # included). SKIP LOCKED: a claim locks the row, then the runs, then its siblings, so a reaper that waited could
 # deadlock with it. `again`: the job's latest closed run (by id; a claim closes and opens at one now()) was lost
-# too. `due_at` moves only for this deployment's names, so an old replica never reschedules a newer one's row.
+# too, a pure request's included: whoever asked, the job lost its runner, as consecutive_failures counts a request's
+# failure too. `due_at` moves only for this deployment's names, so an old replica never reschedules a newer one's row.
+# `pure`: a request whose row was not due yet when it started took no slot (the run's started_at is its claim's now(),
+# and the claim leaves due_at as it was), so its loss keeps the schedule, as its release would (#2317), and a slot that
+# came due while it ran stays due. The pause can change mid-run, so it is not read: a request on a paused row that was
+# already due counts as having taken its slot, and its due_at moves on, never earlier.
 _REAP_LOST_SQL = f"""
 WITH lapsed AS MATERIALIZED (
-  SELECT r.id, r.job_name, r.holder
+  SELECT r.id, r.job_name, r.holder, r.requested_by IS NOT NULL AND j.due_at > r.started_at AS pure
     FROM job_runs r
     JOIN scheduled_jobs j ON j.job_name = r.job_name
    WHERE r.ended_at IS NULL
@@ -315,7 +331,7 @@ WITH lapsed AS MATERIALIZED (
      AND NOT (j.lease_holder IS NOT DISTINCT FROM r.holder AND coalesce(j.lease_expires_at >= now(), false))
      FOR UPDATE OF r, j SKIP LOCKED
 ), judged AS (
-  SELECT l.id, l.job_name, l.holder,
+  SELECT l.id, l.job_name, l.holder, l.pure,
          coalesce((SELECT p.outcome = 'lost' FROM job_runs p
                     WHERE p.job_name = l.job_name AND p.ended_at IS NOT NULL
                     ORDER BY p.id DESC LIMIT 1), false) AS again
@@ -333,7 +349,7 @@ UPDATE scheduled_jobs j
        lease_holder = CASE WHEN j.lease_holder IS NOT DISTINCT FROM x.holder THEN NULL ELSE j.lease_holder END,
        lease_expires_at = CASE WHEN j.lease_holder IS NOT DISTINCT FROM x.holder THEN NULL
                                ELSE j.lease_expires_at END,
-       due_at = CASE WHEN j.due_at IS NULL OR j.job_name <> ALL(%(names)s::text[]) THEN j.due_at
+       due_at = CASE WHEN j.due_at IS NULL OR x.pure OR j.job_name <> ALL(%(names)s::text[]) THEN j.due_at
                      WHEN j.job_name = ANY(%(on_hour)s::text[]) THEN least({_DAY_SLOT_SQL}, {_NEXT_SLOT_SQL})
                      WHEN x.again THEN {_BACKOFF_SQL}
                      ELSE now() END
@@ -351,6 +367,7 @@ SELECT j.job_name
    AND j.runner = %(runner)s AND j.registry_at IS NOT NULL AND j.retired_at IS NULL
    AND {_FREE}
    AND ((j.due_at <= now() AND {_UNPAUSED}) OR j.requested_at <= now())
+   AND {_ONE_HEAVY}
    AND NOT EXISTS (SELECT 1 FROM job_runs r
                     WHERE r.ended_at IS NULL
                       AND (r.job_name = j.job_name OR (j.resource IS NOT NULL AND r.resource = j.resource)))
@@ -469,13 +486,16 @@ def _bounded(conn: psycopg.Connection) -> Iterator[psycopg.Cursor]:
 
 
 def claim(conn: psycopg.Connection, job_name: str, *, holder: str | None = None,
-          ttl_s: int = TTL_S, version: str | None = None) -> Lease | None:
-    """Claims a due job and opens its run, or returns None (not due, paused, retired, held, sibling busy)."""
+          ttl_s: int = TTL_S, version: str | None = None, heavy: Sequence[str] = ()) -> Lease | None:
+    """Claims a due job and opens its run, or returns None (not due, paused, retired, held, sibling busy, or a
+    DB-heavy job while another of `heavy` runs)."""
     holder = holder or holder_id()
-    params = {"job": job_name, "holder": holder, "ttl": ttl_s, "version": version}
+    params = {"job": job_name, "holder": holder, "ttl": ttl_s, "version": version, "heavy": list(heavy)}
     sent_at = clock()
     try:
         with _bounded(conn) as cur:
+            if job_name in heavy:
+                cur.execute(_HEAVY_TURN_SQL)
             cur.execute(_CLAIM_SQL, params)
             row = cur.fetchone()
             if row is None:
@@ -590,16 +610,18 @@ def retire(conn: psycopg.Connection, names: Sequence[str], *, runner: str = RUNN
 def reap_lost(conn: psycopg.Connection, *, names: Sequence[str], on_hour: Sequence[str],
               runner: str = RUNNER) -> list[str]:
     """Closes every open run whose lease lapsed as `lost` (a failure): re-run at once, then back off on a second
-    loss in a row; an `on_hour` (DB-heavy) name waits for its own hour either way. Returns the jobs it closed."""
+    loss in a row; an `on_hour` (DB-heavy) name waits for its own hour either way, and a request whose row was not
+    yet due when it started keeps `due_at`. Returns the jobs it closed."""
     with _bounded(conn) as cur:
         cur.execute(_REAP_LOST_SQL, {"names": list(names), "on_hour": list(on_hour), "runner": runner})
         return [row[0] for row in cur.fetchall()]
 
 
-def due(conn: psycopg.Connection, names: Sequence[str], *, runner: str = RUNNER) -> list[str]:
-    """The claimable names among `names`, oldest due (or requested) first."""
+def due(conn: psycopg.Connection, names: Sequence[str], *, heavy: Sequence[str] = (),
+        runner: str = RUNNER) -> list[str]:
+    """The claimable names among `names`, oldest due (or requested) first; one of `heavy` not while another runs."""
     with _bounded(conn) as cur:
-        cur.execute(_DUE_SQL, {"names": list(names), "runner": runner})
+        cur.execute(_DUE_SQL, {"names": list(names), "heavy": list(heavy), "runner": runner})
         return [row[0] for row in cur.fetchall()]
 
 

@@ -197,7 +197,7 @@ Everything below is **yours to re-measure**. We list the mechanism, not a prescr
   1st-floor flats, not ground-floor ones. sreality's own floor = 0 rows pair at only 0.33 higher (n = 46),
   which does support the "zvýšené přízemí" reading there. 9 pairs decides nothing, so these 108 rows are
   excluded from the "rows that stay put" claim being called verified.
-* **mmreality's `total_floors` is `overgroundFloors + undergroundFloors`**
+* **mmreality's `total_floors` WAS `overgroundFloors + undergroundFloors`** (fixed 2026-11-17, #2552: `overgroundFloors` alone)
   (`scraper/mmreality_parser.py:485-490`), so it is not a storey count and
   `total_floors_equal` is comparing a different quantity on that portal.
 * **ceskereality's `total_floors` is NULL on all 34,363 rows** (the contract declares the cell a genuine

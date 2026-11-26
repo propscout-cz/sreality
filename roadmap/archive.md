@@ -1233,7 +1233,7 @@ entire run. Two coupled fixes, both validated on live data:
   hourly (incremental) + `--full` after a data load. Mirrors
   `recompute_mf_gross_yields` (migration 133). Combined filter query: **~155 ms**
   (BitmapAnd over partial indexes) vs the old timeout.
-- **Population for all obce (#317):** `admin_boundaries.population` now carries every
+- **Population for all obce (#317):** `admin_boundaries.population` (dropped 729) now carries every
   obec (ČSÚ DataStat OBY02AT02, `scripts/load_obec_population.py`), not just the 206
   curated cities — what `home_obec_pop` + pop proximity need.
 - **Consistency (rule 16):** Browse Map/Table (registry auto-dispatch), Stats
@@ -1305,7 +1305,7 @@ entire run. Two coupled fixes, both validated on live data:
 - **Data model (migrations 131/132):** `estimation_runs.reference_rent jsonb` + history-tracked
   `rent_map_revisions` / `rent_map_values` / `rent_map_adjustments` (latest-revision-wins
   `*_public` views, the curated-cities pattern) + a materialized `rent_map_choropleth` for the map.
-- **Join:** the spreadsheet's `Kód obce` IS the ČÚZK/RÚIAN code = `admin_boundaries.id` (all 7,630
+- **Join:** the spreadsheet's `Kód obce` IS the ČÚZK/RÚIAN code = `admin_boundaries.id` (dropped 729) (all 7,630
   codes verified — 1,582 ku + 6,048 obec, no collision); `toolkit.rent_map.compute_reference_rent`
   resolves the subject's lat/lng to its territory by PIP and applies VK + amenity adjustments
   (novostavba variant for new builds). Read-only — not a new toolkit write exception.

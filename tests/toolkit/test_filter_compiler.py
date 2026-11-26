@@ -363,10 +363,6 @@ def test_an_unregistered_key_is_a_programming_error() -> None:
 # --- agendas, basis, nullable ----------------------------------------------------------
 
 
-def test_one_grain_serves_comparables_and_estimation() -> None:
-    assert _ids(fr.Agenda.COMPARABLES) == _ids(fr.Agenda.ESTIMATION)
-
-
 def test_velocity_compiles_under_comparables_on_purpose() -> None:
     """The agent's velocity tool passes the estimation's base filters, which carry the six
     tom/seen bounds and the observed-only switch VELOCITY does not declare: gating on VELOCITY

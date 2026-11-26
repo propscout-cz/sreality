@@ -21,6 +21,7 @@ from pydantic import (
 from api.capabilities.subject import Point, unanchored
 from api.filter_args import agenda_ids, as_str_list, filter_model
 from api.location_filter import DistrictChip
+from api.notifications import CollectionNotifyKinds
 from toolkit import ComparableFilters
 from toolkit import stats_registry as sr
 from toolkit.filter_registry import Agenda
@@ -287,22 +288,11 @@ class ScenarioUpdateIn(BaseModel):
     renovation_czk: float | None = None
 
 
-# Typed so a malformed entry is a 422 at the boundary, never a 500 in the binder.
-class RegionalEntry(BaseModel):
-    """One entry of a Mapy.cz suggestion's `regionalStructure` (other keys ignored)."""
-    name: str | None = None
-    type: str | None = None
-
-
-class ResolveLocationIn(BaseModel):
-    """A picked Mapy.cz suggestion, as `api.maps.resolve` binds it to one RÚIAN unit."""
-    lat: float
-    lng: float
-    type: str
-    name: str
-    regional_structure: list[RegionalEntry] = Field(default_factory=list)
-    # The address picker's flag (W3b): an address pick answers its ONE door, not its street.
-    address_point: bool = False
+class PlaceSuggestIn(BaseModel):
+    """Own place search's typed text (#2449), in a body so it stays out of URLs and logs."""
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(min_length=1, max_length=200)
+    limit: int = Field(default=10, ge=1, le=10)
 
 
 # --- curation -------------------------------------------------------------
@@ -326,6 +316,8 @@ class CreateCollectionIn(BaseModel):
     name:               str = Field(min_length=1, max_length=200)
     description:        Annotated[str | None, AfterValidator(_blank_to_null)] = None
     monitoring_enabled: bool = False
+    # Left out = the column default, every event a collection can tell (migration 735).
+    notify_kinds:       CollectionNotifyKinds | None = None
 
 
 class UpdateCollectionIn(BaseModel):
@@ -333,6 +325,7 @@ class UpdateCollectionIn(BaseModel):
     # Sent as null or blank clears it, left out keeps it (`model_fields_set`).
     description:        Annotated[str | None, AfterValidator(_blank_to_null)] = None
     monitoring_enabled: bool | None = None
+    notify_kinds:       CollectionNotifyKinds | None = None
 
 
 class AddPropertiesToCollectionIn(BaseModel):
@@ -433,6 +426,10 @@ class AttachTagIn(BaseModel):
 
 class AddPipelineCardIn(BaseModel):
     property_id: int
+    # The stage the new card lands at: absent = the entry stage (the bookmark). A
+    # named stage must be one of the account's live, open stages: "add it at the
+    # viewing stage" is then one write and one ledger event, never an add plus a move.
+    stage_id: int | None = None
 
 
 class DismissPropertyIn(BaseModel):
@@ -463,6 +460,10 @@ class CreateStageIn(BaseModel):
     code: str | None = Field(default=None, min_length=1, max_length=4)
 
 
+# What a stage means to the app, whatever its label (migration 734).
+PipelineStageRole = Literal["viewing"]
+
+
 class UpdateStageIn(BaseModel):
     # All optional; an absent field is left unchanged. `is_entry` may only be
     # set True (move the entry crown to this stage) — you re-home the entry by
@@ -474,6 +475,9 @@ class UpdateStageIn(BaseModel):
     # Sent explicitly as null to clear the badge back to the ordinal fallback,
     # so this one is read via model_fields_set, not `is not None`.
     code: str | None = Field(default=None, min_length=1, max_length=4)
+    # A role moves onto this stage from whichever held it; null clears it here.
+    # Read via model_fields_set, like `code`.
+    role: PipelineStageRole | None = None
 
 
 class ReorderStagesIn(BaseModel):

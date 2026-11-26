@@ -8,7 +8,7 @@ falls back to the direct IP, so the scrape stays green, the tests stay green,
 and the portal quietly keeps the throttled egress the flag existed to escape.
 
 idnes is the case that makes this worth pinning. It is not 403-blocked like
-ceskereality and mmreality; it is soft-throttled, so "the proxy silently did not
+mmreality; it is soft-throttled, so "the proxy silently did not
 apply" and "the proxy applied" produce the same status codes and the same parsed
 rows — only 13x apart in wall-clock, which nothing asserts on.
 
@@ -84,11 +84,11 @@ def test_the_fallback_warns_rather_than_failing_silently() -> None:
 
 # --- required vs merely preferred --------------------------------------------
 #
-# There are two ways an edge punishes our datacenter IP, and conflating them
-# costs data in opposite directions. ceskereality and mmreality HARD-403: without
-# the proxy they return nothing, so running them unproxied only burns requests.
-# idnes SOFT-throttles: every page still arrives, ~13x slower. Skipping idnes
-# when the proxy is absent would trade degraded data for NO data.
+# There are two proxy postures, and conflating them costs data in opposite
+# directions. ceskereality and mmreality are PROXY_REQUIRED: unproxied they are
+# not run at all. idnes SOFT-throttles our datacenter IP: every page still
+# arrives, ~13x slower. Skipping idnes when the proxy is absent would trade
+# degraded data for NO data.
 
 
 def test_every_proxied_client_states_whether_the_proxy_is_required() -> None:
@@ -116,7 +116,7 @@ def test_the_worker_skips_only_portals_that_REQUIRE_the_proxy(monkeypatch) -> No
     monkeypatch.setattr(rw, "_PROXY_WARNED", set())
     # Only sources the worker actually rotates — mmreality is proxied but has no
     # worker lane, so it never reaches this function.
-    assert rw._skip_for_proxy("ceskereality") is True   # hard 403 without it
+    assert rw._skip_for_proxy("ceskereality") is True   # proxy required
     assert rw._skip_for_proxy("idnes") is False         # slow, but it works
     assert rw._skip_for_proxy("sreality") is False      # not proxied at all
 

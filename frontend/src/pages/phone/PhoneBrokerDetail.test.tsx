@@ -85,6 +85,11 @@ const dossier = (broker: Partial<brokers.BrokerPublic> = {}): brokers.BrokerDoss
     { category_main: 'byt', category_type: 'prodej', properties: 45, active_properties: 33 },
     { category_main: 'byt', category_type: 'pronajem', properties: 5, active_properties: 2 },
   ],
+  price_change: {
+    all: { priced: 50, repriced: 10, repriced_pct: 20, median_pct: -7.3 },
+    active: { priced: 35, repriced: 4, repriced_pct: 11.43, median_pct: null },
+    inactive: { priced: 15, repriced: 6, repriced_pct: 40, median_pct: -9 },
+  },
   pii_masked: true,
 });
 
@@ -193,6 +198,16 @@ describe('<BrokerDetail> on the phone', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Kopírovat' }));
     await waitFor(() => expect(toast.pushToast).toHaveBeenCalledWith('info', 'Číslo je označené, zkopírujte ho.'));
     expect(window.getSelection()?.toString()).toBe('+420 604 218 377');
+  });
+
+  it('shows how much the broker changes prices, one status at a time', async () => {
+    renderPage();
+    const card = await screen.findByRole('region', { name: 'Změna ceny' });
+    expect(card).toHaveTextContent('přeceněno 10 z 50');
+    expect(card).toHaveTextContent(/medián -7,3\s%/);
+    fireEvent.click(within(card).getByRole('button', { name: 'Neaktivní' }));
+    expect(card).toHaveTextContent('přeceněno 6 z 15');
+    expect(card).toHaveTextContent(/40\s%/);
   });
 
   it('tells an unknown broker from a failed read', async () => {

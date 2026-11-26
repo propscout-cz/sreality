@@ -127,7 +127,7 @@ def test_a_designator_veto_row_is_kept_so_it_still_binds_the_clustering() -> Non
     """E61 names the two units on the row and scores 0. The SQL store evicted it as a reject
     below the floor, so the lane forgot the veto the batch pass unions into must-not-link."""
     db = FakePg()
-    store = SqlStore(db, "rt", store_floor=0.02, calibration_digest="c0ffee", engine_digest="e")
+    store = SqlStore(db, "rt", store_floor=0.02, calibration_digest="c0ffee")
     veto = replace(_pair(A, C, "veto", 0.0), veto="unit_designator", reason="guard:x",
                    evidence={"unit_lo": "12", "unit_hi": "14"})
     store.upsert_pairs([veto, _pair(A, B, "reject", 0.001)])
@@ -517,6 +517,11 @@ class LaneDb(FakeDb):
             keys = sorted(k for g, k in self.clusters if g == p["generation"]
                           and k > p["after"])
             return [(k,) for k in keys[:p["limit"]]]
+        if sql == AS.RC_RULED_SAME_SQL:
+            held = {k for g, k in self.clusters if g == p["generation"]}
+            return sorted({(v["cluster_key"],) for v in self.verdicts
+                           if v["kind"] == "cluster" and v["verdict"] == "same"
+                           and v["cluster_key"] in held})
         if sql == AS.RC_CLUSTERS_SQL:
             return [row for row in self.dispatch(AS.CLUSTERS_SQL, p) if row[0] in p["keys"]]
         if sql == AS.RC_MEMBERS_SQL:
@@ -585,6 +590,22 @@ def _read(db: LaneDb, *lids: int) -> None:
         db.read.add(lid)
 
 
+def test_a_group_the_operator_ruled_same_is_planned_before_the_sweep_reaches_it() -> None:
+    # E992: the sweep's cursor is past group 10 and no pass touched it; the ruling brings it in.
+    db = LaneDb()
+    db.live_scope()
+    _pair_group(db, 10, [10, 11], [100, 200], gen=RT)
+    _read(db, 10, 11)
+    db.cursors[reconcile.CURSOR] = 10
+    assert _lane(db)["counts"]["groups"] == 0
+    db.cursors[reconcile.CURSOR] = 10
+    db.verdicts.append({"kind": "cluster", "cluster_key": 10, "verdict": "same",
+                        "member_ids": [10, 11]})
+    out = _lane(db)
+    assert out["counts"]["ruled_same"] == 1 and out["counts"]["groups"] == 1
+    assert [row["outcome"] for row in db.ledger] == ["applied"]
+
+
 def test_the_reconcile_merges_an_rt_group_through_the_chokepoint() -> None:
     db = LaneDb()
     db.live_scope()
@@ -605,7 +626,8 @@ def test_the_reconcile_merges_an_rt_group_through_the_chokepoint() -> None:
 
 def test_the_reconciles_refusals_are_the_batch_applys_refusals() -> None:
     """ONE brain (E903): the same groups under a batch generation and under `rt` are refused
-    for the same reasons, whichever path plans them."""
+    for the same reasons, whichever path plans them — and the same carried adverts ride along
+    in both (E989)."""
     db = LaneDb()
     db.live_scope()
     for gen in ("g12", RT):
@@ -622,7 +644,7 @@ def test_the_reconciles_refusals_are_the_batch_applys_refusals() -> None:
     db.listing(52, 901, where=(999999, None))             # carried, located outside
     db.listing(61, None)                                  # unattached member
     # 42 is carried, grouped by nobody: the lane has read it (else the group would wait for its
-    # fingerprint, E964 review R2) and refuses it as the batch does.
+    # fingerprint, E964 review R2) and carries it as the batch would.
     _read(db, 10, 11, 20, 21, 30, 31, 40, 41, 42, 50, 51, 60, 61)
     scope = AP.effective_scope(db.settings[AP.SCOPE_SETTING], {}, live=True)
 
@@ -632,10 +654,11 @@ def test_the_reconciles_refusals_are_the_batch_applys_refusals() -> None:
     assert lane["counts"]["skipped_by_reason"] == batch.counts["skipped_by_reason"]
     assert lane["counts"]["out_of_scope_by_reason"] == batch.counts["out_of_scope_by_reason"]
     assert set(lane["counts"]["skipped_by_reason"]) == {
-        AP.SKIP_PAIR_VERDICT, AP.SKIP_MUST_NOT_LINK, AP.SKIP_CARRIES_UNGROUPED,
-        AP.SKIP_CARRIES_OUT_OF_SCOPE, AP.SKIP_UNATTACHED}
+        AP.SKIP_PAIR_VERDICT, AP.SKIP_MUST_NOT_LINK, AP.SKIP_UNATTACHED}
     assert lane["counts"]["out_of_scope_by_reason"] == {AP.OUT_CATEGORY: 1}
-    assert lane["counts"]["applied"] == 0
+    assert [g.cluster_key for g in batch.to_apply] == [40, 50]
+    assert lane["counts"]["applied"] == 2
+    assert db.listings[42]["property_id"] == 700 and db.listings[52]["property_id"] == 900
 
 
 def _redrawn(db: LaneDb, old: int, key: int, lids: list[int]) -> None:
@@ -645,11 +668,12 @@ def _redrawn(db: LaneDb, old: int, key: int, lids: list[int]) -> None:
     db.group(key, lids, gen=RT)
 
 
-def test_an_advert_the_stream_holds_and_groups_with_no_one_never_rides_its_earlier_merge() -> None:
-    """E965: a1=11 and a2=12 merge; X=10 then arrives, the same unit as a2 and stated apart from
-    a1, so the re-clustered {a2, X} refuses the union with a1 (D43) and a1 is a singleton (no
-    group row). Its earlier rt merge must not carry it onto X: the stream read a1 and grouped it
-    with no one, which is its present word. A missed merge, never a stated-fact false merge."""
+def test_an_advert_the_stream_holds_and_groups_with_no_one_rides_its_property_to_the_merge(
+) -> None:
+    """E989 (superseding E965): a1=11 and a2=12 merge; X=10 then arrives, the same unit as a2
+    and stated apart from a1, so the re-clustered {a2, X} refuses the union with a1 (D43) and a1
+    is a singleton (no group row). The decided pair a2 x X merges the WHOLE properties: a1 rides
+    along with a2 onto X's survivor. Only an operator negative over a1 x X would stop it."""
     db = LaneDb()
     db.live_scope()
     _pair_group(db, 11, [11, 12], [200, 250], gen=RT)
@@ -663,19 +687,17 @@ def test_an_advert_the_stream_holds_and_groups_with_no_one_never_rides_its_earli
     _redrawn(db, 11, 10, [10, 12])
     out = _lane(db)
 
-    assert out["counts"]["applied"] == 0
-    assert out["counts"]["skipped_by_reason"] == {AP.SKIP_CARRIES_UNGROUPED: 1}
+    assert out["counts"]["applied"] == 1 and out["counts"]["skipped_by_reason"] == {}
     (row,) = [r for r in db.ledger if r["member_ids"] == [10, 12]]
-    assert (row["outcome"], row["error"]) == ("skipped", AP.SKIP_CARRIES_UNGROUPED)
-    assert json.loads(row["plan_json"])["detail"]["ungrouped_listings"] == [11]
-    assert db.listings[10]["property_id"] == 100 != db.listings[11]["property_id"]
+    assert (row["outcome"], row["survivor_property_id"], row["retired_property_id"]) == (
+        "applied", 100, 200)
+    assert {db.listings[lid]["property_id"] for lid in (10, 11, 12)} == {100}
 
 
-def test_an_advert_the_stream_never_fingerprinted_still_rides_the_merge_that_vouched_it() -> None:
-    """What E965 keeps of E903: g11 merged 12 onto 200 with 11; the stream groups 10 with 11 and
-    holds no fingerprint for 12 (it never read it), so the plan vouches for 12 by g11's live
-    merge. The live reconcile holds the group until a pass reads 12 (E964 R2); once the stream
-    reads it and groups it with no one, it is refused."""
+def test_an_advert_the_stream_never_fingerprinted_holds_the_group_then_rides_along() -> None:
+    """g11 merged 12 onto 200 with 11; the stream groups 10 with 11 and holds no fingerprint for
+    12 (it never read it). The plan carries 12 whether or not the stream read it (E989); the
+    live reconcile holds the group until a pass reads 12 (E964 R2), then 12 rides along."""
     db = LaneDb()
     db.live_scope()
     _pair_group(db, 11, [11, 12], [200, 250], gen="g11")
@@ -685,24 +707,21 @@ def test_an_advert_the_stream_never_fingerprinted_still_rides_the_merge_that_vou
     _pair_group(db, 10, [10, 11], [100, 200], gen=RT)
     _read(db, 10, 11)
 
-    held = AP.plan_apply(db, RT, scope)
+    unread = AP.plan_apply(db, RT, scope)
     db.read.add(12)
-    refused = AP.plan_apply(db, RT, scope)
+    read = AP.plan_apply(db, RT, scope)
     db.read.discard(12)
     out = _lane(db)
 
-    assert [g.reasons for g in held.groups] == [[]]
-    assert held.groups[0].listing_ids == [10, 11, 12]
-    assert [g.reasons for g in refused.groups] == [[AP.SKIP_CARRIES_UNGROUPED]]
-    assert refused.groups[0].detail["ungrouped_listings"] == [12]
+    assert [(g.reasons, g.listing_ids) for g in unread.groups] == [([], [10, 11, 12])]
+    assert [g.to_json() for g in read.groups] == [g.to_json() for g in unread.groups]
     # E964 (R2): the live reconcile never carries an advert the stream never fingerprinted — the
-    # group waits until a pass reads 12, and then the stream's grouping decides (refused here).
+    # group waits until a pass reads 12, and then merges with it.
     assert out["counts"][reconcile.WAITING] == 1 and out["counts"]["applied"] == 0
     db.read.add(12)
     after = _lane(db)
-    assert after["counts"]["applied"] == 0
-    assert after["counts"]["skipped_by_reason"] == {AP.SKIP_CARRIES_UNGROUPED: 1}
-    assert db.listings[12]["property_id"] == 200
+    assert after["counts"]["applied"] == 1
+    assert {db.listings[lid]["property_id"] for lid in (10, 11, 12)} == {100}
 
 
 def test_the_reconcile_never_splits() -> None:
@@ -977,7 +996,7 @@ def test_the_region_s_towns_come_from_the_one_reader_of_the_scope(
     _read(db, 10, 11)
     _lane(db)
     incremental_lane._stale_claims(db, RT, {seed_version_key(RT): SEED_VERSION}, [[10, 11]],
-                                   SimpleNamespace(ledger_keyed=lambda: True), None, 200)
+                                   None, 200)
     assert seen == [[531057, 563510], [531057, 563510]], "the reconcile, then the re-claim"
 
 
@@ -1339,8 +1358,10 @@ def test_the_whole_scope_row_is_re_read_before_every_group() -> None:
 
     out = _lane(db, merge=merge_then_narrow)
 
-    assert out["counts"]["applied"] == 1 and out["counts"]["skipped_at_apply"] == 1
-    assert out["skipped_at_apply"][0]["reasons"] == [AP.SKIP_CARRIES_OUT_OF_SCOPE]
+    assert out["counts"]["applied"] == 1 and out["counts"]["skipped_at_apply"] == 1, (
+        "E39: the narrowed row no longer admits group 20's members, yet it merged — "
+        "recheck_group reads no scope")
+    assert out["skipped_at_apply"][0]["reasons"] == [AP.SKIP_MEMBER_OUT_OF_SCOPE]
     assert db.listings[21]["property_id"] == 400
 
 
@@ -1814,6 +1835,38 @@ def test_the_re_claims_on_top_of_the_limit_fill_none_of_it() -> None:
     assert _measure_rate(230, 480.0, rate, bound) == (
         round(0.5 * 230 / 480.0 + 0.5 * rate, 6), False)
     assert _measure_rate(429, 480.0, rate, bound) == (round(2.0 * rate, 6), True)
+
+
+def test_a_steady_clock_cut_claim_with_work_waiting_is_measured_however_small() -> None:
+    """E984, 2026-11-13: the stored rate 0.025404 gave a limit of 13; the feeds fed 12 (one ran
+    dry) in 221.1 s, under 20 and short of the limit, so nothing was measured and the rate stood
+    for days. On a steady pass with no re-claims, a feed that left work waiting fills the claim."""
+    from autodedup.incremental_lane import _measure_rate
+
+    rate = 0.025404
+    bound = {**_bound("time", int(525.0 * rate), 525.0), "building": False}
+    assert bound["limit"] == 13
+    assert _measure_rate(12, 221.1, rate, bound) == (None, False)
+    assert _measure_rate(12, 221.1, rate, {**bound, "cut": True}) == (round(2 * rate, 6), True)
+    assert _measure_rate(12, 600.0, rate, {**bound, "cut": True}) == (
+        round(0.5 * 12 / 600.0 + 0.5 * rate, 6), False)
+    assert _measure_rate(12, 221.1, rate, {**_bound("cap", 13, 525.0), "cut": True}) == (
+        None, False), "a cap is memory, not the clock"
+
+
+@pytest.mark.parametrize("extra", [
+    {"building": True},               # a build's seconds are the build's
+    {"stale": 5},                     # a re-claim's seconds are not the feeds' (E971)
+    {"building": True, "stale": 5},   # a build pass carrying re-claims
+])
+def test_work_waiting_never_doubles_a_build_or_a_pass_with_re_claims(extra: dict) -> None:
+    from autodedup.incremental_lane import _measure_rate
+
+    rate = 0.025404
+    bound = {**_bound("time", 13, 525.0), "cut": True, **extra}
+    claimed = 12 + int(extra.get("stale", 0))
+    rate_out, doubled = _measure_rate(claimed, 221.1, rate, bound)
+    assert doubled is False and (rate_out is None or rate_out < 2 * rate)
 
 
 class _LaneClock:
@@ -2472,11 +2525,11 @@ def test_a_restart_after_the_commit_releases_the_lease_on_a_new_connection(
     clock = _no_wall_clock(monkeypatch)
     conn, new = _Session(world), _Session(world)
 
-    def restart(_conn: object) -> int:
+    def restart(_conn: object, _generation: str, _bytes_now: int) -> None:
         conn.dead = True
         raise ConnectionError("terminating connection due to administrator command")
 
-    monkeypatch.setattr(incremental_lane, "phash_pop_rows", restart)
+    monkeypatch.setattr(incremental_lane, "record_storage", restart)
     with pytest.raises(ConnectionError, match="administrator command") as raised:
         run_incremental(lambda: conn, fresh_conn=lambda: new)
 
@@ -2896,10 +2949,9 @@ def test_a_signal_mid_pass_rolls_it_back_on_its_own_connection(tmp_path, monkeyp
         return original(self, *args, **kwargs)
 
     monkeypatch.setattr(incremental_lane.SqlFacts, "facts", signal_during_the_first_read)
-    from autodedup.incremental_sql import (RT_FP_COUNT_SQL, RT_PHASH_POP_COUNT_SQL,
-                                           RT_SCHEMA_SIZE_SQL)
+    from autodedup.incremental_sql import RT_FP_COUNT_SQL, RT_SCHEMA_SIZE_SQL
 
-    tail = (RT_FP_COUNT_SQL, RT_PHASH_POP_COUNT_SQL, RT_SCHEMA_SIZE_SQL)
+    tail = (RT_FP_COUNT_SQL, RT_SCHEMA_SIZE_SQL)
     before = [world.statements.count(sql) for sql in tail]
 
     out = run_incremental(lambda: world, holder="worker:1:1",
@@ -2907,8 +2959,7 @@ def test_a_signal_mid_pass_rolls_it_back_on_its_own_connection(tmp_path, monkeyp
 
     # Only the storage guard's schema read, before the pass: nothing between the rollback and
     # the release (the pass returns at once and its `finally` releases).
-    assert [world.statements.count(sql) for sql in tail] == [before[0], before[1],
-                                                               before[2] + 1]
+    assert [world.statements.count(sql) for sql in tail] == [before[0], before[1] + 1]
     assert world.statements[-1] == _END_LANE_SQL
 
     assert out["aborted"] == "stopping" and out["reconcile"] == {"skipped": "pass_stopping"}
@@ -3047,3 +3098,15 @@ def test_an_unnamed_error_files_no_row_without_the_lease_and_is_raised_itself() 
         AP.apply_group(db, planned, scope, run_id="rt:test", generation=RT, merge=crashes,
                        fence=gone)
     assert fenced == [1] and not db.ledger
+
+
+def test_the_pass_readout_names_its_slowest_statements() -> None:
+    from autodedup import incremental_lane as lane
+    from autodedup import incremental_sql
+
+    name = next(n for n, v in vars(incremental_sql).items() if n.isupper() and isinstance(v, str))
+    assert lane._sql_name(getattr(incremental_sql, name)) == name
+    assert lane._sql_name("select  1\n from x") == "select 1 from x"
+    book = {f"S{i}": [1, float(i), i] for i in range(20)}
+    top = lane.top_sql(book, {"S19": [2, 1.0, 5]})
+    assert len(top) == lane.SQL_TOP and next(iter(top.items())) == ("S19", [3, 20.0, 24])

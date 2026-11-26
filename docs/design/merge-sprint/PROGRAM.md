@@ -98,7 +98,7 @@ Items marked *(default)* were not asked; they are engineering defaults the opera
   the paused jobs that made them, the two grade filters, the bulk-AI interface and the estimator's
   instructions. With no prompt rewrite, the two stale prompt suggestions stay as they are (Q43). A
   property's grades keep following its canonical ad, as today, so MS5 moves them (§10) *(default)*. The
-  portal's condition text stays an ad field, the canonical ad's (MS11). The AI ad summaries and the
+  portal's condition text was the canonical ad's (MS11) until 2026-11-21: now the value most active ads state (#2574). The AI ad summaries and the
   photo-comparison tool are untouched too (Q41, Q42). The grade removal in the design inputs
   (`wf2/design_condition.md`; the grade parts of the critic's C4 and D) is void.
 - **MS5 — One canonical ad.** Order: active ads first; then ads with a map point
@@ -107,7 +107,14 @@ Items marked *(default)* were not asked; they are engineering defaults the opera
   With no active ad, an ad with a map point outranks one without, even if that one was seen later.
 - **MS6 — Amenities are a union.** Balcony, lift, parking, terrace, garage, cellar: yes if any of the
   property's ads says yes, active or not. Accepted cost: an unreliable "yes" beats a stated "no"; MF
-  rent and yield rise on about 2,300 sale flats.
+  rent and yield rise on about 2,300 sale flats. **Energy rating (operator ruling 2026-11-05, moved here
+  from the first-ad row of MS11):** the best class any of the property's ads states, active or not (A
+  best, G worst: `min` over the letters). Reason: about 96 % of a stated G is the statutory placeholder
+  for "no certificate" (zákon 406/2000 Sb. § 7a), which no portal marks apart, so the first ad's G hid
+  a sibling's real class. Accepted costs: where two ads state different real classes the better one
+  wins; an active property can show a class only an ended ad states; a house whose best class is
+  better than G now sends it to a Valuo valuation; an estimation cohort reads the canonical ad's own
+  letter until MS20 (§9).
 - **MS7 — Brokers are a list.** The brokers of the active ads, one entry per person, the canonical ad's
   broker first. When no ad is active: the brokers of all its ads, marked as from inactive ads. The
   property header shows the list; the pipeline board shows its first entry plus "+N"; each ad's own row
@@ -129,9 +136,13 @@ Items marked *(default)* were not asked; they are engineering defaults the opera
 
 | Field | Rule |
 |---|---|
-| Price, price per m², area, layout, floor, category (a share sale with a sale reads as a sale once #1655 lands: operator ruling 2026-10-01), description, photos, link, furnished, condition text, our two condition grades (MS4), map point, address, the city figures read from that point | the canonical ad (MS5) |
-| Building type, ownership, energy rating, usable / plot / garden area, parking spaces | the first ad in the canonical order that states it (today's rule, kept) *(default)* |
+| Price, price per m², area, layout, floor, category (a share sale with a sale reads as a sale once #1655 lands: operator ruling 2026-10-01), description, photos, link, furnished, our two condition grades (MS4) | the canonical ad (MS5) |
+| Map point, address, the city figures read from that point | the location ad: the ad placed most precisely (ONE PIN, `docs/design/one-pin/PROGRAM.md`, migrations 635/636, live 2026-10-20; it replaced the canonical ad for these). One ad's finest rung decides, never a consensus, and one ad's street is never joined with another ad's number |
+| Building type, ownership, usable / plot / garden area, parking spaces | the first ad in the canonical order that states it (today's rule, kept) *(default)* |
+| House type (subtype) | the value most ads of the property's category state, active or not; a tie goes to the canonical order (#2574, ruling 2026-11-21: 4,658 properties had a canonical ad with none while another ad stated one) |
+| Condition text | the value most ACTIVE ads state, or most of all ads when no active one states it; a tie goes to the canonical order (#2574, ruling 2026-11-21) |
 | Balcony, lift, parking, terrace, garage, cellar | yes if any ad says yes (MS6) |
+| Energy rating | the best class any ad states, active or not (MS6, ruling 2026-11-05) |
 | Brokers | MS7 |
 | Portals | every portal with an ad; portals with an active ad kept separately (MS19) |
 | Active | any ad active |
@@ -526,8 +537,8 @@ that session; the two never-used indexes come from migrations 198 and 275.
 ## 9. Cut from scope (reported, not built)
 
 - **The estimation subject lookup (MS20).** Its own design and approval; it keeps giving the
-  estimator the subject's two condition grades (MS4). Until then estimation comparables read amenity
-  and portal filters per ad, a named exception to rule 16.
+  estimator the subject's two condition grades (MS4). Until then estimation comparables read amenity,
+  energy-rating and portal filters per ad, a named exception to rule 16.
 - **A notice to other accounts after a split.** Worth revisiting when a second real account curates a
   property with two or more ads, or when splitting opens beyond admins.
 - **The lowest active price on Browse rows.**
@@ -562,7 +573,7 @@ that session; the two never-used indexes come from migrations 198 and 275.
   comparables, which admit only the canonical ad. W2a's report counts it.
 - **City figures need a map point.** The hourly job computes them from the canonical ad's point
   only, so a property whose canonical ad has none keeps the figures of an earlier point, or none,
-  until it gains one (2026-10-06: 101 of 7,363 live properties in ids 300000–309999; it predates W2a).
+  until it gains one (2026-10-06: 101 of 7,363 live properties in ids 300000–309999; it predates W2a). Since ONE PIN (2026-10-20) the point is the location ad's, so this reads as the location ad having none.
 - **W2b merges before W2a** (§4 Order). The other way round, until W2b the property page's price
   figures count W2a's lineage while the moves listed under its chart are the canonical ad's own
   (2026-10-06: 281 of 8,270 live properties in ids 100000–109999 have a same-portal predecessor).

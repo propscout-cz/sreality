@@ -535,9 +535,9 @@ export interface Collection {
   created_at: string;
   updated_at: string;
   listing_count: number;
-  /* Monitored collections raise change alerts on their member properties
-   * (price moves, delisting). `is_system` marks the protected default
-   * "monitoring" collection (can't be renamed or deleted). */
+  /* Monitored collections raise change alerts on their member properties,
+   * of the kinds in `notify_kinds` (migration 735). `is_system` marks the
+   * protected default "monitoring" collection (can't be renamed or deleted). */
   monitoring_enabled: boolean;
   is_system: boolean;
   /* Sharing (migration 610). `owner_email` is null exactly when the caller owns
@@ -547,6 +547,8 @@ export interface Collection {
   /* The owner sees every recipient; a recipient sees only its own grant, with
    * `email: null` (= you) — that account_id is the key to leave. */
   shared_with: CollectionShare[];
+  /* The property events it tells while monitored; all five by default. */
+  notify_kinds: CollectionKind[];
 }
 
 export interface CollectionShare {
@@ -608,6 +610,9 @@ export interface Attachment {
 }
 
 
+/* The stage roles migration 734 allows; one stage per role per account. */
+export type PipelineStageRole = 'viewing';
+
 /* The kanban columns (pipeline_stages_public, operator-curated). */
 export interface PipelineStage {
   id: number;
@@ -620,6 +625,9 @@ export interface PipelineStage {
   /* Short operator-owned badge shown inside the funnel (migration 377). NULL =
    * fall back to the stage's 1-based ordinal among live stages. */
   code: string | null;
+  /* What the stage means to the app, whatever its label (migration 734): `viewing`
+   * = where a property waits for its viewing. NULL or absent = no role. */
+  role?: PipelineStageRole | null;
   /* The stage's latest delegated edit (migration 641's view columns; null when
    * none). Only the view read carries them — the API's stage writes do not. */
   edited_by_account_id?: string | null;
@@ -1071,6 +1079,8 @@ export interface WatchdogSubscription {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  /* The property events this watchdog tells, once each in KIND_ORDER (migration 735). */
+  notify_kinds: WatchdogKind[];
   dispatch_count: number;
 }
 
@@ -1154,6 +1164,26 @@ export type DispatchChangeKind =
   | 'shared_dashboard'
   | 'shared_pipeline';
 
+/* The property events a watchdog can tell (api/notifications.WatchdogKind). */
+export type WatchdogKind = Extract<
+  DispatchChangeKind,
+  'new' | 'price_drop' | 'price_rise' | 'inactive' | 'reactivated' | 'new_source'
+>;
+
+/* The ones a watched collection can tell: all but New match, as a property it holds is never new
+ * to it (api/notifications.CollectionKind). */
+export type CollectionKind = Extract<
+  DispatchChangeKind,
+  'price_drop' | 'price_rise' | 'inactive' | 'reactivated' | 'new_source'
+>;
+
+/* Any kind a watchdog or a collection can be set to tell. */
+export type NotifyKind = WatchdogKind | CollectionKind;
+
+/* Why a New match entered its watchdog's slice (api/notifications.MATCH_REASONS, migration 735);
+ * null on every other kind, and on a New match told before 735 (each newly listed). */
+export type MatchReason = 'listed' | 'back' | 'price' | 'portal' | 'changed' | 'other';
+
 export interface WatchdogDispatch {
   id: string;
   /* Unified event model (migration 206). `source_kind` says which producer
@@ -1169,6 +1199,9 @@ export interface WatchdogDispatch {
    * fired ('new' = newly matched the filter, 'price_drop' = a recent price
    * decrease). */
   property_id: number | null;
+  /* The ad the event fired on (listings.id), whose cover the feed row shows;
+   * null on a share. */
+  listing_id: number | null;
   change_kind: DispatchChangeKind;
   /* What a `share` row shares: the kind (the API reads it off change_kind,
    * migration 652), and its id off the row's own columns — the collection id, the
@@ -1189,6 +1222,8 @@ export interface WatchdogDispatch {
    * latest-wins: the new and the previous price. */
   trigger_price_czk: number | null;
   prev_price_czk: number | null;
+  /* A New match's why (a price reason carries both prices above). */
+  match_reason: MatchReason | null;
   /* Listing-side fields joined via the matcher's LEFT JOIN. Null when
    * the listing has been hard-deleted (shouldn't happen — architectural
    * rule #3 forbids deletes — but render defensively). */

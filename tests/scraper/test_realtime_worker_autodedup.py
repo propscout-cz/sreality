@@ -23,6 +23,7 @@ import re
 import socket
 import sys
 import threading
+import time
 import weakref
 from dataclasses import replace
 from datetime import timedelta
@@ -43,6 +44,7 @@ from autodedup.incremental_lane import (
 )
 from autodedup.incremental_sql import RT_STORE_PRESENT_SQL
 from scraper import realtime_worker as rw
+from scraper import stop as scraper_stop
 from tests._railway_iac import RAILWAY_IAC, iac_constant, iac_entry
 from tests.autodedup.fake_pg import FakePg
 from tests.autodedup.lane_world import seed_lane
@@ -140,6 +142,10 @@ def _summary(**over: Any) -> dict[str, Any]:
         "rss_mb": 388.0,
         "chunk_rss_mb": [395.0, 401.5],
         "chunk_vectored": [61, 58],
+        "timings": {"refresh_s": 61.2, "retrieve_s": 9.4, "score_s": 3.1, "cluster_s": 0.2,
+                    "rail_s": 0.1, "total_s": 74.0},
+        "feeds": {"new": 9, "changed": 3},
+        "sql": {"RT_PAIRS_TOUCHING_SQL": [1, 41.2, 90000]},
         "memo_entries": {"text_facts": 812, "body_align": 64, "shingles": 30, "tokens": 2048},
         "claim_cap": {"cap": 500, "reason": "rt_seed", "limit_mb": 8192.0},
         "predecessor_released": None,
@@ -315,6 +321,11 @@ def test_the_lane_hands_the_engine_its_connection_and_nothing_else(
         # E950: the chunks the decided pairs were scored in, the RSS as each was written and the
         # listings then holding their CLIP vectors
         "chunks": 2, "chunk_rss_mb": [395.0, 401.5], "chunk_vectored": [61, 58],
+        # where the pass's seconds went and the adverts each feed gave it
+        "timings": {"refresh_s": 61.2, "retrieve_s": 9.4, "score_s": 3.1, "cluster_s": 0.2,
+                    "rail_s": 0.1, "total_s": 74.0},
+        "feeds": {"new": 9, "changed": 3},
+        "sql": {"RT_PAIRS_TOUCHING_SQL": [1, 41.2, 90000]},
         # E952: the claims the pass made, each one's wanted pair set and the last's, no refusal
         "attempts": 1, "wanted_pairs": 52, "wanted_by_attempt": [52], "aborted": None,
         # E943: what the budget counted (the last claim's and each claim's), the wanted pairs
@@ -350,7 +361,7 @@ def test_an_absent_store_skips_every_tick_with_one_warning(
     assert first["errors"] == 0 and first["ran"] is False
     assert second["reason"] == "store_absent"
     assert conn.closed
-    assert sum("store (migrations 539/540/596/604/616) is absent" in r.message
+    assert sum("store (migrations 539/540/596/604/616/769) is absent" in r.message
                for r in caplog.records) == 1
 
 
@@ -947,13 +958,32 @@ WORKER_START_COMMAND = "env MALLOC_ARENA_MAX=2 python -m scraper.realtime_worker
 
 
 def test_the_shutdown_signal_is_the_one_path_that_releases(monkeypatch) -> None:
-    """SIGTERM and SIGINT set the loop's stop event, as before, and start the release."""
+    """SIGTERM and SIGINT set the loop's stop event, as before, the process's stop (`scraper.stop`, #2438), and
+    start the release."""
     src = inspect.getsource(rw._amain)
     assert "loop.add_signal_handler(sig, _on_stop_signal, stop_event)" in src
     assert "signal.SIGTERM, signal.SIGINT" in src
     stop = asyncio.Event()
     rw._on_stop_signal(stop)
-    assert stop.is_set() and rw._AUTODEDUP_STOPPING.is_set()
+    assert stop.is_set() and rw._AUTODEDUP_STOPPING.is_set() and scraper_stop.requested()
+
+
+def test_the_worker_arms_the_process_stop_so_a_wait_in_flight_ends_at_once() -> None:
+    """#2438: the event loop owns SIGTERM and SIGINT, so the worker arms `scraper.stop` before it takes them, never
+    installs it, and a limiter's or a backoff's wait already running on a lane thread ends as the signal lands."""
+    src = inspect.getsource(rw._amain)
+    assert -1 < src.find("stop.arm()") < src.find("loop.add_signal_handler")
+    scraper_stop.arm()
+
+    async def deploy() -> tuple[bool, float]:
+        stop_event = asyncio.Event()
+        asyncio.get_running_loop().call_later(0.05, rw._on_stop_signal, stop_event)
+        started = time.monotonic()
+        stopped = await asyncio.to_thread(scraper_stop.wait, 30.0)
+        return stopped, time.monotonic() - started
+
+    stopped, waited = asyncio.run(deploy())
+    assert stopped and waited < 5.0
 
 
 def test_the_drain_window_fits_the_release_and_ends_before_the_watchdog() -> None:

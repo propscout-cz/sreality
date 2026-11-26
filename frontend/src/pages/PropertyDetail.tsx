@@ -2,9 +2,8 @@
  * `/property/:propertyId`.
  *
  * The header shows the property exactly as its Browse card does: the
- * `properties_public` row, whose advert fields are its canonical advert's and
- * whose physical facts are the first non-empty in the same order (migration 561,
- * decision 18). Photos and freshness checks are that canonical advert's. The brokers are a list over the adverts (MS7), the price chart draws
+ * `properties_public` row, every field at its MS11 grain (decision 18,
+ * docs/design/merge-sprint/PROGRAM.md). Photos and freshness checks are that canonical advert's. The brokers are a list over the adverts (MS7), the price chart draws
  * every advert's own line (MS9), and a lowest active price that differs from the
  * header's is named under it (MS8). The merged-adverts section is the only list
  * of adverts, each advert's own facts in its row; `?advert=<id>` opens that row.
@@ -19,6 +18,7 @@
  * Every advert address ever handed out (`/listing/{source}/{native}`,
  * `/listing/{sreality_id}`, `/listing?property=`) is an alias: `AdvertRedirect`
  * resolves the advert's property and lands here with its row open. */
+import { RegisterBadge, RegisterMark } from '@/components/register/RegisterMark';
 import { Suspense, useMemo } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ROUTES } from '@/lib/routes';
@@ -41,7 +41,7 @@ import {
   fetchImagesByListing,
   type PropertyPublic,
 } from '@/lib/queries';
-import { portalLabel } from '@/lib/portals';
+import { advertLink, portalLabel } from '@/lib/portals';
 import { fetchPropertyOrigins } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { fmtCzk } from '@/lib/format';
@@ -86,6 +86,7 @@ export { FreshnessBlock };
 const CurationBlock = lazyChunk(
   () => import('@/components/listing-detail/CurationBlock'),
 );
+const BuildingSalesCard = lazyChunk(() => import('@/components/listing-detail/BuildingSalesCard'));
 const SoldCompsBlock = lazyChunk(
   () => import('@/components/listing-detail/SoldCompsBlock'),
 );
@@ -263,15 +264,16 @@ export default function PropertyDetail() {
 
   /* The status pill opens the latest active advert on its portal (operator
      2026-10-23) — the one seen most recently, the canonical one on a tie; with
-     none active, the advert seen last. Its stored URL, never rebuilt (rule 21). */
+     none active, the advert seen last. Its advertLink, never rebuilt (rule 21). */
   const statusHref = useMemo(() => {
-    const live = sources.filter((s) => s.is_active && s.source_url);
-    const pool = live.length > 0 ? live : sources.filter((s) => s.source_url);
+    const live = sources.filter((s) => s.is_active && advertLink(s));
+    const pool = live.length > 0 ? live : sources.filter((s) => advertLink(s));
     const latest = [...pool].sort(
       (a, b) => b.last_seen_at.localeCompare(a.last_seen_at) || Number(b.id === advertId) - Number(a.id === advertId),
     )[0];
-    return latest?.source_url ?? property?.source_url ?? null;
-  }, [sources, advertId, property?.source_url]);
+    const advert = latest ?? property;
+    return advert ? advertLink(advert) : null;
+  }, [sources, advertId, property]);
 
   // The open tab, from the address. Above the early returns (#310).
   const [tab, setTab] = usePropertyTab(property?.id ?? null);
@@ -344,12 +346,13 @@ export default function PropertyDetail() {
             images={images}
             loading={imagesQ.isLoading}
             isActive={property.is_active}
-            onAll={() => setTab('fotky')}
           />
         </Suspense>
         <div className="min-w-0 space-y-5">
           <PropertyIdentity
             listing={property}
+            registerMark={(fact) => <RegisterMark propertyId={propertyId} fact={fact} />}
+            badge={<RegisterBadge propertyId={propertyId} />}
             priceNote={priceNote}
             statusHref={statusHref}
             addressAction={isAdmin ? (
@@ -443,6 +446,9 @@ export default function PropertyDetail() {
                   listingIds={advertIds}
                   adUrls={sources.map((s) => s.source_url)}
                 />
+              </Suspense>
+              <Suspense fallback={null}>
+                <BuildingSalesCard propertyId={propertyId} />
               </Suspense>
               <Suspense fallback={<Skeleton height={160} />}>
                 {/* Keyed on the property: the block's radius and category seed

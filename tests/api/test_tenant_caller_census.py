@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.api.test_account_scope_census import _NESTED, _qualnames
+from tests.api._ast_census import _NESTED, _qualnames
 
 ROOT = Path(__file__).resolve().parents[2]
 TARGET = "tenant_transaction"
@@ -28,6 +28,7 @@ TREES: Mapping[str, int] = {"api": 90, "toolkit": 55, "scraper": 80, "scripts": 
 
 CALLERS = frozenset({
     "api/tenant_pool.py::tenant_conn",
+    "api/tenant_pool.py::own_account_id_released",
     "api/main.py::post_estimation_feedback",
     "api/capabilities/registry.py::_connection",
 })

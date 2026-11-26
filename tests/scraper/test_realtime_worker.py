@@ -28,6 +28,16 @@ from psycopg.types.json import Jsonb
 from scraper import job_lease, portal_factory
 from scraper import realtime_worker as rw
 from scraper.portal import default_config
+from scraper.stop import StopRequested
+
+
+@pytest.fixture(autouse=True)
+def _browser_is_available(monkeypatch):
+    """ceskereality is fetched through a headless browser, and the worker skips its lanes
+    when playwright is absent (`_skip_for_browser`). Playwright is an optional extra, so it
+    is absent here and in CI — these tests are about lane SELECTION, so they state the
+    image's side of that assumption explicitly instead of inheriting the dev box's."""
+    monkeypatch.setattr("scraper.browser_fetch.playwright_available", lambda: True)
 
 
 def _probe_agg(**over: Any) -> dict[str, Any]:
@@ -654,6 +664,21 @@ def test_heartbeat_upserts_latest_wins_row(monkeypatch):
     assert params["details"].obj["probe"]["last"] == {"portals": 4}
 
 
+def test_the_beat_records_the_commit_beside_every_lane(monkeypatch):
+    conn = _FakeConn()
+    monkeypatch.setattr(rw.db, "connect", lambda **_: conn)
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "abc123")
+    state = rw._new_state()
+    rw._record_pass(state, "probe", {"portals": 4})
+    rw._beat_sync(state)
+    details = conn.calls[0][1]["details"].obj
+    assert details["version"] == "abc123"
+    assert details["probe"]["last"] == {"portals": 4}
+    monkeypatch.delenv("RAILWAY_GIT_COMMIT_SHA")
+    rw._beat_sync(state)
+    assert conn.calls[-1][1]["details"].obj["version"] is None
+
+
 def test_the_heartbeat_lane_records_its_own_pass(monkeypatch):
     """No pseudo-lane: the heartbeat's entry has every lane's shape, and the next beat says so."""
     conn = _FakeConn()
@@ -882,7 +907,7 @@ def test_the_health_lane_ticks_on_a_constant_and_sits_before_autodedup() -> None
     assert (rw.HEALTH_TICK_SECONDS, rw.HEALTH_PASS_BUDGET_SECONDS) == (60.0, 500.0)
     from scripts import verify_pipeline
 
-    # Wave 6: the worker budgets (685 s) outgrow one pass inside the watcher's 600 s in-flight line,
+    # Wave 6: the worker budgets (1,165 s since #2512) outgrow one pass inside the watcher's 600 s in-flight line,
     # so the pass is capped and run_due defers what no longer fits. Since curation sync (migration
     # 696, docs/design/curation-sync.md § 3.9) the alarms due at once owe WORKER_ALARMS_DUE_AT_ONCE_S,
     # past the pass: all but the last fit at their whole budgets, and the last (parsing) defers one
@@ -1007,7 +1032,7 @@ def producers(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         "match_changes_once": {"subscriptions_evaluated": 2, "subscriptions_invalid": 0,
                                "subscriptions_failed": 0, "changes_inserted": 0,
                                "collection_changes_inserted": 0},
-        "match_monitored_collections_once": {"monitored_collections": 2, "events_inserted": 1},
+        "match_lifecycle_once": {"monitored_collections": 2, "events_inserted": 1},
     }}
 
     def fake(name: str) -> Any:
@@ -1049,7 +1074,7 @@ def test_the_lanes_steps_bind_to_the_real_producers() -> None:
     binding them keeps a rename from leaving the lane calling nothing."""
     from api import notifications
 
-    assert list(rw.NOTIFICATIONS_STEPS) == ["watchdog_new", "price", "monitor"]
+    assert list(rw.NOTIFICATIONS_STEPS) == ["watchdog_new", "price", "lifecycle"]
     for name in rw.NOTIFICATIONS_STEPS.values():
         inspect.signature(getattr(notifications, name)).bind(None)
 
@@ -1068,7 +1093,7 @@ def test_a_notifications_pass_runs_each_step_on_its_own_connection(
     lane = state["lanes"]["notifications"]
     assert (lane["passes"], lane["started_at"], lane["failing_since"]) == (1, None, None)
     assert lane["portal_errors"] == {}
-    assert set(lane["last"]) == {"watchdog_new", "price", "monitor"}
+    assert set(lane["last"]) == {"watchdog_new", "price", "lifecycle"}
     assert lane["last"]["watchdog_new"]["matches_inserted"] == 2
     Jsonb(rw._lane_snapshot(state["lanes"]))
 
@@ -1092,7 +1117,7 @@ def test_a_failing_step_is_its_own_cell_and_the_other_steps_still_write(
     assert set(errors) == {"watchdog_new", "price"}
     assert errors["price"]["last_error"] == "RuntimeError: statement timeout"
     assert errors["watchdog_new"]["last_error"] == "1 of 2 watchdogs failed"
-    assert set(lane["last"]) == {"watchdog_new", "monitor"}
+    assert set(lane["last"]) == {"watchdog_new", "lifecycle"}
 
     now = datetime.fromisoformat(errors["price"]["failing_since"])
     cells = platform._portal_cells("notifications", lane, {}, 900.0, now)
@@ -1820,7 +1845,6 @@ _FAST_STATS = {
 
 def _patch_intake_fast(
     monkeypatch: pytest.MonkeyPatch, *, stats: dict[str, Any] | None = None,
-    running_batch: int | None = None,
 ) -> dict[str, Any]:
     """Stub the intake entry points the lane touches and capture run()'s kwargs."""
     captured: dict[str, Any] = {"runs": 0}
@@ -1840,12 +1864,7 @@ def _patch_intake_fast(
         captured.update(kwargs)
         return dict(stats or _FAST_STATS)
 
-    def fake_running(c: Any, **kwargs: Any) -> int | None:
-        captured["yield_conn"] = c
-        return running_batch
-
     monkeypatch.setattr(rw.db, "connect_session", lambda *a, **k: conn)
-    monkeypatch.setattr("location_data.claims_intake.running_batch_id", fake_running)
     monkeypatch.setattr("location_data.claims_intake.run", fake_run)
     monkeypatch.setattr(rw, "_project_contracts_once", lambda: True)
     monkeypatch.setattr(rw, "_INTAKE_FAST_PASS_LOCK", rw._PassLock("location_intake_fast"))
@@ -1892,39 +1911,17 @@ def test_location_intake_fast_knobs_are_env_vars_and_clamped(
     assert rw._read_location_intake_fast_interval() == 5, "an interval knob is not the flag"
 
 
-def test_location_intake_fast_yields_to_a_running_github_run(
+def test_location_intake_fast_never_stands_aside_for_the_hourly_job(
         monkeypatch: pytest.MonkeyPatch) -> None:
-    """W12. Both schedules bump the same `dirty_locations` rows, and the hourly/full run is
-    the one that cannot be re-dispatched cheaply — a `mode=full` walk is hours of work that
-    two lock timeouts already killed twice (2026-09-14). So the minute lane stands aside
-    while one is in flight and says so in its heartbeat; nothing is lost, because the hourly
-    run re-reads its own 15-minute-lag slice."""
-    captured = _patch_intake_fast(monkeypatch, running_batch=1318)
+    """#2028: the hourly job drains a backlog run after run on the job runner, so a minute lane
+    that yielded to its 'running' batch would leave new listings unmined for hours."""
+    from location_data import claims_intake
 
-    out = rw._location_intake_fast_sync()
+    captured = _patch_intake_fast(monkeypatch)
 
-    assert out == {"ran": False, "yielded_to": 1318}
-    assert captured["runs"] == 0, "the yield comes BEFORE any work"
-    assert captured["conn_obj"].closed is True
-    # A yielded tick is not a failed one, and the async wrapper must not read the
-    # work counters that are absent from it.
-    state: dict[str, Any] = {"lanes": {}}
-    asyncio.run(rw._location_intake_fast_pass(asyncio.Event(), state))
-    assert state["lanes"]["location_intake_fast"]["last"]["yielded_to"] == 1318
-
-
-def test_location_intake_fast_does_not_yield_to_a_stale_stamp(
-        monkeypatch: pytest.MonkeyPatch) -> None:
-    """A killed run leaves its 'running' row behind for ever. `running_batch_id` bounds the
-    read on `started_at`, so a stale stamp reads as none and the tick runs."""
-    captured = _patch_intake_fast(monkeypatch, running_batch=None)
-
-    out = rw._location_intake_fast_sync()
-
-    assert out["ran"] is True
-    assert captured["runs"] == 1
-    # ONE connection for the yield read and the scan: the read is one bounded SELECT.
-    assert captured["yield_conn"] is captured["conn"]
+    assert rw._location_intake_fast_sync()["ran"] is True
+    assert captured["runs"] == 1 and captured["conn_obj"].closed is True
+    assert not hasattr(claims_intake, "running_batch_id")
 
 
 def test_location_intake_fast_sync_runs_the_shared_scan_on_its_own_lane(
@@ -2019,7 +2016,7 @@ def test_location_intake_fast_pass_returns_early_when_stopping(
 def test_a_failed_contract_projection_never_stops_the_lane(
         monkeypatch: pytest.MonkeyPatch) -> None:
     # The projection raises by design when a contract's governed bytes changed without a
-    # version bump, and the AUTHORITATIVE projector is location_claims_intake.yml. A worker
+    # version bump, and the AUTHORITATIVE projector is the hourly location_intake job. A worker
     # that refused to scan over that would trade a loud failure for a silent one.
     def boom(*a: Any, **k: Any) -> None:
         raise RuntimeError("sreality@3 is already loaded with a different sha256")
@@ -2163,14 +2160,16 @@ def _patch_refetch(
     return captured
 
 
-def test_location_refetch_lane_ticks_hourly_on_a_constant(
+def test_location_refetch_lane_ticks_every_six_hours_on_a_constant(
         monkeypatch: pytest.MonkeyPatch) -> None:
     # W2: one constant tick, no flag, no interval knob, no first delay — the predicate (a page
-    # at least MIN_AGE old) bounds the traffic, and an hourly tick is what lets liveness judge
-    # the lane (Watch after 3 h, not 3 days).
+    # at least MIN_AGE old) bounds the traffic. #2506: the tick is that predicate's own 6 h, a
+    # code constant (no Railway variable), so liveness reads the lane late after 18 h. The
+    # equality is pinned because the worker and realtime-scrapers.md derive the ~12 h re-read of a
+    # still-townless ad from it: change one value and that statement must change too.
     src = inspect.getsource(rw._amain)
     assert '("location_refetch"' in src
-    assert rw.LOCATION_REFETCH_TICK_SECONDS == 3600.0
+    assert rw.LOCATION_REFETCH_TICK_SECONDS == 21600.0 == float(rw.LOCATION_REFETCH_MIN_AGE_DEFAULT)
     assert "LOCATION_REFETCH_TICK_SECONDS" in src
     for gone in ("LOCATION_REFETCH_ENABLED_ENV", "LOCATION_REFETCH_INTERVAL_ENV",
                  "LOCATION_REFETCH_INTERVAL_DEFAULT", "LOCATION_REFETCH_FIRST_DELAY_SECONDS",
@@ -2204,7 +2203,8 @@ def test_location_refetch_tick_queues_every_portal_at_verify_priority(
 
     out = rw._location_refetch_sync()
 
-    assert captured["kwargs"] == {"min_age_seconds": 21600, "cap_per_source": 500}
+    assert captured["kwargs"] == {"min_age_seconds": 21600, "cap_per_source": 500,
+                                  "statement_timeout_s": rw.LOCATION_REFETCH_STATEMENT_TIMEOUT_S}
     # ONE enqueue per portal, carrying (native_id, detail_ref, price) — the drain needs
     # the stored URL to fetch a crawler portal's page at all.
     assert [src for src, _ in captured["enqueued"]] == ["ceskereality", "realitymix"]
@@ -2384,6 +2384,23 @@ def test_a_ledger_refusal_ends_the_sold_comps_tick_at_once(
     assert captured["conn_obj"].closed is True
 
 
+def test_a_deploy_stop_ends_the_sold_comps_tick_at_the_cell_in_hand(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    # #2438: the worker's SIGTERM sets `scraper.stop`, and every later cell's first request would raise it again:
+    # a `failed` ledger row apiece for cells nothing was wrong with. The cell in hand wrote nothing; it is walked again.
+    captured = _patch_sold_comps(monkeypatch, [1, 2, 3], results=[
+        {"obec_kod": 1, "status": "ok", "records": 5, "new": 5, "pages": 1,
+         "source_total": 625, "dropped": 0, "error": None},
+        StopRequested("a stop signal arrived"),
+    ])
+
+    out = rw._sold_comps_sync()
+
+    assert captured["fetched"] == [1, 2]
+    assert (out["cells"], out["records"], out["failed"], out["budget_refused"]) == (1, 5, 0, 0)
+    assert captured["conn_obj"].closed is True
+
+
 def test_the_worker_names_the_lane_never_the_source() -> None:
     # A shared module that imports one data source's client/parser makes the second
     # sold source an edit to the worker rather than to `sold_fetch`.
@@ -2436,7 +2453,7 @@ def test_a_failed_cell_is_counted_and_never_stops_the_tick(
 
 def test_a_cell_that_could_not_be_boxed_never_reads_as_a_quiet_pass(
         monkeypatch: pytest.MonkeyPatch) -> None:
-    # The work-list's admin_boundaries join means the lane should never see one; if
+    # The work-list's ruian_unit_render join means the lane should never see one; if
     # it ever does, `skipped` is the only place it can show, because a skip writes
     # no ledger row either.
     _patch_sold_comps(monkeypatch, [1], results=[
@@ -2707,8 +2724,8 @@ def test_a_pass_that_ran_or_met_its_ceiling_is_not_a_failed_one(
 
 # --- liveness: the 2026-09-29 freeze ----------------------------------------------------
 #
-# ceskereality answered 403 to everything; the shared rate ledger parked every caller up
-# to an hour; each abandoned probe/drain pass left one more thread asleep there; the
+# The shared rate ledger parked every caller up to an hour; each abandoned probe/drain
+# pass left one more thread asleep there; the
 # default executor filled; the heartbeat write and every interval read queued behind
 # them; the loop stayed alive, so nothing exited and Railway never restarted the worker.
 
@@ -2743,7 +2760,7 @@ def test_a_second_probe_pass_while_one_is_in_flight_is_skipped_and_counted(monke
         probe = state["lanes"]["probe"]
         assert probe["passes"] == 1
         assert probe["last"] == {"previous_pass_running": True}
-        # no second thread started: the abandoned pass got as far as the blocked portal
+        # no second thread started: the abandoned pass got as far as the stalled portal
         assert ran == list(rw.REALTIME_SOURCES[: rw.REALTIME_SOURCES.index("ceskereality") + 1])
     finally:
         release.set()
@@ -3135,3 +3152,36 @@ def test_the_autodedup_pass_hands_the_lane_a_fresh_connection_factory(monkeypatc
     assert seen["fresh"] is not seen["conn"]
     assert len(opened) == 2 and opened[1] == {
         "attempts": 1, "connect_timeout": rw.AUTODEDUP_RESCUE_CONNECT_TIMEOUT_SECONDS}
+
+
+def test_a_browser_fetched_portal_is_skipped_while_playwright_is_absent(monkeypatch):
+    """The code and the image's `browser` extra deploy separately. In that window every
+    ceskereality claim could only raise, and each raise burns one of a queue row's five
+    attempts — 50k rows written off within hours. So the lane is skipped instead, exactly
+    as an unset proxy skips a PROXY_REQUIRED portal."""
+    monkeypatch.setenv("SCRAPER_PROXY_URL", "http://proxy.example:1080")
+    monkeypatch.setattr("scraper.browser_fetch.playwright_available", lambda: False)
+    rw._BROWSER_WARNED.discard("ceskereality")
+    assert rw._skip_for_browser("ceskereality") is True
+    # Every other portal is untouched: they do not set USE_BROWSER.
+    for source in ("sreality", "idnes", "bazos", "mmreality"):
+        assert rw._skip_for_browser(source) is False
+
+
+def test_the_browser_portal_runs_once_playwright_is_there(monkeypatch):
+    monkeypatch.setattr("scraper.browser_fetch.playwright_available", lambda: True)
+    assert rw._skip_for_browser("ceskereality") is False
+
+
+def test_the_drain_skips_the_browser_portal_when_playwright_is_absent(monkeypatch):
+    """The guard reaches the real lane, not just the predicate."""
+    monkeypatch.setenv("SCRAPER_PROXY_URL", "http://proxy.example:1080")
+    monkeypatch.setattr("scraper.browser_fetch.playwright_available", lambda: False)
+    monkeypatch.setattr(rw, "_read_drain_slice", lambda: 200)
+    monkeypatch.setattr(rw, "_read_drain_disabled_sources", lambda: set())
+    monkeypatch.setattr(rw, "_claimable_by_source", lambda: {"ceskereality": 7, "idnes": 5})
+    ran: list[tuple[str, int]] = []
+    monkeypatch.setattr(rw, "_run_drain_sync",
+                        lambda source, max_claims: (ran.append((source, max_claims)), _drain_agg())[1])
+    asyncio.run(rw._drain_pass(asyncio.Event(), rw._new_state()))
+    assert ran == [("idnes", 5)], "ceskereality must not burn attempts without a browser"

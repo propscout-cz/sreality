@@ -7,6 +7,38 @@ This track runs in parallel with the analytical phases above; the
 toolkit is what makes the UI worth building, but the UI doesn't gate
 toolkit work.
 
+### Map layers on the property map, web and phone; one list for every map (2026-11-20, no migration)
+- **Done** (operator ask 2026-11-20: "turn on the various map layers on the property detail map, both
+  apps; reuse/unify"). Rulings 2026-11-20: (1) the 170 px web minimap keeps a clean face, its Vrstvy
+  button opens a large map dialog with Browse's rail, list and keys, a pick there drawn on the minimap
+  too; (2) ČÚZK's aerial photo on every map, Browse included (Podklad Mapa / Letecká); (3) reference
+  layers only (no Města / Růst cen a nájmů on the property map); (4) phone Poloha: one Vrstvy button →
+  a bottom sheet with the same list, the keys under the plate. Supersedes the 2026-10-23 "minimap = zoom
+  only" ruling.
+- Unified: the photo, relief and contours are keys of the one `layers` selection (one memory, one URL key);
+  `lib/usePointMap` is the one hook of the three point maps; `MapOverlayControls` is every map's one list.
+- Next (unruled): Města / Růst cen a nájmů stay Browse's; the photo carries no street names (a "hybrid"
+  would need the basemap's buildings hidden under it).
+
+### Terrain on the map: ČÚZK relief and contours (2026-11-11, no migration, #2494)
+- **Done** (operator ask 2026-11-11: turn on "relief" and "vrstevnice" to judge the terrain). OpenFreeMap
+  carries no elevation; ČÚZK, already the aerial photo's source, serves DMR 5G shaded relief and ZABAGED
+  contours (1 m base interval, thinned on steep slopes by ZABAGED's own `ZOBRAZ_K` pick, from zoom 16).
+  Browse: "Reliéf a vrstevnice" in Vrstvy, each switchable alone, URL `relief=1` / `contours=1`. Phone
+  Poloha: Mapa / Letecká / Terén. Not the listing-detail minimap (ruling 2026-10-23: no overlay toggles).
+- Next (unruled): both services draw each tile on request; if they turn slow under use, cache the tiles
+  on our side (R2) behind the API.
+
+### Cadastral map on every map: ČÚZK KN + a parcel click (2026-11-26, no migration)
+- **Done** (operator ask 2026-11-26; rulings: a click opens a parcel card; below zoom 17 the row only hints
+  to zoom in). A fourth basemap pick, `cadastre`, in the one `layers` selection: ČÚZK's cached KN WMTS,
+  black lines on the map, yellow on the photo, from zoom 17 (ČÚZK's own floor), on Browse, the property
+  maps, the phone and the comparables chips. A click there asks ČÚZK's RÚIAN view service for the parcel
+  (number, k.ú., area, land type and use) with a link to Nahlížení do KN, in the same popup as an overlay
+  area's card (`lib/cadastre`, `lib/basemap` `openReferencePopup`; docs/design/map-overlays.md).
+- Next (unruled): no parcel click on the comparables map (it opens no reference popup); katastrální území
+  borders when zoomed out would be a registry layer from our RÚIAN mirror.
+
 ### Browse's circle is a true circle, placed on the main map (2026-10-30, migrations 694 + 695)
 - **Done** (operator report 2026-10-30: "I do not see pins for inactive properties" — the view held
   more than the pin limit, and a centre + radius with no centre filtered nothing). Rulings 2026-10-30:
@@ -154,11 +186,16 @@ toolkit work.
   "Prohlídka" in the composer; native Prague day + time pickers), moves or drops its date in the editor,
   and leads with the property's upcoming viewings under a calendar leaf. The Phone app's sixth tab,
   Prohlídky (`/viewings`, `GET /viewings`): the account's own viewings one day at a time in time order,
-  Nadcházející / Vše, arrows + swipe + a date wheel + "Dnes", jumps to the nearest day with a viewing, a
-  "now" rule on today; a row opens its property.
+  arrows + swipe + a date wheel + "Dnes", jumps to the nearest day with a viewing, a "now" rule on today; a
+  row opens its property.
 - **Done** (2026-10-26): the day maths is swept across Prague midnight (CET, CEST) and both DST nights
   under three runner zones (`lib/viewings.boundary.test.ts`); the composer's first guess counts the next
   full hour on the instant, so the spring DST night no longer pre-fills 02:00, a time its clock skips.
+- **Done** (operator ask 2026-11-07, #2436): past viewings are a day back. The Nadcházející / Vše scope is
+  gone (its default barred every day before today, so with every viewing behind the operator the tab showed
+  nothing): the arrows, swipe and wheel go either way, an empty day offers the nearest viewing either side
+  (the last one leads when none is ahead), a passed viewing reads as past on any day, and the header counts
+  the ones still ahead ("2 v plánu"); another year's day title is "čt 27. listopadu 2025".
 - **Next (offered, not built):** a push reminder before a viewing; "Přidat do kalendáře" (an .ics file
   for the iPhone calendar).
 
@@ -315,9 +352,8 @@ toolkit work.
   migration 680, and a placeholder-price floor in the rollup) was merged 2026-10-26 and reverted the next
   day (migration 685): the user narrows odd values with the filters (Lot area, Price, Price change).
 - **Shipped (2026-10-22): Advanced → Energy rating (PENB A–G)**, Browse + Watchdog (migration 648:
-  `energy_rating_filter` on the Stats and map-tile RPCs; `browse_list` already carried the column). A
-  property's rating is the first non-null across its ads; G is also the legal "no certificate"
-  placeholder (~half of rated flats for sale), which no portal marks apart.
+  `energy_rating_filter` on the Stats and map-tile RPCs; `browse_list` already carried the column). G is
+  also the legal "no certificate" placeholder (~half of rated flats for sale), which no portal marks apart.
 - **Shipped (2026-10-22): Advanced → Broker** — a name search (GET /brokers/search) that sets the
   existing broker scope (`brokerId`, MS19) on desktop and phone; it narrows the current filters
   (the explore-broker modal still opens a broker's whole book) and stays outside presets.
@@ -442,7 +478,7 @@ toolkit work.
   no estimation start); the fifth tab `/link` takes a pasted link (the first URL in the text) to its
   property, keeps the last five per device, and says "Tento inzerát v databázi nemáme" with the
   portal link for an ad we lack. A password sign-in with nothing stashed lands on `/`. Resolves on the
-  install walk. Follow-up (PR open): **Poloha** — Mapy's static map streamed through the API (never stored), label + note + Apple/Google/Mapy.cz links, as the feed card's fourth margin mark (a sheet) and the property page's first section; `MAPY_STATIC_MAPS_ENABLED=0` turns the image off.
+  install walk. Follow-up: **Poloha** — label + note + Apple/Google/Mapy.cz links, as the feed card's fourth margin mark (a sheet) and the property page's first section; since #2446 over a lazy OpenFreeMap map at the location ad's point (zoom by precision, two-finger pan, dimmed after dusk); the Mapy image and its switch are gone. Since #2447 a Mapa / Letecká bar lays ČÚZK's aerial photo over that map (hidden until the tap, so no aerial tile loads before it).
 - **W3: the pipeline as swiped stage pages** (#1768): on the phone `/pipeline` renders
   `components/phone/PhonePipeline.tsx` instead of the kanban (never mounted there) — a stage strip
   (code badge, label, count; a hairline before the closed stages) over one scroll-snapped page per
@@ -650,12 +686,12 @@ End-to-end browser flow over the U1b backend.
 
 ### browse-2: Region search + box plots (done)
 - Mapy.cz suggest / resolve proxy endpoints (`api/maps.py`) — bearer-
-  gated, 5-min in-process TTL cache on suggest, admin_boundaries-aware
+  gated, 5-min in-process TTL cache on suggest, admin_boundaries-aware (dropped 729)
   polygon resolution that auto-degrades to point + radius when the
   table is missing or empty.
 - Region page rebuilt around a single `LocationSearchBox`: typing a
   street address, neighbourhood, or kraj returns ranked Mapy.cz
-  suggestions and resolves to either a polygon (when admin_boundaries
+  suggestions and resolves to either a polygon (when admin_boundaries (dropped 729)
   ships) or a point + radius. Browse-1's district / radius pickers
   remain reachable under an "Advanced" disclosure for legacy
   bookmarks and direct radius drag-and-drop.
@@ -1253,8 +1289,7 @@ correctness resting on an invisible setting. Verified empirically against prod
   1,000. Live-verified: 60k ask → exactly 50k; map single-shot unaffected.
 - Reported, not fixed: prefilter id-lists ride back on GET `.in()` (~1–2k-id
   URL ceiling, fails loud, server-side predicate is the strategic fix when
-  cohorts grow); `fetchBrokerListings` shows ≤500 of a 20k-listing mega-broker
-  (brokers rebuild owns it).
+  cohorts grow).
 
 ### Broker explore map (done, 2026-09-05)
 "Explore this broker's listings" on `/brokers/:id`. NOT a new map component — a
@@ -1278,7 +1313,6 @@ unmonitored for watchdogs.
   pipeline, so the ~1–2k-id URL ceiling above applies — the largest real broker
   (~1.9k active properties, more listings) can trip it, loudly (map error, not a
   silent subset); the server-side predicate is the strategic fix for all of them.
-  `broker_listings()` ≤500/2000 truncation behind the Inventory table (see U-CAP);
   a shared `PointsMap` primitive (ListingMap + ComparablesMap + DatasetMap still
   duplicate the layer setup); a Watchdog broker dimension; Stats-tab parity (the
   modal hides Stats instead, mirroring the portal filter's accepted gap). WebGL

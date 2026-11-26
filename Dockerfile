@@ -74,9 +74,27 @@ COPY autodedup/ ./autodedup/
 COPY skills/ ./skills/
 
 RUN echo "EXTRAS=${EXTRAS:-unset}" && pip install --upgrade pip && pip install ".[${EXTRAS:-api}]"
+# ONE portal is fetched through a real browser (ceskereality: a JS proof-of-work
+# interstitial since 2026-10-31, #2529), so the image that runs the scrapers bakes
+# chromium and its system libraries. Only the service whose EXTRAS names `browser` pays
+# the weight — the API never scrapes. Baked at build time on purpose: a runtime download
+# would make the first walled fetch of a fresh container fail.
+# libatomic1 first, by hand: `--with-deps` installs chromium's system libraries, but it is
+# itself driven by playwright's bundled node, which this slim base cannot even load without
+# libatomic.so.1 (exit 127 before any dependency is resolved — build failure 2026-11-16).
+RUN case ",${EXTRAS}," in *,browser,*) \
+      apt-get update \
+      && apt-get install -y --no-install-recommends libatomic1 \
+      && playwright install --with-deps chromium \
+      && python -c 'from playwright.sync_api import sync_playwright; \
+        p = sync_playwright().start(); b = p.chromium.launch(); \
+        print("BROWSER baked", b.version); b.close(); p.stop()' \
+      && rm -rf /var/lib/apt/lists/* ;; \
+    esac
 # The job runner's proof, offline: CPU torch at its pin, the vector stack at the manifest's versions (a resolver that
 # replaced one fails the build), and Tagger.load reads only the baked checkpoint (a missing file fails the build after
-# Tagger.load's retries, and the old deployment stays live).
+# Tagger.load's retries, and the old deployment stays live). Tagger.model_input resizes a photo the processor's way
+# before the processor sees it, and must give the processor's own batch output to the bit (#2478).
 RUN case ",${EXTRAS}," in *,clip,*) \
       HF_HUB_OFFLINE=1 python -c 'import torch; assert torch.version.cuda is None, torch.version.cuda; \
         assert torch.__version__.split("+")[0] == "2.14.1", torch.__version__; \
@@ -86,10 +104,18 @@ RUN case ",${EXTRAS}," in *,clip,*) \
         got = {name: version(name) for name in pins}; assert got == pins, (got, pins); \
         print("CLIP stack torch", torch.__version__, got); \
         from scraper.clip_tagger import Tagger; t = Tagger.load(); \
-        print("CLIP baked", t.model_id, t.revision, "torch", torch.__version__)' \
+        print("CLIP baked", t.model_id, t.revision, "torch", torch.__version__); \
+        from PIL import Image; \
+        ims = [Image.merge("RGB", [Image.effect_noise(s, 32 + 24 * k) for k in range(3)]) \
+               for s in ((4032, 3024), (480, 1280), (225, 223), (100, 60))]; \
+        got = torch.cat([t.model_input(im) for im in ims]); \
+        assert torch.equal(got, t._processor(images=ims, return_tensors="pt")["pixel_values"]), "model_input drifted"; \
+        print("CLIP model_input matches the processor", tuple(got.shape))' \
       && du -sh /root/.cache/huggingface ;; \
     esac
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# No access log: a line holds the request URL, query string and all, so a place typed into suggest would reach the
+# deploy log (#2444). Railway's HTTP log keeps the path without the query.
+CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000} --no-access-log"]

@@ -89,15 +89,15 @@ on `notification_dispatches`, and no admin arm reads or updates another account'
 `property_pipeline_events`, plus the signup trigger:
 - **Signup** (`handle_new_user` on `auth.users`, one path since migration 612): it creates the
   account, the owner membership, the default board (`seed_default_pipeline`: 10 stages with
-  codes from the label numbers, a dated snapshot of the operator's board), the `monitoring` collection and the 7-day
+  codes from the label numbers, "3. For Visit" as the viewing stage since 734, a dated snapshot of the operator's board), the `monitoring` collection and the 7-day
   free trial. A new default is a new migration replacing that function's literal; this prints
   one from a live board (keys as `api/pipeline.py` `_slugify` mints them from an ASCII label; the code
   from the label number, the ruled default; drop the comma on the last row):
   ```sql
-  select format('(target_account_id, %L, %L, %s, %L, %L, %s, %s),',
+  select format('(target_account_id, %L, %L, %s, %L, %L, %s, %s, %L),',
            trim(both '_' from lower(regexp_replace(label, '[^A-Za-z0-9]+', '_', 'g'))), label,
            row_number() over (order by position, id), color,
-           coalesce(substring(label from '^\s*([0-9]{1,3})'), code), is_entry::text, is_terminal::text)
+           coalesce(substring(label from '^\s*([0-9]{1,3})'), code), is_entry::text, is_terminal::text, role)
     from pipeline_stages
    where account_id = '<account uuid>' and archived_at is null
    order by position, id;
@@ -476,6 +476,15 @@ the transport hands in, each call in a transaction of its own under the same bou
 COSTLY tool (`valuo_valuation`) reads its run's narrowed account in a short `GET` transaction, closes it, and runs shape 3 on the
 service connection, as the Valuo routes do: no tenant transaction across a paid call.
 
+**Named exception — `tenant_pool.own_account_id_released` (`PUT /account/cuzk-login`, #2601; `POST /properties/{id}/building/prices`, #2595): the caller's own
+account from a transaction of its own, closed before the handler waits on an outside service.** The dependency
+`require_account_id` holds the request's tenant transaction until the handler returns; this handler then waits
+on ČÚZK for up to 25 s, which would pin a pooled backend and a worker for that long. The helper gives the same
+answer and the same refusals (403 under X-Act-As, 400 with no account) and returns with nothing open. It reads
+one row and writes none, so there is no second transaction to split a route's reads and writes across. A route
+that touches tenant rows takes the dependency, never this. Both callers then write on the service connection, every
+statement naming the account; the two are pinned in `tests/api/test_cuzk_login.py`.
+
 **Named exception — `POST /estimations/{run_id}/feedback`: a short tenant transaction, then
 admin-only service-role work.** The route does not take `tenant_conn`; it opens
 `tenant_pool.tenant_transaction(claims, act_as=None, method="POST")` in the handler, for three reasons:
@@ -525,6 +534,20 @@ handler (pinned beside the share routes by `test_the_share_routes_open_the_servi
 statement names that account (shape 3), and `opened` reaches the account through the delivery's event. `GET /push/key` is
 `require_token` with no connection (the public key derives from `VAPID_PRIVATE_KEY`). The worker's push lane routes by ONE
 join, `ps.account_id = d.account_id AND ps.ended_at IS NULL`: recipients come from the event's account at send time.
+
+The ČÚZK login routes (`api/routes/cuzk_login.py`, migration 759) are the same shape over `account_cuzk_logins`:
+GET and DELETE take `require_account_id` (in `_NEVER_ACTS`: the account that pays is never handed over with a board);
+PUT, which waits on ČÚZK, resolves the same account through `own_account_id_released` (the Named exception below; its
+callers are pinned in `tests/api/test_cuzk_login.py`). Then `deps.open_background_conn`, every statement naming the
+account; the password column is encrypted by the API. A save's check against ČÚZK is budgeted first
+(`cuzk_login.admit_check`, ledger `account_cuzk_login_checks`, migration 762; the three budgets and ČÚZK's lock rule
+they answer are stated at the top of `api/cuzk_login.py`): past one, a 429 and nothing is sent. A cadastre price purchase
+(`api/cadastre_prices.py`, migration 763; `GET`/`POST /properties/{id}/building/prices`, both in `_NEVER_ACTS`) spends
+money on the account's ČÚZK login, so ONE run per account uses that login at a time: the purchase lease on the login's
+own row (`cuzk_login.lease`/`renew`/`release`), renewed before every call. Its states, who may move each and on what
+guard head the module; its rows (`cadastre_price_purchases`, `cadastre_deeds`, `cadastre_unit_facts`) are the buyer's
+alone, every statement naming the account. A second kind on the same machine (migration 767,
+`POST /properties/{id}/building/units/{iskn_id}`): one unit's information, whose kept file never holds the owners. One ledger row per run, admitted before its first call.
 
 **Fourth instance — the run routes (`api/routes/agent_runs.py`, #2071).** `require_account_id` on the router (all in
 `_NEVER_ACTS`), so a start lands on the user's oldest membership, with no picker. Reads take `TenantConn` and name no account

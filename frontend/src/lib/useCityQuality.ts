@@ -3,27 +3,12 @@
  * off the pipeline card, the property page's Přehled shows it, as its own card.
  *
  * THE JOIN, AND WHY IT IS THIS ONE
- * There is no `properties.curated_city_id`. The SQL predicates resolve a
- * listing to a curated city spatially:
- *
- *   (admin_boundary_id IS NOT NULL AND ST_Covers(boundary.geom, point))
- *   OR (admin_boundary_id IS NULL   AND ST_DWithin(point, centroid, radius))
- *
- * All 206 curated cities have an `admin_boundary_id`, so the second arm is
- * dead code today and the predicate reduces to "is the point inside this
- * city's obec polygon". `properties_public.obec_id` is the resolver's own obec
- * code (`listing_location.obec_kod`, migration 507; the geom-derived trigger it
- * replaced went in W4-c), so `obec_id = admin_boundary_id` is an integer
- * equi-join that reproduces the live predicate — no PostGIS, no RPC, no migration.
- *
- * IT IS A VERY CLOSE APPROXIMATION, NOT AN IDENTITY. The resolver binds a
- * listing to an obec by more than containment (a named town, a PSČ, an address
- * point), so `obec_id` can be a slight SUPERSET of "inside this polygon". For a
- * badge that is arguably the better behaviour — a property 100 m outside the
- * line still belongs to the town — but it means the strip can appear on a card
- * the city-quality FILTER would not match. The code is also resolved against a
- * registry VERSION, so it can reflect an older vintage after a RÚIAN re-ingest
- * until the row is re-resolved.
+ * There is no `properties.curated_city_id`. A curated city is keyed by the
+ * RÚIAN code of its town (`curated_cities.obec_kod`, migration 726), and the
+ * SQL rules match `obec_id = ANY(curated_cities_matching(...))` (migration 436).
+ * `properties_public.obec_id` is the resolver's own obec code
+ * (`listing_location.obec_kod`, migration 507), so `obec_id = obec_kod` is the
+ * same integer equi-join the city-quality FILTER uses — no PostGIS, no RPC.
  *
  * COVERAGE. 206 curated cities out of ~6,250 Czech obce; about half of all
  * properties resolve to one. A card outside every curated city renders NO
@@ -84,8 +69,7 @@ export function buildCityQualityByObec(
 
   const out = new Map<number, CityQuality>();
   for (const c of cities) {
-    if (c.admin_boundary_id == null) continue;
-    out.set(c.admin_boundary_id, {
+    out.set(c.obec_kod, {
       city_id: c.city_id,
       city_name: c.name,
       readings: wanted.map((def) => ({

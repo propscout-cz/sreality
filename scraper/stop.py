@@ -3,7 +3,8 @@
 A deploy, a cancel or the job runner's timeout sends SIGTERM (a terminal or GitHub's cancel sends SIGINT first).
 `install` turns either into one shared event: `portal.deadline_reached` reads it, the rate limiters and the HTTP
 client's backoff wait on it, and a request in hand on the main thread is cut short, so a walk or a drain finalizes its
-run record within the drain window and exits `EXIT_CODE`.
+run record within the drain window and exits `EXIT_CODE`. The realtime worker, whose event loop owns both signals,
+`arm`s the event instead and sets it from its own handler (#2438).
 """
 
 from __future__ import annotations
@@ -35,8 +36,8 @@ def requested() -> bool:
 
 
 def wait(seconds: float) -> bool:
-    """Sleeps up to `seconds`; True, at once, when a stop arrives first (a plain sleep before `install`: nothing can
-    deliver a stop then, and the realtime worker keeps its own asyncio stop event)."""
+    """Sleeps up to `seconds`; True, at once, when a stop arrives first (a plain sleep before `install` or `arm`:
+    nothing can deliver a stop then)."""
     if not _installed:
         if seconds > 0:
             time.sleep(seconds)
@@ -62,11 +63,16 @@ def interruptible() -> Iterator[None]:
 def install(*, hangup: bool = False) -> None:
     """SIGTERM and SIGINT set the event; with `hangup`, SIGHUP and SIGQUIT too (a foreground `job_runner once`, whose
     child in its own session would outlive a closed terminal). Main thread only: no other thread can install them."""
-    global _installed
     if threading.current_thread() is threading.main_thread():
         for sig in (signal.SIGTERM, signal.SIGINT, *((signal.SIGHUP, signal.SIGQUIT) if hangup else ())):
             signal.signal(sig, _on_signal)
-        _installed = True
+        arm()
+
+
+def arm() -> None:
+    """`wait` ends on the event from now on, and no handler is installed: for a process that sets the event itself."""
+    global _installed
+    _installed = True
 
 
 def reset() -> None:

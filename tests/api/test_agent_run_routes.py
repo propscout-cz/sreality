@@ -14,8 +14,7 @@ from api import dependencies as deps  # noqa: E402
 from api import tenant_pool  # noqa: E402
 from api.main import app  # noqa: E402
 from tests.api._jwt import mint  # noqa: E402
-from tests.api._routes import flat_routes  # noqa: E402
-from tests.api.test_admin_route_coverage import _bucket, _reachable_calls  # noqa: E402
+from tests.api._routes import _bucket, _reachable_calls, flat_routes  # noqa: E402
 
 ROUTES = frozenset({
     ("GET", "/runs/options"), ("PUT", "/runs/limit"), ("POST", "/runs"), ("GET", "/runs"), ("GET", "/runs/{run_id}"),

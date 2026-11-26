@@ -22,41 +22,55 @@ shared Czech grammars every portal already uses, arrives here:
     `<p>` children (inside `<article>` / `<main>` when the page has them), chosen after the
     site's landmark header/footer, nav, aside, script, a form without prose and every
     "similar / related / recommended" block are dropped — else, last, the meta description
-    (often one tagline for the whole site). Never page chrome or another ad's card, which
-    would mint a snapshot on every fetch (rule 2);
-  * the shared grammars over title + description: `scraper.price_text` (the per-m² guard),
-    `scraper.area`, `scraper.vocabulary.disposition`, `scraper.floor.floor_from_text`, and
-    the title words for `category_type` (prodej / pronájem) and `category_main`
-    (byt / dům / pozemek / komerční / garáž), from the first of the JSON-LD name, og:title,
-    `<h1>`, `<title>` that says — NULL when none does. A price the text states is the first
-    CZK amount not named a deposit, fee, advance or commission;
-  * contacts: JSON-LD, `mailto:` and `tel:` links, a `+420` / nine-digit number in the ad
-    text -> `raw['broker'] = {id: the email (lower) else the phone (+420…), name, email,
-    phone, agency}`, and no broker block at all without an id.
+    (often one tagline for the whole site). The main block beats a metadata description that
+    is an excerpt of it (cut off with "…" / "[…]", or a prefix of its text). Never page chrome
+    or another ad's card, which would mint a snapshot on every fetch (rule 2);
+  * the page's **labelled facts** inside the same content: a table row's `th`/`td`, a
+    `dt`/`dd`, a label-class element beside a value-class one, an `li`/`p` reading "Label:
+    value", and a price box (a short price label beside an amount) — never inside a hidden
+    block or a dialog — kept in `raw['facts']`;
+  * the ONE text grammar, `scraper.text_grammar.parse_text`, over the title, that text and
+    those facts (the file portal reads a document the same way): the labelled fields through
+    the shared label table and `scraper.vocabulary`, the price (the JSON-LD offer, else a
+    labelled one, else the first CZK amount in the title then the text that no deposit / fee /
+    commission word names, never a per-m² figure), `scraper.area`, the disposition, the storey,
+    and the prodej / pronájem + byt / dům / pozemek / komerční / garáž words of a labelled type,
+    else the first of the JSON-LD name, og:title, `<h1>`, `<title>` that says — NULL when none
+    does;
+  * contacts: JSON-LD, `mailto:` and `tel:` links, a labelled phone / e-mail, a `+420` /
+    nine-digit number in the ad text -> `raw['broker'] = {id: the email (lower) else the phone
+    (+420…), name, email, phone, agency}`, and no broker block at all without an id.
 
 The deterministic readings are written at the TOP LEVEL of `raw` (`price_czk`, `area_m2`,
 `disposition`, `category_main`, `category_type`, `title`, `description`, `image_urls`,
-`broker`, `jsonld`, `og`, …): the field census reads `coalesce(raw->'params', raw)`.
+`broker`, `jsonld`, `og`, `facts`, …): the field census reads `coalesce(raw->'params', raw)`.
 """
 
 from __future__ import annotations
 
 import json
 import re
-import unicodedata
 from datetime import date, datetime, timezone
 from typing import Any, Iterator
 from urllib.parse import urljoin, urlsplit
 
 from selectolax.parser import HTMLParser, Node
 
-from scraper import vocabulary
-from scraper.area import derive_headline_area, parse_area_text
-from scraper.floor import floor_from_text
 from scraper.media import is_image_url
 from scraper.portal_identity import WEB, canonical_url
-from scraper.price_text import is_per_area_price
 from scraper.scraped_listing import ScrapedListing
+from scraper.text_grammar import (
+    MAX_LABEL,
+    MAX_VALUE,
+    fold_text,
+    label_field,
+    norm_email,
+    norm_phone,
+    parse_text,
+    split_fact,
+    text_phone,
+    text_price,
+)
 
 MAX_IMAGES = 40
 MAX_DESCRIPTION = 10_000
@@ -87,39 +101,12 @@ _IMAGE_EXT = (".jpg", ".jpeg", ".png", ".webp", ".avif")
 _NOT_GALLERY = re.compile(r"logo|icon|sprite|avatar|banner|pixel|tracking|placeholder|blank\.",
                           re.IGNORECASE)
 
-_G = r"[\s\u00a0\u202f\u2009]"
-_AMOUNT = rf"(?<![\d.,])(\d{{1,3}}(?:(?:{_G}|\.)\d{{3}})+|\d{{3,}})"
-_PRICE_RE = re.compile(rf"{_AMOUNT}(?:,-+)?{_G}*(?:Kč|Kc|CZK)(?![A-Za-z])|{_AMOUNT},-", re.IGNORECASE)
-# The nearest cue before an amount (folded, within _CUE_WINDOW chars): a price word keeps it,
-# a deposit / fee / advance / commission word skips it ("Kauce 30 000 Kč. Nájemné 18 500 Kč").
-_CUE_WINDOW = 30
-_PRICE_CUE_RE = re.compile(
-    r"(cen[aeuy]|najemne|najem|najmu|nabidkov)"
-    r"|(kauc|jistot|poplat|zaloh|proviz|energi|sluzb|depozit|rezervac|vratn)")
-_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
-_SEP = r"[\s\u00a0\u202f\u2009.\-]"
-# +420 with any grouping; a bare number only in the two Czech groupings (602 123 456,
-# 602 12 34 56), never followed by a currency or a unit (that is a price or an area).
-_PHONE_INTL_RE = re.compile(rf"(?:\+|00){_G}?420{_SEP}?((?:{_SEP}?\d){{9}})(?!\d)")
-_PHONE_BARE_RE = re.compile(
-    rf"(?<![\d+])([2-7]\d{{2}}(?:{_SEP}?\d{{3}}){{2}}|[2-7]\d{{2}}(?:{_G}\d{{2}}){{3}})(?!\d)"
-    rf"(?!{_G}*(?:Kč|Kc|CZK|m2|m²|,-))")
-
-_TYPE_RE = re.compile(r"\b(?:(prodej|prodeji|prodam|prodava\w*)|(pronajem|pronajmu|pronajmeme|podnajem|najem))\b")
-# Earliest match in the title wins, so "Prodej bytu v rodinném domě" is a flat and
-# "Pronájem kanceláře v bytovém domě" an office.
-_MAIN_RES: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("komercni", re.compile(
-        r"\b(?:kancelar\w*|(?:obchodni|nebytov\w*|komercni)\w*\s+prostor\w*|komercni\w*|sklad\w*"
-        r"|vyrobn\w*|hal[ay]|restaurac\w*|hotel\w*|penzion\w*|ordinac\w*|provozovn\w*"
-        r"|(?:najemni|cinzovni|bytov)\w*\s+dom\w*|(?:najemni|cinzovni|bytovy)\s+dum)\b")),
-    ("byt", re.compile(r"\b(?:byt|bytu|byty|bytem|bytove?\s+jednotk\w*|apartman\w*|garsonier\w*|mezonet\w*)\b")),
-    ("dum", re.compile(
-        r"\b(?:dum|domu|domy|domek|domku|vila|vily|vilu|chata|chaty|chatu|chalupa|chalupy|chalupu"
-        r"|usedlost\w*|statek|statku|rekreacni\s+objekt\w*)\b")),
-    ("pozemek", re.compile(r"\b(?:pozem\w*|parcel\w*|zahrad[ay]|zahradu|louk[ay]|orn\w+\s+pud\w*)\b")),
-    ("ostatni", re.compile(r"\b(?:garaz\w*|(?:parkovaci|garazove)\s+stani|stani)\b")),
-)
+# Where a page's labelled facts may hide outside the ad: a dialog (a "send to a friend" form),
+# anything the page itself hides from a reader.
+_HIDDEN = '[aria-hidden="true"], [role="dialog"], dialog'
+_BLOCK_TAGS = "ul, ol, table, dl, li, p, div"
+# A metadata description cut short: "…", "...", "[…]".
+_ELLIPSIS_RE = re.compile(r"\s*(?:\[\s*(?:…|\.{3})\s*\]|…|\.{3})\s*$")
 
 
 def parse_detail(html: str, *, source_url: str, final_url: str | None = None) -> ScrapedListing:
@@ -144,38 +131,32 @@ def parse_detail(html: str, *, source_url: str, final_url: str | None = None) ->
     _strip(tree, _SIDEBAR)
     _strip_prose_free_forms(tree)
     block = _main_block(tree)
-    description = _description(main, og, meta_description, block)
-    haystack = f"{title or ''}\n{description or ''}"
-
-    category_type = next((v for t in titles if (v := _category_type(t))), None)
-    category_main = next((v for t in titles if (v := _category_main(t))), None)
-    offer = _offer_price(main)
-    price_czk = offer if offer is not None else (_text_price(title) or _text_price(description))
-    price_unit = {"prodej": "za nemovitost", "pronajem": "za mesic"}.get(category_type or "")
-    disposition = vocabulary.disposition(WEB, title, description)
-    floor_size = _floor_size(main)
-    area_m2, area_basis = derive_headline_area(
-        category_main=category_main, floor=floor_size, fallback=parse_area_text(title),
-        prose=parse_area_text(description), disposition=disposition, category_type=category_type,
-    )
-    floor, total_floors = floor_from_text(haystack, category_main=category_main)
-    lat, lon = _geo(main, items)
+    block_text = _block_text(block)
+    description = _description(main, og, meta_description, block_text)
     image_urls = _images(main, og, block, base)
-    broker = _broker(main, links, (description, _block_text(block)))
+    facts = _page_facts(tree)
+    offer = _offer_price(main)
+    floor_size = _floor_size(main)
+    text = parse_text(title, description, facts, portal=WEB, other_titles=titles,
+                      stated_price=offer, stated_floor_area=floor_size)
+    lat, lon = _geo(main, items)
+    broker = _broker(main, links, text.phone or text_phone(block_text), text.email)
 
     raw: dict[str, Any] = {
         "title": title,
         "description": description,
-        "price_czk": price_czk,
-        "area_m2": area_m2,
-        "disposition": disposition,
-        "category_main": category_main,
-        "category_type": category_type,
-        "floor": floor,
-        "total_floors": total_floors,
+        "price_czk": text.price_czk,
+        "area_m2": text.area_m2,
+        "disposition": text.disposition,
+        "category_main": text.category_main,
+        "category_type": text.category_type,
+        "floor": text.floor,
+        "total_floors": text.total_floors,
         "image_urls": image_urls,
         "final_url": final_url,
     }
+    if facts:
+        raw["facts"] = [[label, value] for label, value in facts]
     if broker is not None:
         raw["broker"] = broker
     if main or lat is not None:
@@ -187,15 +168,29 @@ def parse_detail(html: str, *, source_url: str, final_url: str | None = None) ->
         source=WEB,
         source_id_native=canon,
         source_url=canon,
-        category_main=category_main,
-        category_type=category_type,
-        price_czk=price_czk,
-        price_unit=price_unit if price_czk is not None else None,
-        area_m2=area_m2,
-        area_basis=area_basis,
-        disposition=disposition,
-        floor=floor,
-        total_floors=total_floors,
+        category_main=text.category_main,
+        category_type=text.category_type,
+        price_czk=text.price_czk,
+        price_unit=text.price_unit,
+        area_m2=text.area_m2,
+        area_basis=text.area_basis,
+        disposition=text.disposition,
+        floor=text.floor,
+        total_floors=text.total_floors,
+        has_balcony=text.has_balcony,
+        has_parking=text.has_parking,
+        has_lift=text.has_lift,
+        building_type=text.building_type,
+        condition=text.condition,
+        energy_rating=text.energy_rating,
+        estate_area=text.estate_area,
+        usable_area=text.usable_area,
+        garden_area=text.garden_area,
+        furnished=text.furnished,
+        terrace=text.terrace,
+        cellar=text.cellar,
+        garage=text.garage,
+        ownership=text.ownership,
         lat=lat,
         lon=lon,
         description=description,
@@ -205,11 +200,6 @@ def parse_detail(html: str, *, source_url: str, final_url: str | None = None) ->
 
 
 # --- text helpers ----------------------------------------------------------------------------
-
-
-def _fold(text: str | None) -> str:
-    plain = unicodedata.normalize("NFKD", text or "")
-    return "".join(c for c in plain if not unicodedata.combining(c)).lower()
 
 
 def _clean(text: str | None) -> str | None:
@@ -423,11 +413,11 @@ def _strip_related(tree: HTMLParser) -> None:
     """Another ad's cards: a block whose class or id says similar / related / recommended, or
     a section under a "Podobné nabídky" heading (never the content landmark itself)."""
     marked = [n for n in tree.css("[class], [id]")
-              if _RELATED_RE.search(_fold(f"{n.attributes.get('class') or ''} {n.attributes.get('id') or ''}"))]
+              if _RELATED_RE.search(fold_text(f"{n.attributes.get('class') or ''} {n.attributes.get('id') or ''}"))]
     for heading in tree.css("h2, h3, h4"):
         parent = heading.parent
         if (parent is not None and parent.tag not in (*_CONTENT_TAGS, "body", "html")
-                and _RELATED_HEADING_RE.match(_fold(_node_text(heading)))):
+                and _RELATED_HEADING_RE.match(fold_text(_node_text(heading)))):
             marked.append(parent)
     _decompose(marked)
 
@@ -467,50 +457,112 @@ def _block_text(block: Node | None) -> str | None:
 
 
 def _description(main: dict[str, Any], og: dict[str, str], meta: str | None,
-                 block: Node | None) -> str | None:
+                 block_text: str | None) -> str | None:
     """JSON-LD, og:description, the main block; the meta description last (a small site's
-    is often one tagline on every page)."""
+    is often one tagline on every page). The main block beats a metadata excerpt of itself:
+    one cut off with an ellipsis, or a prefix of the block's text."""
     for text in (_clean(_str(main.get("description"))) if main else None, og.get("description")):
         if text and len(text) >= _MIN_DESCRIPTION:
+            if block_text and _excerpt_of(text, block_text):
+                return block_text[:MAX_DESCRIPTION]
             return text[:MAX_DESCRIPTION]
-    text = _block_text(block)
-    if text:
-        return text[:MAX_DESCRIPTION]
+    if block_text:
+        return block_text[:MAX_DESCRIPTION]
     return meta[:MAX_DESCRIPTION] if meta and len(meta) >= _MIN_DESCRIPTION else None
 
 
-# --- the shared grammars ----------------------------------------------------------------------
+def _excerpt_of(excerpt: str, full: str) -> bool:
+    cut = _ELLIPSIS_RE.sub("", excerpt)
+    short, long = " ".join(cut.split()), " ".join(full.split())
+    return len(long) > len(short) and (cut != excerpt or long.startswith(short))
 
 
-def _category_type(title: str | None) -> str | None:
-    m = _TYPE_RE.search(_fold(title))
-    if not m:
-        return None
-    return "prodej" if m.group(1) else "pronajem"
+# --- the page's labelled facts ----------------------------------------------------------------
 
 
-def _category_main(title: str | None) -> str | None:
-    folded = _fold(title)
-    hits = [(m.start(), canon) for canon, rule in _MAIN_RES if (m := rule.search(folded))]
-    return min(hits)[1] if hits else None
+def _page_facts(tree: HTMLParser) -> list[tuple[str, str]]:
+    """Every `(label, value)` pair the ad's content states, in page order and once each: a
+    table row's `th`/`td` (or a `td` label ending in a colon), a `dt`/`dd`, an element whose
+    class names a label beside one whose class names a value, an `li`/`p` reading "Label:
+    value", and a price box (a short price label beside an amount). Read inside the content
+    landmarks when the page has them, never inside a hidden block or a dialog."""
+    # "67 m<sup>2</sup>" reads "67 m2", not "67 m 2" (the description is already taken).
+    tree.unwrap_tags(["sup", "sub"])
+    tree.merge_text_nodes()
+    hidden = {n.mem_id for n in tree.css(_HIDDEN)}
+    scopes = list(tree.css(_CONTENT)) or ([tree.body] if tree.body is not None else [])
+    facts: list[tuple[str, str]] = []
+    for scope in scopes:
+        for node in scope.traverse(include_text=True):
+            for fact in (_price_box(node) if node.tag == "-text" else _element_facts(node)):
+                if fact not in facts and not _inside(node, hidden):
+                    facts.append(fact)
+    return facts
 
 
-def _text_price(text: str | None) -> int | None:
-    """The first amount in CZK the text states that no deposit / fee / commission word names;
-    a per-m² figure is no price (price_text), `,-` spelling included."""
-    if not text:
-        return None
-    for m in _PRICE_RE.finditer(text):
-        group = 1 if m.group(1) else 2
-        before = _fold(text[max(0, m.start(group) - _CUE_WINDOW):m.start(group)])
-        cues = list(_PRICE_CUE_RE.finditer(before))
-        if cues and cues[-1].group(2):
-            continue
-        if is_per_area_price(re.sub(r"^,-+", "", text[m.end(group):])):
-            return None
-        digits = re.sub(r"\D", "", m.group(group))
-        return int(digits) if digits and int(digits) > 0 else None
-    return None
+def _element_facts(node: Node) -> Iterator[tuple[str, str]]:
+    tag = node.tag
+    if tag == "tr":
+        cells = [c for c in node.iter() if c.tag in ("th", "td")]
+        for label, value in zip(cells, cells[1:]):
+            text = _node_text(label) or ""
+            if value.tag == "td" and (label.tag == "th" or text.endswith(":")):
+                yield from _fact(text, _node_text(value))
+    elif tag == "dt":
+        sibling = _next_element(node)
+        if sibling is not None and sibling.tag == "dd":
+            yield from _fact(_node_text(node), _node_text(sibling))
+    elif tag in ("li", "p"):
+        if not any(n.mem_id != node.mem_id for n in node.css(_BLOCK_TAGS)):
+            fact = split_fact(_node_text(node))
+            if fact:
+                yield fact
+    if "label" in (node.attributes.get("class") or "").lower():
+        sibling = _next_element(node)
+        if sibling is not None and "value" in (sibling.attributes.get("class") or "").lower():
+            yield from _fact(_node_text(node), _node_text(sibling))
+
+
+def _price_box(text_node: Node) -> Iterator[tuple[str, str]]:
+    """A price label alone in its element (climbing wrappers that hold nothing else), beside
+    an element that states an amount: `<div>Cena nemovitosti</div><div>8.950.000 Kč</div>`."""
+    raw = text_node.text()
+    if not raw or len(raw) > 4 * MAX_LABEL or raw.isspace():
+        return
+    label = _clean(raw)
+    if not label or len(label) > MAX_LABEL or label_field(label) != "price":
+        return
+    element = text_node.parent
+    while element is not None and element.tag not in ("body", "html") and _node_text(element) == label:
+        sibling = _next_element(element)
+        if sibling is not None:
+            value = _node_text(sibling)
+            if text_price(value) is not None:
+                yield from _fact(label, value)
+            return
+        element = element.parent
+
+
+def _fact(label: str | None, value: str | None) -> Iterator[tuple[str, str]]:
+    label = (label or "").rstrip(":").strip()
+    if label and value and len(label) <= MAX_LABEL and len(value) <= MAX_VALUE:
+        yield label, value
+
+
+def _next_element(node: Node) -> Node | None:
+    sibling = node.next
+    while sibling is not None and sibling.tag.startswith(("-", "_")):
+        sibling = sibling.next
+    return sibling
+
+
+def _inside(node: Node, marked: set[int]) -> bool:
+    current: Node | None = node
+    while current is not None:
+        if current.mem_id in marked:
+            return True
+        current = current.parent
+    return False
 
 
 # --- images -----------------------------------------------------------------------------------
@@ -605,25 +657,6 @@ def _images(main: dict[str, Any], og: dict[str, str], block: Node | None, base: 
 # --- contacts ---------------------------------------------------------------------------------
 
 
-def _norm_email(value: str | None) -> str | None:
-    if not value:
-        return None
-    email = value.strip().removeprefix("mailto:").split("?", 1)[0].strip().lower()
-    return email if _EMAIL_RE.match(email) else None
-
-
-def _norm_phone(value: str | None) -> str | None:
-    if not value:
-        return None
-    raw = value.strip().removeprefix("tel:")
-    digits = re.sub(r"\D", "", raw)
-    if raw.lstrip().startswith(("+", "00")) and not digits.startswith(("420", "00420")):
-        digits = digits.removeprefix("00")
-        return f"+{digits}" if 8 <= len(digits) <= 15 else None
-    digits = digits.removeprefix("00").removeprefix("420")
-    return f"+420{digits}" if len(digits) == 9 and digits[0] in "234567" else None
-
-
 def _party(main: dict[str, Any]) -> dict[str, Any]:
     for holder in [main, *_offers(main)] if main else []:
         for key in _PARTY_KEYS:
@@ -637,25 +670,22 @@ def _party(main: dict[str, Any]) -> dict[str, Any]:
 def _contact_links(tree: HTMLParser) -> tuple[str | None, str | None]:
     """The first `mailto:` and `tel:` link outside the site chrome (an agent box counts)."""
     email = next((e for a in tree.css('a[href^="mailto:"]')
-                  if (e := _norm_email(a.attributes.get("href")))), None)
+                  if (e := norm_email(a.attributes.get("href")))), None)
     phone = next((p for a in tree.css('a[href^="tel:"]')
-                  if (p := _norm_phone(a.attributes.get("href")))), None)
+                  if (p := norm_phone(a.attributes.get("href")))), None)
     return email, phone
 
 
 def _broker(main: dict[str, Any], links: tuple[str | None, str | None],
-            texts: tuple[str | None, ...]) -> dict[str, Any] | None:
+            said_phone: str | None, said_email: str | None) -> dict[str, Any] | None:
+    """The JSON-LD party, then the page's `mailto:` / `tel:` links, then what the text grammar
+    read (a labelled contact, a number in the ad's text)."""
     party = _party(main)
     org = bool(set(_types(party)) & _ORG_TYPES)
     employer = next((p for k in ("worksFor", "memberOf", "parentOrganization")
                      if isinstance(p := party.get(k), dict)), {})
-    email = _norm_email(_str(party.get("email"))) or links[0]
-    phone = _norm_phone(_str(party.get("telephone"))) or links[1]
-    for text in texts if phone is None else ():
-        m = (_PHONE_INTL_RE.search(text) or _PHONE_BARE_RE.search(text)) if text else None
-        if m:
-            phone = _norm_phone(m.group(1))
-            break
+    email = norm_email(_str(party.get("email"))) or links[0] or said_email
+    phone = norm_phone(_str(party.get("telephone"))) or links[1] or said_phone
     broker_id = email or phone
     if broker_id is None:
         return None

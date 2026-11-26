@@ -9,16 +9,13 @@ only the HTML `Accept` header, the realitymix URL builders (`/reality/{family}/
 {sale}` index with `?stranka=N` paging, `/detail/{obec}/{slug}-{id}.html` detail),
 and the removed-listing signals (a redirect off the `.html` detail path, or a
 deleted-listing body marker on a 200). It uses the shared browser User-Agent (the
-robots.txt allow-lists everyone — `Allow: /` — and the framework default avoids
-the bot-UA throttling that bit ceskereality, PRs #637/#638)."""
+robots.txt allow-lists everyone — `Allow: /`; PRs #637/#638)."""
 
 from __future__ import annotations
 
-import logging
+import re
 
-from scraper.portal_base import BasePortalClient, ListingGoneError
-
-LOG = logging.getLogger(__name__)
+from scraper.portal_base import BasePortalClient, gone_phrases, stated_closed
 
 BASE_URL = "https://realitymix.cz"
 
@@ -54,6 +51,12 @@ def detail_url(path_or_url: str) -> str:
 
 class RealitymixClient(BasePortalClient):
     ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    # A removed listing redirects off /detail/; a sold/let one says so in its OWN heading price.
+    DETAIL_URL = re.compile(r"/detail/")
+    GONE_PAGE = (
+        gone_phrases(*_GONE_MARKERS),
+        stated_closed(r'<span class="advert-detail-heading__price-value">'),
+    )
 
     def fetch_index(
         self, sale_type: str, category: str, page: int | None = None
@@ -62,14 +65,4 @@ class RealitymixClient(BasePortalClient):
         return response.text, response.status_code
 
     def fetch_detail(self, path_or_url: str) -> tuple[str, int]:
-        url = detail_url(path_or_url)
-        response = self._request(url)
-        # A removed listing redirects off its .html detail page; after requests
-        # follows it the status is 200 but the URL is no longer a listing page.
-        final_url = getattr(response, "url", url) or url
-        if "/detail/" not in final_url:
-            raise ListingGoneError(url, response.status_code)
-        text = response.text
-        if any(marker in text.lower() for marker in _GONE_MARKERS):
-            raise ListingGoneError(url, response.status_code)
-        return text, response.status_code
+        return self._fetch_detail_page(detail_url(path_or_url))

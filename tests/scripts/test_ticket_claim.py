@@ -217,7 +217,8 @@ def test_a_session_name_is_slugified_only_when_a_marker_rejects_it(
 
 
 class FakeGitHub:
-    """Just enough of `gh api` for one issue: the issue with a Date header, its timeline, closing PRs, comment writes."""
+    """Just enough of `gh api` for one issue: the issue with a Date header, its timeline, closing PRs, comment writes,
+    and the two frontier sources."""
 
     def __init__(self, state: str = "open", kind: str = "issue") -> None:
         self.now = T0
@@ -226,6 +227,7 @@ class FakeGitHub:
         self.timeline: list[dict] = []
         self.closing: list[dict] = []
         self.listing: list[dict] = []
+        self.sub_issues: list[dict] = []
         self.next_id = 1000
         self.posts: list[str] = []
         self.patches: dict[int, str] = {}
@@ -260,9 +262,10 @@ class FakeGitHub:
         if args[1] == "graphql":
             nodes = {"nodes": self.closing}
             return 0, json.dumps({"data": {"repository": {"issue": {"closedByPullRequestsReferences": nodes}}}}), ""
-        if "/timeline?" in args[1] or "/issues?" in args[1]:
+        routes = {"/timeline?": self.timeline, "/issues?": self.listing, "/sub_issues?": self.sub_issues}
+        rows = next((r for route, r in routes.items() if route in args[1]), None)
+        if rows is not None:
             page = int(parse_qs(urlsplit(args[1]).query)["page"][0])
-            rows = self.timeline if "/timeline?" in args[1] else self.listing
             return 0, json.dumps(rows[(page - 1) * 100: page * 100]), ""
         if args[1:3] == ["-X", "POST"]:
             body = json.loads(stdin or "")["body"]
@@ -418,9 +421,11 @@ def test_a_github_failure_or_a_crash_exits_4_never_1(monkeypatch: pytest.MonkeyP
     assert tc.main(["status", "5"]) == tc.GH_ERROR
 
 
-def listed(number: int, blocked: int = 0, children: int = 0, labels: tuple[str, ...] = ("ready-for-agent",)) -> dict:
+def listed(
+    number: int, blocked: int = 0, children: int = 0, labels: tuple[str, ...] = ("ready-for-agent",), state: str = "open",
+) -> dict:
     return {
-        "number": number, "labels": [{"name": name} for name in labels],
+        "number": number, "state": state, "labels": [{"name": name} for name in labels],
         "issue_dependencies_summary": {"blocked_by": blocked}, "sub_issues_summary": {"total": children},
     }
 
@@ -436,3 +441,82 @@ def test_the_frontier_fails_closed_without_the_blocker_count(gh: FakeGitHub) -> 
     del row["issue_dependencies_summary"]
     gh.listing = [row]
     assert tc.main(["status", "--frontier"]) == tc.GH_ERROR
+
+
+def frontier_out(capsys: pytest.CaptureFixture[str], *args: str) -> list[str]:
+    assert tc.main(["status", "--frontier", *args]) == tc.OK
+    return capsys.readouterr().out.splitlines()
+
+
+def test_a_parents_children_print_in_its_order_whatever_their_labels(
+    gh: FakeGitHub, capsys: pytest.CaptureFixture[str],
+) -> None:
+    gh.sub_issues = [listed(9), listed(7, labels=()), listed(8, labels=("wayfinder:task",))]
+    assert frontier_out(capsys, "77") == [f"#{n} free  W9: a ticket" for n in (9, 7, 8)]
+
+
+@pytest.mark.parametrize("label", ["needs-triage", "needs-info", "ready-for-human", "wontfix", "gate"])
+def test_a_skip_label_drops_a_ticket_in_both_modes(
+    gh: FakeGitHub, capsys: pytest.CaptureFixture[str], label: str,
+) -> None:
+    gh.sub_issues = [listed(6, labels=(label,)), listed(5)]
+    assert frontier_out(capsys, "77") == ["#5 free  W9: a ticket"]
+    gh.listing = [listed(6, labels=("ready-for-agent", label)), listed(5)]
+    assert frontier_out(capsys) == ["#5 free  W9: a ticket"]
+
+
+def test_blocked_nested_closed_and_pr_children_are_dropped(gh: FakeGitHub, capsys: pytest.CaptureFixture[str]) -> None:
+    pull = {**listed(4), "pull_request": {"url": "x"}}
+    gh.sub_issues = [listed(1, blocked=1), listed(2, children=3), listed(3, state="closed"), pull, listed(5)]
+    assert frontier_out(capsys, "77") == ["#5 free  W9: a ticket"]
+
+
+def test_a_parent_with_no_sub_issues_is_a_usage_error_naming_the_drafting_rule(
+    gh: FakeGitHub, capsys: pytest.CaptureFixture[str],
+) -> None:
+    gh.listing = [listed(5)]
+    assert tc.main(["status", "--frontier", "77"]) == tc.USAGE
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "#77 has no sub-issues" in err and "Drafting tickets" in err
+
+
+def test_a_parent_whose_children_are_all_done_lists_nothing_without_an_error(
+    gh: FakeGitHub, capsys: pytest.CaptureFixture[str],
+) -> None:
+    gh.sub_issues = [listed(5, state="closed")]
+    assert frontier_out(capsys, "77") == []
+
+
+def test_a_child_without_its_blocker_count_fails_closed(gh: FakeGitHub) -> None:
+    row = listed(5)
+    del row["issue_dependencies_summary"]
+    gh.sub_issues = [row]
+    assert tc.main(["status", "--frontier", "77"]) == tc.GH_ERROR
+
+
+def test_a_child_held_by_a_live_claim_is_not_listed(gh: FakeGitHub, capsys: pytest.CaptureFixture[str]) -> None:
+    gh.sub_issues = [listed(5)]
+    gh.comment(marker("claim", "sreality-0f"))
+    assert frontier_out(capsys, "77") == []
+
+
+def test_a_child_closed_by_another_branchs_pr_is_not_listed(gh: FakeGitHub, capsys: pytest.CaptureFixture[str]) -> None:
+    gh.sub_issues = [listed(5)]
+    gh.closing = [open_pr("feature/other")]
+    assert frontier_out(capsys, "77") == []
+
+
+def test_the_hash_form_parses_and_a_ticket_after_the_parent_gets_its_status_line(
+    gh: FakeGitHub, capsys: pytest.CaptureFixture[str],
+) -> None:
+    gh.sub_issues = [listed(9)]
+    assert frontier_out(capsys, "#77") == ["#9 free  W9: a ticket"]
+    assert frontier_out(capsys, "77", "5") == ["#5 free  W9: a ticket", "#9 free  W9: a ticket"]
+
+
+def test_a_ticket_before_a_bare_flag_stays_a_ticket(gh: FakeGitHub, capsys: pytest.CaptureFixture[str]) -> None:
+    gh.sub_issues = [listed(9)]
+    gh.listing = [listed(8)]
+    assert tc.main(["status", "5", "--frontier"]) == tc.OK
+    assert capsys.readouterr().out.splitlines() == ["#5 free  W9: a ticket", "#8 free  W9: a ticket"]

@@ -1,8 +1,8 @@
-"""What a migration file CREATES, extracted from its SQL text.
+"""What a migration file CREATES and DROPS, extracted from its SQL text.
 
 Feeds the `migration_drift` check: a migration that is merged but never applied
-leaves every object it declares absent from the live catalog, and nothing else
-in the system notices. Migration 438 merged 2026-08-25 17:12 and was applied
+leaves every object it declares absent from the live catalog, and every object it
+drops still there, and nothing else in the system notices. Migration 438 merged 2026-08-25 17:12 and was applied
 2026-08-26 22:06; for 29 hours every write on six portals failed a CHECK
 constraint that the code assumed existed, and `scrape_runs.errors` read 0.
 
@@ -61,13 +61,15 @@ _RE_POLICY = re.compile(
     rf"\bcreate\s+policy\s+({_IDENT})\s+on\s+({_QUALIFIED})",
     re.IGNORECASE,
 )
-_RE_ADD_COLUMN = re.compile(
-    rf"\balter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?({_QUALIFIED})\s+add\s+column\s+(?:if\s+not\s+exists\s+)?({_IDENT})",
+# One ALTER TABLE may add and drop columns in any order, so each clause is read on its own.
+_RE_ALTER_CLAUSES = re.compile(
+    rf"\balter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?({_QUALIFIED})\s+([^;]*)",
     re.IGNORECASE,
 )
+_RE_ADD_COLUMN = re.compile(rf"\badd\s+column\s+(?:if\s+not\s+exists\s+)?({_IDENT})", re.IGNORECASE)
 
-# 'relation' covers tables, views, matviews and indexes — to_regclass resolves
-# all four, so they need no separate probe. 'constraint' earns its place because
+# 'relation' covers tables, views, matviews, indexes and sequences — to_regclass
+# resolves them all, so they need no separate probe. 'constraint' earns its place because
 # migration 438 — the outage this check exists for — creates no object at all: it
 # swaps a CHECK constraint, and a parser that only looks for CREATE would have
 # been blind to precisely the incident that motivated it.
@@ -200,13 +202,14 @@ def _objects_in(body: str) -> list[MigrationObject]:
         add("relation", name)
     for m in _RE_FUNCTION.finditer(body):
         add("function", _clean(m.group(1)))
-    for m in _RE_ADD_COLUMN.finditer(body):
+    for m in _RE_ALTER_CLAUSES.finditer(body):
         qualified = _clean(m.group(1))
         schema, _, table = qualified.rpartition(".")
         # information_schema.columns is probed per schema, so a column on a table
         # outside `public` keeps its schema: `<schema>.<table>.<column>`.
         prefix = f"{schema}.{table}" if schema and schema != "public" else table
-        add("column", f"{prefix}.{_clean(m.group(2))}")
+        for clause in _RE_ADD_COLUMN.finditer(m.group(2)):
+            add("column", f"{prefix}.{_clean(clause.group(1))}")
     for m in _RE_ADD_CONSTRAINT.finditer(body):
         qualified = _clean(m.group(1))
         schema, _, table = qualified.rpartition(".")
@@ -226,10 +229,6 @@ _RE_DROP_RELATION = re.compile(
 _RE_DROP_FUNCTION = re.compile(
     rf"\bdrop\s+function\s+(?:if\s+exists\s+)?({_QUALIFIED})", re.IGNORECASE,
 )
-_RE_DROP_COLUMNS = re.compile(
-    rf"\balter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?({_QUALIFIED})\s+(drop\s+column\b[^;]*)",
-    re.IGNORECASE,
-)
 _RE_DROP_COLUMN = re.compile(rf"\bdrop\s+column\s+(?:if\s+exists\s+)?({_IDENT})", re.IGNORECASE)
 _RE_DROP_POLICY = re.compile(
     rf"\bdrop\s+policy\s+(?:if\s+exists\s+)?({_IDENT})\s+on\s+({_QUALIFIED})", re.IGNORECASE,
@@ -247,13 +246,24 @@ def _dropped(sql: str) -> set[tuple[str, str]]:
     out = {_key("relation", _clean(name))
            for m in _RE_DROP_RELATION.finditer(body) for name in m.group(1).split(",")}
     out |= {_key("function", _clean(m.group(1))) for m in _RE_DROP_FUNCTION.finditer(body)}
-    for m in _RE_DROP_COLUMNS.finditer(body):
+    for m in _RE_ALTER_CLAUSES.finditer(body):
         schema, _, table = _clean(m.group(1)).rpartition(".")
         prefix = f"{schema}.{table}" if schema and schema != "public" else table
         out |= {_key("column", f"{prefix}.{_clean(c.group(1))}") for c in _RE_DROP_COLUMN.finditer(m.group(2))}
     for m in _RE_DROP_POLICY.finditer(body):
         out.add(_key("policy", f"{_clean(m.group(2)).split('.')[-1]}.{_clean(m.group(1))}"))
     return out
+
+
+def _expected_absent(dropped: set[tuple[str, str]], created: set[tuple[str, str]]) -> list[MigrationObject]:
+    """Drops nothing re-creates, in a stable order. Never a function: the probe matches by name,
+    so an overload left standing would read as a failed drop."""
+    return [MigrationObject(kind, ident) for kind, ident in sorted(dropped - created) if kind != "function"]
+
+
+def parse_dropped(sql: str) -> list[MigrationObject]:
+    """What this one file leaves absent: its drops minus its own creates."""
+    return _expected_absent(_dropped(sql), {_key(o.kind, o.ident) for o in parse_objects(sql)})
 
 
 _MIGRATION_NAME = re.compile(r"^(\d+)_(.+)\.sql$")
@@ -264,6 +274,7 @@ class Migration:
     number: int
     filename: str
     objects: list[MigrationObject]
+    dropped: list[MigrationObject]  # expected absent: dropped here, re-created by neither this nor a later file
 
 
 def load_migrations(migrations_dir: Path, newest: int = 25) -> list[Migration]:
@@ -277,20 +288,24 @@ def load_migrations(migrations_dir: Path, newest: int = 25) -> list[Migration]:
             continue
         paths[path.name] = path
         out.append(
-            Migration(int(m.group(1)), path.name, parse_objects(path.read_text(encoding="utf-8")))
+            Migration(int(m.group(1)), path.name, parse_objects(path.read_text(encoding="utf-8")), [])
         )
     out.sort(key=lambda mig: mig.number)
     out = out[-newest:] if newest > 0 else out
     # An object a LATER migration retires is absent by design, not by drift (613 drops 610's
     # shared_at): one dropped and not re-created in that same file stops being probed for the
     # earlier file. A re-creation in a later file is probed there.
+    # The same pass, the other way round: a drop this or a later file re-creates expects nothing absent.
     retired: set[tuple[str, str]] = set()
+    recreated: set[tuple[str, str]] = set()
     for i in range(len(out) - 1, -1, -1):
         mig = out[i]
         objects = [o for o in mig.objects if _key(o.kind, o.ident) not in retired]
-        sql = paths[mig.filename].read_text(encoding="utf-8")
-        retired |= _dropped(sql) - {_key(o.kind, o.ident) for o in mig.objects}
-        out[i] = Migration(mig.number, mig.filename, objects)
+        dropped = _dropped(paths[mig.filename].read_text(encoding="utf-8"))
+        created = {_key(o.kind, o.ident) for o in mig.objects}
+        recreated |= created
+        retired |= dropped - created
+        out[i] = Migration(mig.number, mig.filename, objects, _expected_absent(dropped, recreated))
     return out
 
 
@@ -298,7 +313,7 @@ def load_migrations(migrations_dir: Path, newest: int = 25) -> list[Migration]:
 #
 # One probe for both readers of "applied": the `migration_drift` alarm
 # (scripts/checks/platform.py) and apply_migration_receipt's post-apply receipt. It asks
-# the catalog, never the ledger: for each declared object, does it exist right now?
+# the catalog, never the ledger: for each declared or dropped object, does it exist right now?
 
 MIGRATION_OBJECT_PROBE_SQL = """
 select o.kind, o.ident,

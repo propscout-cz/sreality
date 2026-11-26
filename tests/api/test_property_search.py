@@ -19,8 +19,8 @@ from api.capabilities.errors import ToolError, ToolErrorCode
 from api.capabilities.truncate import RESULT_BUDGET, encode
 from api.filter_args import agenda_ids
 from api.property_search import PAGE_MAX, SEARCH_COLUMNS, SORTS, SearchArgs, SearchFilters
+from tests._read_contract import BROWSE_SORT_TS, _projection_columns, _sortable_fields
 from tests.api._script_conn import ScriptConn
-from tests.test_browse_read_path_guardrail import BROWSE_SORT_TS, _projection_columns, _sortable_fields
 from toolkit import filter_registry as fr
 from toolkit.measures import BASIS_MIXED, RENT_MONTHLY_CZK_M2, SALE_CAPITAL_CZK_M2
 

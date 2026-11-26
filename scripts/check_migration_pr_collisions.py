@@ -10,9 +10,11 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 
 API = "https://api.github.com"
 MIGRATION_RE = re.compile(r"^migrations/(\d{3,})_[^/]+\.sql$")
+Getter = Callable[[str, str | None], list[dict]]
 
 
 def migration_number(path: str) -> str | None:
@@ -65,26 +67,26 @@ def _get(url: str, token: str | None) -> list[dict]:
         return json.load(resp)
 
 
-def _paged(url: str, token: str | None) -> list[dict]:
+def _paged(url: str, token: str | None, get: Getter = _get) -> list[dict]:
     """Every page of a per_page=100 listing."""
     out: list[dict] = []
     page = 1
     while True:
-        batch = _get(f"{url}{'&' if '?' in url else '?'}per_page=100&page={page}", token)
+        batch = get(f"{url}{'&' if '?' in url else '?'}per_page=100&page={page}", token)
         out.extend(batch)
         if len(batch) < 100:
             return out
         page += 1
 
 
-def open_pr_migrations(repo: str, token: str | None, skip: int) -> dict[int, list[str]]:
+def open_pr_migrations(repo: str, token: str | None, skip: int, get: Getter = _get) -> dict[int, list[str]]:
     """Migration files carried by every other open PR, keyed by PR number."""
     result: dict[int, list[str]] = {}
-    for pr in _paged(f"{API}/repos/{repo}/pulls?state=open", token):
+    for pr in _paged(f"{API}/repos/{repo}/pulls?state=open", token, get):
         n = int(pr["number"])
         if n == skip:
             continue
-        files = _paged(f"{API}/repos/{repo}/pulls/{n}/files", token)
+        files = _paged(f"{API}/repos/{repo}/pulls/{n}/files", token, get)
         paths = [f["filename"] for f in files if f.get("status") != "removed"]
         mig = [p for p in paths if migration_number(p)]
         if mig:

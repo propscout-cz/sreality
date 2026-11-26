@@ -70,6 +70,45 @@ select distinct on (c ->> 'subject') c ->> 'subject' as subject, c -> 'facts' ->
  order by c ->> 'subject', r.run_at desc
 """
 
+# Every active ad with a gone verdict newer than its last sighting (in dwell), with the earliest such
+# verdict, as db.gone_evidence reads it: a refuted earlier verdict never hides a later one that still
+# stands. Delisting's stuck arm and coverage's residual read it. The verdicts are grouped per ad off
+# the partial gone index first, so listings is probed once per ad, never once per verdict (each
+# re-check of an ad files one more); its key is unique, so the rows are one per ad as before. The
+# probe itself, one heap row an ad, is the read's cost, so a verdict older than the ad's latest flip
+# is dropped first: every reactivation stamps last_seen_at = now() (db._touch_chunk_by_id,
+# listing_write; pinned by the census in tests/scraper/test_listing_write_census.py), so such a
+# verdict stands only behind a touch transaction open from before it to after the flip. 42k ads probed fell to 11k, 171k buffers to 49k, with the same 6,050
+# ads in dwell (11-14, #2512). The flips are aggregated per ad and hash-joined, never a correlated
+# NOT EXISTS, which may plan a probe per verdict. `{scope}` is an extra `and ...` on both reads.
+_IN_DWELL_CTES = """flips as (
+    select c.source, c.native_id, max(c.completed_at) as flipped_at
+      from detail_queue_completions c
+     where c.outcome = 'flipped'{scope}
+     group by c.source, c.native_id),
+gone as (
+    select c.source, c.native_id, array_agg(c.completed_at) as gone_at
+      from detail_queue_completions c
+      left join flips f on f.source = c.source and f.native_id = c.native_id
+     where c.outcome = 'gone'{scope}
+       and (f.flipped_at is null or c.completed_at > f.flipped_at)
+     group by c.source, c.native_id),
+pending as (
+    select l.source, l.category_main, l.category_type, l.id, v.first_gone_at
+      from gone g
+      join listings l on l.source = g.source and l.source_id_native = g.native_id
+     cross join lateral (
+           select min(t) filter (where t > coalesce(l.last_seen_at, '-infinity'::timestamptz))
+                      as first_gone_at
+             from unnest(g.gone_at) as t) v
+     where l.is_active and v.first_gone_at is not null)"""
+
+
+def in_dwell_ctes(scope: str = "") -> str:
+    """The `flips`, `gone` and `pending` CTEs above, `scope` (an `and ...` on the completions)
+    spliced in."""
+    return _IN_DWELL_CTES.format(scope=scope)
+
 
 def now(conn: Any) -> _dt.datetime:
     """The database's clock, the one every window in these checks' SQL is measured on."""

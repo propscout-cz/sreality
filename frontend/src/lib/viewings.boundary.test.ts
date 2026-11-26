@@ -89,7 +89,7 @@ function mismatchesAt(now: number): string[] {
       check(
         `dayTitle(${label})`,
         dayTitle(viewingSlot(iso).day, pragueDayKey(at)),
-        TITLE[days] ?? `${WEEKDAY_LONG.format(t)} ${DAY_MONTH.format(t)}${year}`,
+        TITLE[days] ?? (year ? `${WEEKDAY_SHORT.format(t)} ${DAY_MONTH.format(t)}${year}` : `${WEEKDAY_LONG.format(t)} ${DAY_MONTH.format(t)}`),
       );
     }
   }

@@ -56,6 +56,7 @@ from autodedup.cluster import cluster_pairs, cluster_rows
 from autodedup.dataset import Image, Listing
 from autodedup.decide import Decision, decide_pair
 from autodedup.features import (
+    CODE_AREA_TOL,
     FEATURE_VERSION,
     FeatureContext,
     Feats,
@@ -68,14 +69,21 @@ from autodedup.features import (
 from autodedup.features import _attr_map as _feature_attr_map
 from autodedup.fingerprint import Fingerprint, build_fingerprint
 from autodedup.d43 import relation_for
-from autodedup.guards import UNIT_DESIGNATOR_VETO, GuardSide, pair_veto
+from autodedup.guards import (
+    UNIT_DESIGNATOR_VETO, GuardSide, exemption_window_quota, in_exemption_window, pair_veto,
+)
 from autodedup.hazard_context import BlockCell, ContextIndex, ContextStamp, rail_plan
 from autodedup.hazard_context import address_block_key, category_group
 from autodedup.model import LogisticModel
 from autodedup.indistinguishable import FEATURE_SLOTS
 from autodedup.settings import Settings
 from autodedup.store_score import storable
-from autodedup.text_facts import reference_codes, states_from_price
+from autodedup.text_facts import (
+    MAX_CODE_POPULATION,
+    reference_codes,
+    states_from_price,
+    structured_code,
+)
 
 GENERATION: str = "rt"
 
@@ -129,12 +137,18 @@ def stream_live(control: Mapping[str, Any], generation: str = GENERATION) -> boo
 _SEP: str = "\x1f"
 # E960: the dirty listings whose posted keys a pass holds at once while it retrieves them.
 KEY_CHUNK: int = 5000
-# The probes whose tokens lead with a band number (`simhash_bands`): text, and phash per anchor.
+# The probes whose tokens carry a band number (`simhash_bands`): text, and phash per anchor.
 _BANDED: frozenset[str] = frozenset({"text", "phash"})
 
 
 def key_token(key: Sequence[Any]) -> str:
     return _SEP.join("" if part is None else str(part) for part in key)
+
+
+def band_of(token: str) -> int:
+    """The band number of a text or phash token: its second-last part, whether or not
+    `content_key_town_grain` put the town before it."""
+    return int(token.rsplit(_SEP, 2)[-2])
 
 
 def _cut_key(cat_group: str | None, category_type: str | None) -> str:
@@ -143,7 +157,7 @@ def _cut_key(cat_group: str | None, category_type: str | None) -> str:
 
 @dataclass(slots=True, frozen=True)
 class GuardRow:
-    """The five columns `pair_veto` reads, served from `listing_fp` without a gallery fetch.
+    """The columns `pair_veto` reads, served from `rt_fp` without a gallery fetch.
 
     Satisfies `guards.GuardSide` structurally, which is why the rule floor can refuse a
     candidate before the fan-out cap spends a slot on it (E17) without building its
@@ -155,11 +169,14 @@ class GuardRow:
     area_m2: float | None
     disposition: str | None
     floor: int | None
+    # NULL on a row written before migration 769: the basis exemption does not fire for it.
+    source: str | None = None
+    area_basis: str | None = None
 
 
 def guard_row(fp: Fingerprint) -> GuardRow:
     return GuardRow(fp.listing_id, fp.category_main, fp.category_type, fp.area_m2,
-                    fp.disposition, fp.floor)
+                    fp.disposition, fp.floor, fp.source, fp.area_basis)
 
 
 @dataclass(slots=True, frozen=True)
@@ -267,6 +284,14 @@ class FpRow:
     # The listing's `decision_digest` as the lane last read its facts (E960): the reject ledger's
     # key for a side the pass does not read. Empty on a row written before migration 604.
     dd: str = ""
+    # The `block_key` its postings were keyed under: the lane's drift sweep re-claims the row
+    # when today's location gives another (A). None on a row written before migration 769.
+    block_key: str | None = None
+    # Every order code the advert carries, body and column (finding 2 of the #2056 review): the
+    # lane counts a code's carriers off these rows when a pair is decided, so a code read off
+    # the COLUMN that became a crowd after the cut stops certifying (a body code keeps the cut's
+    # verdict, as on main). Empty on a row written before migration 769.
+    ref_codes: tuple[str, ...] = ()
 
     @property
     def cell(self) -> tuple[str, str]:
@@ -354,6 +379,10 @@ class Calibration:
     block_attr_df: dict[str, dict[str, int]] = field(default_factory=dict)
     pin_pop: dict[str, int] = field(default_factory=dict)
     certifying_codes: list[str] = field(default_factory=list)
+    # The codes the union of body and `ad_reference` carriers certifies (`FeatureContext.
+    # union_codes`). Cut only under settings that read the column, and serialised only when
+    # there are any, so a calibration cut without them keeps its bytes and its digest.
+    certifying_structured_codes: list[str] = field(default_factory=list)
     # E944: `digest()` hashed once. A pass hashes it three to seven times and the lane keeps one
     # calibration across passes; nothing writes into one after it is built (`replace` makes a
     # new one, with no digest yet).
@@ -378,6 +407,9 @@ class Calibration:
         certifying: set[str] = set()
         for codes in ctx.codes.values():
             certifying |= set(codes)
+        structured: set[str] = set()
+        for codes in ctx.union_codes.values():
+            structured |= set(codes)
         return cls(
             generation=generation,
             feature_version=FEATURE_VERSION,
@@ -396,6 +428,7 @@ class Calibration:
             },
             pin_pop=dict(ctx.pin_pop),
             certifying_codes=sorted(certifying),
+            certifying_structured_codes=sorted(structured),
         )
 
     def digest(self) -> str:
@@ -414,7 +447,7 @@ class Calibration:
         return self._digest
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "generation": self.generation,
             "feature_version": self.feature_version,
             "built_at": self.built_at,
@@ -429,6 +462,9 @@ class Calibration:
             "pin_pop": self.pin_pop,
             "certifying_codes": self.certifying_codes,
         }
+        if self.certifying_structured_codes:
+            out["certifying_structured_codes"] = self.certifying_structured_codes
+        return out
 
     @classmethod
     def from_json(cls, raw: Mapping[str, Any]) -> "Calibration":
@@ -447,6 +483,7 @@ class Calibration:
             block_attr_df={k: dict(v) for k, v in (raw.get("block_attr_df") or {}).items()},
             pin_pop=dict(raw.get("pin_pop") or {}),
             certifying_codes=list(raw.get("certifying_codes") or []),
+            certifying_structured_codes=list(raw.get("certifying_structured_codes") or []),
         )
 
 
@@ -481,7 +518,7 @@ class Keyer:
         `phash` over two anchor images or more, whose bands follow the images, which no posting
         keeps (`retrieve_posted` reads that probe loose)."""
         posted = sorted(set(posted), key=lambda key: (
-            key[0], int(key[1].partition(_SEP)[0]) if key[0] in _BANDED else 0, key[1]))
+            key[0], band_of(key[1]) if key[0] in _BANDED else 0, key[1]))
         quarter = any(probe == QUARTER_PROBE for probe, _token in posted)
         out: list[tuple[str, str]] = []
         for probe, token in posted:
@@ -506,11 +543,48 @@ class Keyer:
         return {probe for probe, token in self.index_keys(fp) if self.is_exploded(probe, token)}
 
 
+# A code's carriers are read up to this many: one past the cap is already a crowd.
+CODE_CARRIER_READ: int = MAX_CODE_POPULATION + 1
+
+
+def carried_codes(listing: Listing, settings: Settings) -> tuple[str, ...]:
+    """Every order code the advert carries as the cut's union reads it; empty when the settings
+    read no column (the row then hashes and stores what it did before)."""
+    if not settings.ref_code_structured_categories:
+        return ()
+    found = reference_codes(listing.description)
+    column = structured_code(listing.ad_reference)
+    return tuple(sorted(found | {column} if column else found))
+
+
+def crowded_codes(store: "Store", settings: Settings,
+                  listings: Mapping[int, Listing]) -> frozenset[str]:
+    """The codes of this pass's adverts that fail E60's two rails over their carriers TODAY.
+
+    The cut judges RARE and PURE once; a code with one carrier at the cut passes both, and every
+    advert that later prints it would inherit the certificate until the next re-cut. The stored
+    rows are the carriers as the lane last read them, this pass's own refreshes included."""
+    codes = sorted({code for listing in listings.values()
+                    for code in carried_codes(listing, settings)})
+    if not codes:
+        return frozenset()
+    crowded: set[str] = set()
+    for code, carriers in store.code_carriers(codes).items():
+        dispositions = {dispo for dispo, _ in carriers if dispo is not None}
+        areas = [area for _, area in carriers if area is not None and area > 0.0]
+        spread = (max(areas) - min(areas)) / max(areas) if areas else 0.0
+        if (len(carriers) > MAX_CODE_POPULATION or len(dispositions) > 1
+                or spread > CODE_AREA_TOL):
+            crowded.add(code)
+    return frozenset(crowded)
+
+
 def context_for(
     calibration: Calibration,
     settings: Settings,
     fps: Mapping[int, Fingerprint],
     listings: Mapping[int, Listing],
+    crowded: frozenset[str] = frozenset(),
 ) -> FeatureContext:
     """A `FeatureContext` over the WORKING SET whose cohort statistics are the frozen ones.
 
@@ -527,6 +601,10 @@ def context_for(
         for block, bucket in calibration.block_attr_df.items()
     }
     certifying = set(calibration.certifying_codes)
+    # A calibration cut before the column was read carries no structured verdicts, so the
+    # column certifies nothing until the generation is re-cut under settings that read it.
+    structured = (set(calibration.certifying_structured_codes) - crowded
+                  if settings.ref_code_structured_categories else set())
     for listing_id, fp in fps.items():
         block = _block_of(fp)
         df = ctx.block_token_df.setdefault(block, {})
@@ -545,10 +623,16 @@ def context_for(
         )
         listing = listings.get(listing_id)
         if listing is not None:
-            kept = frozenset(code for code in reference_codes(listing.description)
-                             if code in certifying)
+            found = reference_codes(listing.description)
+            kept = frozenset(code for code in found if code in certifying)
             if kept:
                 ctx.codes[listing_id] = kept
+            if structured:
+                column = structured_code(listing.ad_reference)
+                both = frozenset(code for code in (found | {column} if column else found)
+                                 if code in structured)
+                if both:
+                    ctx.union_codes[listing_id] = both
     return ctx
 
 
@@ -577,6 +661,8 @@ class Store(Protocol):
     def drop_listing(self, listing_id: int) -> None: ...
     def keys_many(self, ids: Iterable[int]) -> dict[int, list[tuple[str, str]]]: ...
     def rows(self, ids: Iterable[int]) -> dict[int, FpRow]: ...
+    def code_carriers(self, codes: Sequence[str]
+                      ) -> dict[str, list[tuple[str | None, float | None]]]: ...
     def known(self, ids: Iterable[int]) -> set[int]: ...
     def pairs_touching(self, ids: Iterable[int]) -> dict[tuple[int, int], PairRow]: ...
     def pairs_within(self, members: Iterable[int]) -> list[PairRow]: ...
@@ -584,7 +670,6 @@ class Store(Protocol):
     def upsert_pairs(self, rows: Sequence[PairRow]) -> int: ...
     def delete_pairs(self, keys: Sequence[tuple[int, int]]) -> None: ...
     def rejected(self, keys: Sequence[tuple[int, int, str, str]]) -> set[tuple[int, int]]: ...
-    def ledger_keyed(self) -> bool: ...
     def clusters_touching(self, members: Iterable[int]) -> dict[int, list[int]]: ...
     def write_clusters(self, drop_keys: Sequence[int], rows: Sequence[dict[str, Any]],
                        conflicts: Sequence[dict[str, Any]]) -> None: ...
@@ -659,8 +744,10 @@ def retrieve(
 
     Fill order is `PROBE_PRIORITY` then the listing's own `probe_keys` order then ascending
     listing id, exactly as the cohort pass fills it, so the cap can only ever discard the
-    weakest evidence class (E17). `tests/autodedup/test_incremental.py` asserts this against
-    `BlockIndex.candidates` over the whole cohort rather than trusting the restatement."""
+    weakest evidence class (E17); a candidate only an area exemption admits is seated after
+    every base candidate, in a slot none took (C4c). `tests/autodedup/test_incremental.py`
+    asserts this against `BlockIndex.candidates` over the whole cohort rather than trusting the
+    restatement."""
     return _fill(fp.listing_id, fp, keyer.probe_keys(fp), keyer, store, guards, settings,
                  vetoed) or {}
 
@@ -677,10 +764,11 @@ def retrieve_posted(
     """`retrieve` for a listing whose facts the pass does not read (E960): its keys as the store
     posts them and its guard columns as its row keeps them. None when its `phash` bands came
     from two anchors or more and the fan-out cap refused, inside that probe, a candidate the
-    rule floor would have let in — the one case the lost order of its bands can reach — and the
-    caller then reads its facts and `retrieve`s."""
+    rule floor would have let in — the one case the lost order of its bands can reach — or the
+    exemption window's seats (C4c) cut through the candidates first met inside that probe, and
+    the caller then reads its facts and `retrieve`s."""
     keys = keyer.probe_keys_of(posted)
-    bands = [token.partition(_SEP)[0] for probe, token in keys if probe == "phash"]
+    bands = [band_of(token) for probe, token in keys if probe == "phash"]
     return _fill(side.listing_id, side, keys, keyer, store, guards, settings, vetoed,
                  loose="phash" if len(bands) != len(set(bands)) else None)
 
@@ -709,11 +797,19 @@ def _fill(
     # in `PROBE_PRIORITY` order below, so batching the fetch cannot move the fill order.
     postings = store.lookup_many(wanted)
     out: dict[int, set[str]] = {}
+    # C4c: the candidates only an area exemption admits, in fill order, seated after the fill.
+    window: dict[int, set[str]] = {}
     cap = settings.max_candidates_per_listing
+    quota = exemption_window_quota(cap)
+    # The loose probe's window candidates: the count before it, after it, and whether the quota
+    # turned one away inside it.
+    loose_span: tuple[int, int, bool] | None = None
     for probe in probes:
         # A probe whose tokens are out of order fills the same set in any order unless the cap
-        # turns away a candidate the floor would admit while it is read.
+        # turns away a base candidate the floor would admit while it is read, or the window's
+        # seats end among the candidates it met first.
         ordered = probe != loose or len(out) >= cap
+        start, overflow = len(window), False
         for token in by_probe[probe]:
             if keyer.is_exploded(probe, token):
                 continue
@@ -721,6 +817,8 @@ def _fill(
                 if other == listing_id:
                     continue
                 hit = out.get(other)
+                if hit is None:
+                    hit = window.get(other)
                 if hit is not None:
                     hit.add(probe)
                     continue
@@ -728,7 +826,8 @@ def _fill(
                 if len(out) >= cap:
                     if not ordered and pair not in vetoed:
                         row = guards.get(other)
-                        if row is not None and pair_veto(side, row, settings) is None:
+                        if (row is not None and pair_veto(side, row, settings) is None
+                                and not in_exemption_window(side, row, settings)):
                             return None
                     continue
                 if pair in vetoed:
@@ -740,7 +839,21 @@ def _fill(
                 if veto is not None:
                     vetoed[pair] = veto
                     continue
-                out[other] = {probe}
+                if not in_exemption_window(side, row, settings):
+                    out[other] = {probe}
+                elif len(window) < quota:
+                    window[other] = {probe}
+                else:
+                    overflow = True
+        if not ordered:
+            loose_span = (start, len(window), overflow)
+    seats = min(cap - len(out), quota)
+    if loose_span is not None:
+        start, end, overflow = loose_span
+        if start < seats and (seats < end or overflow):
+            return None
+    for other in list(window)[:seats]:
+        out[other] = window[other]
     return out
 
 
@@ -961,7 +1074,7 @@ def fp_digest(fp: Fingerprint, images: Sequence[Image]) -> str:
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def decision_digest(listing: Listing, images: Sequence[Image]) -> str:
+def decision_digest(listing: Listing, images: Sequence[Image], settings: Settings) -> str:
     """What a below-floor decision depends on of ONE side (E943): the whole listing and its
     gallery as the engine reads them, CLIP tags included. Not the CLIP vectors, which an
     unscored endpoint is read without: `clip_tagged_at` stands for them, the stamp the CLIP job
@@ -969,9 +1082,18 @@ def decision_digest(listing: Listing, images: Sequence[Image]) -> str:
     (`invalidate_derived_signals`).
 
     Not `fp_digest`: that hashes the body as its SimHash and token count, which a one-token edit
-    keeps, and it misses broker identity, granularity, attrs, subtype, the URL and the CLIP job."""
+    keeps, and it misses broker identity, granularity, attrs, subtype, the URL and the CLIP job.
+
+    `ad_reference` enters as the code K-R reads, and only where it reads one (a category in
+    `ref_code_structured_categories`): every other advert hashes the bytes it hashed before."""
+    facts = asdict(listing)
+    column = facts.pop("ad_reference")
+    if listing.category_main in settings.ref_code_structured_categories:
+        code = structured_code(column)
+        if code is not None:
+            facts["ad_reference"] = code
     payload = json.dumps(
-        [asdict(listing),
+        [facts,
          sorted((img.image_id, img.seq, img.phash, img.pop, img.tags, img.clip_tagged_at)
                 for img in images)],
         sort_keys=True, default=str,
@@ -982,8 +1104,8 @@ def decision_digest(listing: Listing, images: Sequence[Image]) -> str:
 # The modules a below-floor decision is computed by (E943): the import closure, inside
 # `autodedup`, of `decide`, `features`, `fingerprint`, `guards`, `model`, `store_score` and
 # `dataset` (a test holds it to this list), plus this module, whose `context_for` builds the
-# features' context. A deploy that changes any of them moves `engine_digest`, so the reject
-# ledger re-decides every wanted reject once rather than standing in for code that is gone.
+# features' context. A deploy that changes any of them moves `engine_digest`, so a merge
+# rests only on adverts refreshed since (E960); no stored decision is voided by it.
 DECISION_MODULES: tuple[str, ...] = (
     "body_align", "d43", "dataset", "decide", "demonstrate", "development", "family",
     "features", "fingerprint", "floor_convention", "guards", "hazard_context", "incremental",
@@ -1005,8 +1127,8 @@ DECISION_SOURCE_DIGEST: str = source_digest(Path(__file__).resolve().parent, DEC
 
 
 def engine_digest(settings: Settings, model: LogisticModel) -> str:
-    """The decision code, the model and the settings a reject is decided under (E943): the
-    reject ledger's fifth key. The model is hashed as loaded (`to_json`), so the hand-set prior,
+    """The decision code, the model and the settings a pass decides under: the digest
+    `rt_engine` records, which a merge's freshness is read against (E960). The model is hashed as loaded (`to_json`), so the hand-set prior,
     which has no file, is covered as `models/<version>.json` is."""
     payload = json.dumps([DECISION_SOURCE_DIGEST, model.to_json(), settings.to_dict()],
                          sort_keys=True, default=str)
@@ -1353,13 +1475,16 @@ def run_pass(
         # share a pHash band, and the posting list is a set — a pass that read that difference
         # as a change would re-score the whole corpus on every drain.
         new_keys = sorted(set(keyer.index_keys(fp)))
-        dd = decision_digest(listing, working.images.get(listing_id, ()))
+        dd = decision_digest(listing, working.images.get(listing_id, ()), settings)
         # E960: a claimed advert whose decision digest moved under an unmoved fingerprint (a
         # body edit the SimHash keeps, a broker identity, tags) is refreshed too, so its stored
         # pairs are re-decided, not only its ledgered rejects; a row with no digest yet (written
         # before migration 604) is stamped.
         if (old is not None and old.digest == digest and old_keys == new_keys
-                and listing_id not in redecide and (not old.dd or old.dd == dd)):
+                and listing_id not in redecide and (not old.dd or old.dd == dd)
+                # A stored block key that is not the one the digest was taken under (a row main
+                # refreshed after a move) is rewritten, or the drift sweep re-claims it for ever.
+                and (old.block_key is None or old.block_key == fp.block_key)):
             if old.dd != dd:
                 stamps[listing_id] = dd
             continue  # idempotence: an unchanged listing costs a digest, not a pass
@@ -1376,7 +1501,9 @@ def run_pass(
                   # The FIRST decision's stamp is carried, never restamped: the evidence
                   # horizon is measured from it, and a refresh that reset it would hold a
                   # merge for ever (E92). The store coalesces it on the way down too.
-                  first_decided_at=old.first_decided_at if old is not None else None, dd=dd),
+                  first_decided_at=old.first_decided_at if old is not None else None, dd=dd,
+                  block_key=fp.block_key,
+                  ref_codes=carried_codes(listing, settings)),
             new_keys, old_keys,
         )
         view.bump_cell(listing)
@@ -1500,22 +1627,11 @@ def run_pass(
                 or lo in changed or hi in changed):
             decide.add((lo, hi))
     # E943: a pair decided below `store_floor` is not stored, so it reaches here with no row. The
-    # ledger answers it while both sides' decision digests and the store's calibration, feature
-    # version and engine digest all still match, which is exactly when a re-score would decide
-    # it the same. A refreshed side is never answered: its pairs are re-decided whatever its
-    # digest says. A side whose row predates its digest (migration 604) is read for it.
+    # ledger answers it by a stored pair's own rule: both sides' decision digests match and
+    # neither side was refreshed since it was decided. A side refreshed in this pass is never
+    # asked: its pairs are re-decided whatever its digest says.
     asked = [(lo, hi) for lo, hi in sorted(decide)
              if (lo, hi) not in stored and lo not in changed and hi not in changed]
-    # Read only while the ledger holds a row under this store's key: right after a deploy that
-    # moved the engine digest (the one that ships 604) none matches, and the sides are read
-    # once their pairs are decided instead.
-    blank = sorted({i for pair in asked for i in pair if not dds[i]})
-    if blank and store.ledger_keyed():
-        working.ensure(blank, reason="digest")
-        for listing_id in blank:
-            if listing_id in working.listings:
-                stamps[listing_id] = dds[listing_id] = decision_digest(
-                    working.listings[listing_id], working.images.get(listing_id, ()))
     skipped = store.rejected([(lo, hi, dds[lo], dds[hi]) for lo, hi in asked
                               if dds[lo] and dds[hi]])
     decide -= skipped
@@ -1548,10 +1664,11 @@ def run_pass(
     for listing_id in {i for pair in decide for i in pair}:
         if not dds[listing_id] and listing_id in working.listings:
             stamps[listing_id] = dds[listing_id] = decision_digest(
-                working.listings[listing_id], working.images.get(listing_id, ()))
+                working.listings[listing_id], working.images.get(listing_id, ()), settings)
     if stamps:
         store.put_decision_digests(stamps)
-    ctx = context_for(calibration, settings, working.fps, working.listings)
+    ctx = context_for(calibration, settings, working.fps, working.listings,
+                      crowded_codes(store, settings, working.listings))
     census = _census(store, working.listings, working.images)
     # E93's two inputs, batched for the whole pass: what each endpoint's photographs ARE right
     # now (off the facts this pass read) and when this generation first decided it.
@@ -1604,7 +1721,7 @@ def run_pass(
         result.pairs_scored += 1
         evidence = dict(decision.evidence)
         if decision.certificate == "K-R":
-            evidence["ref_codes"] = ",".join(ctx.shared_codes(lo, hi))
+            evidence["ref_codes"] = ",".join(ctx.shared_codes(la, lb))
         # E93: a MERGE that does not rest on a photograph-free certificate waits while either
         # side's gallery exists and carries no hash at all. The zone written is the BAND — the
         # engine's own "look again" verdict — and what the pass decided is kept beside it so a

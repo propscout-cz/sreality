@@ -614,6 +614,41 @@ def test_a_db_heavy_lost_run_waits_for_its_own_hour(cur: Any) -> None:
     assert (due_at.hour, due_at.minute) == (3, 0) and now < due_at <= now + timedelta(days=1)
 
 
+@pytest.mark.parametrize("db_heavy", [False, True])
+def test_a_lost_pure_request_keeps_the_schedule_and_one_that_took_its_slot_does_not(cur: Any, db_heavy: bool) -> None:
+    """#2317: a request claimed before its row was due took no slot, so its loss moves nothing (a lost map_overlays
+    request starts no live run at its next 22:00Z), and a slot that came due while it ran stays due; a request that
+    also took its due slot is re-run as one, and so is one on a paused row that was already due (its due_at moves on,
+    never earlier)."""
+    now = _now(cur)
+    offset_s = _offset_away(now, 86400)
+    pure, overran, slot, paused = (_registered_job(cur, every_s=86400, offset_s=offset_s) for _ in range(4))
+    cur.execute("UPDATE scheduled_jobs SET due_at = now() - interval '1 second' WHERE job_name = ANY(%s)",
+                ([slot, paused],))
+    job_lease.pause(cur.connection, paused, until=now + timedelta(days=14), note="drill", by="test")
+    before = _row(cur, pure)["due_at"]
+    names = [pure, overran, slot, paused]
+    for name in names:
+        assert job_lease.request(cur.connection, name, ["--dry-run"], by="github:op") is None
+        lease = job_lease.claim(cur.connection, name, holder="A")
+        assert lease is not None and lease.due_slot is (name == slot)
+        _expire(cur, name)
+    # now() is frozen: `overran` was claimed an hour before this reap, half an hour before its slot.
+    cur.execute("UPDATE job_runs SET started_at = now() - interval '1 hour' WHERE job_name = %s", (overran,))
+    cur.execute("UPDATE scheduled_jobs SET due_at = now() - interval '30 minutes' WHERE job_name = %s", (overran,))
+    assert sorted(job_lease.reap_lost(cur.connection, names=names, on_hour=names if db_heavy else [])) == sorted(names)
+    row = _row(cur, pure)
+    assert (row["due_at"], row["last_outcome"], row["consecutive_failures"]) == (before, "lost", 1)
+    assert [r[1:5] for r in _runs(cur, pure)] == [("lost", False, ["--dry-run"], "github:op")]
+    assert _row(cur, overran)["due_at"] == now - timedelta(minutes=30), "the slot it never took stays due"
+    for name in (slot, paused):
+        due_at = _row(cur, name)["due_at"]
+        if db_heavy:
+            assert now < due_at < before and int(due_at.timestamp()) % 86400 == offset_s, "its own hour, as before"
+        else:
+            assert due_at == now, "re-run at once, as before"
+
+
 def test_the_reaper_closes_lost_runs_it_does_not_reschedule(cur: Any) -> None:
     """A paused row's run closes too; a retired row and one this deployment does not name keep their schedule."""
     now = _now(cur)
@@ -662,6 +697,24 @@ def test_due_lists_free_reconciled_rows_oldest_first(cur: Any) -> None:
     cur.execute("INSERT INTO job_runs (job_name, holder, resource) VALUES (%s, 'A', 'test-heavy')", (holder,))
     names = [older, newer, requested, paused, open_run, sibling, unregistered, holder]
     assert job_lease.due(cur.connection, names) == [older, requested, newer]
+
+
+def test_two_db_heavy_rows_due_3_hours_ago_are_never_both_claimed(cur: Any) -> None:
+    """#2027: a replica back after hours down finds both daily sweeps due; the second waits for the first's run."""
+    _now(cur)
+    first, second, light = (_registered_job(cur) for _ in range(3))
+    cur.execute("UPDATE scheduled_jobs SET due_at = now() - interval '3 hours' WHERE job_name = ANY(%s)",
+                ([first, second, light],))
+    conn, names, heavy = cur.connection, [first, second, light], [first, second]
+    assert job_lease.due(conn, names, heavy=heavy) == sorted(names)
+    held = job_lease.claim(conn, first, holder="A", heavy=heavy)
+    assert held is not None
+    assert job_lease.due(conn, names, heavy=heavy) == [light], "the other heavy row waits; a light one does not"
+    assert job_lease.claim(conn, second, holder="B", heavy=heavy) is None
+    assert job_lease.claim(conn, light, holder="C", heavy=heavy) is not None
+    assert job_lease.release(conn, held, "ok")
+    assert job_lease.due(conn, names, heavy=heavy) == [second]
+    assert job_lease.claim(conn, second, holder="B", heavy=heavy) is not None
 
 
 def test_a_request_is_filed_once_and_only_for_a_runner_row(cur: Any) -> None:
@@ -1037,6 +1090,30 @@ def test_two_holders_racing_for_one_due_job_get_one_run() -> None:
             assert cur.fetchall() == [("A",)]
     finally:
         _cleanup(a, [name])
+        a.close()
+        b.close()
+
+
+def test_two_replicas_claiming_two_db_heavy_jobs_at_once_start_one() -> None:
+    """No unique index spans two jobs: B's heavy claim waits for A's to commit, then reads A's open run."""
+    a, b = _sessions(2)
+    names = _registered_committed(a, 2)
+    try:
+        result: dict[str, Any] = {}
+        with a.transaction():
+            assert job_lease.claim(a, names[0], holder="A", heavy=names) is not None
+            racer = threading.Thread(target=lambda: result.update(
+                lease=job_lease.claim(b, names[1], holder="B", heavy=names)))
+            racer.start()
+            racer.join(timeout=1)
+            assert racer.is_alive(), "B's heavy claim must wait on A's uncommitted one"
+        racer.join(timeout=15)
+        assert result == {"lease": None}
+        with a.cursor() as cur:
+            cur.execute("SELECT job_name FROM job_runs WHERE job_name = ANY(%s)", (names,))
+            assert cur.fetchall() == [(names[0],)]
+    finally:
+        _cleanup(a, names)
         a.close()
         b.close()
 

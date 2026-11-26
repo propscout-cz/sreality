@@ -17,9 +17,8 @@ from api import dependencies as deps
 from api import main as api_main
 from api import property_read as pr
 from tests.api._jwt import mint
-from tests.api._routes import flat_routes
+from tests.api._routes import _bucket, flat_routes
 from tests.api._script_conn import ScriptConn
-from tests.api.test_admin_route_coverage import _bucket
 
 _QUERIES = Path(__file__).resolve().parents[2] / "frontend/src/lib/queries.ts"
 _URL = "/properties/7/price-history"

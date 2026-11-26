@@ -17,7 +17,7 @@ import {
   type FilterRow,
 } from '@/lib/filterLayout';
 import { FILTER_REGISTRY, type FilterDef } from '@/lib/filterRegistry.generated';
-import type { MapySuggestion } from '@/lib/maps';
+import type { PlaceRow } from '@/lib/places';
 import { CollapsibleGroup, DecimalField, SegmentedBar, Section } from '@/components/controls';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
@@ -46,7 +46,7 @@ interface SidebarProps {
    * filter via the normal onChange path; this is a side channel for
    * the map navigation. Optional so other consumers (Watchdog edit
    * form, etc.) can mount the sidebar without it. */
-  onLocationPick?: (s: MapySuggestion) => void;
+  onLocationPick?: (row: PlaceRow) => void;
   /* Operator-resizable width in px (Browse persists it). Optional so
    * other consumers keep the default 320px sidebar. */
   width?: number;
@@ -294,8 +294,8 @@ export function FilterSidebar({
   // already use. The adapter in lib/filters bridges both directions
   // (tri-state amenities pivot bool|null ↔ 'any'|'yes'|'no' inside it).
   const registryView = listingFiltersToRegistryView(filters);
-  // A location pick lands only after `/maps/resolve` answers, so it merges into
-  // the LATEST filters, never the ones the click closed over.
+  // A location pick merges into the LATEST filters, never the ones the click
+  // closed over.
   const latestFilters = useRef(filters);
   latestFilters.current = filters;
   const units = sidebarUnits(filters);
@@ -468,9 +468,8 @@ export function FilterSidebar({
 /* Phase QUAL — population-data status hint                                   */
 /*                                                                            */
 /* The `min_city_population` / `max_city_population` filters compare against  */
-/* the latest `city_population.population` reading. When `city_population` is */
-/* empty (the seed loaded the indexes but the population CSV was missing /    */
-/* the Wikidata fetcher hasn't run yet), every city's `c.population` resolves */
+/* the latest `obec_population` reading (migration 725). When it is empty     */
+/* (the population load has not run), every city's `c.population` resolves   */
 /* to NULL, so a `min ≥ 1` predicate excludes everything — counter-intuitive  */
 /* enough that the operator filed it as a bug. This banner detects the empty- */
 /* population state via a one-row count query and tells the operator how to  */
@@ -517,9 +516,7 @@ export function CityPopulationHint() {
         <strong className="text-[var(--color-copper)]">Pop. data nejsou nahraná</strong>
         {' '}({data.withPop}/{data.total} měst). Filtr min/max populace bude
         vždy 0 výsledků. Spusť workflow{' '}
-        <em className="font-mono not-italic">Refresh city populations from Wikidata</em>
-        {' '}a poté{' '}
-        <em className="font-mono not-italic">Seed curated cities</em>.
+        <em className="font-mono not-italic">Jobs: load obec population (manual)</em>.
       </p>
     </div>
   );

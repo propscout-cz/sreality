@@ -30,7 +30,7 @@
  *   * no interactive control is nested inside another.
  */
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, onTestFinished } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -117,6 +117,7 @@ function group(over: Partial<AutodedupGroup> & { cluster_key: number }): Autoded
     edges: { n_edges: 1, min_score: 0.61, mean_score: 0.61, n_certificates: 0 },
     verdict: null,
     stale_verdict: null,
+    hold: null,
     member_verdicts: [],
     ...over,
   };
@@ -485,6 +486,7 @@ describe('<AutodedupGroups>', () => {
       cluster_key: 7,
       // WHICH PASS the ruling was taken on (E58) — the server refuses one without it.
       generation: 'g1',
+      seen_member_ids: [101, 202],
       verdict: 'same',
       reasons: [],
       note: 'stejný dům',
@@ -617,6 +619,9 @@ describe('<AutodedupGroups>', () => {
       kind: 'cluster',
       cluster_key: 7,
       generation: 'g1',
+      /* The adverts the card showed: the server refuses a ruling on a group
+       * that changed since. */
+      seen_member_ids: [101, 202],
       verdict: 'same',
       /* The annotation rides with every verdict — empty when the operator gave
         * none, never absent, so the stored row is the click's whole statement. */
@@ -822,6 +827,50 @@ describe('<AutodedupGroups>', () => {
     expect(api.getAutodedupGroups).toHaveBeenLastCalledWith(
       expect.objectContaining({ block: 563510, block_grain: null }),
     );
+  });
+
+  it('filters to the groups the engine left unmerged, and says why on the card', async () => {
+    vi.mocked(api.getAutodedupGroups).mockResolvedValue(
+      page([
+        group({
+          cluster_key: 7,
+          hold: {
+            outcome: 'skipped',
+            reason: 'carries_legacy_merged_listing',
+            held_at: '2026-11-24T08:20:00+00:00',
+            property_ids: [100219, 124595],
+            detail: { legacy_merged_listings: [379401] },
+          },
+        }),
+      ]),
+    );
+    const user = userEvent.setup();
+    renderPage();
+    const notice = await screen.findByTestId('apply-hold-notice');
+    expect(notice).toHaveTextContent('starý engine');
+    expect(notice).toHaveTextContent('#379401');
+    expect(screen.getByRole('link', { name: '#124595' })).toHaveAttribute(
+      'href',
+      '/property/124595',
+    );
+    await user.selectOptions(
+      screen.getByLabelText('Nesloučeno'),
+      'carries_legacy_merged_listing',
+    );
+    await waitFor(() =>
+      expect(api.getAutodedupGroups).toHaveBeenLastCalledWith(
+        expect.objectContaining({ hold: 'carries_legacy_merged_listing' }),
+      ),
+    );
+  });
+
+  it('drops a hold the server does not know instead of showing a banner', async () => {
+    renderPage('/autodedup/groups?hold=whatever');
+    await screen.findByText('#7');
+    expect(api.getAutodedupGroups).toHaveBeenLastCalledWith(
+      expect.objectContaining({ hold: null }),
+    );
+    expect(screen.queryByTestId('apply-hold-notice')).toBeNull();
   });
 
   it('shows the queue rather than a banner when the url carries a stale verdict', async () => {
@@ -1218,6 +1267,15 @@ describe('<AutodedupGroups>', () => {
         conflicts: [],
         verdicts: [],
       },
+    });
+    /* jsdom lays nothing out: a member's text outgrows its six-line clamp when it is long. */
+    const tall = vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockImplementation(function (this: Element) {
+      return (this.textContent?.length ?? 0) > 360 ? 400 : 40;
+    });
+    const cut = vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(120);
+    onTestFinished(() => {
+      tall.mockRestore();
+      cut.mockRestore();
     });
     renderPage();
     const card = (await screen.findByText('#7')).closest('li')!;

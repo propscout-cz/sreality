@@ -11,11 +11,9 @@ redirect off the /nemovitosti/{id}/ detail path).
 
 from __future__ import annotations
 
-import logging
+import re
 
-from scraper.portal_base import BasePortalClient, ListingGoneError
-
-LOG = logging.getLogger(__name__)
+from scraper.portal_base import BasePortalClient, gone_phrases
 
 BASE_URL = "https://www.mmreality.cz"
 
@@ -52,13 +50,16 @@ def detail_url(id_or_path: str) -> str:
 
 class MmRealityClient(BasePortalClient):
     ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    # A removed listing redirects off /nemovitosti/{id}/ (to the bare /nemovitosti/).
+    DETAIL_URL = re.compile(r"/nemovitosti/[^/]")
+    GONE_PAGE = (gone_phrases(*_GONE_MARKERS),)
     # Route every request through the residential proxy in SCRAPER_PROXY_URL.
     # mmreality's Cloudflare edge HARD-403s our datacenter (GitHub-Actions) IP on
     # the first request (verified — the portal ingested 0 listings across 101
-    # blocked runs); a residential exit IP returns 200. Same opt-in the sister
-    # CF-blocked portal (ceskereality) uses; the shared browser UA is most natural
-    # once proxied, so no USER_AGENT override. Unset env = direct IP (logs a warn,
-    # then 403s) — a misconfigured deploy fails loudly, never silently green.
+    # blocked runs); a residential exit IP returns 200. Same opt-in ceskereality
+    # uses; the shared browser UA is most natural once proxied, so no USER_AGENT
+    # override. Unset env = direct IP (logs a warn, then 403s) — a misconfigured
+    # deploy fails loudly, never silently green.
     USE_PROXY = True
 
     def fetch_index(
@@ -75,16 +76,4 @@ class MmRealityClient(BasePortalClient):
         return response.text, response.status_code
 
     def fetch_detail(self, id_or_path: str) -> tuple[str, int]:
-        url = detail_url(id_or_path)
-        response = self._request(url)
-        # A removed listing redirects off /nemovitosti/{id}/; after requests
-        # follows it the status is 200 but the URL is no longer the detail path.
-        final_url = getattr(response, "url", url) or url
-        if "/nemovitosti/" not in final_url or final_url.rstrip("/").endswith(
-            "/nemovitosti"
-        ):
-            raise ListingGoneError(url, response.status_code)
-        text = response.text
-        if any(marker in text.lower().replace("\xa0", " ") for marker in _GONE_MARKERS):
-            raise ListingGoneError(url, response.status_code)
-        return text, response.status_code
+        return self._fetch_detail_page(detail_url(id_or_path))

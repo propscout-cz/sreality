@@ -85,6 +85,20 @@ from toolkit.property_identity import MergeError, detach_listings
 
 RETIRE_BY: str = "autodedup-legacy-retire"
 LEGACY_SOURCE: str = "auto"
+
+# The adverts an old-engine merge moved that still sit where it put them. Read by the apply's
+# plan over every advert of a property a merge would carry adverts from (E989 vi): a row names
+# only the MOVED advert, and no one decided what the old merge tied together. A write
+# guard, never a label; it goes with this module when the last legacy group is undone.
+LEGACY_PLACED_SQL = """
+select distinct e.listing_ref_id
+  from public.property_merge_events e
+  join public.listings l on l.id = e.listing_ref_id
+ where e.listing_ref_id = any(%(listing_ids)s::bigint[])
+   and e.undone_at is null
+   and e.source = 'auto'
+   and l.property_id = e.survivor_property_id
+"""
 INTACT: str = "intact"
 OPERATOR_SPLIT: str = "operator_split"
 TO_RETIRE: str = "to_retire"
@@ -800,3 +814,11 @@ def run(
         raise
     _publish(out_dir, result)
     return result
+
+
+def legacy_placed(conn: Any, listing_ids: Iterable[int]) -> set[int]:
+    """Which of these adverts an old-engine merge put on the property they sit on now."""
+    if not listing_ids:
+        return set()
+    return {int(row[0]) for row in _rows(
+        conn, LEGACY_PLACED_SQL, {"listing_ids": sorted(listing_ids)})}

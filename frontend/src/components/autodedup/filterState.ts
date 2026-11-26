@@ -34,6 +34,8 @@ export interface GroupFilterState {
   max_score: string;
   verdict: string;
   shared_photo: string;
+  /* WHY apply left the group unmerged (groups queue only): '' = no filter. */
+  hold: string;
   sort: 'weakest' | 'newest' | 'largest' | 'random';
   /* WHICH random sample. Only meaningful with `sort=random`, and only written to
    * the URL when it is not the default one. */
@@ -62,6 +64,7 @@ export const EMPTY_FILTERS: GroupFilterState = {
   max_score: '',
   verdict: '',
   shared_photo: '',
+  hold: '',
   sort: 'weakest',
   seed: DEFAULT_SEED,
   blind: '0',
@@ -141,6 +144,29 @@ const FOLDED_VERDICTS: Record<string, string> = {
   same_project_different_unit: 'different',
 };
 
+/* The server's `HOLD_FILTER_VALUES` (api/routes/autodedup.py): a value outside it
+ * is a 400, so a stale link drops the filter instead. */
+export const HOLDS: readonly string[] = [
+  '',
+  'any',
+  'refused',
+  'failed',
+  'carries_legacy_merged_listing',
+  'category_type_mix',
+  'category_main_incompatible',
+  'member_out_of_scope',
+  'unattached_member',
+  'property_not_active',
+  'operator_group_verdict',
+  'operator_pair_verdict',
+  'must_not_link',
+  'refused_at_chokepoint_before',
+  'changed_since_plan',
+  'property_spans_groups',
+  'carries_ungrouped_listings',
+  'carries_out_of_scope_listings',
+];
+
 export function sanitizeGroupFilters<T extends GroupFilterState>(raw: T): T {
   const sort = SORTS.includes(raw.sort) ? raw.sort : 'weakest';
   const folded = FOLDED_VERDICTS[raw.verdict] ?? raw.verdict;
@@ -149,7 +175,8 @@ export function sanitizeGroupFilters<T extends GroupFilterState>(raw: T): T {
    * is the wrong answer to a hand-edited link: an unusable seed means the
    * default sample, exactly as an unusable number means "no filter". */
   const seed = SEED_RE.test(raw.seed) ? raw.seed : DEFAULT_SEED;
-  return sort === raw.sort && verdict === raw.verdict && seed === raw.seed
+  const hold = HOLDS.includes(raw.hold) ? raw.hold : '';
+  return sort === raw.sort && verdict === raw.verdict && seed === raw.seed && hold === raw.hold
     ? raw
-    : { ...raw, sort, verdict, seed };
+    : { ...raw, sort, verdict, seed, hold };
 }

@@ -372,8 +372,8 @@ def test_three_quiet_stretches_open_no_outflow_incident() -> None:
 
 
 def test_every_other_outflow_onset_is_a_real_stall_that_closed_once_its_portal_caught_up() -> None:
-    """09-28/29, ceskereality's 403 wall (09-29..10-02) and the dwell's 10-12/13 tail."""
-    # Each portal held under a fifth of its quietest usual 24 h; the wall made no flip from 09-29
+    """09-28/29, ceskereality's gap (09-29..10-02) and the dwell's 10-12/13 tail."""
+    # Each portal held under a fifth of its quietest usual 24 h; the gap made no flip from 09-29
     # 07:00 to 10-02 10:00 and its catch-up burst read as a spike (Watch, 10-02/03). idnes's
     # 09-28/29 and sreality's 10-13 shares stayed above a fifth: Watch only (the next test).
     ladder, _ = _outflow_replay()
@@ -383,8 +383,8 @@ def test_every_other_outflow_onset_is_a_real_stall_that_closed_once_its_portal_c
         ("bazos/outflow", "10-12"), ("realitymix/outflow", "10-12"),
         ("mmreality/outflow", "10-12"), ("idnes/outflow", "10-13"), ("remax/outflow", "10-13")]
     assert all(i["resolve_reason"] == "measured ok" for i in outside)
-    wall = next(i for i in outside if i["subject"] == "ceskereality/outflow")
-    assert wall["resolved_at"].strftime("%m-%d") == "10-02"
+    gap = next(i for i in outside if i["subject"] == "ceskereality/outflow")
+    assert gap["resolved_at"].strftime("%m-%d") == "10-02"
 
 
 def test_aligned_windows_silence_the_10_05_walk_shift_and_keep_every_stall_day() -> None:

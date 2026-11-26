@@ -186,7 +186,8 @@ def test_parse_detail_full():
     assert listing.building_type == "skelet"
     assert listing.condition == "novostavba"
     assert listing.ownership == "osobni"
-    assert listing.energy_rating == "B"
+    # The description's "PENB: B" is prose, not a `penb` row: one grammar, no page scan.
+    assert listing.energy_rating is None
     assert listing.has_balcony is True
     assert listing.furnished == "ano"    # W4: the `vybavení` row was read by nothing
     assert listing.has_parking is True

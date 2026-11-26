@@ -13,6 +13,7 @@ import { ROUTES } from '@/lib/routes';
 import type { Collection } from '@/lib/types';
 
 import Collections from '../Collections';
+import { COLLECTION_KINDS } from '@/lib/notifyKinds';
 
 vi.mock('@/lib/phoneShell', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/phoneShell')>()),
@@ -36,6 +37,7 @@ const coll = (c: Partial<Collection>): Collection => ({
   is_system: false,
   owner_email: null,
   shared_with: [],
+  notify_kinds: COLLECTION_KINDS.map((k) => k.kind),
   ...c,
 });
 

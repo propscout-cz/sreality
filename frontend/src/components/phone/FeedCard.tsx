@@ -1,6 +1,6 @@
 /* One card of the feed's roll, drawn as the W0 prototype draws it (#1762): a
  * full-width 4:3 photo strip — the 1080 px copies (#1765), opening on the cover
- * the Browse card would open on, up to eight photos a swipe apart
+ * the Browse card would open on, every photo a swipe apart and round again
  * (CardPhotoStrip) — with the margin of marks over its right edge and the stage
  * wash on every photo when the property is filed; under it three lines. Line 1 the price in
  * Fraunces and the price per m² in mono WITH ITS BASIS (rule 23: the server's
@@ -114,14 +114,13 @@ export default function FeedCard({ r, coverTag }: { r: CardRow; coverTag: CoverT
         <CardPhotoStrip
           to={to}
           photos={strip.photos}
-          total={strip.total}
           pending={strip.pending}
           wash={member ? { color: accent.fg, badge, label: member.stage_label } : null}
           insetRight={MARGIN_PX}
         />
         <MarginMarks
           subject={{ property_id: r.property_id, text: line2, figure: price.text ? priceLabel : null }}
-          photoCount={strip.pending ? null : strip.total}
+          photoCount={strip.pending ? null : strip.photos.length}
         />
       </div>
       {/* `relative`: the price link's stretched hit area covers this text, not the strip. */}
