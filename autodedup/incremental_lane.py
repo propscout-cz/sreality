@@ -188,6 +188,7 @@ from autodedup.incremental_sql import (
     RT_REJECT_LEDGER_DELETE_SQL,
     RT_REJECT_LEDGER_LOOKUP_SQL,
     RT_REJECT_LEDGER_UPSERT_SQL,
+    RT_SWEEP_OWED_SQL,
     RT_RESCORE_SQL,
     RT_RESCORE_WRITE_SQL,
     RT_REVIVED_SQL,
@@ -701,8 +702,12 @@ class SqlStore:
     claim."""
 
     def __init__(self, conn: Any, generation: str = GENERATION, *, calibration_digest: str,
-                 store_floor: float = 0.02, model_version: str | None = None) -> None:
+                 store_floor: float = 0.02, model_version: str | None = None,
+                 sweep: Mapping[str, Any] | None = None) -> None:
         self.conn = conn
+        # E998: the rescore sweep in progress (`since` and the scope's four parameters), None
+        # when none is: what `owed` reads.
+        self.sweep = dict(sweep) if sweep else None
         self.generation = generation
         # WHICH SCORER TOOK THE DECISION, stamped on every row this store writes (E90a). The
         # columns existed and the lane wrote `evidence["_model"]` into them — a key nothing has
@@ -1009,6 +1014,17 @@ class SqlStore:
             self._run(RT_REJECT_LEDGER_DELETE_SQL, {
                 "generation": self.generation,
                 "los": [row.lo for row in chunk], "his": [row.hi for row in chunk]})
+
+    def owed(self, keys: Sequence[tuple[int, int]]) -> set[tuple[int, int]]:
+        if self.sweep is None:
+            return set()
+        out: set[tuple[int, int]] = set()
+        for start in range(0, len(keys), LEDGER_CHUNK):
+            chunk = keys[start:start + LEDGER_CHUNK]
+            out.update((int(row[0]), int(row[1])) for row in self._query(RT_SWEEP_OWED_SQL, {
+                "generation": self.generation, **self.sweep,
+                "los": [key[0] for key in chunk], "his": [key[1] for key in chunk]}))
+        return out
 
     def rejected(self, keys: Sequence[tuple[int, int, str, str]]) -> set[tuple[int, int]]:
         out: set[tuple[int, int]] = set()
@@ -3690,8 +3706,12 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                     "calibration": {"built_age_days": age_days(row[6])},
                     "generation": generation, "predecessor_released": predecessor,
                     "claim_cap": cap, "spent_usd": 0.0, **pass_memory()}
+        rescore = control.get(rescore_key(generation))
         store = SqlStore(conn, generation, calibration_digest=calibration.digest(),
-                         store_floor=settings.store_floor, model_version=model.version)
+                         store_floor=settings.store_floor, model_version=model.version,
+                         sweep=({"since": rescore["since"], **scope.params()}
+                                if isinstance(rescore, Mapping) and rescore.get("since")
+                                and not rescore.get("done") else None))
         facts = SqlFacts(conn, deadline=deadline, stopping=stopping)
         engine = engine_digest(settings, model)
         engine_since = _engine_since(conn, generation, control.get(engine_key(generation)),
@@ -3708,7 +3728,7 @@ def run_incremental(conn_factory: Callable[[], Any], *,
                        stale_budget=stale_budget,
                        build_priority=parse_build_priority(
                            control.get(build_priority_key(generation))),
-                       rescore=control.get(rescore_key(generation)))
+                       rescore=rescore)
         result = None
         stopped = ""
         # E941: halved AHEAD, outside the transaction (`db.connect` is autocommit), so it stands

@@ -2234,6 +2234,8 @@ def _autodedup_outcome(
             pairs_to_decide_by_attempt=counts.get("pairs_to_decide_by_attempt"),
             ledger_skipped=counts.get("ledger_skipped"),
             ledger_written=counts.get("ledger_written"),
+            # E998: wanted pairs left to the rescore sweep (one of their sides is owed a re-read).
+            sweep_owed=counts.get("sweep_owed"),
             # E960: the probe-key neighbourhood the last attempt re-retrieved from the store's
             # keys and guard rows, and the adverts whose facts the pass read, by why (claim,
             # order, digest, decided, cluster, rail), summed over every attempt.

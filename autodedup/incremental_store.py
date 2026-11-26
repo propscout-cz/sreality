@@ -179,6 +179,10 @@ class MemoryStore:
                 ledgered += 1
         return ledgered
 
+    def owed(self, keys: Sequence[tuple[int, int]]) -> set[tuple[int, int]]:
+        """The twin runs no rescore sweep (E998): nothing is ever left to one."""
+        return set()
+
     def rejected(self, keys: Sequence[tuple[int, int, str, str]]) -> set[tuple[int, int]]:
         out: set[tuple[int, int]] = set()
         for lo, hi, dd_lo, dd_hi in keys:

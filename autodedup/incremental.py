@@ -670,6 +670,7 @@ class Store(Protocol):
     def upsert_pairs(self, rows: Sequence[PairRow]) -> int: ...
     def delete_pairs(self, keys: Sequence[tuple[int, int]]) -> None: ...
     def rejected(self, keys: Sequence[tuple[int, int, str, str]]) -> set[tuple[int, int]]: ...
+    def owed(self, keys: Sequence[tuple[int, int]]) -> set[tuple[int, int]]: ...
     def clusters_touching(self, members: Iterable[int]) -> dict[int, list[int]]: ...
     def write_clusters(self, drop_keys: Sequence[int], rows: Sequence[dict[str, Any]],
                        conflicts: Sequence[dict[str, Any]]) -> None: ...
@@ -932,6 +933,8 @@ class PassResult:
     ledger_skipped: int = 0
     pairs_to_decide: int = 0
     ledger_written: int = 0
+    # E998: wanted pairs left to the rescore sweep, which still owes one of their sides a re-read.
+    sweep_owed: int = 0
     # E950: the process's resident memory (MiB) as each scoring chunk was written, before it gave
     # its vectors and features back: one reading a chunk, so their number is the chunks'. Beside
     # it, the listings holding their CLIP vectors at that moment: the share no chunk bounds.
@@ -988,6 +991,7 @@ class PassResult:
                 "ledger_skipped": self.ledger_skipped,
                 "pairs_to_decide": self.pairs_to_decide,
                 "ledger_written": self.ledger_written,
+                "sweep_owed": self.sweep_owed,
                 "chunks": len(self.chunk_rss_mb),
                 "components": self.components,
                 "clusters_written": self.clusters_written,
@@ -1636,6 +1640,14 @@ def run_pass(
                               if dds[lo] and dds[hi]])
     decide -= skipped
     result.ledger_skipped = len(skipped)
+    # E998: while a rescore sweep runs, a pair nobody has decided and neither side of which
+    # this pass refreshed is the sweep's: it still owes one of the sides a re-read, and a
+    # refreshed side's pairs are all decided (never asked above, never left here). Without
+    # this every neighbour of a claimed advert pays the new settings' retrieval at once: the
+    # w34 switch asked one pass of 8 adverts for 74k-150k such pairs.
+    owed = store.owed([pair for pair in asked if pair not in skipped])
+    decide -= owed
+    result.sweep_owed = len(owed)
     result.pairs_to_decide = len(decide)
     # E75: the budget is refused BEFORE the first write, because a partial pair set re-clusters
     # from a partial edge set and the watermark would then step over the difference for ever.

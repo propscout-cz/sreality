@@ -1253,6 +1253,16 @@ def _dispatch(db: FakePg, sql: str, p: Mapping[str, Any]) -> list[tuple]:  # noq
         owed = [i for i in slice_ids if db.rt_fp[(gen, i)]["updated_at"] < since
                 and _in_scope(db, i, p)]
         return [(max(slice_ids) if slice_ids else int(p["after_id"]), len(slice_ids), owed)]
+    if sql == S.RT_SWEEP_OWED_SQL:
+        since = datetime.fromisoformat(str(p["since"]))
+
+        def owed(listing_id: int) -> bool:
+            row = db.rt_fp.get((gen, listing_id))
+            return (row is not None and row["updated_at"] < since
+                    and _in_scope(db, listing_id, p))
+
+        return [(int(lo), int(hi)) for lo, hi in zip(p["los"], p["his"])
+                if owed(int(lo)) or owed(int(hi))]
     if sql == S.RT_REVIVED_SQL:
         slice_ids = sorted(i for g, i in db.rt_fp
                            if g == gen and not db.rt_fp[(g, i)]["is_active"]

@@ -1335,6 +1335,26 @@ on conflict (generation, listing_lo, listing_hi) do update set
     decided_at = now()
 """
 
+# E998: which of these pairs the rescore sweep still owes a decision: a side the sweep has not
+# re-read yet, by `RT_RESCORE_SQL`'s own test (not refreshed since the switch, and in scope).
+# Its re-claim refreshes that side, and a refreshed side's pairs are all decided.
+RT_SWEEP_OWED_SQL = """
+select k.lo, k.hi
+  from unnest(%(los)s::bigint[], %(his)s::bigint[]) as k(lo, hi)
+ where exists (
+       select 1
+         from autodedup.rt_fp f
+         left join public.listing_location ll
+                on ll.listing_id = f.listing_id
+               and (ll.obec_kod = any(%(obec)s::bigint[])
+                    or ll.cast_obce_kod = any(%(cast_obce)s::bigint[])
+                    or ll.okres_kod = any(%(okres)s::bigint[]))
+        where f.generation = %(generation)s::text
+          and f.listing_id in (k.lo, k.hi)
+          and f.updated_at < %(since)s::timestamptz
+          and (%(all_scope)s::boolean or ll.listing_id is not null))
+"""
+
 # A pair the lane STORES leaves the ledger: `pairs` and the ledger never hold the same pair.
 RT_REJECT_LEDGER_DELETE_SQL = """
 delete from autodedup.rt_reject_ledger l
