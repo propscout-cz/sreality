@@ -28,6 +28,8 @@ def main() -> None:
     parser.add_argument("--lines", type=int, default=0)
     parser.add_argument("--grandchild", action="store_true", help="fork a sleeper that keeps SIGTERM's default")
     parser.add_argument("--exit", type=int, default=None)
+    parser.add_argument("--detached-grandchild-mb", type=int, default=0,
+                        help="fork a sleeper in a session of its own holding this much, as Playwright starts chromium")
     args = parser.parse_args()
 
     if args.ignore_term:
@@ -43,6 +45,15 @@ def main() -> None:
             time.sleep(60)
             os._exit(0)
         print(f"grandchild {pid}", flush=True)
+    if args.detached_grandchild_mb:
+        pid = os.fork()
+        if pid == 0:
+            os.setsid()
+            held = b"\x01" * (args.detached_grandchild_mb << 20)
+            time.sleep(60)
+            del held
+            os._exit(0)
+        print(f"detached {pid}", flush=True)
     hold = b"\x01" * (args.hold_mb << 20)  # after the fork, so the grandchild shares none of it
     for i in range(args.lines):
         print(f"line {i}", flush=True)

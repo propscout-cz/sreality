@@ -133,11 +133,12 @@ production.
   nor a stalled log reader delays a stop: at `timeout_s` SIGTERM to the leader only (a walk reads it
   as its deadline; a pool finishes the item in hand), SIGKILL to the whole group `GRACE_S` (90 s) later, under
   `jobs.STUCK_RUN_GRACE_S` (600 s; the stuck-run cutoff and DB-heavy hour censuses count it); at the lease's fence,
-  or a refused renewal, the group is SIGKILLed at once. A run the runner stopped at `timeout_s` is recorded
+  or a refused renewal, the job's process tree (its group and every group a descendant started, #2689) is SIGKILLed
+  at once. A run the runner stopped at `timeout_s` is recorded
   `timeout` whatever it exited (0, 75 and 143 included), never `interrupted` (an interrupted run is due again at
   once, so a walk cut by its own timeout would restart at once); the lease is released only after the child's
   whole group has exited; the exit code is stored signed (−9, −15: killed by that signal), the peak RSS is the
-  larger of the leader's `VmHWM` and the group's summed `VmRSS` over 1 s samples (never `ru_maxrss`, which
+  larger of the leader's `VmHWM` and its process tree's summed `VmRSS` over 1 s samples (never `ru_maxrss`, which
   inherits the runner's own peak at exec; shared pages count twice, the safe direction; a job shorter than one
   sample records none), and the tail is the last 64 lines. Children carry `oom_score_adj +500`, set by an exec
   shim in the same pid, so an OOM kills the job, not the runner. **Residual:** a fenced child's statement already

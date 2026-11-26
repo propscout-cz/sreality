@@ -87,7 +87,7 @@ Recipes:
 | `JOBS skip job=… why=…` (ERROR) | The database refused that entry (a CHECK, a bad value): never claimed until a deploy fixes it. |
 | `RUN start job=… run=… pid=… requested_by=… args=…` | A claim spawned. The child's own output follows as `[<job>#<run>] <line>`. |
 | `RUN term job=<job>#<run> pid=… why=timeout\|deploy` | The guard sent SIGTERM to the leader. |
-| `RUN kill job=… pid=… why=timeout\|deploy\|fence (…)` | The guard SIGKILLed the group: the grace ran out, or the lease's fence passed / a renewal was refused. |
+| `RUN kill job=… pid=… why=timeout\|deploy\|fence (…)` | The guard SIGKILLed the job's process tree (its group and every group a descendant started): the grace ran out, or the lease's fence passed / a renewal was refused. |
 | `RUN end job=… run=… outcome=… due=… exit=… peak_mb=…` | Released. |
 | `LEASE lost job=…: …` | A renewal or a release was refused, or the reaper closed a lapsed run as `lost`. Each claim is its own holder (`<BOOT holder>/<n>`), so a late release never touches a later run of the job. |
 | `LEDGER <call> failed (connection lost): …` | A database call failed; the tick asks nothing more after a lost connection. A finished run waits in memory and is released when the database answers. |
@@ -123,8 +123,9 @@ already due counts at its loss as having taken its slot, so its loss moves `due_
 ## Reading `job_runs`
 
 `exit_code` is signed: −9 / −15 = killed by that signal; 143 = the child exited after its own SIGTERM handling.
-`peak_rss_mb` is the larger of the leader's `VmHWM` and the group's summed `VmRSS` (pool workers included; shared
-pages count twice). `last_error` on `scheduled_jobs` names the cause in `settle`'s order (none for an `ok` run, a
+`peak_rss_mb` is the larger of the leader's `VmHWM` and its process tree's summed `VmRSS`: the job's group and every
+descendant in any group, so a browser in a group of its own counts (#2689; pool workers included; shared pages count
+twice). `last_error` on `scheduled_jobs` names the cause in `settle`'s order (none for an `ok` run, a
 deploy or fence it outlived included; `killed by signal N` for a signal with no name) and never carries log text. **Never paste
 `log_tail` anywhere public: it can hold a connection string.**
 

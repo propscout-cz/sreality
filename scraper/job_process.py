@@ -15,8 +15,9 @@ reader (a full stderr pipe) delays no signal, no lock and no watchdog exit.
 
 Exit statuses are read with a pid-targeted `waitid(WNOWAIT)` peek and a `waitpid` reap, never through `Popen`'s own
 methods (they reap with no status left to read, and `send_signal` polls first). Peak memory is the leader's `VmHWM`
-or the group's summed `VmRSS`, whichever is higher, over the guard's samples; never `ru_maxrss`, which inherits the
-runner's own peak at exec.
+or its process tree's summed `VmRSS`, whichever is higher, over the guard's samples; never `ru_maxrss`, which inherits
+the runner's own peak at exec. The tree is the job's group and every descendant in any group, so a browser that starts
+in a group of its own (Playwright's chromium) is counted, waited for and killed with its job (#2689).
 """
 
 from __future__ import annotations
@@ -98,7 +99,7 @@ class Child(Protocol):
 
     def reap(self) -> Exit: ...
 
-    def stragglers(self) -> int: ...  # live (non-zombie) processes left in the group
+    def stragglers(self) -> int: ...  # live (non-zombie) processes left in the job's process tree
 
     def reader_done(self) -> bool: ...  # every writer closed the output pipe
 
@@ -126,9 +127,16 @@ def _stats(proc: str = PROC) -> Iterator[tuple[int, list[str]]]:
         yield int(entry), stat[stat.rfind(")") + 2:].split()
 
 
-def _group(pgid: int, proc: str = PROC) -> list[tuple[int, str, int]]:
-    """(pid, state, rss pages) of every process whose process group is `pgid`."""
-    return [(pid, f[0], int(f[21])) for pid, f in _stats(proc) if len(f) > 21 and f[2] == str(pgid)]
+def _family(pgid: int, proc: str = PROC) -> list[tuple[int, str, int, int]]:
+    """(pid, state, rss pages, process group) of every process in the job's group `pgid` and of every descendant of
+    one, whatever its group."""
+    table = {pid: f for pid, f in _stats(proc) if len(f) > 21}
+    family = {pid for pid, f in table.items() if f[2] == str(pgid)}
+    frontier = family
+    while frontier:
+        frontier = {pid for pid, f in table.items() if int(f[1]) in frontier and pid not in family}
+        family = family | frontier
+    return [(pid, table[pid][0], int(table[pid][21]), int(table[pid][2])) for pid in family]
 
 
 def _kb(path: str, key: str) -> int | None:
@@ -143,16 +151,16 @@ def _kb(path: str, key: str) -> int | None:
 
 
 def process_memory_mb(pgid: int, proc: str = PROC) -> int | None:
-    """The higher of the leader's peak resident memory and its group's summed resident memory, in MiB."""
+    """The higher of the leader's peak resident memory and its process tree's summed resident memory, in MiB."""
     hwm_kb = _kb(os.path.join(proc, str(pgid), "status"), "VmHWM:")
     page_kb = os.sysconf("SC_PAGE_SIZE") // 1024
-    rss_kb = sum(pages * page_kb for _, state, pages in _group(pgid, proc) if state != "Z")
+    rss_kb = sum(pages * page_kb for _, state, pages, _ in _family(pgid, proc) if state != "Z")
     best = max(hwm_kb or 0, rss_kb)
     return -(-best // 1024) if best else None
 
 
 def stragglers(pgid: int, proc: str = PROC) -> int:
-    return sum(1 for _, state, _ in _group(pgid, proc) if state != "Z")
+    return sum(1 for _, state, _, _ in _family(pgid, proc) if state != "Z")
 
 
 class ProcessChild:
@@ -212,9 +220,14 @@ def _term_leader(pid: int) -> None:
         os.kill(pid, signal.SIGTERM)
 
 
-def _kill_group(pid: int) -> None:
-    with suppress(ProcessLookupError):
-        os.killpg(pid, signal.SIGKILL)
+def _kill_tree(pid: int, proc: str = PROC) -> None:
+    """SIGKILLs the job's group and every group a descendant started, read before the first kill: a browser whose
+    driver dies is re-parented and would drop out of the tree."""
+    groups = {pid} | {group for *_, group in _family(pid, proc)}
+    groups.discard(os.getpgrp())
+    for group in groups:
+        with suppress(ProcessLookupError):
+            os.killpg(group, signal.SIGKILL)
 
 
 def spawn_process(command: Sequence[str], env: Mapping[str, str], label: str,
@@ -228,7 +241,7 @@ def spawn_process(command: Sequence[str], env: Mapping[str, str], label: str,
         child = ProcessChild(popen, label)
         adopt(child)
     except BaseException:
-        _kill_group(popen.pid)
+        _kill_tree(popen.pid)
         _, status = os.waitpid(popen.pid, 0)
         popen.returncode = os.waitstatus_to_exitcode(status)
         raise
@@ -263,7 +276,7 @@ class Guard:
     def __init__(self, *, clock: Callable[[], float], grace_s: float = GRACE_S,
                  stopping: Callable[[], bool] = stop.requested,
                  sample: Callable[[int], int | None] = process_memory_mb,
-                 term: Callable[[int], None] = _term_leader, kill: Callable[[int], None] = _kill_group,
+                 term: Callable[[int], None] = _term_leader, kill: Callable[[int], None] = _kill_tree,
                  liveness_s: float = LIVENESS_BOUND_S) -> None:
         self._clock = clock
         self._grace_s = grace_s
