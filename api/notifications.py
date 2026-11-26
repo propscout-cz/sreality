@@ -1243,13 +1243,16 @@ class _Source:
 # A semi-join, never a JOIN: a property in two monitored collections is two members.
 _MEMBERS_ONLY = " AND {pid} IN (SELECT property_id FROM members)"
 
-# A return is told to a collection that HELD the property when it came back. A merge returns a
-# property long off the market by bringing a live one in (the survivor is the older record,
-# `property_identity.survivor_of`); the membership that merge moved onto it (the carry record,
-# written in the merge's transaction, so no later than the stamp) followed the live one, which never left.
+# A return is told to a collection that held a property OFF the market. A merge returns a property
+# long gone by bringing a live one in; a membership a merge moved onto it at or after the return (the
+# carry record: written in the merge's transaction, so never before the stamp it causes) is told
+# unless it came from a property on the market as that merge saw it, which never left: the retired
+# row's `left_market_at` IS NULL, frozen by `property_identity._RETIRE_SQL`. Undone or not: an
+# undone carry whose row went back names no member, one the operator kept is still that membership.
 _HELD_AT_THE_RETURN = (
     " AND NOT EXISTS (SELECT 1 FROM property_merge_carries c "
-    "WHERE c.to_property_id = e.property_id AND c.undone_at IS NULL "
+    "JOIN properties r ON r.id = c.from_property_id AND r.left_market_at IS NULL "
+    "WHERE c.to_property_id = e.property_id "
     "AND c.table_name = 'collection_properties' AND c.row_key = m.source_id AND c.kind = 'moved' "
     "AND c.created_at >= e.back_on_market_at)"
 )

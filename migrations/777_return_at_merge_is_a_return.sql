@@ -5,8 +5,9 @@
 -- the long-gone property was never told it came back. The trigger cannot tell followers apart, so the rule
 -- leaves it: a property away 24 hours or more that is active again has returned, however its active ad
 -- arrived. Who is told is decided where the followers are known (api/notifications.py):
---   - a collection whose membership the same merge moved onto the survivor is skipped (`_HELD_AT_THE_RETURN`,
---     off property_merge_carries; the survivor is always the older record, property_identity.survivor_of);
+--   - a collection whose membership a merge moved onto the survivor FROM A PROPERTY ON THE MARKET is skipped
+--     (`_HELD_AT_THE_RETURN`, off property_merge_carries and the retired row's left_market_at, which a
+--     retirement freezes: NULL = on the market at the merge, toolkit/property_identity._RETIRE_SQL);
 --   - a watchdog telling 'new' stays silent through its slice's merged-member exemption (`_SLICE_PASS_SQL`).
 --
 -- One `create or replace function`: the function loses its `not exists (... merged_at = now() ...)` arm and
@@ -32,6 +33,12 @@ begin
 end;
 $$;
 revoke all on function public.properties_stamp_back_on_market_at() from public, anon, authenticated;
+
+comment on column public.properties.left_market_at is
+  'Since when this property is off the market (migrations 754, 777): stamped by properties_stamp_back_on_market_at '
+  'when it leaves or is born with no active ad, cleared on its return. NULL while on the market, and on a live '
+  'property that left more than a day before 754. On a merged-away row it is frozen at the merge: NULL = it was on '
+  'the market then, -infinity = off it since an unknown time.';
 
 comment on column public.properties.back_on_market_at is
   'When this property last came back on the market after 24 hours or more away (migrations 754, 777): '

@@ -1495,9 +1495,14 @@ def test_back_on_the_market_is_one_fact_for_both_producers() -> None:
     assert "drop " not in restated and "alter table" not in restated, "one function restated, nothing else"
     assert nf._WATCHDOG.held == "" and nf._MONITOR.held == nf._HELD_AT_THE_RETURN
     held = " ".join(nf._MONITOR_REACTIVATED_SQL.split())
-    assert ("AND NOT EXISTS (SELECT 1 FROM property_merge_carries c WHERE c.to_property_id = e.property_id "
-            "AND c.undone_at IS NULL AND c.table_name = 'collection_properties' AND c.row_key = m.source_id "
+    assert ("AND NOT EXISTS (SELECT 1 FROM property_merge_carries c JOIN properties r ON r.id = c.from_property_id "
+            "AND r.left_market_at IS NULL WHERE c.to_property_id = e.property_id "
+            "AND c.table_name = 'collection_properties' AND c.row_key = m.source_id "
             "AND c.kind = 'moved' AND c.created_at >= e.back_on_market_at)") in held
+    from toolkit import property_identity
+
+    assert ("left_market_at = CASE WHEN is_active THEN NULL ELSE coalesce(left_market_at, '-infinity') END"
+            in property_identity._RETIRE_SQL), "the retired row says whether it was on the market at the merge"
     assert "property_merge_carries" not in nf._WATCHDOG_REACTIVATED_SQL
     watchdog, collection = sql.split("alter table public.collections drop constraint", 1)
     allowed = watchdog.split("notify_kinds <@ array[", 1)[1].split("]", 1)[0]

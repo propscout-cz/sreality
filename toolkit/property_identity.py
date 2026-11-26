@@ -157,11 +157,15 @@ _CARRY_SETTLED_SQL = (
 )
 
 # One statement touching `status` and `is_active` together: a retired property is never left
-# active between two writes; the last write of a pair.
+# active between two writes; the last write of a pair. It freezes whether the property was on the
+# market as this merge saw it (`is_active` is still its own rollup here): `left_market_at` NULL = it
+# was, else since when ('-infinity': before migration 754 kept the time). No trigger fires on a
+# retirement, so the row keeps it; `api/notifications._HELD_AT_THE_RETURN` reads it.
 _RETIRE_SQL = """
 UPDATE properties
 SET status = 'merged_away', merged_into = %s,
-    merged_at = now(), is_active = false
+    merged_at = now(), is_active = false,
+    left_market_at = CASE WHEN is_active THEN NULL ELSE coalesce(left_market_at, '-infinity') END
 WHERE id = %s
 """
 
