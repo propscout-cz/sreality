@@ -235,11 +235,11 @@ def _term_leader(pid: int) -> None:
 
 
 def _kill_tree(pid: int, proc: str = PROC) -> None:
-    """SIGKILLs the job's group and every group a descendant started, read before the first kill: a browser whose
-    driver dies is re-parented and would drop out of the tree."""
-    groups = {pid} | {p.group for p in _process_tree(pid, proc)}
-    for group in groups - {os.getpgrp(), 0}:
-        with suppress(ProcessLookupError):
+    """SIGKILLs the job's own group first, then every group a descendant started, read before the first kill: a
+    browser whose driver dies is re-parented and would drop out of the tree. A group that refuses stops no other."""
+    descendants = sorted({p.group for p in _process_tree(pid, proc)} - {pid, os.getpgrp(), 0})
+    for group in (pid, *descendants):
+        with suppress(ProcessLookupError, PermissionError):
             os.killpg(group, signal.SIGKILL)
 
 
