@@ -13,6 +13,7 @@ import datetime as _dt
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from scraper.db import COMPLETION_EVIDENCE_DAYS
 from scripts.checks.clock import PASS, fetchall, fetchone
 
 _UTC = _dt.timezone.utc
@@ -80,17 +81,21 @@ select distinct on (c ->> 'subject') c ->> 'subject' as subject, c -> 'facts' ->
 # listing_write; pinned by the census in tests/scraper/test_listing_write_census.py), so such a
 # verdict stands only behind a touch transaction open from before it to after the flip. 42k ads probed fell to 11k, 171k buffers to 49k, with the same 6,050
 # ads in dwell (11-14, #2512). The flips are aggregated per ad and hash-joined, never a correlated
-# NOT EXISTS, which may plan a probe per verdict. `{scope}` is an extra `and ...` on both reads.
+# NOT EXISTS, which may plan a probe per verdict. Both reads judge db.COMPLETION_EVIDENCE_DAYS, the
+# week db.gone_evidence reads, not the ledger's whole retention (#2665). `{scope}` is an extra `and ...`
+# on both.
 _IN_DWELL_CTES = """flips as (
     select c.source, c.native_id, max(c.completed_at) as flipped_at
       from detail_queue_completions c
      where c.outcome = 'flipped'{scope}
+       and c.completed_at > now() - interval '{days} days'
      group by c.source, c.native_id),
 gone as (
     select c.source, c.native_id, array_agg(c.completed_at) as gone_at
       from detail_queue_completions c
       left join flips f on f.source = c.source and f.native_id = c.native_id
      where c.outcome = 'gone'{scope}
+       and c.completed_at > now() - interval '{days} days'
        and (f.flipped_at is null or c.completed_at > f.flipped_at)
      group by c.source, c.native_id),
 pending as (
@@ -107,7 +112,7 @@ pending as (
 def in_dwell_ctes(scope: str = "") -> str:
     """The `flips`, `gone` and `pending` CTEs above, `scope` (an `and ...` on the completions)
     spliced in."""
-    return _IN_DWELL_CTES.format(scope=scope)
+    return _IN_DWELL_CTES.format(scope=scope, days=COMPLETION_EVIDENCE_DAYS)
 
 
 def now(conn: Any) -> _dt.datetime:

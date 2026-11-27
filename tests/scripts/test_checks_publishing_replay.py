@@ -109,7 +109,7 @@ from tests.toolkit.test_system_alerts import Told, _FakeConn as _Ladder
 
 _MINUTE, _HOUR = _dt.timedelta(minutes=1), _dt.timedelta(hours=1)
 PORTALS = sorted(SOURCES)
-# The completions' retention edge (each portal's drain prunes its own past 7 days) plus the longest
+# The completions' retention edge (each portal's drain pruned its own past 7 days then) plus the longest
 # wait of the week: the reconstruction is complete from here.
 _QUEUE_FROM = _utc("2026-10-12T12:00:00Z")
 _ATTACH_FROM, _ATTACH_TO = _utc("2026-09-21T05:30:00Z"), _utc("2026-10-19T04:30:00Z")

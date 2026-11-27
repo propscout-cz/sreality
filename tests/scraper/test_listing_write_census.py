@@ -80,8 +80,6 @@ LEDGER: dict[str, Site] = {
         "same-statement"),
     "scripts/reextract.py": Site(
         1, "heal", "raw_json.broker via jsonb_set", "sweep:daily broker sweep"),
-    "scripts/backfill_idnes_brokers.py": Site(
-        1, "heal", "raw_json.broker via jsonb_set", "sweep:daily broker sweep"),
     "toolkit/condition_scoring.py": Site(
         2, "condition", "rule 14's two derived levels (lane paused)", "gap:rule-14 paused"),
     "toolkit/broker_sources.py": Site(

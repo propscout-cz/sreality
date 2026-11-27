@@ -1229,7 +1229,7 @@ def _fake_run(seen: list[str], fail: dict[str, Exception]) -> Any:
 def test_one_refused_section_does_not_block_the_others(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[str] = []
     monkeypatch.setattr(mod, "run_section", _fake_run(seen, {"flood": mod.Refused("shrunk")}))
-    monkeypatch.setattr(mod, "connect", lambda: contextlib.nullcontext(object()))
+    monkeypatch.setattr(mod, "connect", lambda **_patience: contextlib.nullcontext(object()))
     assert mod.main([]) == 1
     assert seen == ["metro", "flood", "kraje", "universities", "railway", "rent_map"]
 
@@ -1237,7 +1237,7 @@ def test_one_refused_section_does_not_block_the_others(monkeypatch: pytest.Monke
 def test_a_datum_refusal_stops_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[str] = []
     monkeypatch.setattr(mod, "run_section", _fake_run(seen, {"metro": mod.DatumRefused("off")}))
-    monkeypatch.setattr(mod, "connect", lambda: contextlib.nullcontext(object()))
+    monkeypatch.setattr(mod, "connect", lambda **_patience: contextlib.nullcontext(object()))
     assert mod.main([]) == 1
     assert seen == ["metro"]
 
@@ -1248,7 +1248,7 @@ def test_a_clean_full_run_exits_zero_and_stamps_the_store_wide_tile_count(
     seen: list[str] = []
     stamps: list[tuple[Any, ...]] = []
     monkeypatch.setattr(mod, "run_section", _fake_run(seen, {}))
-    monkeypatch.setattr(mod, "connect", lambda: contextlib.nullcontext(object()))
+    monkeypatch.setattr(mod, "connect", lambda **_patience: contextlib.nullcontext(object()))
     monkeypatch.setattr(mod, "count_tiles", lambda conn: 1234)
     monkeypatch.setattr(mod, "stamp_derived_artifact",
                         lambda conn, name, **kw: stamps.append((name, kw["rows"])))
@@ -1262,7 +1262,7 @@ def test_a_partial_run_stamps_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[str] = []
     stamps: list[str] = []
     monkeypatch.setattr(mod, "run_section", _fake_run(seen, {}))
-    monkeypatch.setattr(mod, "connect", lambda: contextlib.nullcontext(object()))
+    monkeypatch.setattr(mod, "connect", lambda **_patience: contextlib.nullcontext(object()))
     monkeypatch.setattr(mod, "stamp_derived_artifact",
                         lambda conn, name, **kw: stamps.append(name))
     assert mod.main(["--sections", "kraje"]) == 0
@@ -1272,7 +1272,7 @@ def test_a_partial_run_stamps_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_a_dry_run_and_a_failed_run_stamp_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     stamps: list[str] = []
-    monkeypatch.setattr(mod, "connect", lambda: contextlib.nullcontext(object()))
+    monkeypatch.setattr(mod, "connect", lambda **_patience: contextlib.nullcontext(object()))
     monkeypatch.setattr(mod, "stamp_derived_artifact",
                         lambda conn, name, **kw: stamps.append(name))
     monkeypatch.setattr(mod, "run_section", _fake_run([], {}))

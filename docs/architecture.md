@@ -1672,9 +1672,9 @@ on 2026-12-01, and until then a file of that name would override the applied set
   daily `property_sweep` (03:00 UTC) and `broker_sweep` (06:00 UTC) since #2027, which never run beside each other
   or any other DB-heavy job (`job_lease`'s heavy turn), of the hourly claim intake `location_intake` since #2028
   and the RÚIAN registry load `ruian_load` since #2033, daily (§ Location data), and of the walks whose
-  `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (30 min: web, maxima and bezrealitky since #2029, each
-  `walk_<source>` every 6 h with no `--max-seconds`, the runner's SIGTERM at the timeout its one budget; the longer
-  walks wait on their workflows):
+  `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (50 min: web, maxima and bezrealitky since #2029, each
+  `walk_<source>` every 6 h, and sreality hourly since #2030, with no `--max-seconds`, the runner's SIGTERM at the
+  timeout its one budget; the longer walks wait on their workflows):
   - two replicas in the worker's region, each 4 vCPU and 8 GB, restart policy ALWAYS, `checkSuites: false`. Railway
     counts decimal bytes, so 8e9 B is 7,629 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
     line and every beat carry `memory_limit_mb` and `cpus` as the replica's cgroup reads them;
@@ -2032,8 +2032,9 @@ renumber.** Navigate by area:
    close an ad 12 h after the first. The operator ruled on 2026-10-18 that 24 h becomes the one
    rule, in its own scraper PR (#1858). The `delisting` check's limits derive from this: its
    stuck arm counts the active ads whose first unrefuted verdict is older than the effective
-   dwell + 2 × the portal's p90 walk-start gap + 1 h. The ledger's 7-day retention bounds the
-   evidence; the gone-rate breaker is unchanged (ingest only). The same check's precision arm
+   dwell + 2 × the portal's p90 walk-start gap + 1 h. The evidence is the ledger's last 7 days
+   (`db.COMPLETION_EVIDENCE_DAYS`; it keeps 21 for late gate reads, #2665), the drain's and this
+   arm's alike; the gone-rate breaker is unchanged (ingest only). The same check's precision arm
    reads a day of `flipped` rows from 2 × the p90 walk gap + 1 h old (by then a walk has sighted any
    ad still listed; a later return is a re-list) whose ads are active again. Deleted with it: sreality's
    HTML "tato stránka neexistuje" body scan (the live listing page carries that string in its
@@ -3945,8 +3946,9 @@ renumber.** Navigate by area:
     ink not copper), its state riding on `POST /listings/lookup` as `dismissed` (RLS-only, like
     the pipeline and collection state beside it) and its writes on the same `/dismissals` routes.
 19. **The sreality scrape is split by cadence (Phase 2): a fast index-walk feeds an async
-    batched detail-drain through `listing_detail_queue` (migration 105).** `index_walk.yml`
-    (`scraper.main --index-only`, `run_type='index'`) walks the full index,
+    batched detail-drain through `listing_detail_queue` (migration 105).** The job runner's hourly
+    `walk_sreality` (`scraper.sreality_main --index-only`, `run_type='index'`; `index_walk.yml` until
+    #2030) walks the full index,
     `portal_runner.reconcile_sightings` (touch every sighted known row) + nominates unseen rows for a page check (rule #3, 2026-09-07), and **enqueues** new/price-changed
     ids — classified by the ONE shared verdict rule, `portal.classify_index_sighting`, which
     every portal including sreality routes through (a rail in `tests/scraper/test_portal.py`
