@@ -1684,8 +1684,9 @@ on 2026-12-01, and until then a file of that name would override the applied set
   - `BACKEND_WATCH`: every repo tree the Dockerfile COPYs (not `COPY --from=` a stage) plus `/Dockerfile` and
     `/.dockerignore`, pinned to the COPY lines by a census, so a move PR never forgets a tree; `.railway/` stays out;
   - variables `EXTRAS`, `HF_HUB_OFFLINE: "1"` (no runtime download), `SUPABASE_DB_URL: sreality.env.SUPABASE_DB_URL`,
-    `SUPABASE_DB_SESSION_URL` likewise (#2604: `ruian_buildings` refuses the transaction pooler) and the R2 set, by reference (#2032: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`,
-    each `sreality.env.<NAME>`), references to the worker's variables (`${{sreality.NAME}}`, ruling #2025-R3): one
+    `SUPABASE_DB_SESSION_URL` likewise (#2604: `ruian_buildings` refuses the transaction pooler), the R2 set, by reference (#2032: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`,
+    each `sreality.env.<NAME>`) and `SCRAPER_PROXY_URL` (#2030: a proxied portal's walk; `tests/scraper/test_proxy_wiring.py`
+    refuses one on the runner without it), references to the worker's variables (`${{sreality.NAME}}`, ruling #2025-R3): one
     stored value each, so a rotation changes one place, and applying the worker's staged change redeploys job-runner
     after it (Railway's deployment dependencies), cutting any run in flight (closed `interrupted`, re-claimed at once).
     The secrets inventory's rotation steps say so and check its Health cells. Later moves add their names in their

@@ -240,6 +240,10 @@ of a sibling on its resource seen since its clock started. The worst condition w
   each category short of its end, so it nominates nothing). A walk writes its `scrape_runs` row (`run_type='index'`)
   as on GitHub, and the runner its `job_runs` row. Slots: `_walks()` spreads one cadence's walks evenly, so a new
   portal moves them (`scheduled_jobs.offset_s`).
+- **The proxy:** a child inherits the runner's env, which holds `SCRAPER_PROXY_URL` by reference to the worker's
+  (`sreality.env.SCRAPER_PROXY_URL`, #2030), so a walk whose client declares `USE_PROXY` rides the same residential
+  egress as on GitHub. `tests/scraper/test_proxy_wiring.py` refuses a proxied portal's runner job without it: the
+  client would fall back to the direct IP, which a `PROXY_REQUIRED` portal's edge 403s.
 
 ## Jobs: run now, click by click
 
