@@ -750,6 +750,15 @@ def test_the_tree_kill_signals_the_jobs_own_group_first_and_goes_on_past_a_refus
     assert killed[0] == 100 and sorted(killed) == [100, 200, 250]
 
 
+def test_the_tree_kill_never_signals_the_runners_own_group_or_group_zero(tmp_path: Path) -> None:
+    """The belt under the setsid shim: whatever pid it is handed, the kill never reaches the runner's own group."""
+    killed: list[int] = []
+    with mock.patch.object(job_process.os, "killpg", lambda group, _sig: killed.append(group)):
+        job_process._kill_tree(os.getpgrp(), str(tmp_path))
+        job_process._kill_tree(0, str(tmp_path))
+    assert killed == []
+
+
 def test_a_browser_in_a_session_of_its_own_is_counted_and_killed_with_its_job() -> None:
     """#2689, with real processes: a grandchild that setsid()s (as chromium) is in the job's memory and its kill."""
     child = job_process.spawn_process([sys.executable, "-m", CHILD, "--detached-grandchild-mb", "96"],
