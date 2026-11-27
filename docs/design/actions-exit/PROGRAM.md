@@ -344,7 +344,7 @@ delisting and coverage cells unchanged; aggregate peak ≤ 70 % of a replica.
 ### W5 — CLIP, the registry load, the GitHub tick, the leftovers
 `clip` every 15 min in the runner image (one unsharded run, exit 75 for backlogs; `clip_tag.yml`, the shard
 plumbing and the weights cache deleted); `ruian_load` moves to the runner (geo wheels in the build);
-price_stats ticks daily through `job_runner once` on GitHub so it has a row and a cell; `location_refetch`
+price_stats ticks daily through `job_runner once` on GitHub (not built: § As decided below); `location_refetch`
 reads its due time from its row (`first_delay_seconds` deleted). The test pinning the GitHub schedule set
 exists from W2 (#2023) and tightens by itself when the last waiting job moves; W5 adds its one workflow-reader
 rule, `scraper.job_runner once <job>` read as running `<job>`, without which the pairing census reads
@@ -375,6 +375,13 @@ finish, ~20 s) and `location_registry_load.yml` is deleted. The runner claims it
 `job_lease.held_job`, its only off-runner caller gone, is deleted with its tests. Migration 775 re-hosts the
 `place_facts` artifact row, keeping its fail line. A dry run of the 2026-11 vintage peaked at 342 MB (declared 2,048)
 and wrote 918 MB to its temporary directory. A by-hand run is `request ruian_load -- --vintage YYYYMMDD`.
+**As decided (2026-11-26), price statistics gets no tick.** The operator's subtraction audit ("migrate nothing we do
+not need") found the tick adds nothing that exists. Health's `gh/scrape_price_stats` cell already judges each weekly
+run's lateness and red streak, `price_stat_choropleth`'s artifact cell judges its output, and the pairing census reads
+`scraper.price_stats_main` in the workflow. A tick would have cost a second cell for the same job, a `once` path for a
+GitHub-hosted row (the lease helper #2033 had just deleted), the workflow-reader rule above and six "not due" runs a week.
+`scrape_price_stats.yml` stays as it is, its chain step included (gate #2106: one chained run in 14 days). The
+`location_refetch` half left W5 for the location programme's W2 (#2215).
 **Gate:** CLIP lag p90 ≤ 45 min; a 100-image re-embed identical within fp32 tolerance; both GitHub-hosted
 jobs show cells; `location_refetch` runs once a day across ≥ 3 deploys; **the flip gate: 7 days of billed
 GitHub run-rate under 50,000 min/month.**
@@ -418,7 +425,9 @@ budget) and the hand-kept stuck-run cutoff; the per-walk
 `--max-seconds` duplicate; idnes's own slice ordering; the `LOCATION_INTAKE_WORKERS` override; the 4-way
 CLIP shard matrix and weights cache; `location_refetch`'s first-delay machinery; the 18 h GitHub slack on
 artifact rows, re-hosted row by row in each move PR; the anonymous GitHub clone in RunPod pods; 13.2 GB of public artifacts. By ruling:
-up to 9 more files (R6a) and the dead lease columns, alias view and index (R6b).
+up to 9 more files (R6a; the last of its eight, the idnes broker backfill and its script, went 2026-11-26 after the
+re-measure: its 637 pages hold no broker block) and the dead lease columns, alias view and index (R6b). Never built
+either: the price-statistics tick (2026-11-26, W5 above).
 Never built (dropped from the first design): the shared `lanes.py` move, 17 interval knobs, the due-gated
 GitHub matrix, the overdue-only fallback rule, the disarm wave, runtime memory admission.
 
