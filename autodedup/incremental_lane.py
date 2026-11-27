@@ -1493,6 +1493,10 @@ class SqlWork:
         self.enter_blocks = walk_blocks(scope, self.parents, self.districts)
         self.statements = 0
         self.windows: dict[str, int] = {}
+        # What each forward feed's window still held, in scope, once this claim had taken its
+        # part: the arrivals, changes and flips WAITING for a later pass. Bounded by the window
+        # (`FEED_WINDOW`): a count that large means "at least".
+        self.waiting: dict[str, int] = {}
         # What this pass spent on `public` for the entrant feed, for the run summary: a block
         # refresh, a refusal against the daily cap, or nothing at all.
         self.enter_scan: dict[str, Any] = {}
@@ -1549,9 +1553,12 @@ class SqlWork:
         items: list[WorkItem] = []
         self._pending = {}
         self.windows = {}
+        self.waiting = {}
         self._claimed = {}
         self._unread_scan = None
         cut = False
+        # The arrivals this claim's window read past its fifth, for the top-up below.
+        new_left: tuple[list[Any], list[Any], int] = ([], [], 0)
 
         after_new = cursors[CURSOR_NEW][0]
         # The straggler sweep FIRST: a row that committed after the cursor passed its id is
@@ -1579,10 +1586,10 @@ class SqlWork:
                 self.claim_bound["new_known"] = len(known)
         if size:
             taken = min(len(ids), share)
-            cut = cut or taken < len(ids)
             self._pending[CURSOR_NEW] = (int(ids[taken - 1]) if taken < len(ids) else int(end))
             for listing_id, stamp in zip(ids[:taken], stamps[:taken]):
                 items.append(WorkItem(int(listing_id), "new", _epoch(stamp), None))
+            new_left = (list(ids[taken:]), list(stamps[taken:]), int(end))
 
         after_changed = cursors[CURSOR_CHANGED][1]
         end, size, ids, stamps, snapshot_ids = _window(self._query(RT_CHANGED_LISTINGS_SQL, {
@@ -1592,6 +1599,7 @@ class SqlWork:
         if size:
             taken = min(len(ids), share)
             cut = cut or taken < len(ids)
+            self.waiting["changed"] = len(ids) - taken
             self._pending[CURSOR_CHANGED] = (int(snapshot_ids[taken - 1])
                                              if taken < len(ids) else int(end))
             for listing_id, stamp in zip(ids[:taken], stamps[:taken]):
@@ -1605,6 +1613,7 @@ class SqlWork:
         if size:
             taken = min(len(ids), share)
             cut = cut or taken < len(ids)
+            self.waiting["flipped"] = len(ids) - taken
             self._pending[CURSOR_FLIPPED] = ((stamps[taken - 1], int(ids[taken - 1]))
                                              if taken < len(ids)
                                              else (stamp_end, int(id_end)))
@@ -1706,6 +1715,22 @@ class SqlWork:
             # longer holds it, so there is nothing to re-decide it into.
             retiring = {item.listing_id for item in items if item.retire}
             items.extend(self._evidence_feed(cursors[CURSOR_EVIDENCE][0], share, retiring))
+        # ARRIVALS TAKE THE UNUSED CLAIM (2026-11-27). Every forward feed has had its fifth;
+        # what they left of the limit goes to the arrivals the window above already read, in
+        # id order, before the rescore sweep (which took it until now: a background re-read
+        # ahead of adverts no pass has seen). A new property is held from Browse and the
+        # watchdog until the engine has read its adverts, so an arrival waiting is user-facing
+        # and a sweep waiting is not. No statement: the cursor stops at the last one taken.
+        left_ids, left_stamps, new_end = new_left
+        extra = max(0, min(len(left_ids), limit - len(items)))
+        for listing_id, stamp in zip(left_ids[:extra], left_stamps[:extra]):
+            items.append(WorkItem(int(listing_id), "new", _epoch(stamp), None))
+        if extra:
+            self._pending[CURSOR_NEW] = (int(left_ids[extra - 1]) if extra < len(left_ids)
+                                         else new_end)
+        if "new" in self.windows:
+            self.waiting["new"] = len(left_ids) - extra
+        cut = cut or extra < len(left_ids)
         # E991: the rescore sweep. After a seed switched the settings in place, every in-scope
         # row no pass refreshed since is re-claimed once, the live rows first (E976's order),
         # each cycle in id order behind its own cursor, and re-decided as the evidence sweep's
@@ -3919,6 +3944,7 @@ def run_incremental(conn_factory: Callable[[], Any], *,
             _rows(conn, RT_FP_COUNT_SQL, {"generation": generation})[0][0])
         summary["scope"] = scope.as_json()
         summary["windows"] = dict(work.windows)
+        summary["waiting"] = dict(work.waiting)
         summary["enter_scan"] = dict(work.enter_scan)
         # E991: the rescore sweep's slice this pass, while one is owed.
         summary["rescore"] = work.rescore_report

@@ -2234,6 +2234,10 @@ def _autodedup_outcome(
             pairs_to_decide_by_attempt=counts.get("pairs_to_decide_by_attempt"),
             ledger_skipped=counts.get("ledger_skipped"),
             ledger_written=counts.get("ledger_written"),
+            # What each forward feed left WAITING in its window this pass (arrivals, changes,
+            # flips; bounded by the window, so a count that large means "at least"): the
+            # adverts refreshed in a pass are not the arrivals read.
+            waiting=summary.get("waiting"),
             # E960: the probe-key neighbourhood the last attempt re-retrieved from the store's
             # keys and guard rows, and the adverts whose facts the pass read, by why (claim,
             # order, digest, decided, cluster, rail), summed over every attempt.

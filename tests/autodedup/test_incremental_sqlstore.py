@@ -468,14 +468,14 @@ def test_the_new_feed_passes_over_a_row_the_lane_already_holds() -> None:
     db.cursors[CURSOR_NEW] = {"last_listing_id": 1000}
     work = SqlWork(db, SCOPE, GEN, straggler_window=0, revive_slice=0, drift_slice=0,
                    enter_slice=0, evidence_slice=0)
-    items = work.claim(10)  # a share of two
-    assert [item.listing_id for item in items if item.feed == "new"] == [1003, 1005]
+    items = work.claim(4)  # the whole claim: the other feeds are quiet
+    assert [item.listing_id for item in items if item.feed == "new"] == [1003, 1005, 1006, 1007]
     assert work.claim_bound["new_known"] == 3 and work.claim_bound["cut"]
-    assert work.commit(items)[CURSOR_NEW] == 1005
+    assert work.commit(items)[CURSOR_NEW] == 1007
     work = SqlWork(db, SCOPE, GEN, straggler_window=0, revive_slice=0, drift_slice=0,
                    enter_slice=0, evidence_slice=0)
     assert [item.listing_id for item in work.claim(50) if item.feed == "new"] == [
-        1006, 1007, 1008, 1009, 1010]
+        1008, 1009, 1010]
 
 
 def test_the_changed_feed_skips_a_listings_first_snapshot_and_still_crosses_it() -> None:

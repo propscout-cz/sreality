@@ -332,6 +332,8 @@ def test_the_lane_hands_the_engine_its_connection_and_nothing_else(
         # the reject ledger answered, and the rejects the pass ledgered
         "pairs_to_decide": 21, "pairs_to_decide_by_attempt": [21],
         "ledger_skipped": 31, "ledger_written": 6,
+        # what each forward feed left waiting: the summary of this test names none
+        "waiting": None,
         # E960: the neighbourhood re-retrieved from the store, and the adverts read, by why
         "dirty": 30, "reads": {"claim": 12, "decided": 9},
         # E940: the pass walked no scope block and none is mid-cycle
