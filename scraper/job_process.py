@@ -6,17 +6,20 @@ stalled database or a wedged main loop delays no stop:
 
 * SIGTERM goes to the leader only, at the job's `timeout_s` or as soon as a stop arrives, so the process that
   installed `scraper.stop` finalizes while its pool workers finish the item in hand;
-* SIGKILL goes to the whole group `GRACE_S` later, at once at the lease's fence, and to stragglers once the leader
-  has exited;
-* with no clean tick for `LIVENESS_BOUND_S` it kills every group and exits the process (the watchdog).
+* SIGKILL goes to the job's whole process tree `GRACE_S` later, at once at the lease's fence, and to stragglers once
+  the leader has exited;
+* with no clean tick for `LIVENESS_BOUND_S` it kills every job's tree and exits the process (the watchdog).
 
 The guard never writes a log line itself: it queues each one, and a forwarder thread writes them, so a stalled log
 reader (a full stderr pipe) delays no signal, no lock and no watchdog exit.
 
 Exit statuses are read with a pid-targeted `waitid(WNOWAIT)` peek and a `waitpid` reap, never through `Popen`'s own
 methods (they reap with no status left to read, and `send_signal` polls first). Peak memory is the leader's `VmHWM`
-or the group's summed `VmRSS`, whichever is higher, over the guard's samples; never `ru_maxrss`, which inherits the
-runner's own peak at exec.
+or its process tree's summed `VmRSS`, whichever is higher, over the guard's samples; never `ru_maxrss`, which inherits
+the runner's own peak at exec. The tree is the job's group and every descendant in any group, so a browser that starts
+in a group of its own (Playwright's chromium) is counted, waited for and killed with its job (#2689). The shim makes the
+leader a child subreaper, so a process whose parent exits stays in the tree while the leader lives; one still running
+when the leader itself exits re-parents to the runner and drops out of it.
 """
 
 from __future__ import annotations
@@ -36,7 +39,7 @@ from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import TracebackType
-from typing import IO, Literal, Protocol
+from typing import IO, Literal, NamedTuple, Protocol
 
 from scraper import stop
 
@@ -44,10 +47,15 @@ LOG = logging.getLogger("scraper.job_process")
 
 Stop = Literal["timeout", "deploy", "fence"]  # why the runner stopped a job; the first cause wins
 
-# Run before the job's own interpreter, in the same pid: an OOM picks the job, never the runner. Raising the
-# score needs no privilege; preexec_fn would be unsafe in a threaded parent.
+# Run before the job's own interpreter, in the same pid: an OOM picks the job, never the runner, and the job adopts
+# its orphans (PR_SET_CHILD_SUBREAPER, kept across exec) so they stay in its tree. Neither needs privilege;
+# preexec_fn would be unsafe in a threaded parent.
 OOM_SHIM = (
-    "import os, sys\n"
+    "import ctypes, os, sys\n"
+    "try:\n"
+    "    ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)\n"
+    "except (OSError, AttributeError):\n"
+    "    pass\n"
     "p = '/proc/self/oom_score_adj'\n"
     "try:\n"
     "    with open(p) as f:\n"
@@ -62,7 +70,7 @@ OOM_SHIM = (
 GRACE_S = 90.0  # SIGTERM to SIGKILL, at a timeout and in a deploy's drain; under jobs.STUCK_RUN_GRACE_S
 GUARD_POLL_S = 1.0
 LIVENESS_BOUND_S = 300.0  # no clean tick for this long: the watchdog exits (under 675's c_worker_dead)
-STRAGGLER_WAIT_S = 10.0  # after the leader's exit, how long the release waits for its group to empty
+STRAGGLER_WAIT_S = 10.0  # after the leader's exit, how long the release waits for its process tree to empty
 TAIL_LINES, TAIL_LINE_BYTES, TAIL_BYTES = 64, 8192, 32768
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROC = "/proc"
@@ -87,7 +95,7 @@ class Watch:
     label: str = ""
     reason: Stop | None = None
     kill_at: float | None = None
-    killed: bool = False  # the runner sent the group its SIGKILL
+    killed: bool = False  # the runner sent the tree its SIGKILL
     peak_mb: int | None = None
 
 
@@ -98,7 +106,7 @@ class Child(Protocol):
 
     def reap(self) -> Exit: ...
 
-    def stragglers(self) -> int: ...  # live (non-zombie) processes left in the group
+    def stragglers(self) -> int: ...  # live (non-zombie) processes left in the job's process tree
 
     def reader_done(self) -> bool: ...  # every writer closed the output pipe
 
@@ -126,9 +134,23 @@ def _stats(proc: str = PROC) -> Iterator[tuple[int, list[str]]]:
         yield int(entry), stat[stat.rfind(")") + 2:].split()
 
 
-def _group(pgid: int, proc: str = PROC) -> list[tuple[int, str, int]]:
-    """(pid, state, rss pages) of every process whose process group is `pgid`."""
-    return [(pid, f[0], int(f[21])) for pid, f in _stats(proc) if len(f) > 21 and f[2] == str(pgid)]
+class Proc(NamedTuple):
+    pid: int
+    state: str
+    parent: int
+    group: int
+    rss_pages: int
+
+
+def _process_tree(pgid: int, proc: str = PROC) -> list[Proc]:
+    """Every process in the job's group `pgid` and every descendant of one, whatever its group (one /proc read)."""
+    table = {pid: Proc(pid, f[0], int(f[1]), int(f[2]), int(f[21])) for pid, f in _stats(proc) if len(f) > 21}
+    tree = {pid for pid, p in table.items() if p.group == pgid}
+    frontier = tree
+    while frontier:
+        frontier = {pid for pid, p in table.items() if p.parent in frontier and pid not in tree}
+        tree = tree | frontier
+    return [table[pid] for pid in tree]
 
 
 def _kb(path: str, key: str) -> int | None:
@@ -143,16 +165,16 @@ def _kb(path: str, key: str) -> int | None:
 
 
 def process_memory_mb(pgid: int, proc: str = PROC) -> int | None:
-    """The higher of the leader's peak resident memory and its group's summed resident memory, in MiB."""
+    """The higher of the leader's peak resident memory and its process tree's summed resident memory, in MiB."""
     hwm_kb = _kb(os.path.join(proc, str(pgid), "status"), "VmHWM:")
     page_kb = os.sysconf("SC_PAGE_SIZE") // 1024
-    rss_kb = sum(pages * page_kb for _, state, pages in _group(pgid, proc) if state != "Z")
+    rss_kb = sum(p.rss_pages * page_kb for p in _process_tree(pgid, proc) if p.state != "Z")
     best = max(hwm_kb or 0, rss_kb)
     return -(-best // 1024) if best else None
 
 
 def stragglers(pgid: int, proc: str = PROC) -> int:
-    return sum(1 for _, state, _ in _group(pgid, proc) if state != "Z")
+    return sum(1 for p in _process_tree(pgid, proc) if p.state != "Z")
 
 
 class ProcessChild:
@@ -212,14 +234,18 @@ def _term_leader(pid: int) -> None:
         os.kill(pid, signal.SIGTERM)
 
 
-def _kill_group(pid: int) -> None:
-    with suppress(ProcessLookupError):
-        os.killpg(pid, signal.SIGKILL)
+def _kill_tree(pid: int, proc: str = PROC) -> None:
+    """SIGKILLs the job's group and every group a descendant started, read before the first kill: a browser whose
+    driver dies is re-parented and would drop out of the tree."""
+    groups = {pid} | {p.group for p in _process_tree(pid, proc)}
+    for group in groups - {os.getpgrp(), 0}:
+        with suppress(ProcessLookupError):
+            os.killpg(group, signal.SIGKILL)
 
 
 def spawn_process(command: Sequence[str], env: Mapping[str, str], label: str,
                   adopt: Callable[[Child], None]) -> ProcessChild:
-    """Starts the job in its own session. Atomic: if anything raises before `adopt` returns, the group is killed and
+    """Starts the job in its own session. Atomic: if anything raises before `adopt` returns, the tree is killed and
     the leader reaped, so no dropped `Popen` steals a status later or leaves a job running untracked."""
     popen = subprocess.Popen(  # noqa: S603 - argv from the registry, never a shell
         list(command), env=dict(env), cwd=REPO_ROOT, start_new_session=True,
@@ -228,7 +254,7 @@ def spawn_process(command: Sequence[str], env: Mapping[str, str], label: str,
         child = ProcessChild(popen, label)
         adopt(child)
     except BaseException:
-        _kill_group(popen.pid)
+        _kill_tree(popen.pid)
         _, status = os.waitpid(popen.pid, 0)
         popen.returncode = os.waitstatus_to_exitcode(status)
         raise
@@ -263,7 +289,7 @@ class Guard:
     def __init__(self, *, clock: Callable[[], float], grace_s: float = GRACE_S,
                  stopping: Callable[[], bool] = stop.requested,
                  sample: Callable[[int], int | None] = process_memory_mb,
-                 term: Callable[[int], None] = _term_leader, kill: Callable[[int], None] = _kill_group,
+                 term: Callable[[int], None] = _term_leader, kill: Callable[[int], None] = _kill_tree,
                  liveness_s: float = LIVENESS_BOUND_S) -> None:
         self._clock = clock
         self._grace_s = grace_s
@@ -313,7 +339,7 @@ class Guard:
                 self._watches[pid].fence_at = fence_at
 
     def fence_now(self, pid: int) -> None:
-        """A renewal was refused: another holder may claim the job now, so its group dies now."""
+        """A renewal was refused: another holder may claim the job now, so its process tree dies now."""
         with self._lock:
             watch = self._watches.get(pid)
             if watch is not None and not watch.killed:
@@ -322,7 +348,7 @@ class Guard:
         self._flush()
 
     def forget(self, pid: int) -> Watch:
-        """The leader exited and is about to be reaped: kill its group's stragglers and never signal the pid again."""
+        """The leader exited and is about to be reaped: kill its tree's stragglers and never signal the pid again."""
         with self._lock:
             watch = self._watches.pop(pid, None)
             self._kill(pid)
