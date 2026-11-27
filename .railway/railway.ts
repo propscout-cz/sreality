@@ -22,7 +22,7 @@ const WORKER_DRAINING_SECONDS = 30;
 const RUNNER_START = "python -m scraper.job_runner run";
 const RUNNER_REPLICAS = 2;
 const RUNNER_CPUS = 4;
-const RUNNER_MEMORY_BYTES = 8000000000;
+const RUNNER_MEMORY_BYTES = 12000000000;   // 12 GB since #2031 (a chromium walk, ~1.3 GB): billed by use
 const RUNNER_DRAINING_SECONDS = 250;
 // Every repo tree the root Dockerfile copies, plus the files that build it (a census pins it to the COPY lines).
 const BACKEND_WATCH = ["/Dockerfile", "/.dockerignore", "/pyproject.toml", "/scraper/**", "/toolkit/**", "/api/**", "/scripts/**", "/location_data/**", "/contracts/**", "/data/**", "/autodedup/**", "/skills/**"];
@@ -53,11 +53,11 @@ const jobRunner = (sreality: ReturnType<typeof service>) => service("job-runner"
             limitOverride: { containers: { cpu: RUNNER_CPUS, memoryBytes: RUNNER_MEMORY_BYTES } } },
   // The worker's secrets, by reference (${{sreality.NAME}}): a rotation changes one place. SUPABASE_DB_URL (#2025-R3);
   // the R2 set (#2032); SUPABASE_DB_SESSION_URL (#2604: a location load refuses the transaction pooler).
-  // No `browser` here, so this image bakes NO chromium: a job dispatched to the runner cannot fetch a portal that
-  // sits behind a JS interstitial (ceskereality, #2529). Its walk runs in GitHub Actions, which installs chromium in
-  // the workflow, and its drain runs on the worker's own service, which carries the extra. Adding a browser-fetched
-  // portal's job here means adding `browser` to this list too, and paying chromium's weight in this image.
-  env: { EXTRAS: "api,clip,geo", HF_HUB_OFFLINE: "1", SUPABASE_DB_URL: sreality.env.SUPABASE_DB_URL,
+  // `browser` (#2031): W4 moves the ceskereality walk here, and every page of that portal sits behind a JS
+  // interstitial (#2529), so this image bakes chromium as the worker's does; `CI: runner image` launches it through
+  // scraper/browser_fetch.py in the finished image, offline. The walk itself still waits for its cutoff and its
+  // proxy reference (SCRAPER_PROXY_URL: a datacenter IP is refused before the interstitial runs).
+  env: { EXTRAS: "api,browser,clip,geo", HF_HUB_OFFLINE: "1", SUPABASE_DB_URL: sreality.env.SUPABASE_DB_URL,
          SUPABASE_DB_SESSION_URL: sreality.env.SUPABASE_DB_SESSION_URL,
          R2_ACCOUNT_ID: sreality.env.R2_ACCOUNT_ID, R2_ACCESS_KEY_ID: sreality.env.R2_ACCESS_KEY_ID,
          R2_SECRET_ACCESS_KEY: sreality.env.R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME: sreality.env.R2_BUCKET_NAME },

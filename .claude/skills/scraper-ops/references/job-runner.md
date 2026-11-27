@@ -7,7 +7,7 @@ rulings: `docs/design/actions-exit/PROGRAM.md` § 4.2. Since #2025's move PR it 
 and since #2028 `location_intake`, whose workflows those PRs deleted, since #2604 `ruian_buildings` (13:00 UTC, born
 on the runner; `docs/architecture.md` § Register facts), since #2029 the walks of web, maxima and bezrealitky, since
 #2033 the daily `ruian_load` (below) and since #2030 the hourly sreality walk; each later move PR (the rest of #2030,
-#2031) flips more entries' host. On Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and 8 GB
+#2031) flips more entries' host. On Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and 12 GB
 (`.railway/railway.ts` `jobRunner`; settings, drain and image: `docs/architecture.md` § Railway service
 configuration). Its Health cells and the "Jobs: run now" form are #2026's (below).
 
@@ -218,7 +218,7 @@ of a sibling on its resource seen since its clock started. The worst condition w
 
 - **Which walks run here:** every walk whose Portal class's `walk_timeout_s` is at most `jobs.RUNNER_WALK_TIMEOUT_S`
   (50 min since #2030: `walk_web` 15 min, `walk_maxima` and `walk_bezrealitky` 30 min, each every 6 h, and
-  `walk_sreality` 50 min, hourly (R24); 512 MB, 1 CPU). The rest wait on their GitHub workflows
+  `walk_sreality` 50 min, hourly (R24); 1,536 MB, 1 CPU, since #2031 for every walk). The rest wait on their GitHub workflows
   (`github-actions-until-moved`). A batch raises the cutoff and deletes the workflows it takes over, and names no
   portal (rule 21); the registry census `test_a_walks_host_is_the_cutoffs` refuses a per-portal host value (one would
   need a ruling). The next cutoff (60 min) takes remax and mmreality together: remax waits for its sold/let gate
