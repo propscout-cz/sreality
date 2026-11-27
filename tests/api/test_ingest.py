@@ -60,7 +60,7 @@ class _Cur:
             q = s.queue.get(tuple(params))
             self._rows = [(q["attempts"], q["claimed_at"], q["given_up"])] if q else []
         elif text.startswith("SELECT outcome FROM detail_queue_completions"):
-            hits = [o for src, nid, o in s.completions if (src, nid) == tuple(params)]
+            hits = [o for src, nid, o in s.completions if (src, nid) == tuple(params[:2])]  # [2]: the window
             self._rows = [(hits[-1],)] if hits else []
         elif text.startswith("INSERT INTO listing_detail_queue"):
             s.writes.append("enqueue")

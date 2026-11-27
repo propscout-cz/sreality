@@ -21,7 +21,7 @@ api/                FastAPI service exposing the toolkit (deployed to Railway)
 frontend/           Vite + React + TS database-browser UI (deployed to Railway as its own project; see frontend/README.md)
 tests/              pytest suite
 .railway/           Railway settings for the three projects (TypeScript IaC, operator-applied; Node only for the pinned CLI/SDK, never in an image)
-.github/workflows/  test.yml (every PR and push to main), index_walk.yml (the sreality walk; the realtime worker drains)
+.github/workflows/  test.yml (every PR and push to main; its frontend job typechecks, builds and guards the bundle size), the walks still on Actions (`*_index_walk.yml`, `scrape_remax.yml`, `scrape_mmreality.yml`; the job runner runs the rest)
 ```
 
 ## Scope
@@ -46,7 +46,7 @@ tests/              pytest suite
 
 - [x] Schema applied (migrations 001–014)
 - [x] Scraper code (index walk, detail fetch, parse, upsert, snapshot-on-change)
-- [x] CI workflows (`test.yml` per push, the sreality walk — `index_walk.yml` — every 15 min, drained by the realtime worker, frontend build)
+- [x] CI workflows (`test.yml` per push, the sreality walk, hourly on the job runner, drained by the realtime worker, frontend build)
 - [x] Image mirroring to Cloudflare R2 with parallel uploads
 - [x] Failure tracking (`listing_fetch_failures`) with priority retry and give-up threshold
 - [x] Conservative/aggressive run modes

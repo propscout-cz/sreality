@@ -1672,9 +1672,9 @@ on 2026-12-01, and until then a file of that name would override the applied set
   daily `property_sweep` (03:00 UTC) and `broker_sweep` (06:00 UTC) since #2027, which never run beside each other
   or any other DB-heavy job (`job_lease`'s heavy turn), of the hourly claim intake `location_intake` since #2028
   and the RÚIAN registry load `ruian_load` since #2033, daily (§ Location data), and of the walks whose
-  `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (30 min: web, maxima and bezrealitky since #2029, each
-  `walk_<source>` every 6 h with no `--max-seconds`, the runner's SIGTERM at the timeout its one budget; the longer
-  walks wait on their workflows):
+  `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (50 min: web, maxima and bezrealitky since #2029, each
+  `walk_<source>` every 6 h, and sreality hourly since #2030, with no `--max-seconds`, the runner's SIGTERM at the
+  timeout its one budget; the longer walks wait on their workflows):
   - two replicas in the worker's region, each 4 vCPU and 8 GB, restart policy ALWAYS, `checkSuites: false`. Railway
     counts decimal bytes, so 8e9 B is 7,629 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
     line and every beat carry `memory_limit_mb` and `cpus` as the replica's cgroup reads them;
@@ -2032,8 +2032,9 @@ renumber.** Navigate by area:
    close an ad 12 h after the first. The operator ruled on 2026-10-18 that 24 h becomes the one
    rule, in its own scraper PR (#1858). The `delisting` check's limits derive from this: its
    stuck arm counts the active ads whose first unrefuted verdict is older than the effective
-   dwell + 2 × the portal's p90 walk-start gap + 1 h. The ledger's 7-day retention bounds the
-   evidence; the gone-rate breaker is unchanged (ingest only). The same check's precision arm
+   dwell + 2 × the portal's p90 walk-start gap + 1 h. The evidence is the ledger's last 7 days
+   (`db.COMPLETION_EVIDENCE_DAYS`; it keeps 21 for late gate reads, #2665), the drain's and this
+   arm's alike; the gone-rate breaker is unchanged (ingest only). The same check's precision arm
    reads a day of `flipped` rows from 2 × the p90 walk gap + 1 h old (by then a walk has sighted any
    ad still listed; a later return is a re-list) whose ads are active again. Deleted with it: sreality's
    HTML "tato stránka neexistuje" body scan (the live listing page carries that string in its
@@ -3945,8 +3946,9 @@ renumber.** Navigate by area:
     ink not copper), its state riding on `POST /listings/lookup` as `dismissed` (RLS-only, like
     the pipeline and collection state beside it) and its writes on the same `/dismissals` routes.
 19. **The sreality scrape is split by cadence (Phase 2): a fast index-walk feeds an async
-    batched detail-drain through `listing_detail_queue` (migration 105).** `index_walk.yml`
-    (`scraper.main --index-only`, `run_type='index'`) walks the full index,
+    batched detail-drain through `listing_detail_queue` (migration 105).** The job runner's hourly
+    `walk_sreality` (`scraper.sreality_main --index-only`, `run_type='index'`; `index_walk.yml` until
+    #2030) walks the full index,
     `portal_runner.reconcile_sightings` (touch every sighted known row) + nominates unseen rows for a page check (rule #3, 2026-09-07), and **enqueues** new/price-changed
     ids — classified by the ONE shared verdict rule, `portal.classify_index_sighting`, which
     every portal including sreality routes through (a rail in `tests/scraper/test_portal.py`
@@ -4992,17 +4994,9 @@ renumber.** Navigate by area:
     mmreality's `builtUpArea`) with no column to put it in — a schema decision for the operator,
     not a parser fix. bazos has no labelled parcel in its free text, so it gains no side columns.
 
-    **`area_m2` is what every consumer reads — the dedup rule included.** NEW DEDUP path C used
-    to spell its own choice (`estate_area` for pozemek, else `usable_area`), a second answer to
-    "which area is this listing's area" that disagreed with the headline on every one of those
-    52,183 rows and on every dwelling measured only by a floor/total label. W17 deleted it:
-    `toolkit/dedup_candidates_sql.py` reads `area_m2 > 0` for every category, and the per-category
-    IDENTITY ATTRIBUTES are one vocabulary (`dedup_candidates.IDENTITY_ATTRS` — `pozemek`: area
-    only, everything else disposition + area) rendered into both the pairing SQL and the Python
-    oracle, so C1 never joins two parcels on a room count. That changed what the generator PAIRS,
-    so `GENERATOR_VERSION` moved `c3 -> c4` (a new `inputs_id`; the pilot's pair rows are
-    orphaned deliberately) and the SHA-256 ledger of the pairing statements in
-    `tests/toolkit/test_dedup_candidates_sql.py` was re-pinned in the same commit.
+    **`area_m2` is what every consumer reads.** NEW DEDUP path C once spelled its own choice
+    (`estate_area` for pozemek, else `usable_area`); W17 moved it onto `area_m2`, and the lane
+    itself was deleted 2026-11-26 (#2681).
 
     **The basis is resolved from `(category_main, category_type)`, rent-first, and NEVER from
     `listings.price_unit`** — that column is two values (`za nemovitost` / `za mesic`; W5
@@ -5985,8 +5979,7 @@ surface, `browse_projection` (keyed on the property's location advert since 636,
 `browse_stats_properties` and `browse_map_cells` all inherit it), plus,
 in code, the watchdog matcher (`api/notifications._build_match_clauses`,
 which reads `properties_public` and so cannot inherit; keyed on the `location_listing_ref_id`
-that view appends since 636) and path C candidate generation
-(`toolkit/dedup_candidates_sql`); `toolkit/comparables._shared_filter_where` needs no clause because
+that view appends since 636); `toolkit/comparables._shared_filter_where` needs no clause because
 its `ll.geom IS NOT NULL` is the same rule minus the foreign arm. **DETAIL STAYS REACHABLE**:
 `listings_public`, `properties_public` and `pipeline_board_public` are read by id, so a direct link,
 the extension and an operator's pipeline card (rule 22 operator state)
@@ -6185,17 +6178,11 @@ counted `unresolved`: 99 % of its 12,272 were delisted ads with no claims.)
 (migrations 523/524/526) was the chain behind this page: every listing → judged → located → hidden.
 W1 (ruling Q7) folded its numbers into the `{portal}/town` facts and deleted the panel; migration 719
 (ruling W1-c) dropped the table, its producer, `location_pin_audit_summary()` and
-`refresh_location_pin_audit_mv()`. **W16's ONE vocabulary outlives it.** The NEW DEDUP candidates funnel
-once called *judged* "Known to the location engine", and cut its town step with no consumer rule, so
-its single "lost 99,889" silently added three unlike things together (≈53,374
-judged-but-not-located, 45,619 **abroad, an ANSWER**, ≈895 a Czech point with no town). The four
-booleans are rendered from `location_data/location_steps.py`, which also declares a run's step keys,
-their order and each key's shape; `has_town` carries dedup's obec RANK floor and `located_no_town` is
-the plain complement. Wording lives in `frontend/src/lib/locationSteps.ts`, one file holding Czech and
-English for every key, so a better sentence costs no migration and a step cannot be renamed on one
-page only.
-A candidate run stamps those keys into `candidate_generations.stats.waterfall` with the losses and
-shares already computed by the lane. The rail is `tests/test_location_steps_vocabulary.py`.
+`refresh_location_pin_audit_mv()`. **W16's ONE spelling outlives it** (and the NEW DEDUP candidates
+funnel, deleted with its lane in #2681): the four booleans are rendered from
+`location_data/location_steps.py`, where `has_town` carries the obec RANK floor and `town_missing_sql()`
+is the set the scorecard view and the refetch lane share. The rail is
+`tests/test_location_steps_vocabulary.py`.
 `quality` bucketed the set on active/delisted × `has_claims` — and since W15 `listings.is_active` was
 the page's ONLY live/delisted notion; the SPA page `/new-dedup/pin-audit` filtered on those four axes
 plus the sibling flag; W1 deleted its overview matrix, state totals and split (read from

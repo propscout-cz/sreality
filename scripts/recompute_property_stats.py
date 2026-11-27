@@ -806,7 +806,9 @@ def _resume_point(saved: tuple[Any, ...] | None, max_id: int) -> tuple[int, int,
 # job_lease.FENCE_MARGIN_S must comfortably exceed one batch's worst case — a sweep
 # batch is the rollup under the explicit _BATCH_STATEMENT_TIMEOUT (10 min) ceiling
 # plus the broker book under _BOOK_STATEMENT_TIMEOUT (2 min) — 15 min is that
-# margin, not a renewal cadence. Every write transaction ends with job_lease.fence,
+# margin, not a renewal cadence. A reconnect that waits out a database restart (db.JOB_PATIENCE, up to 3 min,
+# #2660) adds to that gap: a batch near its ceiling that then waits lapses the lease and ends LeaseLost.
+# Every write transaction ends with job_lease.fence,
 # so none commits under a lease that lapsed mid-batch; the dirty queue's claim and
 # dequeue are single keyed statements a replay repeats.
 MAINTENANCE_LEASE = "property_maintenance"
@@ -895,7 +897,8 @@ def _maintenance_lease(
 ) -> Iterator[job_lease.Hold | None]:
     """Yields this writer's hold on the maintenance lease, or None when another
     writer holds it (past `wait_s`) or it is paused. A release on a dead `conn` falls
-    back to `reconnect` when given, else to `held`'s own one-attempt connection."""
+    back to `reconnect` when given (the sweep's is patient, so it waits for a restarting
+    database too), else to `held`'s own one-attempt connection."""
     fallback = {} if reconnect is None else {"connect": reconnect}
     with job_lease.held(conn, MAINTENANCE_LEASE, cadence=_LEASE_CADENCE, runner=_LEASE_RUNNER,
                         ttl_s=_LEASE_TTL_S, holder=_new_holder(kind), wait_s=wait_s, **fallback) as hold:
@@ -992,7 +995,7 @@ def main() -> int:
     )
 
     def reconnect() -> Any:
-        return db.connect(db_url)
+        return db.connect(db_url, **db.JOB_PATIENCE)
 
     started_at = time.monotonic()
     # db.connect() instead of a bare psycopg.connect(): same autocommit +
@@ -1000,7 +1003,7 @@ def main() -> int:
     # The full sweep holds this ONE connection for up to the whole budget, so a
     # pooler recycle or a Supabase restart (2026-08-11, an AdminShutdown 338s in)
     # used to kill the run outright.
-    with db.connect(db_url) as conn:
+    with db.connect(db_url, **db.JOB_PATIENCE) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT now()")
             cutoff = cur.fetchone()[0]

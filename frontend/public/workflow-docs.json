@@ -94,46 +94,6 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/autodedup.yml"
     },
     {
-      "filename": "backfill_idnes_brokers.yml",
-      "name": "Data: backfill idnes broker blocks",
-      "description": "One-shot backfill: reparse the staged idnes detail HTML (portal_raw_pages) into listings.raw_json.broker via scraper.broker_idnes.parse_idnes_broker. raw_json.broker is OUT of the content hash (_HASH_FIELDS is typed columns only), so this never churns snapshots. The broker resolver then attributes idnes brokers from raw_json.broker like sreality's raw_json.user. No re-fetch, no LLM, no new secrets.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_seconds",
-          "description": "Wall-clock budget; resume from the cursor next run",
-          "required": false,
-          "type": "string",
-          "default": "3000",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Parse + report counts without writing",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "idnes-broker-backfill",
-      "cancelInProgress": false,
-      "timeoutMinutes": 60,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/backfill_idnes_brokers.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/backfill_idnes_brokers.yml"
-    },
-    {
       "filename": "backup_before_drop.yml",
       "name": "Ops: back up what a destructive migration drops",
       "description": "Dumps what a DROP TABLE / DROP COLUMN migration is about to destroy, BEFORE it is applied (CLAUDE.md rule 1 / the `database` skill: back up first, then the operator's explicit OK). Each target is `table` (pg_dump of the whole relation) or `table:key,col[,col...]` (a CSV of the key plus those columns, rows where one of them is set), uploaded to R2 under backups/<label>/<UTC date>/ and read back. Never a workflow artifact: an artifact is not private storage and it expires. workflow_dispatch only; safe to re-run (a same-day re-run overwrites).",
@@ -854,52 +814,6 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/idnes_index_walk.yml"
     },
     {
-      "filename": "index_walk.yml",
-      "name": "Scraping: Sreality index walk (Phase 2)",
-      "description": "The fast half of the Phase-2 cadence split, now on the shared portal framework: `scraper.sreality_main --index-only` drives SrealityPortal through the one generic portal_runner (the same loop every other portal uses). Walks the COMPLETE index of every configured category pair (scraper.main.CATEGORIES — the full category cross product incl. pozemek/ostatni/drazba/podil; district-split + national fallback above the deep-pagination cap), bumps last_seen on still-listed ids (touch), nominates unseen ids for a page check once the walk reached the portal's own end (rule #3 — the walk flips nothing; the drain fetches each nominated page and the PAGE decides), and enqueues new + price-changed ids into listing_detail_queue (source='sreality'). It does NO detail fetching, so it finishes in minutes and delistings surface fast.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "*/15 * * * *",
-          "human": "Every 15 minutes"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_seconds",
-          "description": "wall-clock budget; the walk finalizes cleanly before this (blank = 1800 = 30 min)",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "dry_run",
-          "description": "Walk the index and log enqueue intent, but write nothing",
-          "required": false,
-          "type": "boolean",
-          "default": "false",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "sreality-index-walk",
-      "cancelInProgress": false,
-      "timeoutMinutes": 40,
-      "permissions": null,
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/index_walk.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/index_walk.yml"
-    },
-    {
       "filename": "label_images.yml",
       "name": "Labeling: bulk machine labels",
       "description": "The LLM builds the training set for named heads: one call per image carrying the ACTIVE definitions, verdicts written to image_tag_labels as source='machine' (migration 468 gives the pass its own called_for so its price is measured separately). See scripts/label_images.py for the rails.",
@@ -1184,93 +1098,6 @@
       "permissions": "contents: read, pull-requests: read",
       "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/migrations.yml",
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/migrations.yml"
-    },
-    {
-      "filename": "new_dedup_candidates.yml",
-      "name": "NEW DEDUP: candidate generation (path C)",
-      "description": "Level 0 of the rebuilt dedup: find the listing pairs worth comparing later, by path C — \"same town\" (the location engine's obec_kod) plus disposition (rung C1) or, when a disposition is missing on either side, area (rung C3). Manual dispatch only; nothing runs on a schedule. Design: docs/design/new-dedup/PROGRAM.md, ledger 2026-09-10.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "mode",
-          "description": "estimate (reads only, counts what a generation would write), verify (reads only, SQL vs the Python oracle on the named towns) or generate (writes pairs).",
-          "required": true,
-          "type": "choice",
-          "default": "estimate",
-          "options": [
-            "estimate",
-            "verify",
-            "generate"
-          ]
-        },
-        {
-          "name": "scopes",
-          "description": "estimate only: which scopes to count — all, active, or all,active. (generate takes its scope from the l0_candidate_scope setting.)",
-          "required": false,
-          "type": "string",
-          "default": "all,active",
-          "options": null
-        },
-        {
-          "name": "blocks",
-          "description": "Comma-separated obec_kod list to limit the run to (a pilot: e.g. 582786 for Brno). Empty = every town. A limited generate never runs the stale sweep.",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "chunk",
-          "description": "generate only: listing ids per upsert statement (each statement pairs that many listings against the whole town).",
-          "required": false,
-          "type": "string",
-          "default": "2000",
-          "options": null
-        },
-        {
-          "name": "max_listings",
-          "description": "verify only: skip a town with more listings than this (the oracle compares every pair in Python).",
-          "required": false,
-          "type": "string",
-          "default": "3000",
-          "options": null
-        },
-        {
-          "name": "resume",
-          "description": "generate only: continue the last running generation of the same parameter set from its cursor.",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        },
-        {
-          "name": "dry_run",
-          "description": "generate only: print the plan and write nothing.",
-          "required": false,
-          "type": "choice",
-          "default": "true",
-          "options": [
-            "true",
-            "false"
-          ]
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "new-dedup-candidates",
-      "cancelInProgress": false,
-      "timeoutMinutes": 350,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/new_dedup_candidates.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/new_dedup_candidates.yml"
     },
     {
       "filename": "realitymix_index_walk.yml",

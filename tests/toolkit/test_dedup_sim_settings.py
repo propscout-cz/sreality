@@ -74,12 +74,12 @@ def test_list_with_metadata_shape() -> None:
 
 def test_validate_rejects_wrong_type() -> None:
     with pytest.raises(dss.SettingValidationError):
-        dss._validate(dss.REGISTRY["l0_geo_radius_m"], "not a number")
+        dss._validate(dss.REGISTRY["l3_runpod_daily_cost_cap_usd"], "not a number")
 
 
 def test_validate_rejects_bool_for_numeric() -> None:
     with pytest.raises(dss.SettingValidationError):
-        dss._validate(dss.REGISTRY["l0_geo_radius_m"], True)
+        dss._validate(dss.REGISTRY["l3_runpod_daily_cost_cap_usd"], True)
 
 
 def test_validate_rejects_out_of_range() -> None:
@@ -89,7 +89,7 @@ def test_validate_rejects_out_of_range() -> None:
 
 def test_validate_rejects_non_integer_for_integer_type() -> None:
     with pytest.raises(dss.SettingValidationError):
-        dss._validate(dss.REGISTRY["l0_floor_tolerance"], 2.5)
+        dss._validate(dss.REGISTRY["labeling_gate1_target_per_tag"], 2.5)
 
 
 def test_validate_rejects_bad_enum_choice() -> None:
@@ -160,7 +160,7 @@ def test_update_setting_then_effective_value_reflects_override() -> None:
     dss.update_setting(conn, "l2_phash_hamming_threshold", 8, updated_by="test")
     assert dss.effective_value("l2_phash_hamming_threshold", conn=conn) == 8
     # Untouched settings still fall back to their registry default.
-    assert dss.effective_value("l0_geo_radius_m", conn=conn) == 75
+    assert dss.effective_value("l3_runpod_daily_cost_cap_usd", conn=conn) == 1.00
 
 
 def test_update_setting_validates_before_writing() -> None:
@@ -178,10 +178,10 @@ def test_update_setting_unknown_key_raises() -> None:
 
 def test_reset_setting_reverts_to_default() -> None:
     conn = _FakeConn()
-    dss.update_setting(conn, "l0_floor_tolerance", 3, updated_by="test")
-    assert dss.effective_value("l0_floor_tolerance", conn=conn) == 3
-    dss.reset_setting(conn, "l0_floor_tolerance")
-    assert dss.effective_value("l0_floor_tolerance", conn=conn) == 2
+    dss.update_setting(conn, "labeling_gate1_target_per_tag", 3, updated_by="test")
+    assert dss.effective_value("labeling_gate1_target_per_tag", conn=conn) == 3
+    dss.reset_setting(conn, "labeling_gate1_target_per_tag")
+    assert dss.effective_value("labeling_gate1_target_per_tag", conn=conn) == 150
 
 
 def test_reset_setting_unknown_key_raises() -> None:
