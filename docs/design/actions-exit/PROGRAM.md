@@ -356,9 +356,8 @@ next, at 130). `scrape_remax.yml` and
 days to 11-26 (p95 525 s and 961 s against the 60 min timeout, none near its old 2,100 s and 2,400 s budgets).
 mmreality is `PROXY_REQUIRED`, so job-runner takes `SCRAPER_PROXY_URL` by reference to the worker's (its own PR,
 applied by the operator's wizard, `window worker 0 0 job-runner`) and `tests/scraper/test_proxy_wiring.py` refuses a
-proxied portal's runner job without it. The runner walks it 4 times a day where GitHub managed about 2, so its walk's
-proxy traffic per day doubles (about 1,930 to 3,850 index pages a day, +8 % on the proxied walk and drain fetches of
-mmreality, ceskereality and idnes). **This PR merges only after gate #2647 has read remax (2026-11-29) and the wizard
+proxied portal's runner job without it. At 12 h the runner walks it twice a day, as GitHub managed, so its walk's proxy
+traffic holds at about 1,930 index pages a day. **This PR merges only after gate #2647 has read remax (2026-11-29) and the wizard
 apply has put the variable on job-runner.** remax's walk changed under #2646 on 11-24 (466 to 385 pages, and a
 deferral backlog of sold/let ads still draining), so its gate baseline is re-read on the day.
 **Gate per walk (7 days):** pages and reached-end per cycle, nominations per day (a moved walk keeps its declared
