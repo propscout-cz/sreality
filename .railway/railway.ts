@@ -22,7 +22,7 @@ const WORKER_DRAINING_SECONDS = 30;
 const RUNNER_START = "python -m scraper.job_runner run";
 const RUNNER_REPLICAS = 2;
 const RUNNER_CPUS = 4;
-const RUNNER_MEMORY_BYTES = 8000000000;
+const RUNNER_MEMORY_BYTES = 12000000000;   // 12 GB since #2031 (a chromium walk, ~1.3 GB): billed by use
 const RUNNER_DRAINING_SECONDS = 250;
 // Every repo tree the root Dockerfile copies, plus the files that build it (a census pins it to the COPY lines).
 const BACKEND_WATCH = ["/Dockerfile", "/.dockerignore", "/pyproject.toml", "/scraper/**", "/toolkit/**", "/api/**", "/scripts/**", "/location_data/**", "/contracts/**", "/data/**", "/autodedup/**", "/skills/**"];

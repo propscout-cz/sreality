@@ -355,7 +355,8 @@ finished image with no network; no walk moves. The ceskereality walk still needs
 datacenter IP is refused before the interstitial) and a memory value that fits it: one exit IP's 250-page browser
 session of a full-size page held ~1,260 MB PSS (Python 231, Playwright's driver 252, chromium 780; 360 after one page;
 the image's Playwright 1.65.2 and chromium 159, 2026-11-26) against `WALK_MEMORY_MB` 512 and 35 MB of co-tenancy
-headroom, and a job's `peak_rss_mb` never counts chromium (its own process group). Its 31 failed GitHub runs in 30 days
+headroom (the operator chose option A on 2026-11-27: every walk declares 1,536 MB and each replica gets 12 GB, billed
+by use; since #2689 a job's `peak_rss_mb` and kill follow its whole process tree, chromium included). Its 31 failed GitHub runs in 30 days
 were all the Anubis wall (11-02 to 11-16, `CHECK empty_walk`: 0 ads from ~165 pages), none in the 22 since #2530.
 realitymix needs neither the proxy nor the browser; idnes prefers the proxy, bazos neither.
 **Gate per walk (7 days):** pages and reached-end per cycle, nominations per day (a moved walk keeps its declared

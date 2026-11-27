@@ -1675,8 +1675,8 @@ on 2026-12-01, and until then a file of that name would override the applied set
   `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (50 min: web, maxima and bezrealitky since #2029, each
   `walk_<source>` every 6 h, and sreality hourly since #2030, with no `--max-seconds`, the runner's SIGTERM at the
   timeout its one budget; the longer walks wait on their workflows):
-  - two replicas in the worker's region, each 4 vCPU and 8 GB, restart policy ALWAYS, `checkSuites: false`. Railway
-    counts decimal bytes, so 8e9 B is 7,629 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
+  - two replicas in the worker's region, each 4 vCPU and 12 GB (8 GB until #2031), restart policy ALWAYS, `checkSuites: false`.
+    Railway counts decimal bytes, so 12e9 B is 11,444 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
     line and every beat carry `memory_limit_mb` and `cpus` as the replica's cgroup reads them;
   - `drainingSeconds` 250: the runner checks its own 180 s drain only between ticks, then forgets its heartbeat, so
     Railway's SIGKILL must wait a guard poll, that drain, a tick, one stopping tick and the forget, 243 s (a test ties
@@ -1718,9 +1718,8 @@ on 2026-12-01, and until then a file of that name would override the applied set
   after the close; in the runner image it then loads one exit IP's session (`PAGES_PER_EXIT_IP`, 250) of a full-size
   ceskereality page and prints the memory held, the walk's sizing (information, not a verdict). A census holds every
   `EXTRAS` a service declares to one CI build, and each one naming `browser` to that check. Playwright launches
-  chromium as its own process group, so a job's `peak_rss_mb` never counts it and the runner's group SIGKILL never
-  reaches it: chromium exits once its driver's pipe closes (a SIGKILL of a walk's group took it down within 5 s,
-  2026-11-26), and its exited helpers go to PID 1, the runner, which reaps them.
+  chromium as its own process group; since #2689 the runner reads a job's whole process tree, so `peak_rss_mb` counts
+  it and the timeout's kill reaches it, and its exited helpers go to PID 1, the runner, which reaps them.
 - **The runner is cut only by a new deployment:** a Redeploy of the ACTIVE deployment (same image and configuration)
   or Deploy Latest Commit. Restart restarts the process inside its container, and no doc says it honours
   `drainingSeconds`, so it is never a runner procedure. **Never boot an older runner image:** no dashboard Rollback,

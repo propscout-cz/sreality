@@ -17,9 +17,10 @@ HOUR, DAY = 3600, 86400
 # Children per replica (job_runner.MAX_CHILDREN enforces it); the largest that many declarations fit this share of
 # one replica.
 RUNNER_MAX_CONCURRENT = 3
-# Railway's 8 GB = 8e9 B (.railway/railway.ts RUNNER_MEMORY_BYTES), in MiB. 81 %, not 70 %, since clip's honest
-# 3072 (#2155; operator ruling 2026-10-28): revisit with the replica's memory when ruian_load moves.
-REPLICA_MEMORY_MB, CO_TENANCY_SHARE = 7629, 0.81
+# Railway's 12 GB = 12e9 B (.railway/railway.ts RUNNER_MEMORY_BYTES), in MiB: 8 GB until a walk with chromium needed
+# ~1.3 GB (operator decision 2026-11-27, option A; Railway bills what a replica uses, not its limit). 81 % since clip's
+# honest 3072 (#2155; operator ruling 2026-10-28).
+REPLICA_MEMORY_MB, CO_TENANCY_SHARE = 11444, 0.81
 # The runner's SIGKILL grace after its SIGTERM stays under this; the API's stuck-run cutoff exceeds the longest
 # walk by it, and the DB-heavy hour census counts it (tests/scraper/test_job_registry.py).
 STUCK_RUN_GRACE_S = 600
@@ -28,7 +29,8 @@ STUCK_RUN_GRACE_S = 600
 # for all three since the address load moved too (#2033).
 LOCATION_HEAVY = "location-heavy"
 WALK_PREFIX = "walk_"
-WALK_MEMORY_MB, WALK_CPUS = 512, 1
+# One declaration for every walk (no per-portal value): a ceskereality walk's chromium held ~1,263 MB (#2031).
+WALK_MEMORY_MB, WALK_CPUS = 1536, 1
 # W4 moves the walks shortest first (PROGRAM § W4): a walk whose timeout fits this runs on the runner, the rest wait on
 # their workflows. A batch raises it and deletes the workflows it takes over; it names no portal (rule 21). Which walks
 # each cutoff took, and why the next waits: PROGRAM § W4.
