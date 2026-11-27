@@ -389,8 +389,8 @@ idnes (240) the last waiting walk. `realitymix_index_walk.yml` and `ceskereality
 (`realitymix-index-walk`, `ceskereality-index-walk`) are deleted; their dispatch inputs (`--max-pages`,
 `--max-seconds`, ceskereality's `--kraj`) are request args now. GitHub's throttled cron delivered 14 walks of each in
 the 7 days to 11-27 (p95 3,053 s and 4,421 s, none near the 9,000 s budget each carried). The job cell reads Watch
-past ⅔ of the 180 min timeout (7,200 s): realitymix's slowest walk in 30 days took 3,295 s (119 % above), ceskereality's
-slowest since its exit IP rotates (#2547, 11-17) 4,421 s (63 %); its two walks of 11-16 on one sticky exit IP (4,633
+past ⅔ of the 180 min timeout (7,200 s): realitymix's slowest of 68 walks in 30 days took 3,295 s (119 % above),
+ceskereality's slowest of 21 since its exit IP rotates (#2547, 11-17) 4,421 s (63 %); its two walks of 11-16 on one sticky exit IP (4,633
 and 8,246 s, the second past the line) predate that fix. realitymix needs neither the proxy nor the browser;
 ceskereality is `USE_PROXY`/`PROXY_REQUIRED` and fetches through `scraper/browser_fetch.py`, so it moves only onto
 #2685's `SCRAPER_PROXY_URL` reference and #2688's chromium and 1,536 MB declaration. Joining the 12 h group moves

@@ -166,8 +166,7 @@ class CeskerealityPortal(portal_runner.PortalDefaults):
     # Every request rides the paid residential proxy: 12 h keeps the walk's proxy traffic at the ~2 walks a day GitHub
     # delivered (operator decision 2026-11-27).
     walk_every_s = 12 * 3600
-    # job/walk_ceskereality reads Watch past 2/3 of it (7,200 s): the slowest of 21 GitHub walks since the exit IP
-    # rotates (#2547, 2026-11-17 to 11-27) took 4,421 s, so the line sits 63 % above it.
+    # Its 2/3 Watch line clears its slowest GitHub walk (PROGRAM § W4).
     walk_timeout_s = 180 * 60
     index_rate = 0.7
     # The denominator this portal reports to the runner is the NATIONAL total, and
