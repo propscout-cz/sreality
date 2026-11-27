@@ -13,8 +13,8 @@ apply" and "the proxy applied" produce the same status codes and the same parsed
 rows — only 13x apart in wall-clock, which nothing asserts on.
 
 Each portal's own unit tests can see its own client. None of them can see a
-missing line in a YAML file, or in `.railway/railway.ts` for a walk the job
-runner runs (#2030): the runner hands its service's env to every child.
+missing line in `.railway/railway.ts`: the job runner runs every walk (#2031)
+and hands its service's env to every child.
 """
 
 from __future__ import annotations
@@ -33,7 +33,6 @@ from tests._railway_iac import iac_env_names
 
 _ROOT = Path(__file__).resolve().parents[2]
 _SCRAPER = _ROOT / "scraper"
-_WORKFLOWS = _ROOT / ".github" / "workflows"
 
 PROXY_ENV = "SCRAPER_PROXY_URL"
 
@@ -85,24 +84,10 @@ def test_the_runner_proxy_census_fires() -> None:
 
 
 @pytest.mark.parametrize("stem,source", _proxied_clients())
-def test_a_proxied_portals_workflows_pass_the_secret(stem: str, source: str) -> None:
-    """Every workflow that runs this portal's scraper must hand it the secret; a job the runner runs instead is
-    judged by the census above."""
-    runners = [
-        p for p in sorted(_WORKFLOWS.glob("*.yml"))
-        if re.search(rf"scraper\.{source}(_main)?\b", p.read_text(encoding="utf-8"))
-    ]
-    on_runner = [j.name for j in jobs.runner_jobs() if _runs(j, source)]
-    assert runners or on_runner, f"no workflow and no runner job runs scraper.{source}* — was one renamed?"
-    missing = [
-        p.name for p in runners
-        if PROXY_ENV not in p.read_text(encoding="utf-8")
-    ]
-    assert missing == [], (
-        f"{stem} sets USE_PROXY but {missing} never pass {PROXY_ENV}: those jobs "
-        f"fall back to the direct IP with only a log warning, so the portal keeps "
-        f"the throttled egress while every check stays green"
-    )
+def test_a_proxied_portal_is_walked_on_the_runner(stem: str, source: str) -> None:
+    """The census above judges runner jobs only, so a proxied portal no runner job runs (a renamed module) would pass
+    it vacuously. A workflow that ran one would fail the registry's pairing census (no walk is on GitHub, #2031)."""
+    assert [j.name for j in jobs.runner_jobs() if _runs(j, source)], f"no runner job runs scraper.{source}* ({stem})"
 
 
 def test_the_fallback_warns_rather_than_failing_silently() -> None:

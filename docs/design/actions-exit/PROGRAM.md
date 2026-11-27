@@ -92,7 +92,7 @@ production.
   Portal class attributes `walk_every_s` and `walk_timeout_s` (never in the DB-overridable limits layer), so
   shared scheduler code names no portal (rule 21). Every job's entry exists from W2 with a `host`:
   `job-runner`, `github-actions` (the canary and price stats), or `github-actions-until-moved` (a workflow
-  still schedules it; its values are the move's targets). **A scheduler reads `runner_jobs()` only**
+  still schedules it; its values are the move's targets; deleted with the last walk's move, #2031). **A scheduler reads `runner_jobs()` only**
   (`host == job-runner`; `declared()` is the censuses'); it upserts, schedules, claims and accepts a request
   only for those names, adopts a `registry_at IS NULL` row one of them names (lease state and history kept),
   logs and skips a row it cannot reconcile instead of aborting at boot, and retires only rows with
@@ -104,8 +104,8 @@ production.
   retries, not a deploy's at-once re-run of an interrupted one, which waits instead: #2027's heavy turn); the API's stuck-run
   cutoff (`STUCK_RUN_CUTOFF_MINUTES`) exceeds the longest walk timeout (the walks are the `scrape_runs`
   writers) plus `STUCK_RUN_GRACE_S`; the GitHub schedule set is exactly {verify_pipeline,
-  scrape_price_stats} once the files still running a waiting job are set aside, so it tightens by itself
-  when the last one moves; and, computed from the workflow files with no hand-kept ledger, every job runs on
+  scrape_price_stats} (until #2031 moved the last walk, once the files still running a waiting job were set
+  aside); and, computed from the workflow files with no hand-kept ledger, every job runs on
   exactly one host.
 - **One service** (`python -m scraper.job_runner run`, exec form: a shell as PID 1 forwards no SIGTERM), **two
   identical replicas**, 8 GB / 4 vCPU each,
@@ -281,7 +281,7 @@ can start after the merge. A new row's first slot comes after `now() + timeout_s
 re-land within an hour of its revert's deploy keeps the old `due_at` and claims at its boot, so its retired row
 is paused before that deploy.
 The PR that moves the last waiting job (#2031, #2032 or #2033) also deletes the `github-actions-until-moved`
-host, its ratchet and the gone leavers in the registry test.
+host, its ratchet and the gone leavers in the registry test (#2031's idnes step, below).
 **As built (#2025), three PRs, each merged on the merge light:** (1) the `job-runner` service, dark, applied at its
 head inside one window (`scripts/railway_iac_wizard.sh window worker 1 0 job-runner`), then merged at once, with the
 runner image, migration 683 (`rent_map_cells` names its scripts, not a workflow) and the wizard's general modes;
@@ -398,6 +398,21 @@ mmreality's slot to 06:00/18:00 (ceskereality takes 00:00/12:00), and the 6 h gr
 The runner walks realitymix 4 times a day where GitHub managed 2 (its direct index requests about 4,900 to 9,800 a day,
 inside its 1 req/s budget); ceskereality's proxied walk holds at about 4,800 pages a day. **This PR merges only after
 the bazos step and #2685's and #2688's wizard applies.**
+**As built (#2031), batch 3 ends with idnes, the last walk.** It moves on its own `walk_timeout_s` (240 min, every
+6 h), and with it the waiting state goes: `jobs.UNTIL_MOVED` and its host value, `jobs.RUNNER_WALK_TIMEOUT_S` and
+`_walk`'s host choice (every walk is a runner job), and in the registry test the waiting set
+(`ORIGINAL_UNTIL_MOVED`), the cutoff census, the waiting arms of the pairing and GitHub-set censuses, their
+"tightens itself" test and the gone leaver (`recompute_city_proximity.yml`); `test_proxy_wiring.py` drops its
+workflow arm (the pairing census refuses any workflow running a runner job). The registry is runner jobs plus the
+two GitHub jobs (price_stats, verify_pipeline); the timeout floor stays, for them. `idnes_index_walk.yml` and its group
+`idnes-index-walk` are deleted; its dispatch inputs (`--max-pages`, `--max-seconds`) are request args now. GitHub's
+throttled cron delivered 14 walks in the 7 days to 11-27 (p50 5,580 s, p95 and max 7,129 s, 4,327 pages on average,
+none near the 13,000 s budget it carried), so the job cell's Watch line (9,600 s) sits 35 % above its slowest walk; on
+11-14 two walks took 8,891 and 12,594 s (2.0 and 2.8 s a page through the proxy), and a day like that reads Watch
+inside the timeout. idnes is `USE_PROXY` (not `PROXY_REQUIRED`) and its workflow passed `SCRAPER_PROXY_URL`, so its
+walk rides the runner's proxy reference (#2685); at its declared 6 h the runner walks it 4 times a day where GitHub
+managed 2, so its proxied walk requests double (about 8,650 to 17,300 a day); the operator's 12 h decision named
+ceskereality and mmreality only, so idnes's cadence waits on his word. **This PR merges only after the 180 min step.**
 **Gate per walk (7 days):** pages and reached-end per cycle, nominations per day (a moved walk keeps its declared
 cadence), ± 10 %; 403/429 share from
 Railway ≤ the GitHub baseline; 0 `ended_at NULL` after ≥ 5 mid-walk deploys; proxy GB/day within its band;

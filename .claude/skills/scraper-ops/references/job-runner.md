@@ -7,7 +7,8 @@ rulings: `docs/design/actions-exit/PROGRAM.md` § 4.2. Since #2025's move PR it 
 and since #2028 `location_intake`, whose workflows those PRs deleted, since #2604 `ruian_buildings` (13:00 UTC, born
 on the runner; `docs/architecture.md` § Register facts), since #2029 the walks of web, maxima and bezrealitky, since
 #2033 the daily `ruian_load` (below), since #2030 the hourly sreality walk and the walks of remax and mmreality, and
-since #2031 the walks of bazos, realitymix and ceskereality; #2031's last PR moves idnes. On Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and 12 GB
+since #2031 the walks of bazos, realitymix, ceskereality and idnes: every walk, GitHub keeping only the canary and
+price stats. On Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and 12 GB
 (`.railway/railway.ts` `jobRunner`; settings, drain and image: `docs/architecture.md` § Railway service
 configuration). Its Health cells and the "Jobs: run now" form are #2026's (below).
 
@@ -216,32 +217,31 @@ of a sibling on its resource seen since its clock started. The worst condition w
 
 ## The walks (W4: `walk_<source>`, #2029, #2030, #2031)
 
-- **Which walks run here:** every walk whose Portal class's `walk_timeout_s` is at most `jobs.RUNNER_WALK_TIMEOUT_S`
-  (180 min since #2031: `walk_web` 15 min, `walk_maxima` and `walk_bezrealitky` 30 min, `walk_remax` 60 min,
-  `walk_bazos` 130 min and `walk_realitymix` 180 min, each every 6 h, `walk_mmreality` 60 min and `walk_ceskereality`
-  180 min every 12 h (proxied; operator decision 2026-11-27), and `walk_sreality` 50 min, hourly (R24); 1,536 MB,
-  1 CPU, since #2031 for every walk). idnes (240 min) waits on its workflow (`github-actions-until-moved`). A batch
-  raises the cutoff and deletes the workflows it takes over, and names no portal (rule 21); the registry census
-  `test_a_walks_host_is_the_cutoffs` refuses a per-portal host value (one would need a ruling).
+- **Which walks run here:** every walk, since #2031 (`jobs._walk` has no host choice; the Portal class's
+  `walk_every_s`/`walk_timeout_s`: `walk_web` 15 min, `walk_maxima` and `walk_bezrealitky` 30 min, `walk_remax` 60 min,
+  `walk_bazos` 130 min, `walk_realitymix` 180 min and `walk_idnes` 240 min, each every 6 h, `walk_mmreality` 60 min
+  and `walk_ceskereality` 180 min every 12 h (proxied; operator decision 2026-11-27), and `walk_sreality` 50 min,
+  hourly (R24); 1,536 MB, 1 CPU). A new portal's walk is born here; the stuck-run census bounds its timeout.
 - **One budget:** the argv is `scraper.<source>_main --index-only` with no `--max-seconds`; the runner's SIGTERM at
   `timeout_s` is the walk's deadline (`stop` → `portal.deadline_reached`). A deploy's SIGTERM ends it 143,
   `interrupted`, re-claimed at once and resumed inside its cycle (a cut group nominates nothing; only the fragment
   that closes the cycle nominates orphans). A walk stopped at its own timeout is `timeout`, a Problem: W4 keeps each
   `walk_timeout_s` above the walk's p95 (7 days to 2026-11-25 on GitHub: web 3 s, maxima 40 s, bezrealitky 137 s;
   to 11-26 sreality 1,518 s, remax 525 s, mmreality 961 s, bazos 3,272 s, to 11-27 realitymix 3,053 s, ceskereality
-  4,421 s, none near its old `--max-seconds`: 1,800, 2,100, 2,400, 6,600, 9,000 s). Its ⅔ Watch line sits ≥ 25 %
-  above its slowest GitHub walk (PROGRAM § W4).
+  4,421 s, idnes 7,129 s, none near its old `--max-seconds`: 1,800, 2,100, 2,400, 6,600, 9,000, 13,000 s). Its ⅔
+  Watch line sits ≥ 25 % above its slowest GitHub walk (PROGRAM § W4).
 - **Exits:** 0 a walk, a partly failed one included (`errors` in `scrape_runs`); 1 when every category failed or an
   empty walk (`CHECK empty_walk`), retried on the failure backoff (60 s doubling, capped at the cadence and the next
   slot), where GitHub waited for the next cron.
 - **Politeness does not depend on the host:** a walk leases the same `portal_rate_state` budget
   (`scraper_limits_global` `shared_rate_limiter`) on either host and waits as long as it says (no `max_wait_s`).
   Egress moves from GitHub's rotating Azure addresses to Railway's, which the worker's drain (and, but for web, its
-  probe) already uses on these portals. Of the nine mmreality and ceskereality are proxied (`USE_PROXY`,
+  probe) already uses on these portals. Of the ten mmreality and ceskereality are proxied (`USE_PROXY`,
   `PROXY_REQUIRED`; ceskereality through the headless browser, `scraper/browser_fetch.py`): each rides the residential
   proxy as on GitHub (below), every 12 h, the ~2 walks a day GitHub delivered, so its proxy traffic holds (~963 and
-  ~2,400 pages a walk). The 6 h grid walks bazos and realitymix 4 times a day where GitHub managed about 2, so their
-  direct index requests double (~1,300 and ~2,450 pages a walk).
+  ~2,400 pages a walk). idnes rides it too (`USE_PROXY`, not `PROXY_REQUIRED`: a direct IP is throttled, not
+  refused), every 6 h, so its proxied walk traffic doubles (~4,330 pages a walk); bazos and realitymix's direct index
+  requests double the same way (~1,300 and ~2,450 pages a walk).
 - **Run one now:** "Jobs: run now" with `walk_<source>`; args append (`--max-pages 2` stops each category short of
   its end, so it nominates nothing; bazos also takes `--sale-type` with `--category`, one section that ends no cycle, or
   `--locality`/`--radius-km`, and ceskereality `--kraj <slug>`, a slice that nominates nothing). A walk writes its `scrape_runs` row (`run_type='index'`)
@@ -268,7 +268,7 @@ runs nothing on GitHub; the runner starts the job within seconds once it and its
    Redeploy at once: a pure request keeps `due_at`, so nothing re-claims it.
 4. **Run workflow**.
 5. Open the run and read its one summary line: `request filed for <job>`, or why not (`<job> runs on
-   github-actions-until-moved` until its move PR lands; `a request by … has waited since …`; `not a job name`; `args: an unmatched quote, nothing filed`). Then
+   github-actions` (the canary, price stats); `a request by … has waited since …`; `not a job name`; `args: an unmatched quote, nothing filed`). Then
    watch `job/<name>` on Health. Green means asked, not done.
 
 ## Runner-only operations outside the merge coordinator's windows (#2025-R2, ruled 2026-10-26)

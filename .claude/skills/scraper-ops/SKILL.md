@@ -129,16 +129,14 @@ worker's drain lane. Bazos's ad text needs a post-publication pass the other
 portals' structured pages don't: field-capture W7 runs it as the worker's `text_extract` lane
 (`toolkit/description_extraction.py`), never in the scrape — the LLM is behind publication, never
 in front of it.
-The bezrealitky, maxima and web
-walks are job-runner jobs since #2029, remax and mmreality since #2030, realitymix and ceskereality since #2031 (`walk_<source>`, every 6 h, the proxied two 12 h; run now:
+Every walk is a job-runner job since #2031 (`walk_<source>`, every 6 h, sreality hourly, mmreality and ceskereality 12 h; run now:
 `references/job-runner.md`). mmreality sends
 every request via the residential `SCRAPER_PROXY_URL` (CF 403s datacenter IPs; job-runner reads the worker's; `USE_PROXY` +
 `PROXY_REQUIRED=True` so the worker skips it when unset — idnes is proxied too but sets
 `PROXY_REQUIRED=False`, throttled not blocked; ceskereality sets `CLIENT_HINTS=True`, is **the
 one fetched by a HEADLESS BROWSER** (JS wall: `browser` extra + chromium, #2529; exit IP retires /250 pages + 2×403)). The idnes scrape is
 **cadence-split** like sreality (iDNES is large — 4,235 index pages, ~110k listings):
-`idnes_index_walk.yml` ("Scraping: iDNES Reality index walk", `idnes_main --index-only`, cron
-`15 */6`) feeds the worker's drain lane. idnes's `supports_complete_walk` was parked (migration 453) — posture only since
+the job runner's `walk_idnes` (every 6 h since #2031) feeds the worker's drain lane. idnes's `supports_complete_walk` was parked (migration 453) — posture only since
 2026-09-07, it gates no delisting; the walk is sliced into the 14 kraje + abroad (the gate that re-earned the flag retired in wave 4).
 **Parked flags, the walk cycle and the retired gate: `references/coverage-and-delisting.md`.**
 The properties track runs the worker's maintenance lane (**dirty-set incremental, every 30 s** — attaches new stragglers as
@@ -288,7 +286,7 @@ The detail-drain writes `scrape_runs` rows too (`run_type='detail'`), but only t
 ## Onboarding a portal — and the tenth, `web` (2026-10-21)
 
 A portal is one row per registry, never a branch (the registry list: `docs/architecture.md` § rule 21 and
-`docs/design/new-property-from-link.md` §3.4; its Portal class declares `walk_every_s`/`walk_timeout_s` (`scraper/jobs.py`)). A walk whose `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (180 min, #2031) is born on the runner; a longer one fails the waiting-set ratchet (`ORIGINAL_UNTIL_MOVED`, `tests/scraper/test_job_registry.py`) until the cutoff reaches it or the operator rules. Run a new portal's first walk at deploy (a runner `request`): `scraping` judges every portal in `SOURCES` from then, so `<portal>/walks` reads Problem until it walks (web, 2026-10-22).
+`docs/design/new-property-from-link.md` §3.4; its Portal class declares `walk_every_s`/`walk_timeout_s` (`scraper/jobs.py`)). Its walk is born on the job runner (every walk since #2031). Run a new portal's first walk at deploy (a runner `request`): `scraping` judges every portal in `SOURCES` from then, so `<portal>/walks` reads Problem until it walks (web, 2026-10-22).
 `web` (`scraper/web_main.py`) is `indexless`: its 6-hourly walk sees
 nothing, reaches the end and nominates every active row as an orphan (its unit has no scope); the worker drains it FIRST;
 its pages go through `scraper/egress.py` (private ranges refused per hop, a wall-clock deadline, a decoded cap). A pasted

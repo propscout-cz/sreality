@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from scraper import idnes_main, portal_runner
+from scraper import idnes_main, portal_runner, stop
 from scraper import portal as portal_mod
 from scraper.idnes_main import IdnesPortal
 from scraper.portal import PortalConfig
@@ -732,6 +732,21 @@ def test_a_deadline_mid_page_suppresses_the_category(monkeypatch):
         50.0)
     assert complete is False
     assert list(stops.values())[:1] == ["deadline"]
+
+
+def test_the_runners_stop_signal_is_our_stop_without_a_deadline(monkeypatch):
+    """W4 (#2031): on the job runner the walk carries no --max-seconds; the runner's SIGTERM at timeout_s (the stop
+    event) is its one budget, and reaches the slice loop through deadline_reached(None)."""
+    stop.EVENT.set()
+    monkeypatch.setattr(idnes_main, "parse_index", lambda _h: _page(items=[1], total=1, next_offset=1))
+    monkeypatch.setattr(idnes_main, "IdnesClient", _IdxClient)
+    monkeypatch.setattr(idnes_main.db, "index_summary_native", lambda *a, **k: {})
+    monkeypatch.setattr(idnes_main.db, "enqueue_detail", lambda *a, **k: 0)
+    stops = _slice_outcomes(monkeypatch)
+    seen, _c, _n, pages, complete = _portal().walk_category(
+        {"sale_type": "prodej", "category": "byty"}, _Conn(), False, _Limiter(), None)
+    assert complete is False and not seen
+    assert pages == 1 and stops == {}, "the national count only: no slice starts"
 
 
 def test_a_deadline_inside_the_last_slice_suppresses_the_category(monkeypatch):

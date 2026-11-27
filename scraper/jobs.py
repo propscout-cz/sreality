@@ -7,11 +7,9 @@ import importlib
 from dataclasses import dataclass
 from typing import Literal
 
-Host = Literal["job-runner", "github-actions", "github-actions-until-moved"]
+Host = Literal["job-runner", "github-actions"]
 RUNNER: Host = "job-runner"
 GITHUB: Host = "github-actions"
-# A workflow still schedules the job; the entry's values are the targets its move PR takes over.
-UNTIL_MOVED: Host = "github-actions-until-moved"
 
 HOUR, DAY = 3600, 86400
 # Children per replica (job_runner.MAX_CHILDREN enforces it); the largest that many declarations fit this share of
@@ -31,10 +29,6 @@ LOCATION_HEAVY = "location-heavy"
 WALK_PREFIX = "walk_"
 # One declaration for every walk (no per-portal value): a ceskereality walk's chromium held ~1,263 MB (#2031).
 WALK_MEMORY_MB, WALK_CPUS = 1536, 1
-# W4 moves the walks shortest first (PROGRAM § W4): a walk whose timeout fits this runs on the runner, the rest wait on
-# their workflows. A batch raises it and deletes the workflows it takes over; it names no portal (rule 21). Which walks
-# each cutoff took, and why the next waits: PROGRAM § W4.
-RUNNER_WALK_TIMEOUT_S = 180 * 60
 
 
 @dataclass(frozen=True)
@@ -106,9 +100,8 @@ _FIXED: tuple[Job, ...] = (
 
 
 def _walk(source: str, portal: type, offset_s: int) -> Job:
-    host = RUNNER if portal.walk_timeout_s <= RUNNER_WALK_TIMEOUT_S else UNTIL_MOVED
     return Job(f"{WALK_PREFIX}{source}", (f"scraper.{source}_main", "--index-only"), portal.walk_every_s,
-               offset_s, portal.walk_timeout_s, WALK_MEMORY_MB, WALK_CPUS, host)
+               offset_s, portal.walk_timeout_s, WALK_MEMORY_MB, WALK_CPUS, RUNNER)
 
 
 @functools.cache

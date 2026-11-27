@@ -236,8 +236,9 @@ to the API's own last page; the runner nominates the rows such a finished walk d
 a page check (rule #3, source-scoped) and the page decides.
 
 **Data source (reality.idnes.cz).** A scheduled scraper (`scraper/idnes_client.py`,
-`idnes_parser.py`, `idnes_main.py` — **cadence-split** like sreality/bazos:
-`idnes_index_walk.yml` every 6h feeds the realtime worker's drain lane) tagged
+`idnes_parser.py`, `idnes_main.py` — **cadence-split** like sreality/bazos: the job runner's
+`walk_idnes` every 6 h since #2031 (`idnes_index_walk.yml` before; its requests ride the residential proxy where
+set, `USE_PROXY` without `PROXY_REQUIRED`) feeds the realtime worker's drain lane) tagged
 `source='idnes'`. iDNES is an HTML portal (like bazos, not a JSON API) but a STRUCTURED one:
 `idnes_parser` reads the `<dl>` spec table, a clean price element, and **precise per-listing
 coordinates from the page's embedded map config** (`"center":[lon,lat]`), so there is no
@@ -1673,11 +1674,10 @@ on 2026-12-01, and until then a file of that name would override the applied set
   and the re-tag campaign, one unsharded run every 15 min; `fleet/photo_tags` judges its 45-min line), and of the
   daily `property_sweep` (03:00 UTC) and `broker_sweep` (06:00 UTC) since #2027, which never run beside each other
   or any other DB-heavy job (`job_lease`'s heavy turn), of the hourly claim intake `location_intake` since #2028
-  and the RÚIAN registry load `ruian_load` since #2033, daily (§ Location data), and of the walks whose
-  `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (180 min: web, maxima and bezrealitky since #2029, remax and
-  mmreality since #2030, bazos, realitymix and ceskereality since #2031, each `walk_<source>` every 6 h (mmreality and
-  ceskereality 12 h), and sreality hourly since #2030, with no `--max-seconds`, the runner's SIGTERM at the timeout its
-  one budget; idnes, the longer walk, waits on its workflow):
+  and the RÚIAN registry load `ruian_load` since #2033, daily (§ Location data), and of every walk (web, maxima and
+  bezrealitky since #2029, remax and mmreality since #2030, bazos, realitymix, ceskereality and idnes since #2031, each
+  `walk_<source>` every 6 h (mmreality and ceskereality 12 h), and sreality hourly since #2030, with no
+  `--max-seconds`, the runner's SIGTERM at the timeout its one budget; GitHub keeps the canary and price stats):
   - two replicas in the worker's region, each 4 vCPU and 12 GB (8 GB until #2031), restart policy ALWAYS, `checkSuites: false`.
     Railway counts decimal bytes, so 12e9 B is 11,444 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
     line and every beat carry `memory_limit_mb` and `cpus` as the replica's cgroup reads them;
