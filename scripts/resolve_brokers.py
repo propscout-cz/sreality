@@ -1730,13 +1730,13 @@ def main() -> int:
     deadline = started + args.max_seconds if args.max_seconds else None
 
     def reconnect() -> Any:
-        return db.connect(db_url)
+        return db.connect(db_url, **db.JOB_PATIENCE)
 
     # db.connect() instead of a bare psycopg.connect(): same autocommit +
     # prepare_threshold=None, PLUS TCP keepalives and a 3-attempt handshake retry.
     # This connection is held for the whole 60-90 minute sweep, so a pooler idle
     # reaper or a Supabase restart used to kill the run outright.
-    with db.connect(db_url) as conn:
+    with db.connect(db_url, **db.JOB_PATIENCE) as conn:
         free, franchise, auto_merge = _settings(conn)
         if args.dry_run:
             with conn.cursor() as cur:

@@ -109,7 +109,11 @@ The runner's own stop decides before the exit code.
 | any other exit, an unsent SIGKILL (likely the OOM killer) | `failed` | backoff: 60 s doubling, capped at the cadence and the next slot |
 | lease lapsed (runner crash, a database outage past the fence; a refused renewal, since the reaper closes the run first) | `lost` | now, then backoff on a second loss in a row; a pure request: unchanged (one exception, below) |
 
-A DB-heavy job's backoff, retry and lost waits go to its own hour (the next day at most), and **no DB-heavy job starts
+A DB-heavy job's backoff, retry and lost waits go to its own hour (the next day at most), so **the job itself outwaits
+a database restart** (#2660, ruling C): its first connect and every reconnect pass `db.JOB_PATIENCE`, 3 waits of 60 s,
+and with `probe` an attempt counts only once `SELECT 1` answers (a pooler that cannot reach the database fails it); a database
+down longer is an incident, and the day's Watch its signal. A census in `tests/scraper/test_db_connect_retry.py` holds
+every DB-heavy entry to it. **No DB-heavy job starts
 while another one's run is open** (#2027; `job_lease`'s `due`/`claim` with `PgLedger.heavy`, main's whole registry, so
 `once` too; a transaction advisory lock makes two replicas' heavy claims take turns). A run off its hours (an
 interrupted one, a recovery after hours down, a request) waits instead, and past 10 min its cell reads Watch `due N ago
@@ -211,7 +215,7 @@ of a sibling on its resource seen since its clock started. The worst condition w
 
 - **Which walks run here:** every walk whose Portal class's `walk_timeout_s` is at most `jobs.RUNNER_WALK_TIMEOUT_S`
   (130 min since #2031: `walk_web` 15 min, `walk_maxima` and `walk_bezrealitky` 30 min, `walk_remax` and
-  `walk_mmreality` 60 min, `walk_bazos` 130 min, each every 6 h, and `walk_sreality` 40 min, hourly (R24); 512 MB,
+  `walk_mmreality` 60 min, `walk_bazos` 130 min, each every 6 h, and `walk_sreality` 50 min, hourly (R24); 512 MB,
   1 CPU). The rest wait on their GitHub workflows (`github-actions-until-moved`). A batch raises the cutoff and deletes
   the workflows it takes over, and names no portal (rule 21); the registry census `test_a_walks_host_is_the_cutoffs`
   refuses a per-portal host value (one would need a ruling). The next cutoff (180 min) would take realitymix and

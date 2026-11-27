@@ -710,6 +710,14 @@ jobs:
           TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
         run: pytest tests/test_detail_queue_fairness_live.py tests/test_given_up_rearm_live.py -q
 
+      # The completions ledger keeps 21 days while its live readers judge 7 (#2665): the prune and each
+      # reader's window are statements over completed_at, so only executing them shows the week.
+      - name: The completions ledger keeps three weeks, its readers one (#2665)
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          DB_RAILS_REQUIRED: "1"
+        run: pytest tests/test_completion_ledger_window_live.py -q
+
       # A lease the caller will not wait for must be refused WITHOUT moving the shared
       # frontier (2026-09-29: callers slept an hour behind it). The fake ledger only
       # emulates that statement, and a failing one silently falls back to local pacing.
