@@ -32,7 +32,7 @@ WALK_MEMORY_MB, WALK_CPUS = 512, 1
 # W4 moves the walks shortest first (PROGRAM § W4): a walk whose timeout fits this runs on the runner, the rest wait on
 # their workflows. A batch raises it and deletes the workflows it takes over; it names no portal (rule 21). Which walks
 # each cutoff took, and why the next waits: PROGRAM § W4.
-RUNNER_WALK_TIMEOUT_S = 50 * 60
+RUNNER_WALK_TIMEOUT_S = 130 * 60
 
 
 @dataclass(frozen=True)

@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from scraper import mmreality_main, portal_runner
+from scraper import mmreality_main, portal_runner, stop
 from scraper.mmreality_main import MmRealityPortal
 from scraper.portal import PortalConfig
 from scraper.portal_base import ListingGoneError
@@ -426,6 +426,17 @@ def test_deadline_stops_before_fetching_and_is_incomplete(monkeypatch, caplog):
     monkeypatch.setattr(mmreality_main, "deadline_reached", lambda _d: True)
     _s, _c, total, pages, reached_end = _portal().walk_category(
         BYTY, object(), False, _Limiter(), deadline=1.0)
+    assert (total, pages, reached_end) == (None, 0, False)
+    assert _ScriptedClient.calls == []
+    assert _reconciled(caplog)["outcome"] == "deadline"
+
+
+def test_the_runners_stop_signal_is_our_stop_without_a_deadline(monkeypatch, caplog):
+    """W4 (#2030): on the job runner the walk carries no --max-seconds; the runner's SIGTERM at timeout_s (the stop
+    event) is its one budget, and reaches the page loop through deadline_reached(None)."""
+    _stub_walk(monkeypatch, caplog, {"1": _page([_item("1")], total=1)})
+    stop.EVENT.set()
+    _s, _c, total, pages, reached_end = _portal().walk_category(BYTY, object(), False, _Limiter())
     assert (total, pages, reached_end) == (None, 0, False)
     assert _ScriptedClient.calls == []
     assert _reconciled(caplog)["outcome"] == "deadline"
