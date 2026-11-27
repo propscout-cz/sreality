@@ -332,6 +332,8 @@ def test_the_lane_hands_the_engine_its_connection_and_nothing_else(
         # the reject ledger answered, and the rejects the pass ledgered
         "pairs_to_decide": 21, "pairs_to_decide_by_attempt": [21],
         "ledger_skipped": 31, "ledger_written": 6,
+        # E997: no deadline stopped this pass, so no salvage ran
+        "ledger_salvaged": None, "ledger_salvage_error": None,
         # what each forward feed left waiting: the summary of this test names none
         "waiting": None,
         # E960: the neighbourhood re-retrieved from the store, and the adverts read, by why

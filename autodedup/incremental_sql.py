@@ -1335,6 +1335,28 @@ on conflict (generation, listing_lo, listing_hi) do update set
     decided_at = now()
 """
 
+# E997: the rejects of a pass that stopped at its deadline, written after its rollback. Only a
+# pair that holds no row in `pairs`: the store is what the rollback left, and `pairs` and the
+# ledger never hold the same pair.
+RT_REJECT_LEDGER_SALVAGE_SQL = """
+insert into autodedup.rt_reject_ledger (
+    generation, listing_lo, listing_hi, dd_lo, dd_hi, decided_at
+)
+select %(generation)s::text, k.lo, k.hi, k.dd_lo, k.dd_hi, now()
+  from unnest(%(los)s::bigint[], %(his)s::bigint[], %(dd_los)s::text[], %(dd_his)s::text[])
+       as k(lo, hi, dd_lo, dd_hi)
+ where not exists (
+       select 1 from autodedup.pairs p
+        where p.generation = %(generation)s::text
+          and p.listing_lo = k.lo
+          and p.listing_hi = k.hi)
+on conflict (generation, listing_lo, listing_hi) do update set
+    dd_lo      = excluded.dd_lo,
+    dd_hi      = excluded.dd_hi,
+    decided_at = now()
+returning listing_lo
+"""
+
 # A pair the lane STORES leaves the ledger: `pairs` and the ledger never hold the same pair.
 RT_REJECT_LEDGER_DELETE_SQL = """
 delete from autodedup.rt_reject_ledger l
