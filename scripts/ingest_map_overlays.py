@@ -34,7 +34,7 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from scraper import contact
-from scraper.db import connect, stamp_derived_artifact
+from scraper.db import JOB_PATIENCE, connect, stamp_derived_artifact
 from toolkit.rent_map import MF_INFOGRAPHIC_URL
 
 LOG = logging.getLogger("ingest_map_overlays")
@@ -1136,7 +1136,7 @@ def main(argv: list[str] | None = None) -> int:
     failed: list[str] = []
     tiles = 0
     started = time.monotonic()
-    with connect() as conn:
+    with connect(**JOB_PATIENCE) as conn:
         for key in keys:
             try:
                 tiles += run_section(conn, http, arcgis, key, SOURCES[key],

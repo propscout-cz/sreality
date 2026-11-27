@@ -992,7 +992,7 @@ def main() -> int:
     )
 
     def reconnect() -> Any:
-        return db.connect(db_url)
+        return db.connect(db_url, **db.JOB_PATIENCE)
 
     started_at = time.monotonic()
     # db.connect() instead of a bare psycopg.connect(): same autocommit +
@@ -1000,7 +1000,7 @@ def main() -> int:
     # The full sweep holds this ONE connection for up to the whole budget, so a
     # pooler recycle or a Supabase restart (2026-08-11, an AdminShutdown 338s in)
     # used to kill the run outright.
-    with db.connect(db_url) as conn:
+    with db.connect(db_url, **db.JOB_PATIENCE) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT now()")
             cutoff = cur.fetchone()[0]

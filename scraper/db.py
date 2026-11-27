@@ -312,6 +312,10 @@ _KEEPALIVES: dict[str, int] = {
 # of database_url() and a real bug fails loud instead of spinning ~30s.
 _CONNECT_ATTEMPTS = 3
 _CONNECT_RETRY_DELAY = 10.0
+# A DB-heavy runner job's failed run retries a day later, so its first connect and every reconnect outwait a database
+# restart (#2660, ruling C): 3 waits of a minute. The pooler can accept a connection before it can reach a restarting
+# database, so `probe` counts an attempt only once the database answers.
+JOB_PATIENCE: dict[str, Any] = {"attempts": 4, "retry_delay": 60.0, "probe": True}
 
 
 def _connect_with_retry(
@@ -319,11 +323,19 @@ def _connect_with_retry(
     *,
     attempts: int,
     delay: float,
+    probe: bool = False,
 ) -> psycopg.Connection:
     for attempt in range(1, attempts + 1):
+        conn: psycopg.Connection | None = None
         try:
-            return opener()
+            conn = opener()
+            if probe:
+                conn.execute("SELECT 1")
+            return conn
         except Exception as exc:  # noqa: BLE001 - re-raised below unless transient
+            if conn is not None:
+                with contextlib.suppress(Exception):
+                    conn.close()
             if not is_transient_db_error(exc) or attempt >= attempts:
                 raise
             LOG.warning(
@@ -340,6 +352,7 @@ def connect(
     attempts: int = _CONNECT_ATTEMPTS,
     retry_delay: float = _CONNECT_RETRY_DELAY,
     connect_timeout: int | None = None,
+    probe: bool = False,
 ) -> psycopg.Connection:
     """Open an autocommit connection. Callers manage transactions explicitly.
 
@@ -352,7 +365,7 @@ def connect(
     apart (see _connect_with_retry). Callers that can't afford the full budget —
     the synchronous API per-request path — pass a smaller one, and a caller that
     must finish quickly passes `connect_timeout` (seconds per address; psycopg's
-    default is 130).
+    default is 130). A runner job passes JOB_PATIENCE.
     """
     return _connect_with_retry(
         lambda: psycopg.connect(
@@ -364,6 +377,7 @@ def connect(
         ),
         attempts=attempts,
         delay=retry_delay,
+        probe=probe,
     )
 
 
@@ -372,6 +386,7 @@ def connect_session(
     *,
     attempts: int = _CONNECT_ATTEMPTS,
     retry_delay: float = _CONNECT_RETRY_DELAY,
+    probe: bool = False,
 ) -> psycopg.Connection:
     """Open a connection that lets psycopg3 auto-prepare statements.
 
@@ -387,11 +402,12 @@ def connect_session(
     """
     session_url = url or os.environ.get("SUPABASE_DB_SESSION_URL")
     if not session_url:
-        return connect(attempts=attempts, retry_delay=retry_delay)
+        return connect(attempts=attempts, retry_delay=retry_delay, probe=probe)
     return _connect_with_retry(
         lambda: psycopg.connect(session_url, autocommit=True, **_KEEPALIVES),
         attempts=attempts,
         delay=retry_delay,
+        probe=probe,
     )
 
 
