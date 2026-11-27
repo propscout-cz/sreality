@@ -181,7 +181,8 @@ def test_a_walks_host_is_the_cutoffs() -> None:
     assert walk_host_problems(jobs.declared(), _portal_classes()) == []
     hosts = {j.name: j.host for j in jobs.declared() if j.name.startswith(jobs.WALK_PREFIX)}
     assert {n for n, h in hosts.items() if h == jobs.RUNNER} == {
-        "walk_web", "walk_maxima", "walk_bezrealitky", "walk_sreality"}, "batch 1 (#2029), batch 2's first (#2030)"
+        "walk_web", "walk_maxima", "walk_bezrealitky", "walk_sreality", "walk_remax", "walk_mmreality"}, \
+        "batch 1 (#2029), batch 2 (#2030: sreality at 50 min, remax and mmreality at 60)"
 
 
 def test_the_walk_host_census_fires() -> None:
@@ -573,13 +574,14 @@ def test_every_job_has_exactly_one_host() -> None:
 
 
 # Each move PR's job and the workflow it deleted: W2 (#2025), W5 (#2032, #2033), W3 (#2027, #2028), W4 batch 1 (#2029),
-# W4 batch 2's sreality (#2030).
+# W4 batch 2 (#2030: sreality, then remax and mmreality).
 MOVED = (("stale_images", "refresh_stale_images.yml"), ("rent_map", "fetch_rent_map.yml"),
          ("map_overlays", "ingest_map_overlays.yml"), ("clip", "clip_tag.yml"),
          ("property_sweep", "recompute_property_stats.yml"), ("broker_sweep", "resolve_brokers_full.yml"),
          ("location_intake", "location_claims_intake.yml"), ("ruian_load", "location_registry_load.yml"),
          ("walk_web", "web_index_walk.yml"), ("walk_maxima", "scrape_maxima.yml"),
-         ("walk_bezrealitky", "scrape_bezrealitky.yml"), ("walk_sreality", "index_walk.yml"))
+         ("walk_bezrealitky", "scrape_bezrealitky.yml"), ("walk_sreality", "index_walk.yml"),
+         ("walk_remax", "scrape_remax.yml"), ("walk_mmreality", "scrape_mmreality.yml"))
 
 
 @pytest.mark.parametrize(("name", "file"), MOVED)
