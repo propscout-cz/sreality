@@ -650,6 +650,11 @@ def _kill_quietly(pgid: int) -> None:
         os.killpg(pgid, signal.SIGKILL)
 
 
+def _kill_pid_quietly(pid: int | None) -> None:
+    if pid is not None and _state(pid) not in (None, "Z"):
+        os.kill(pid, 9)
+
+
 def _state(pid: int) -> str | None:
     """The /proc state letter of `pid`, None once it is gone."""
     try:
@@ -727,10 +732,38 @@ def test_a_jobs_process_tree_is_its_group_and_every_descendant_in_any_group(tmp_
     assert sorted(killed) == [100, 200]
 
 
+def test_the_tree_kill_signals_the_jobs_own_group_first_and_goes_on_past_a_refusal(tmp_path: Path) -> None:
+    """#2689 review: the job's group dies first, and a group that refuses SIGKILL (EPERM) stops no other group's."""
+    rows = [(100, 1, 100, 1, "S"), (101, 100, 100, 1, "S"), (250, 101, 250, 1, "S"), (200, 101, 200, 1, "S")]
+    for pid, ppid, pgrp, rss, state in rows:
+        (tmp_path / str(pid)).mkdir()
+        (tmp_path / str(pid) / "stat").write_text(_stat_line(pid, ppid, pgrp, rss, state))
+    killed: list[int] = []
+
+    def killpg(group: int, _sig: int) -> None:
+        killed.append(group)
+        if group == 200:
+            raise PermissionError(1, "Operation not permitted")
+
+    with mock.patch.object(job_process.os, "killpg", killpg):
+        job_process._kill_tree(100, str(tmp_path))
+    assert killed[0] == 100 and sorted(killed) == [100, 200, 250]
+
+
+def test_the_tree_kill_never_signals_the_runners_own_group_or_group_zero(tmp_path: Path) -> None:
+    """The belt under the setsid shim: whatever pid it is handed, the kill never reaches the runner's own group."""
+    killed: list[int] = []
+    with mock.patch.object(job_process.os, "killpg", lambda group, _sig: killed.append(group)):
+        job_process._kill_tree(os.getpgrp(), str(tmp_path))
+        job_process._kill_tree(0, str(tmp_path))
+    assert killed == []
+
+
 def test_a_browser_in_a_session_of_its_own_is_counted_and_killed_with_its_job() -> None:
     """#2689, with real processes: a grandchild that setsid()s (as chromium) is in the job's memory and its kill."""
     child = job_process.spawn_process([sys.executable, "-m", CHILD, "--detached-grandchild-mb", "96"],
                                       dict(os.environ), "browser#1", lambda _c: None)
+    detached = None
     try:
         _wait_for(lambda: "ready" in child.tail())
         [detached] = [int(line.split()[1]) for line in child.tail().splitlines() if line.startswith("detached ")]
@@ -742,6 +775,7 @@ def test_a_browser_in_a_session_of_its_own_is_counted_and_killed_with_its_job() 
         child.reap()
     finally:
         job_process._kill_tree(child.pid)
+        _kill_pid_quietly(detached)  # once the leader is reaped, the tree no longer reaches its setsid() grandchild
 
 
 def test_a_runner_job_whose_browser_runs_in_its_own_session_records_it_and_kills_it_at_the_timeout() -> None:
@@ -774,6 +808,7 @@ def test_a_runner_job_whose_browser_runs_in_its_own_session_records_it_and_kills
     finally:
         if pgid is not None:
             job_process._kill_tree(pgid)
+        _kill_pid_quietly(detached)
 
 
 def test_a_real_child_that_ignores_sigterm_is_killed_after_the_grace_and_recorded_whole() -> None:
