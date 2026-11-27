@@ -70,7 +70,8 @@ from autodedup.features import _attr_map as _feature_attr_map
 from autodedup.fingerprint import Fingerprint, build_fingerprint
 from autodedup.d43 import relation_for
 from autodedup.guards import (
-    UNIT_DESIGNATOR_VETO, GuardSide, exemption_window_quota, in_exemption_window, pair_veto,
+    PHOTO_PROBE, UNIT_DESIGNATOR_VETO, GuardSide, exemption_window_quota, gallery_window_only,
+    in_exemption_window, pair_veto, photo_key_still_possible,
 )
 from autodedup.hazard_context import BlockCell, ContextIndex, ContextStamp, rail_plan
 from autodedup.hazard_context import address_block_key, category_group
@@ -799,6 +800,12 @@ def _fill(
     out: dict[int, set[str]] = {}
     # C4c: the candidates only an area exemption admits, in fill order, seated after the fill.
     window: dict[int, set[str]] = {}
+    # E1000: the gallery limb's candidates no photo-hash key has reached YET (met under a probe
+    # that fills before the photo probe): they hold a place in the fill order and none in the
+    # quota until a photo key confirms them. One first met after the photo probe can no longer
+    # be reached and is `unreached`: no place at all.
+    waiting: set[int] = set()
+    unreached: set[int] = set()
     cap = settings.max_candidates_per_listing
     quota = exemption_window_quota(cap)
     # The loose probe's window candidates: the count before it, after it, and whether the quota
@@ -809,7 +816,7 @@ def _fill(
         # turns away a base candidate the floor would admit while it is read, or the window's
         # seats end among the candidates it met first.
         ordered = probe != loose or len(out) >= cap
-        start, overflow = len(window), False
+        start, overflow = len(window) - len(waiting), False
         for token in by_probe[probe]:
             if keyer.is_exploded(probe, token):
                 continue
@@ -821,6 +828,13 @@ def _fill(
                     hit = window.get(other)
                 if hit is not None:
                     hit.add(probe)
+                    if probe == PHOTO_PROBE and other in waiting:
+                        if len(window) - len(waiting) < quota:
+                            waiting.discard(other)
+                        else:
+                            overflow = True
+                    continue
+                if other in unreached:
                     continue
                 pair = (listing_id, other) if listing_id < other else (other, listing_id)
                 if len(out) >= cap:
@@ -841,18 +855,24 @@ def _fill(
                     continue
                 if not in_exemption_window(side, row, settings):
                     out[other] = {probe}
-                elif len(window) < quota:
+                elif gallery_window_only(side, row, settings) and probe != PHOTO_PROBE:
+                    if photo_key_still_possible(probe, probes):
+                        window[other] = {probe}
+                        waiting.add(other)
+                    else:
+                        unreached.add(other)
+                elif len(window) - len(waiting) < quota:
                     window[other] = {probe}
                 else:
                     overflow = True
         if not ordered:
-            loose_span = (start, len(window), overflow)
+            loose_span = (start, len(window) - len(waiting), overflow)
     seats = min(cap - len(out), quota)
     if loose_span is not None:
         start, end, overflow = loose_span
         if start < seats and (seats < end or overflow):
             return None
-    for other in list(window)[:seats]:
+    for other in [other for other in window if other not in waiting][:seats]:
         out[other] = window[other]
     return out
 
