@@ -2,8 +2,8 @@ name: "Jobs: run now"
 
 # Asks the Railway job runner to run one of its jobs now. It only FILES a request (one row on scheduled_jobs, written
 # by the runner's own `request` verb) and runs nothing here. The runner starts it within seconds once the job and its
-# shared resource are free, even while its schedule is paused; a second request is refused while one waits; a job its
-# own workflow still schedules is refused until its move PR lands. A green run means "asked", not "done": follow the
+# shared resource are free, even while its schedule is paused; a second request is refused while one waits; a job
+# GitHub hosts (the canary, price stats) is refused. A green run means "asked", not "done": follow the
 # run on Health (job/<name>). Required secret: SUPABASE_DB_URL.
 #
 # The job box takes the name Health shows after job/ (operator ruling R-2, #2026: typed, never a drop-down, which would

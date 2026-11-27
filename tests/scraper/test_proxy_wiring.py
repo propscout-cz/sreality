@@ -23,7 +23,6 @@ import importlib
 import inspect
 import re
 from collections.abc import Sequence
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -78,7 +77,7 @@ def test_a_proxied_portal_on_the_runner_gets_the_proxy() -> None:
 def test_the_runner_proxy_census_fires() -> None:
     proxied = _proxied_clients()
     walk = next(j for j in jobs.declared() if j.name.startswith(jobs.WALK_PREFIX) and _runs(j, proxied[0][1]))
-    on_runner = [replace(walk, host=jobs.RUNNER)]
+    on_runner = [walk]
     assert runner_proxy_problems(on_runner, proxied, iac_env_names("jobRunner") - {PROXY_ENV})
     assert runner_proxy_problems(on_runner, proxied, iac_env_names("jobRunner") | {PROXY_ENV}) == []
 

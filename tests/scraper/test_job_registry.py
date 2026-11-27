@@ -134,7 +134,8 @@ def _portal_classes() -> dict[str, type]:
 
 
 def walk_problems(entries: Sequence[Job], portals: dict[str, type]) -> list[str]:
-    """One walk per portal, each through `scraper.<source>_main` on its class's own walk schedule."""
+    """One walk per portal, each through `scraper.<source>_main` on its class's own walk schedule, and no third
+    code-only per-portal walk value beside it (PROGRAM § W4: one needs a ruling; every walk declares one memory)."""
     problems: list[str] = []
     entrypoints = {f"scraper.{s}_main" for s in portals} | {cls.__module__ for cls in portals.values()}
     walks = {j.name: j for j in entries if j.argv[0] in entrypoints}
@@ -147,6 +148,10 @@ def walk_problems(entries: Sequence[Job], portals: dict[str, type]) -> list[str]
         schedule = tuple(getattr(cls, a, None) for a in WALK_ATTRS)
         if not all(type(v) is int and v > 0 for v in schedule):
             problems.append(f"{cls.__name__}: {WALK_ATTRS} must be positive ints, not {schedule}")
+        extra = sorted(a for a in dir(cls) if a.startswith("walk_") and a not in WALK_ATTRS
+                       and not callable(getattr(cls, a)))
+        if extra:
+            problems.append(f"{cls.__name__}: {extra} beside {WALK_ATTRS}: a per-portal walk value needs a ruling")
         walk = walks.get(f"{jobs.WALK_PREFIX}{source}")
         if walk and (walk.argv[0], walk.every_s, walk.timeout_s) != (f"scraper.{source}_main", *schedule):
             problems.append(f"{walk.name}: not scraper.{source}_main on {cls.__name__}'s {WALK_ATTRS}")
@@ -168,6 +173,12 @@ def test_the_walk_census_fires() -> None:
         walk_every_s = 3600
 
     assert walk_problems(entries, {**portals, "web": NoTimeout})
+
+    class OwnMemory:  # one more per-portal walk value beside the schedule (option A: one declaration for every walk)
+        walk_every_s, walk_timeout_s, walk_memory_mb = 6 * 3600, 900, 4096
+
+    assert walk_problems(entries, {**portals, "web": OwnMemory}) == [
+        "OwnMemory: ['walk_memory_mb'] beside ('walk_every_s', 'walk_timeout_s'): a per-portal walk value needs a ruling"]
 
 
 # The runner adopts an existing scheduled_jobs row a registry entry names, so the registry never names a lane's
@@ -385,11 +396,7 @@ class Invocation:
 class Workflow:
     file: str
     scheduled: bool  # a timer or another workflow starts it, not only a person
-    timeout_s: int | None  # the largest job-level timeout-minutes (GitHub's 360 where unset; None if not literal)
     invocations: tuple[Invocation, ...]
-
-
-GITHUB_DEFAULT_TIMEOUT_MIN = 360
 
 
 _PYTHON_M = re.compile(r"\bpython3?\s+(?:-[A-Za-z]+\s+)*?-m\s+([A-Za-z_][\w.]*)([^;|&]*)")
@@ -408,7 +415,7 @@ def _invocations(run: str, root: Path) -> list[Invocation]:
 
 
 def read_workflows(root: Path) -> dict[str, Workflow]:
-    """Every workflow file: whether it runs unattended, its timeout, and each `python -m <repo module>` it runs."""
+    """Every workflow file: whether it runs unattended, and each `python -m <repo module>` it runs."""
     workflows: dict[str, Workflow] = {}
     for path in sorted(p for p in (root / ".github" / "workflows").iterdir() if p.suffix in (".yml", ".yaml")):
         data = yaml.safe_load(path.read_text()) or {}
@@ -416,11 +423,9 @@ def read_workflows(root: Path) -> dict[str, Workflow]:
         triggers = on if isinstance(on, dict) else dict.fromkeys([on] if isinstance(on, str) else on or [])
         scheduled = bool(triggers.get("schedule")) or bool({"workflow_run", "repository_dispatch"} & set(triggers))
         job_defs = (data.get("jobs") or {}).values()
-        minutes = [j.get("timeout-minutes", GITHUB_DEFAULT_TIMEOUT_MIN) for j in job_defs]
-        timeout_s = max(minutes) * 60 if minutes and all(type(m) is int for m in minutes) else None
         calls = [c for j in job_defs for step in j.get("steps") or [] if step.get("run")
                  for c in _invocations(step["run"], root)]
-        workflows[path.name] = Workflow(path.name, scheduled, timeout_s, tuple(calls))
+        workflows[path.name] = Workflow(path.name, scheduled, tuple(calls))
     return workflows
 
 
@@ -459,16 +464,14 @@ def test_the_workflow_reader(tmp_path: Path) -> None:
         "on: workflow_dispatch\njobs:\n  a:\n    timeout-minutes: ${{ inputs.t }}\n    steps:\n"
         "      - run: python -m scripts.y --z\n")
     workflows = read_workflows(tmp_path)
-    assert workflows["synthetic.yml"] == Workflow("synthetic.yml", True, 12 * 60, (
+    assert workflows["synthetic.yml"] == Workflow("synthetic.yml", True, (
         Invocation("scripts.refresh_stale_image_urls", frozenset({"--limit", "--min-age"})),
         Invocation("location_data.resolver.drain", frozenset({"--full-sweep"})),
         Invocation("scraper.web_main", frozenset({"--index-only"})),
     ))
-    # GitHub runs .yaml files too, and a job without timeout-minutes for its default 360.
-    assert workflows["chained.yaml"] == Workflow("chained.yaml", True, 360 * 60,
-                                                 (Invocation("scripts.x", frozenset()),))
-    assert workflows["by_hand.yml"] == Workflow("by_hand.yml", False, None,
-                                                (Invocation("scripts.y", frozenset({"--z"})),))
+    # GitHub runs .yaml files too.
+    assert workflows["chained.yaml"] == Workflow("chained.yaml", True, (Invocation("scripts.x", frozenset()),))
+    assert workflows["by_hand.yml"] == Workflow("by_hand.yml", False, (Invocation("scripts.y", frozenset({"--z"})),))
 
 
 GITHUB_ENTRIES = frozenset({"verify_pipeline", "price_stats"})
@@ -529,14 +532,14 @@ def test_a_move_is_a_host_flip_plus_its_workflows_deletion(name: str, file: str)
     job, workflows = _entry(name), _repo_workflows()
     assert job.host == jobs.RUNNER and file not in workflows
     assert pairing_problems(jobs.declared(), workflows) == []
-    kept = Workflow(file, True, job.timeout_s, (Invocation(job.argv[0], frozenset()),))
+    kept = Workflow(file, True, (Invocation(job.argv[0], frozenset()),))
     assert pairing_problems(jobs.declared(), {**workflows, file: kept}) == [  # flipped, workflow kept
         f"{name}: on the runner, and {file} still runs {job.argv[0]}"]
 
 
 def test_the_pairing_census_fires() -> None:
     workflows = _repo_workflows()
-    stray = Workflow("stray.yml", True, 600, (Invocation("scripts.stray_job", frozenset()),))
+    stray = Workflow("stray.yml", True, (Invocation("scripts.stray_job", frozenset()),))
     assert pairing_problems(jobs.declared(), {**workflows, "stray.yml": stray})
     # #2033's tick hosts price_stats only once read_workflows reads the `once` form; until then B3 is red.
     once = (Invocation("scripts.price_stats_probe", frozenset()), Invocation("scraper.job_runner", frozenset()))
@@ -558,21 +561,6 @@ def github_set_problems(entries: Sequence[Job], workflows: dict[str, Workflow]) 
     return problems
 
 
-def timeout_floor_problems(entries: Sequence[Job], workflows: dict[str, Workflow]) -> list[str]:
-    """A job not on the runner declares at least its workflow's timeout, so a move's first slot (now() + timeout_s)
-    comes after any GitHub run still in flight at the cutover."""
-    problems: list[str] = []
-    for j in entries:
-        for w in workflows.values():
-            if j.host == jobs.RUNNER or not (w.scheduled and _invokes(j, w)):
-                continue
-            if w.timeout_s is None:
-                problems.append(f"{j.name}: {w.file}'s timeout-minutes is no literal, so nothing bounds its run")
-            elif j.timeout_s < w.timeout_s:
-                problems.append(f"{j.name}: timeout_s {j.timeout_s} is under {w.file}'s {w.timeout_s}")
-    return problems
-
-
 def test_github_keeps_only_the_canary_and_price_stats() -> None:
     assert github_set_problems(jobs.declared(), _repo_workflows()) == []
 
@@ -580,22 +568,10 @@ def test_github_keeps_only_the_canary_and_price_stats() -> None:
 def test_the_github_set_census_fires() -> None:
     entries, workflows = jobs.declared(), _repo_workflows()
     assert github_set_problems([*entries, replace(_entry("price_stats"), name="price_stats_twin")], workflows)
-    walk = Workflow("idnes_index_walk.yml", True, 14400, (Invocation("scraper.idnes_main", frozenset({"--index-only"})),))
+    walk = Workflow("idnes_index_walk.yml", True, (Invocation("scraper.idnes_main", frozenset({"--index-only"})),))
     assert github_set_problems(entries, {**workflows, walk.file: walk}), "a walk's schedule back on GitHub"
     canary = workflows["verify_pipeline.yml"]
     assert github_set_problems(entries, {**workflows, "canary_twin.yml": replace(canary, file="canary_twin.yml")})
-
-
-def test_a_github_job_outlasts_its_github_run() -> None:
-    assert timeout_floor_problems(jobs.declared(), _repo_workflows()) == []
-
-
-def test_the_timeout_floor_census_fires() -> None:
-    entries, workflows = jobs.declared(), _repo_workflows()
-    assert timeout_floor_problems([replace(j, timeout_s=3000) if j.name == "price_stats" else j for j in entries],
-                                  workflows)
-    unknown = replace(workflows["scrape_price_stats.yml"], timeout_s=None)  # an expression: no bound to check
-    assert timeout_floor_problems(entries, {**workflows, "scrape_price_stats.yml": unknown})
 
 
 def _production_sources() -> dict[str, str]:

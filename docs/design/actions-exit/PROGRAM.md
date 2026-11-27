@@ -404,7 +404,9 @@ the bazos step and #2685's and #2688's wizard applies.**
 (`ORIGINAL_UNTIL_MOVED`), the cutoff census, the waiting arms of the pairing and GitHub-set censuses, their
 "tightens itself" test and the gone leaver (`recompute_city_proximity.yml`); `test_proxy_wiring.py` drops its
 workflow arm (the pairing census refuses any workflow running a runner job). The registry is runner jobs plus the
-two GitHub jobs (price_stats, verify_pipeline); the timeout floor stays, for them. `idnes_index_walk.yml` and its group
+two GitHub jobs (price_stats, verify_pipeline). The timeout floor goes too: it kept a move's first slot after a GitHub
+run in flight, and neither GitHub job moves (nothing reads a GitHub entry's `timeout_s`). The walk census keeps the
+cutoff census's other half: no Portal class carries a walk value beside `walk_every_s`/`walk_timeout_s`. `idnes_index_walk.yml` and its group
 `idnes-index-walk` are deleted; its dispatch inputs (`--max-pages`, `--max-seconds`) are request args now. GitHub's
 throttled cron delivered 14 walks in the 7 days to 11-27 (p50 5,580 s, p95 and max 7,129 s, 4,327 pages on average,
 none near the 13,000 s budget it carried), so the job cell's Watch line (9,600 s) sits 35 % above its slowest walk; on

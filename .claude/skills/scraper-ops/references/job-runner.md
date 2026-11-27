@@ -228,20 +228,21 @@ of a sibling on its resource seen since its clock started. The worst condition w
   that closes the cycle nominates orphans). A walk stopped at its own timeout is `timeout`, a Problem: W4 keeps each
   `walk_timeout_s` above the walk's p95 (7 days to 2026-11-25 on GitHub: web 3 s, maxima 40 s, bezrealitky 137 s;
   to 11-26 sreality 1,518 s, remax 525 s, mmreality 961 s, bazos 3,272 s, to 11-27 realitymix 3,053 s, ceskereality
-  4,421 s, idnes 7,129 s, none near its old `--max-seconds`: 1,800, 2,100, 2,400, 6,600, 9,000, 13,000 s). Its ⅔
-  Watch line sits ≥ 25 % above its slowest GitHub walk (PROGRAM § W4).
+  4,421 s, idnes 7,129 s, none near its old `--max-seconds`: 1,800, 2,100, 2,400, 6,600, 9,000, 13,000 s). The ⅔
+  Watch line clears the slowest GitHub walk of its measured window (PROGRAM § W4): sreality 27 % (7 days), realitymix
+  119 % (30 days), ceskereality 63 % (since #2547), idnes 35 % (7 days; two 11-14 walks were slower).
 - **Exits:** 0 a walk, a partly failed one included (`errors` in `scrape_runs`); 1 when every category failed or an
   empty walk (`CHECK empty_walk`), retried on the failure backoff (60 s doubling, capped at the cadence and the next
   slot), where GitHub waited for the next cron.
 - **Politeness does not depend on the host:** a walk leases the same `portal_rate_state` budget
   (`scraper_limits_global` `shared_rate_limiter`) on either host and waits as long as it says (no `max_wait_s`).
   Egress moves from GitHub's rotating Azure addresses to Railway's, which the worker's drain (and, but for web, its
-  probe) already uses on these portals. Of the ten mmreality and ceskereality are proxied (`USE_PROXY`,
-  `PROXY_REQUIRED`; ceskereality through the headless browser, `scraper/browser_fetch.py`): each rides the residential
-  proxy as on GitHub (below), every 12 h, the ~2 walks a day GitHub delivered, so its proxy traffic holds (~963 and
-  ~2,400 pages a walk). idnes rides it too (`USE_PROXY`, not `PROXY_REQUIRED`: a direct IP is throttled, not
-  refused), every 6 h, so its proxied walk traffic doubles (~4,330 pages a walk); bazos and realitymix's direct index
-  requests double the same way (~1,300 and ~2,450 pages a walk).
+  probe) already uses on these portals. Of the ten three ride the residential proxy as on GitHub (`USE_PROXY`,
+  below): mmreality and ceskereality `PROXY_REQUIRED` (ceskereality through the headless browser,
+  `scraper/browser_fetch.py`), every 12 h, the ~2 walks a day GitHub delivered, so their proxy traffic holds (~963 and
+  ~2,400 pages a walk); idnes not required (a direct IP is throttled, not refused), every 6 h, so its proxied walk
+  traffic doubles (~4,330 pages a walk). bazos and realitymix's direct index requests double the same way (~1,300 and
+  ~2,450 pages a walk).
 - **Run one now:** "Jobs: run now" with `walk_<source>`; args append (`--max-pages 2` stops each category short of
   its end, so it nominates nothing; bazos also takes `--sale-type` with `--category`, one section that ends no cycle, or
   `--locality`/`--radius-km`, and ceskereality `--kraj <slug>`, a slice that nominates nothing). A walk writes its `scrape_runs` row (`run_type='index'`)
