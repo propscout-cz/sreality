@@ -329,11 +329,11 @@ prodej + pronájem today). Image-URL rows are recorded by the drain; the realtim
 `images` lane downloads the bytes to R2 (source-agnostic).
 
 **Data source (mmreality.cz).** A crawler (`scraper/mmreality_client.py`,
-`mmreality_parser.py`, `mmreality_main.py`, the job runner's `walk_mmreality` since #2030 (every 6 h;
+`mmreality_parser.py`, `mmreality_main.py`, the job runner's `walk_mmreality` since #2030 (every 12 h, its proxy traffic at GitHub's ~2 walks a day: operator decision 2026-11-27;
 `scrape_mmreality.yml` before) — pilot — **every request rides the residential proxy** (`SCRAPER_PROXY_URL`,
 `USE_PROXY=True`; job-runner reads the worker's by reference): Cloudflare hard-403s datacenter IPs (the first 101
 direct scheduled runs ingested zero listings), so the proxy is mandatory from ANY datacenter egress, GitHub or
-Railway alike; its runner slot (`jobs._walks()`'s even spread, 03:20 every 6 h today) is off ceskereality's
+Railway alike; its runner slot (`jobs._walks()` spreads each cadence's walks evenly; mmreality is the 12 h group's) is off ceskereality's
 `25 */6` minute) tagged `source='mmreality'`. M&M Reality is server-rendered HTML
 but **every detail page embeds a COMPLETE structured estate object** as a Vue
 `:property` prop (HTML-entity-encoded JSON), so `mmreality_parser.parse_detail` decodes
@@ -1673,7 +1673,7 @@ on 2026-12-01, and until then a file of that name would override the applied set
   or any other DB-heavy job (`job_lease`'s heavy turn), of the hourly claim intake `location_intake` since #2028
   and the RÚIAN registry load `ruian_load` since #2033, daily (§ Location data), and of the walks whose
   `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (60 min: web, maxima and bezrealitky since #2029, remax and
-  mmreality since #2030, each `walk_<source>` every 6 h, and sreality hourly since #2030, with no `--max-seconds`,
+  mmreality since #2030, each `walk_<source>` every 6 h (mmreality 12 h), and sreality hourly since #2030, with no `--max-seconds`,
   the runner's SIGTERM at the timeout its one budget; the longer walks wait on their workflows):
   - two replicas in the worker's region, each 4 vCPU and 8 GB, restart policy ALWAYS, `checkSuites: false`. Railway
     counts decimal bytes, so 8e9 B is 7,629 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT

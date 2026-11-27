@@ -160,7 +160,9 @@ class MmRealityPortal(portal_runner.PortalDefaults):
     registry config; one category per (sale type, property type) index."""
 
     source = SOURCE
-    walk_every_s = 6 * 3600
+    # Every request rides the paid residential proxy: 12 h keeps the walk's proxy traffic at the ~2 walks a day GitHub
+    # delivered (operator decision 2026-11-27).
+    walk_every_s = 12 * 3600
     walk_timeout_s = 60 * 60
     index_rate = 1.0
 

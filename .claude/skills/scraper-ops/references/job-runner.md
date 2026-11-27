@@ -214,8 +214,8 @@ of a sibling on its resource seen since its clock started. The worst condition w
 ## The walks (W4: `walk_<source>`, #2029, #2030)
 
 - **Which walks run here:** every walk whose Portal class's `walk_timeout_s` is at most `jobs.RUNNER_WALK_TIMEOUT_S`
-  (60 min since #2030: `walk_web` 15 min, `walk_maxima` and `walk_bezrealitky` 30 min, `walk_remax` and
-  `walk_mmreality` 60 min, each every 6 h, and `walk_sreality` 50 min, hourly (R24); 512 MB, 1 CPU). The rest wait on
+  (60 min since #2030: `walk_web` 15 min, `walk_maxima` and `walk_bezrealitky` 30 min, `walk_remax` 60 min,
+  each every 6 h, `walk_mmreality` 60 min every 12 h (proxied; operator decision 2026-11-27), and `walk_sreality` 50 min, hourly (R24); 512 MB, 1 CPU). The rest wait on
   their GitHub workflows (`github-actions-until-moved`). A batch raises the cutoff and deletes the workflows it takes
   over, and names no portal (rule 21); the registry census `test_a_walks_host_is_the_cutoffs` refuses a per-portal
   host value (one would need a ruling). The next cutoff (130 min) would take bazos; realitymix, ceskereality (the

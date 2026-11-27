@@ -348,7 +348,9 @@ sighted active ad (110k), so hourly walks add about 2.3M `listings` updates a da
 on 11-26, 97 % heap-only since migration 743 dropped the last index on `last_seen_at`). sreality is not proxied and
 the runner already carries `SUPABASE_DB_URL` and the R2 set: no `.railway/` change, no migration.
 **As built (#2030), batch 2 ends with remax and mmreality.** The cutoff rises to 60 min, which takes both (each
-`walk_timeout_s` 60 min, every 6 h) and nothing else (bazos is next, at 130). `scrape_remax.yml` and
+`walk_timeout_s` 60 min; remax every 6 h, mmreality every 12 h, because its every request rides the paid residential
+proxy and 12 h keeps that traffic at GitHub's ~2 walks a day: operator decision 2026-11-27) and nothing else (bazos is
+next, at 130). `scrape_remax.yml` and
 `scrape_mmreality.yml` and their groups (`remax-scrape`, `mmreality-scrape`) are deleted; their dispatch inputs
 (`--max-pages`, `--max-seconds`) are request args now. GitHub's throttled cron delivered 14 walks of each in the 7
 days to 11-26 (p95 525 s and 961 s against the 60 min timeout, none near its old 2,100 s and 2,400 s budgets).
