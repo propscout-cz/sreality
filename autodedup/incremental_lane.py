@@ -1494,7 +1494,8 @@ class SqlWork:
         self.statements = 0
         self.windows: dict[str, int] = {}
         # What each forward feed's window still held, in scope, once this claim had taken its
-        # part: the arrivals, changes and flips WAITING for a later pass. Bounded by the window
+        # part and WAITING for a later pass: `new` and `flipped` in adverts, `changed` in
+        # snapshots (an advert that changed twice counts twice). Bounded by the window
         # (`FEED_WINDOW`): a count that large means "at least".
         self.waiting: dict[str, int] = {}
         # What this pass spent on `public` for the entrant feed, for the run summary: a block
@@ -1553,7 +1554,7 @@ class SqlWork:
         items: list[WorkItem] = []
         self._pending = {}
         self.windows = {}
-        self.waiting = {}
+        self.waiting = {"new": 0, "changed": 0, "flipped": 0}
         self._claimed = {}
         self._unread_scan = None
         cut = False
@@ -1721,15 +1722,20 @@ class SqlWork:
         # ahead of adverts no pass has seen). A new property is held from Browse and the
         # watchdog until the engine has read its adverts, so an arrival waiting is user-facing
         # and a sweep waiting is not. No statement: the cursor stops at the last one taken.
+        # The stale re-claims ride this attempt on top of the claim (below): their slots are
+        # not the arrivals' (E971: a build's limit + 200 re-claims outgrows what the worker's
+        # memory holds), so a pass holds at most the limit plus the sweep's room, as before.
+        stale = (sum(1 for i in self.stale_claims
+                     if i not in {item.listing_id for item in items if item.retire})
+                 if self.attempt == 0 else 0)
         left_ids, left_stamps, new_end = new_left
-        extra = max(0, min(len(left_ids), limit - len(items)))
+        extra = max(0, min(len(left_ids), limit - len(items) - stale))
         for listing_id, stamp in zip(left_ids[:extra], left_stamps[:extra]):
             items.append(WorkItem(int(listing_id), "new", _epoch(stamp), None))
         if extra:
             self._pending[CURSOR_NEW] = (int(left_ids[extra - 1]) if extra < len(left_ids)
                                          else new_end)
-        if "new" in self.windows:
-            self.waiting["new"] = len(left_ids) - extra
+        self.waiting["new"] = len(left_ids) - extra
         cut = cut or extra < len(left_ids)
         # E991: the rescore sweep. After a seed switched the settings in place, every in-scope
         # row no pass refreshed since is re-claimed once, the live rows first (E976's order),
@@ -1739,13 +1745,10 @@ class SqlWork:
         # pair it holds is decided again. It takes what the feeds above left of the limit, never
         # less than a fifth (a build's entrant feed leaves it the fifth), as the build itself does.
         if self.rescore is not None and self.rescore_slice:
-            # The stale re-claims below ride on the same pass: the sweep leaves them their room,
-            # so a pass holds what the feeds above took plus the sweep's room, never more.
-            # In a build too: the entrant feed only SHRANK by them (`reserved`, above), which
-            # leaves their slots open in `limit - len(items)`; taken out here once, they are held.
-            stale = (sum(1 for i in self.stale_claims
-                         if i not in {item.listing_id for item in items if item.retire})
-                     if self.attempt == 0 else 0)
+            # The stale re-claims below ride on the same pass: the sweep leaves them their room
+            # (`stale`, counted above, where the arrivals' top-up left it too), so a pass holds
+            # what the feeds above took plus the sweep's room, never more. In a build too: the
+            # entrant feed only SHRANK by them (`reserved`, above).
             items.extend(self._rescore_feed(self.rescore, cursors[CURSOR_RESCORE][0], limit,
                                             share, items, scope, stale))
             cut = cut or bool(self.rescore_report and self.rescore_report["left"])

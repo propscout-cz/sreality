@@ -46,13 +46,13 @@ def test_with_the_other_feeds_quiet_the_arrivals_take_the_whole_claim() -> None:
     items = work.claim(50)
     assert _feeds(items) == {"new": 50}, "a fifth, then the forty the other feeds left"
     assert [item.listing_id for item in items] == list(range(101, 151)), "in id order"
-    assert work.waiting == {"new": 20} and work.claim_bound["cut"] is True
+    assert work.waiting == {"new": 20, "changed": 0, "flipped": 0} and work.claim_bound["cut"] is True
     work.commit(items)
     assert db.cursors[CURSOR_NEW]["last_listing_id"] == 150, "the cursor stops at the last taken"
     again = _work(db)
     rest = again.claim(50)
     assert [item.listing_id for item in rest] == list(range(151, 171))
-    assert again.waiting == {"new": 0} and again.claim_bound["cut"] is False
+    assert again.waiting["new"] == 0 and again.claim_bound["cut"] is False
     again.commit(rest)
     assert db.cursors[CURSOR_NEW]["last_listing_id"] == 170
 
@@ -64,7 +64,7 @@ def test_a_claim_the_arrivals_do_not_fill_is_theirs_whole_and_the_cursor_ends_th
     work = _work(db)
     items = work.claim(50)
     assert [item.listing_id for item in items] == list(range(101, 113)), "in scope only"
-    assert work.waiting == {"new": 0}
+    assert work.waiting == {"new": 0, "changed": 0, "flipped": 0}
     work.commit(items)
     assert db.cursors[CURSOR_NEW]["last_listing_id"] == 115, "past the window, out of scope too"
 
@@ -90,12 +90,64 @@ def test_the_sweep_takes_what_the_arrivals_leave_never_less_than_its_fifth() -> 
     assert _feeds(_work(quiet, rescore=record).claim(50)) == {"rescore": 40}
 
 
+def _held(db: FakePg, ids: range) -> None:
+    before = db.now - timedelta(hours=2)
+    for listing_id in ids:
+        db.locations[listing_id] = {"obec_kod": TOWN}
+        db.rt_fp[(GEN, listing_id)] = {"is_active": True, "first_decided_at": before,
+                                       "ev_complete": True, "block_key": None,
+                                       "updated_at": before}
+
+
+def test_the_re_claims_riding_a_pass_keep_their_slots() -> None:
+    """E971: the stale re-claims ride on top of the claim, so the arrivals' top-up leaves them
+    their room: a pass holds at most the limit plus the sweep's room, as before the top-up."""
+    db = FakePg()
+    _arrivals(db, range(101, 301))
+    _held(db, range(1, 61))
+    stale = list(range(1, 31))
+    # A steady pass with re-claims and arrivals waiting, no sweep: the limit and no more.
+    work = _work(db, stale_claims=stale, stale_waiting=30)
+    feeds = _feeds(work.claim(50))
+    assert feeds == {"new": 20, "stale": 30} and sum(feeds.values()) == 50
+    # With a sweep owed: the sweep's room on top and nothing else.
+    record = {"since": db.now.isoformat(), "settings": "w31"}
+    work = _work(db, stale_claims=stale, stale_waiting=30, rescore=record)
+    feeds = _feeds(work.claim(50))
+    assert feeds["stale"] == 30 and feeds["new"] == 20
+    assert sum(feeds.values()) <= 50 + 10, feeds
+    # A retry of the claim carries no re-claims (E960: first attempt only): arrivals take it.
+    assert _feeds(work.claim(50))["new"] == 50
+
+
+def test_more_re_claims_than_the_limit_leave_the_arrivals_their_fifth_only() -> None:
+    db = FakePg()
+    _arrivals(db, range(101, 301))
+    _held(db, range(1, 51))
+    work = _work(db, stale_claims=list(range(1, 51)), stale_waiting=50)
+    feeds = _feeds(work.claim(50))
+    assert feeds == {"new": 10, "stale": 50}, "main's 60, not the 100 a blind top-up would hold"
+
+
+def test_a_builds_first_attempt_with_re_claims_holds_what_it_held_before() -> None:
+    """E964 x E971: in a build the re-claims sit INSIDE the limit (the entrant feed shrinks by
+    them); the arrivals' top-up must not fill the slots that shrink left open."""
+    db = FakePg()
+    _arrivals(db, range(1001, 1401))
+    _held(db, range(1, 201))
+    work = _work(db, bootstrap=True, stale_claims=list(range(1, 201)), stale_waiting=200)
+    feeds = _feeds(work.claim(200))
+    limit = work.claim_bound["limit"]
+    assert feeds == {"new": max(1, limit // 5), "stale": 200}, (
+        "the arrivals' fifth and the re-claims, never the limit + re-claims + arrivals")
+
+
 def test_the_waiting_count_is_bounded_by_the_window() -> None:
     db = FakePg()
     _arrivals(db, range(1, FEED_WINDOW + 500))
     work = _work(db)
     items = work.claim(50)
-    assert len(items) == 50 and work.waiting == {"new": FEED_WINDOW - 50}, (
+    assert len(items) == 50 and work.waiting["new"] == FEED_WINDOW - 50, (
         "at least: the window holds no more")
 
 
