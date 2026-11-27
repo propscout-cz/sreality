@@ -117,8 +117,8 @@ Heal via `reparse.yml` (`--source <portal> --fields area_m2,estate_area,usable_a
 
 ## How to manually trigger the scrapers
 
-The sreality pipeline is **split by cadence (Phase 2)**: `index_walk.yml` ("Scraping: Sreality
-index walk", cron `*/15`) feeds the worker's drain lane — since W0 (#2010) the ONLY drain of the
+The sreality pipeline is **split by cadence (Phase 2)**: the job runner's `walk_sreality` (hourly
+since #2030) feeds the worker's drain lane — since W0 (#2010) the ONLY drain of the
 walk-only portals (sreality, bazos, idnes, ceskereality, realitymix, web), and since W1 (#2021) of
 the four combined scrapers too (bezrealitky, maxima, mmreality, remax: each walk runs `--index-only`, on Actions or, since #2029, the job runner). The combined `scrape.yml` fallback was deleted in C2-2
 (2026-10); an ad-hoc combined run is `python -m scraper.<portal>_main` with neither
@@ -190,8 +190,8 @@ The worker's `llm` check alarms PER PROVIDER (each its own account: a credit err
 once kept a credit-exhausted account green ~8h); `LLMClient` records the failure row on every
 provider exception, so the check needs no key of its own. Its `fleet/spend` cell judges 24 h spend (Watch > $130,
 Problem > $150, in `THRESHOLDS`) and lands in the same `pipeline_check_results` table the harness below writes to. Run any directly:
-- CLI: `gh workflow run index_walk.yml --ref <branch>` (`-f` for flags); watch with
-  `gh run list --workflow=index_walk.yml` then `gh run watch`.
+- CLI: `gh workflow run <file>.yml --ref <branch>` (`-f` for flags); watch with
+  `gh run list --workflow=<file>.yml` then `gh run watch`. Runner walks: `references/job-runner.md`.
 - Browser: repo → **Actions** → the workflow → **Run workflow** → branch + flags. (All sreality
   scraping workflows are prefixed `Scraping:`.)
 
@@ -204,7 +204,7 @@ on drift. Health shows no declared schedule: the `jobs` check judges each workfl
 
 **The split (architectural rule #19).** The cheap "which ads still exist" check is decoupled
 from the slow "download each ad" write:
-- **`index_walk.yml` (fast, frequent).** Walks the **entire** index of every category pair (no
+- **The index walk (`walk_sreality`, hourly on the job runner).** Walks the **entire** index of every category pair (no
   `--limit`), `reconcile_sightings` bumps `last_seen_at` on every still-listed id we hold, unseen ids are nominated
   for a page check (rule #3, 2026-09-07), new + price-changed ids are queued. The walk carries a
   **wall-clock deadline checked per PAGE** (`--max-seconds` → `run_index_walk` →
@@ -277,11 +277,10 @@ R2 key = `img/{listing_id}/{images.id}.jpg`, unique per ROW (rule #6); a stored 
 - `stale_images` (job runner, every 6h) — re-enqueues active listings whose un-downloaded image URLs
   rotated/went stale into `listing_detail_queue` (NEW priority) so the detail drain repoints them.
 
-**Cadence:** the sreality walk runs `*/15` (frequent index walks surface delistings fast) and the worker's
-drain lane every 30 s keeps a steady, polite fetch volume. GitHub throttles scheduled workflows, so a walk's effective
-cadence is slower, and Health judges the gap a portal keeps, not a declared one: the `scraping` check's `<portal>/walks/<unit>`
+**Cadence:** the sreality walk runs hourly (frequent index walks surface delistings fast) and the worker's
+drain lane every 30 s keeps a steady, polite fetch volume. GitHub throttles the walks still on Actions, and Health judges the gap a portal keeps, not a declared one: the `scraping` check's `<portal>/walks/<unit>`
 cells age a unit's newest end-reached walk against G, the median start gap of the portal's finished walks over 14 d (under 10
-gaps, the slowest portal's G): Watch past 3 G, Problem past 6 G (crawlers ~43 h, sreality 26.5 h) or with no end-reached walk
+gaps, the slowest portal's G): Watch past 3 G, Problem past 6 G (crawlers ~43 h; sreality ~6 h hourly) or with no end-reached walk
 in 14 d; `<portal>/walks` is a Problem when no walk finished in 30 d (`THRESHOLDS` in `scripts/verify_pipeline.py`).
 Concurrency: each workflow has its own group with `cancel-in-progress: false` — a long run is never killed mid-batch, the
 next tick queues behind it. Per-category nominations are queued immediately after each category's walk, so even a timed-out
@@ -293,7 +292,7 @@ The detail-drain writes `scrape_runs` rows too (`run_type='detail'`), but only t
 ## Onboarding a portal — and the tenth, `web` (2026-10-21)
 
 A portal is one row per registry, never a branch (the registry list: `docs/architecture.md` § rule 21 and
-`docs/design/new-property-from-link.md` §3.4; its Portal class declares `walk_every_s`/`walk_timeout_s` (`scraper/jobs.py`)). A walk whose `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (30 min, #2029) is born on the runner; a longer one fails the waiting-set ratchet (`ORIGINAL_UNTIL_MOVED`, `tests/scraper/test_job_registry.py`) until the cutoff reaches it or the operator rules. Run a new portal's first walk at deploy (a runner `request`): `scraping` judges every portal in `SOURCES` from then, so `<portal>/walks` reads Problem until it walks (web, 2026-10-22).
+`docs/design/new-property-from-link.md` §3.4; its Portal class declares `walk_every_s`/`walk_timeout_s` (`scraper/jobs.py`)). A walk whose `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (50 min, #2030) is born on the runner; a longer one fails the waiting-set ratchet (`ORIGINAL_UNTIL_MOVED`, `tests/scraper/test_job_registry.py`) until the cutoff reaches it or the operator rules. Run a new portal's first walk at deploy (a runner `request`): `scraping` judges every portal in `SOURCES` from then, so `<portal>/walks` reads Problem until it walks (web, 2026-10-22).
 `web` (`scraper/web_main.py`) is `indexless`: its 6-hourly walk sees
 nothing, reaches the end and nominates every active row as an orphan (its unit has no scope); the worker drains it FIRST;
 its pages go through `scraper/egress.py` (private ranges refused per hop, a wall-clock deadline, a decoded cap). A pasted
@@ -446,7 +445,7 @@ canary's keys too); the canary watches pg_cron and the ladder. **Rationale, watc
 The scheduled pipeline logs in two halves. The shared `portal_runner` emits CATEGORY, ENQUEUE, VERIFY, RECONCILE,
 RUN, COVERAGE, the closing `INDEX total=…` and every DRAIN line; per-page INDEX / SPLIT / SLICE lines come from each portal's `walk_category` (sreality's per-page INDEX from its client).
 
-**Index walk** (`index_walk.yml` and the per-portal walks):
+**Index walk** (`walk_sreality` and the per-portal walks):
 - `CATEGORY start cm=... ct=...` per category pair
 - `INDEX offset=N estates=M total=K` per search page (offset/limit paging; sreality)
 - `SPLIT cm=... ct=... result_size=N > T: walking D districts` when a sreality category exceeds

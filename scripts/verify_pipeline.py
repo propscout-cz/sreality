@@ -146,9 +146,9 @@ THRESHOLDS: dict[str, Any] = {
     # A credit outage stays red after its callers back off: 72 h, never a 24 h window.
     "llm_lookback_h": 72,
     # --- scraping (portal alarm): is every portal still finding and fetching its ads ------
-    # Watch past 3 G (the median walk-start gap, 14 d: crawlers 7.15-7.33 h, sreality 4.42 h).
+    # Watch past 3 G (the median walk-start gap, 14 d: crawlers 7.15-7.33 h, sreality 4.42 h; ~1 h hourly, #2030).
     "scraping_walk_watch_gaps": 3,
-    # Problem past 6 G (crawlers ~43 h, sreality 26.5 h); no unit crossed it in the 14-day replay.
+    # Problem past 6 G (crawlers ~43 h, sreality 26.5 h, ~6 h hourly); no unit crossed it in the 14-day replay.
     "scraping_walk_fail_gaps": 6,
     # Under 10 finished gaps in 14 d a portal is scored on the slowest portal's G, never dropped.
     "scraping_walk_fallback_min_gaps": 10,

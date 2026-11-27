@@ -330,12 +330,23 @@ are deleted; their dispatch inputs (`--max-pages`, `--max-seconds`) are request 
 (15, 30, 30 min) against a GitHub p95 of 3, 40 and 137 s (7 days to 11-25). None of the three is proxied and the runner
 already carries `SUPABASE_DB_URL` and the R2 set (#2032): no `.railway/` change, no migration. **remax is held to a later
 batch:** its sold/let measurement gate #2647 reads remax until 2026-11-29, and a new host, cadence and egress would
-confound it. A cutoff moves walks in `walk_timeout_s` order (sreality 40; remax, mmreality 60; bazos 130; realitymix,
+confound it. A cutoff moves walks in `walk_timeout_s` order (sreality 50; remax, mmreality 60; bazos 130; realitymix,
 ceskereality 180; idnes 240), so 60 min takes sreality with remax and mmreality; #2030's listed set and this section's
 order after it (realitymix before bazos) are not one cutoff, and ceskereality needs the `browser` extra the runner image
 lacks: later batches need a ruling on their order or the image. GitHub's throttled cron fired these walks
 about twice a day (14 runs each in those 7 days), the runner's grid four times, so the gate reads nominations per day
 beside per cycle (#2029's gate ticket).
+**As built (#2030), batch 2 starts with sreality alone.** The cutoff rises to 50 min, which takes sreality (hourly,
+R24) and nothing else. The next cutoff (60 min) takes remax and mmreality together, once gate #2647 has read remax
+(2026-11-29) and job-runner carries `SCRAPER_PROXY_URL` (a `.railway/` change, the operator's wizard); realitymix
+(180 min) is not on either, so its place needs the ruling above. `index_walk.yml` and its group `sreality-index-walk`
+are deleted; its dispatch inputs (`--max-seconds`, `--dry-run`) are request args now. GitHub's throttled `*/15` cron
+delivered 22 walks in the 7 days to 11-26 (p50 1,165 s, p95 1,518 s, max 1,578 s, 476 pages on average, none near the
+1,800 s budget it carried); the runner's grid delivers 24 a day under a 50 min timeout, whose ⅔ Watch line (2,000 s) sits 27 % above that
+slowest walk; 40 min would have put it 22 s above. Each walk touches every
+sighted active ad (110k), so hourly walks add about 2.3M `listings` updates a day to today's ~2.5M (one 5-min reading
+on 11-26, 97 % heap-only since migration 743 dropped the last index on `last_seen_at`). sreality is not proxied and
+the runner already carries `SUPABASE_DB_URL` and the R2 set: no `.railway/` change, no migration.
 **Gate per walk (7 days):** pages and reached-end per cycle, nominations per day (a moved walk keeps its declared
 cadence), ± 10 %; 403/429 share from
 Railway ≤ the GitHub baseline; 0 `ended_at NULL` after ≥ 5 mid-walk deploys; proxy GB/day within its band;
