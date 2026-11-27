@@ -16,7 +16,7 @@ service's Variables page before editing it.
 Railway variable NAMES live in `.railway/railway.ts` (each `preserve()`, but job-runner's references and plain values;
 values stay in Railway): add a name there in the same PR as the secret, remove it there to delete one (an operator
 apply, `scripts/railway_iac_wizard.sh`).
-`EXTRAS` (API and worker: `api`; job-runner: `api,clip,geo`) is the root Dockerfile's build argument.
+`EXTRAS` (API: `api`; worker: `api,browser`; job-runner: `api,browser,clip,geo`) is the root Dockerfile's build argument.
 
 ## Rotated in M0 (ruling Q13, MVP.md § 4)
 

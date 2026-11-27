@@ -265,9 +265,11 @@ LABELS=(vite API worker)
 dashboard() { printf 'https://railway.com/project/%s' "${PROJECT_ID[$1]}"; }
 RUNNER=job-runner   # the job runner's service, in the worker's project (#2025)
 # The runner image's build inputs (.github/workflows/runner_image.yml): a pull request that changes one owes that check.
-# The scraper files are what the build's offline proof imports (Tagger.load).
+# The scraper files are what the build's offline proof imports (Tagger.load) and what the browser images' check runs
+# (scripts/browser_image_check.py over scraper/browser_fetch.py).
 IMAGE_INPUTS=(Dockerfile .dockerignore pyproject.toml scripts/bake_clip_weights.py data/clip_taxonomy.json
               data/requirements-clip-runner.txt scraper/__init__.py scraper/clip_tagger.py scraper/cpus.py
+              scraper/browser_fetch.py scraper/cgroup.py scraper/stop.py scripts/browser_image_check.py
               api/wsdp_client.py)
 IMAGE_CHECK="CI: runner image"
 

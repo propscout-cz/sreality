@@ -61,9 +61,7 @@ SERVED_RULE_SITES: dict[tuple[str, str, str], tuple[str, str]] = {
     ("location_data/claims_common.py", "SERVED_LOCATION_PREDICATE", "l.id"):
         ("ad", "the rule on `listings l`, the text the migrations carry verbatim"),
     ("location_data/location_steps.py", "step_flags_sql", "{listings}.id"):
-        ("ad", "the location waterfall's `located` step, one ad at a time"),
-    ("toolkit/dedup_candidates_sql.py", "_BASE_CTE", "l.listing_id"):
-        ("ad", "dedup pairs ads; `l` is the ad's own listing_location row"),
+        ("ad", "the step flags' `located`, one ad at a time"),
     ("api/notifications.py", "_build_match_clauses", "l.location_listing_ref_id"):
         ("property", "the watchdog matcher over properties_public, served as browse_projection serves"),
     ("scripts/checks/publishing.py", "_STAGE_TAIL", "p.location_listing_ref_id"):

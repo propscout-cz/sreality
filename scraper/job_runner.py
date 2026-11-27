@@ -2,8 +2,8 @@
 
 `python -m scraper.job_runner run` is the service. Every `TICK_S` it ticks in two phases:
 
-* the **process phase** does no database I/O and sends no signal: it reaps exited leaders, waits for each group to
-  empty, and settles each run into an outcome and a due kind (`settle`);
+* the **process phase** does no database I/O and sends no signal: it reaps exited leaders, waits for each job's process
+  tree to empty, and settles each run into an outcome and a due kind (`settle`);
 * the **ledger phase** releases settled runs, renews leases, then (not stopping) registers the registry at boot,
   reaps lost runs, lists due jobs oldest first and claims them up to `MAX_CHILDREN`, beats and prunes.
 
@@ -151,7 +151,7 @@ class Running:
 
 @dataclass
 class Finished:
-    """Reaped, group empty, not yet released: kept in memory through a database outage."""
+    """Reaped, process tree empty, not yet released: kept in memory through a database outage."""
 
     lease: job_lease.Lease
     outcome: str

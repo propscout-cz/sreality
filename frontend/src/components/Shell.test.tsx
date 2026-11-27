@@ -61,7 +61,7 @@ function renderShellWith(element: React.ReactNode, at = '/browse') {
           <Route element={<Shell />}>
             <Route path="/browse" element={element} />
             <Route path="/property/:propertyId" element={element} />
-            <Route path="/new-dedup/candidates" element={element} />
+            <Route path="/new-dedup/exam" element={element} />
           </Route>
         </Routes>
       </MemoryRouter>
@@ -171,14 +171,14 @@ describe('<Shell> Browse entry', () => {
 describe('<Shell> a page inside the Admin menu', () => {
   it('lights the Admin trigger and only its own row', async () => {
     const user = userEvent.setup();
-    renderShellWith(<p>page content</p>, '/new-dedup/candidates');
+    renderShellWith(<p>page content</p>, '/new-dedup/exam');
     const nav = screen.getByRole('navigation');
     const trigger = within(nav).getByRole('button', { name: /^Admin/ });
     const classes = trigger.className.split(/\s+/);
     expect(classes).toContain('text-[var(--color-chrome-ink)]');
     expect(classes).not.toContain('text-[var(--color-chrome-ink-2)]');
     await user.click(trigger);
-    expect(within(nav).getByRole('menuitem', { name: 'Candidates' })).toHaveAttribute(
+    expect(within(nav).getByRole('menuitem', { name: 'Exam' })).toHaveAttribute(
       'aria-current',
       'page',
     );

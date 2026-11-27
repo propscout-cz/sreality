@@ -1044,93 +1044,6 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/migrations.yml"
     },
     {
-      "filename": "new_dedup_candidates.yml",
-      "name": "NEW DEDUP: candidate generation (path C)",
-      "description": "Level 0 of the rebuilt dedup: find the listing pairs worth comparing later, by path C — \"same town\" (the location engine's obec_kod) plus disposition (rung C1) or, when a disposition is missing on either side, area (rung C3). Manual dispatch only; nothing runs on a schedule. Design: docs/design/new-dedup/PROGRAM.md, ledger 2026-09-10.",
-      "manual": true,
-      "schedules": [],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "mode",
-          "description": "estimate (reads only, counts what a generation would write), verify (reads only, SQL vs the Python oracle on the named towns) or generate (writes pairs).",
-          "required": true,
-          "type": "choice",
-          "default": "estimate",
-          "options": [
-            "estimate",
-            "verify",
-            "generate"
-          ]
-        },
-        {
-          "name": "scopes",
-          "description": "estimate only: which scopes to count — all, active, or all,active. (generate takes its scope from the l0_candidate_scope setting.)",
-          "required": false,
-          "type": "string",
-          "default": "all,active",
-          "options": null
-        },
-        {
-          "name": "blocks",
-          "description": "Comma-separated obec_kod list to limit the run to (a pilot: e.g. 582786 for Brno). Empty = every town. A limited generate never runs the stale sweep.",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "chunk",
-          "description": "generate only: listing ids per upsert statement (each statement pairs that many listings against the whole town).",
-          "required": false,
-          "type": "string",
-          "default": "2000",
-          "options": null
-        },
-        {
-          "name": "max_listings",
-          "description": "verify only: skip a town with more listings than this (the oracle compares every pair in Python).",
-          "required": false,
-          "type": "string",
-          "default": "3000",
-          "options": null
-        },
-        {
-          "name": "resume",
-          "description": "generate only: continue the last running generation of the same parameter set from its cursor.",
-          "required": false,
-          "type": "choice",
-          "default": "false",
-          "options": [
-            "false",
-            "true"
-          ]
-        },
-        {
-          "name": "dry_run",
-          "description": "generate only: print the plan and write nothing.",
-          "required": false,
-          "type": "choice",
-          "default": "true",
-          "options": [
-            "true",
-            "false"
-          ]
-        }
-      ],
-      "secrets": [
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "new-dedup-candidates",
-      "cancelInProgress": false,
-      "timeoutMinutes": 350,
-      "permissions": "contents: read",
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/new_dedup_candidates.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/new_dedup_candidates.yml"
-    },
-    {
       "filename": "realitymix_index_walk.yml",
       "name": "Scraping: RealityMix index walk",
       "description": "The fast half of the realitymix cadence split (architectural rule #19, like sreality/idnes/ceskereality). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, presence nomination (rule #3) nominates unseen ones for a page check once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='realitymix'). No detail fetch — the realtime worker's drain lane consumes the queue. Records run_type='index'.",
@@ -1406,7 +1319,7 @@
     {
       "filename": "runner_image.yml",
       "name": "CI: runner image",
-      "description": "Builds the job-runner image, the root Dockerfile with EXTRAS=api,clip,geo (CPU torch, the baked CLIP checkpoint, the geo wheels), on every pull request that changes an image input, before Railway first builds it after the merge (#2025): a failure there would leave main unable to build the runner until a fix lands. The build's own offline RUN is the proof (CPU torch, and the checkpoint loads with the hub offline), so the scraper files it imports are inputs too; the log then shows the image size. A second job builds the API image (EXTRAS=api) at the base and with this pull request, fails if it can import torch or transformers or holds the hub cache, and prints both sizes and the package diff (#2032). A third builds the WORKER image (EXTRAS=api,browser) and launches chromium inside the finished image with no network: that arm was missing, so the first browser build reached Railway unbuilt and failed there instead (2026-11-16). No secrets; it pushes and deploys nothing. About 10 minutes a run, billed once the repository is private.",
+      "description": "Builds the job-runner image, the root Dockerfile with EXTRAS=api,browser,clip,geo (CPU torch, the baked CLIP checkpoint, the geo wheels, chromium since #2031), on every pull request that changes an image input, before Railway first builds it after the merge (#2025): a failure there would leave main unable to build the runner until a fix lands. The build's own offline RUN is the CLIP proof (CPU torch, and the checkpoint loads with the hub offline), so the scraper files it imports are inputs too; the log then shows the image size. A second job builds the API image (EXTRAS=api) at the base and with this pull request, fails if it can import torch or transformers or holds the hub cache, and prints both sizes and the package diff (#2032). A third builds the WORKER image (EXTRAS=api,browser). Each browser image then runs scripts/browser_image_check.py in the FINISHED image with no network: chromium launches, serves a page and closes through the repo's own helper (scraper/browser_fetch.py), so those files are inputs too. That arm was missing for the worker, so its first browser build reached Railway unbuilt and failed there instead (2026-11-16). No secrets; it pushes and deploys nothing. About 10 minutes a run, billed once the repository is private.",
       "manual": false,
       "schedules": [],
       "onPush": false,
@@ -1420,9 +1333,13 @@
         "data/requirements-clip-runner.txt",
         "pyproject.toml",
         "scraper/__init__.py",
+        "scraper/browser_fetch.py",
+        "scraper/cgroup.py",
         "scraper/clip_tagger.py",
         "scraper/cpus.py",
-        "scripts/bake_clip_weights.py"
+        "scraper/stop.py",
+        "scripts/bake_clip_weights.py",
+        "scripts/browser_image_check.py"
       ],
       "inputs": [],
       "secrets": [],

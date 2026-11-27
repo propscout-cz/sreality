@@ -2185,7 +2185,8 @@ def _autodedup_outcome(
             reconcile=str(reconciled.get("skipped") or reconciled.get("stopped") or "ran")
             [:AUTODEDUP_REASON_CHARS],
             # A pass that rolled back — past its deadline, or a pair set that would not fit
-            # even a one-listing claim: nothing written, and the next pass claims half.
+            # even a one-listing claim: the next pass claims half. A deadline's rollback keeps
+            # the rejects the pass decided (E997, `ledger_salvaged`); nothing else is written.
             errors=1 if aborted else 0,
             deadline_exceeded=aborted == "deadline",
             bound_by=(summary.get("claim_bound") or {}).get("bound_by"),
@@ -2234,6 +2235,14 @@ def _autodedup_outcome(
             pairs_to_decide_by_attempt=counts.get("pairs_to_decide_by_attempt"),
             ledger_skipped=counts.get("ledger_skipped"),
             ledger_written=counts.get("ledger_written"),
+            # E997: the rejects a deadline-stopped pass ledgered after its rollback (None: no
+            # salvage ran), and why none were when the salvage failed.
+            ledger_salvaged=summary.get("ledger_salvaged"),
+            ledger_salvage_error=summary.get("ledger_salvage_error"),
+            # What each forward feed left WAITING in its window this pass (arrivals, changes,
+            # flips; bounded by the window, so a count that large means "at least"): the
+            # adverts refreshed in a pass are not the arrivals read.
+            waiting=summary.get("waiting"),
             # E960: the probe-key neighbourhood the last attempt re-retrieved from the store's
             # keys and guard rows, and the adverts whose facts the pass read, by why (claim,
             # order, digest, decided, cluster, rail), summed over every attempt.

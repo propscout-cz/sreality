@@ -409,8 +409,8 @@ portal put an Anubis v1.28.2 JS proof-of-work interstitial in front of every pag
 cards, and each page read as EMPTY — an our-stop, so walks never reached the portal's end and
 stopped nominating (pages/walk fell ~2,400 → ~140 the day the wall went up; #2479). The one seam is
 `BasePortalClient._send`, which `CeskerealityClient` overrides to drive `scraper/browser_fetch.py`
-(Python Playwright, imported lazily, the `browser` pyproject extra, chromium baked into the scraper
-image by `EXTRAS=api,browser`): one chromium context per phase solves the interstitial ONCE and
+(Python Playwright, imported lazily, the `browser` pyproject extra, chromium baked into each image
+whose `EXTRAS` names `browser`: the worker's, and the job runner's since #2031): one chromium context per phase solves the interstitial ONCE and
 carries its ~7-day cookie, pinned to ONE residential exit IP (the gateway rotates per request and a
 rotating IP re-challenges every page). **That exit IP is RETIRED every 250 pages, and after 2
 consecutive 403s** (`rotate()`: a new sticky session, and the browser goes with it, since the
@@ -1653,8 +1653,8 @@ on 2026-12-01, and until then a file of that name would override the applied set
   `tests/fixtures/railway_plans/` is synthetic until #2025 pins it to a real plan's change list (names only).
 - **Every variable NAME is declared,** a secret as `preserve()` (values stay in Railway) or as a reference to another
   service's (the runner's `SUPABASE_DB_URL`), a plain value written out: add a name in the same PR as the secret;
-  removing one is a destructive delete the apply asks to confirm. `EXTRAS` (API and worker: `api`; the runner:
-  `api,clip,geo`) is the root Dockerfile's build argument: a service variable reaches the ARG of its name, and the
+  removing one is a destructive delete the apply asks to confirm. `EXTRAS` (API: `api`; worker: `api,browser`; the
+  runner: `api,browser,clip,geo`) is the root Dockerfile's build argument: a service variable reaches the ARG of its name, and the
   build log echoes it.
 - **Domains stay dashboard-owned, custom and generated (`*.up.railway.app`)**: no plan diffs either, and IaC cannot
   register one. The file names the custom domains that exist (`api.`, `app.` and, since 2026-10-31, the bare `propscout.cz`: the privacy page and a redirect to the app since the landing came down 2026-11-09), so removing one of those also takes it out of the
@@ -1675,8 +1675,8 @@ on 2026-12-01, and until then a file of that name would override the applied set
   `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (130 min: web, maxima and bezrealitky since #2029, remax and
   mmreality since #2030, bazos since #2031, each `walk_<source>` every 6 h (mmreality 12 h), and sreality hourly since #2030, with no
   `--max-seconds`, the runner's SIGTERM at the timeout its one budget; the longer walks wait on their workflows):
-  - two replicas in the worker's region, each 4 vCPU and 8 GB, restart policy ALWAYS, `checkSuites: false`. Railway
-    counts decimal bytes, so 8e9 B is 7,629 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
+  - two replicas in the worker's region, each 4 vCPU and 12 GB (8 GB until #2031), restart policy ALWAYS, `checkSuites: false`.
+    Railway counts decimal bytes, so 12e9 B is 11,444 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
     line and every beat carry `memory_limit_mb` and `cpus` as the replica's cgroup reads them;
   - `drainingSeconds` 250: the runner checks its own 180 s drain only between ticks, then forgets its heartbeat, so
     Railway's SIGKILL must wait a guard poll, that drain, a tick, one stopping tick and the forget, 243 s (a test ties
@@ -1712,6 +1712,15 @@ on 2026-12-01, and until then a file of that name would override the applied set
   within fp32 tolerance, read-only) and lift the pause on a pass, so no vector of the new stack lands unproven.
   The `api-image` job of the same workflow builds `EXTRAS=api` at the PR's base and head and fails if the head can
   import torch or transformers or holds a Hugging Face cache, so the API and worker images stay clip-free.
+- **The runner image bakes chromium too (#2031):** its `EXTRAS` name `browser`, so the Dockerfile's browser layer
+  (the worker's, #2529) runs in it, for the ceskereality walk W4 moves there. `CI: runner image` runs
+  `scripts/browser_image_check.py` in each finished browser image (worker and runner) with no network: chromium
+  launches, serves a loopback page and closes through `scraper/browser_fetch.py`, and as PID 1 the check holds no child
+  after the close; in the runner image it then loads one exit IP's session (`PAGES_PER_EXIT_IP`, 250) of a full-size
+  ceskereality page and prints the memory held, the walk's sizing (information, not a verdict). A census holds every
+  `EXTRAS` a service declares to one CI build, and each one naming `browser` to that check. Playwright launches
+  chromium as its own process group; since #2689 the runner reads a job's whole process tree, so `peak_rss_mb` counts
+  it and the timeout's kill reaches it, and its exited helpers go to PID 1, the runner, which reaps them.
 - **The runner is cut only by a new deployment:** a Redeploy of the ACTIVE deployment (same image and configuration)
   or Deploy Latest Commit. Restart restarts the process inside its container, and no doc says it honours
   `drainingSeconds`, so it is never a runner procedure. **Never boot an older runner image:** no dashboard Rollback,
@@ -4995,17 +5004,9 @@ renumber.** Navigate by area:
     mmreality's `builtUpArea`) with no column to put it in — a schema decision for the operator,
     not a parser fix. bazos has no labelled parcel in its free text, so it gains no side columns.
 
-    **`area_m2` is what every consumer reads — the dedup rule included.** NEW DEDUP path C used
-    to spell its own choice (`estate_area` for pozemek, else `usable_area`), a second answer to
-    "which area is this listing's area" that disagreed with the headline on every one of those
-    52,183 rows and on every dwelling measured only by a floor/total label. W17 deleted it:
-    `toolkit/dedup_candidates_sql.py` reads `area_m2 > 0` for every category, and the per-category
-    IDENTITY ATTRIBUTES are one vocabulary (`dedup_candidates.IDENTITY_ATTRS` — `pozemek`: area
-    only, everything else disposition + area) rendered into both the pairing SQL and the Python
-    oracle, so C1 never joins two parcels on a room count. That changed what the generator PAIRS,
-    so `GENERATOR_VERSION` moved `c3 -> c4` (a new `inputs_id`; the pilot's pair rows are
-    orphaned deliberately) and the SHA-256 ledger of the pairing statements in
-    `tests/toolkit/test_dedup_candidates_sql.py` was re-pinned in the same commit.
+    **`area_m2` is what every consumer reads.** NEW DEDUP path C once spelled its own choice
+    (`estate_area` for pozemek, else `usable_area`); W17 moved it onto `area_m2`, and the lane
+    itself was deleted 2026-11-26 (#2681).
 
     **The basis is resolved from `(category_main, category_type)`, rent-first, and NEVER from
     `listings.price_unit`** — that column is two values (`za nemovitost` / `za mesic`; W5
@@ -5988,8 +5989,7 @@ surface, `browse_projection` (keyed on the property's location advert since 636,
 `browse_stats_properties` and `browse_map_cells` all inherit it), plus,
 in code, the watchdog matcher (`api/notifications._build_match_clauses`,
 which reads `properties_public` and so cannot inherit; keyed on the `location_listing_ref_id`
-that view appends since 636) and path C candidate generation
-(`toolkit/dedup_candidates_sql`); `toolkit/comparables._shared_filter_where` needs no clause because
+that view appends since 636); `toolkit/comparables._shared_filter_where` needs no clause because
 its `ll.geom IS NOT NULL` is the same rule minus the foreign arm. **DETAIL STAYS REACHABLE**:
 `listings_public`, `properties_public` and `pipeline_board_public` are read by id, so a direct link,
 the extension and an operator's pipeline card (rule 22 operator state)
@@ -6188,17 +6188,11 @@ counted `unresolved`: 99 % of its 12,272 were delisted ads with no claims.)
 (migrations 523/524/526) was the chain behind this page: every listing → judged → located → hidden.
 W1 (ruling Q7) folded its numbers into the `{portal}/town` facts and deleted the panel; migration 719
 (ruling W1-c) dropped the table, its producer, `location_pin_audit_summary()` and
-`refresh_location_pin_audit_mv()`. **W16's ONE vocabulary outlives it.** The NEW DEDUP candidates funnel
-once called *judged* "Known to the location engine", and cut its town step with no consumer rule, so
-its single "lost 99,889" silently added three unlike things together (≈53,374
-judged-but-not-located, 45,619 **abroad, an ANSWER**, ≈895 a Czech point with no town). The four
-booleans are rendered from `location_data/location_steps.py`, which also declares a run's step keys,
-their order and each key's shape; `has_town` carries dedup's obec RANK floor and `located_no_town` is
-the plain complement. Wording lives in `frontend/src/lib/locationSteps.ts`, one file holding Czech and
-English for every key, so a better sentence costs no migration and a step cannot be renamed on one
-page only.
-A candidate run stamps those keys into `candidate_generations.stats.waterfall` with the losses and
-shares already computed by the lane. The rail is `tests/test_location_steps_vocabulary.py`.
+`refresh_location_pin_audit_mv()`. **W16's ONE spelling outlives it** (and the NEW DEDUP candidates
+funnel, deleted with its lane in #2681): the four booleans are rendered from
+`location_data/location_steps.py`, where `has_town` carries the obec RANK floor and `town_missing_sql()`
+is the set the scorecard view and the refetch lane share. The rail is
+`tests/test_location_steps_vocabulary.py`.
 `quality` bucketed the set on active/delisted × `has_claims` — and since W15 `listings.is_active` was
 the page's ONLY live/delisted notion; the SPA page `/new-dedup/pin-audit` filtered on those four axes
 plus the sibling flag; W1 deleted its overview matrix, state totals and split (read from

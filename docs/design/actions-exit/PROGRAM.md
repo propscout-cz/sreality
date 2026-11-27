@@ -111,7 +111,8 @@ production.
   identical replicas**, 8 GB / 4 vCPU each,
   `restartPolicy ALWAYS`, built from the same Dockerfile, whose `ARG EXTRAS` shipped with
   #2060 (no default; unset installs `api`): the runner sets `EXTRAS: "api,clip,geo"` in its `.railway/railway.ts`
-  env, so CPU torch, the pinned CLIP weights (revision 3d74acf9) and the geo wheels live in this image only.
+  env (`api,browser,clip,geo` since #2031), so CPU torch, the pinned CLIP weights (revision 3d74acf9) and the geo
+  wheels live in this image only.
   `watchPatterns` cover the trees jobs import. **As built (#2025):** service `job-runner` in the realtime-worker
   project (no new project); `drainingSeconds` 250, outlasting the runner's own 180 s drain by its last tick and
   forget (243 s); 8 GB is 8e9 B = 7,629 MiB (`jobs.REPLICA_MEMORY_MB`); the watch patterns are every tree the
@@ -131,13 +132,14 @@ production.
   threads and the intake pool read it instead of `os.cpu_count()`); a guard thread sends every signal, with no
   database call and no log write of its own (a forwarder thread writes its lines), so neither a stalled database
   nor a stalled log reader delays a stop: at `timeout_s` SIGTERM to the leader only (a walk reads it
-  as its deadline; a pool finishes the item in hand), SIGKILL to the whole group `GRACE_S` (90 s) later, under
+  as its deadline; a pool finishes the item in hand), SIGKILL to the job's whole process tree `GRACE_S` (90 s) later, under
   `jobs.STUCK_RUN_GRACE_S` (600 s; the stuck-run cutoff and DB-heavy hour censuses count it); at the lease's fence,
-  or a refused renewal, the group is SIGKILLed at once. A run the runner stopped at `timeout_s` is recorded
+  or a refused renewal, the job's process tree (its group and every group a descendant started, #2689) is SIGKILLed
+  at once. A run the runner stopped at `timeout_s` is recorded
   `timeout` whatever it exited (0, 75 and 143 included), never `interrupted` (an interrupted run is due again at
   once, so a walk cut by its own timeout would restart at once); the lease is released only after the child's
-  whole group has exited; the exit code is stored signed (−9, −15: killed by that signal), the peak RSS is the
-  larger of the leader's `VmHWM` and the group's summed `VmRSS` over 1 s samples (never `ru_maxrss`, which
+  whole process tree has exited; the exit code is stored signed (−9, −15: killed by that signal), the peak RSS is the
+  larger of the leader's `VmHWM` and its process tree's summed `VmRSS` over 1 s samples (never `ru_maxrss`, which
   inherits the runner's own peak at exec; shared pages count twice, the safe direction; a job shorter than one
   sample records none), and the tail is the last 64 lines. Children carry `oom_score_adj +500`, set by an exec
   shim in the same pid, so an OOM kills the job, not the runner. **Residual:** a fenced child's statement already
@@ -370,6 +372,16 @@ neither the proxy nor the browser, and the runner already carries `SUPABASE_DB_U
 change, no migration. The runner walks it 4 times a day where GitHub managed about 2, so its direct index requests rise
 from about 2,800 to 5,200 a day beside the drain's 4,200, all inside bazos's one 0.7 req/s budget (60,480 slots a day).
 Its 51 min walk then spans about 3.4 h a day, so a deploy cuts one most days and the resumed walk re-reads the cut scope.
+**The runner image, before batch 3 (#2031):** the runner's `EXTRAS` gain `browser` (`api,browser,clip,geo`), so its
+image bakes chromium as the worker's does, and `CI: runner image` launches it through `scraper/browser_fetch.py` in the
+finished image with no network; no walk moves. The ceskereality walk still needs `SCRAPER_PROXY_URL` by reference (a
+datacenter IP is refused before the interstitial) and a memory value that fits it: one exit IP's 250-page browser
+session of a full-size page held ~1,260 MB PSS (Python 231, Playwright's driver 252, chromium 780; 360 after one page;
+the image's Playwright 1.65.2 and chromium 159, 2026-11-26) against `WALK_MEMORY_MB` 512 and 35 MB of co-tenancy
+headroom (the operator chose option A on 2026-11-27: every walk declares 1,536 MB and each replica gets 12 GB, billed
+by use; since #2689 a job's `peak_rss_mb` and kill follow its whole process tree, chromium included). Its 31 failed GitHub runs in 30 days
+were all the Anubis wall (11-02 to 11-16, `CHECK empty_walk`: 0 ads from ~165 pages), none in the 22 since #2530.
+realitymix needs neither the proxy nor the browser; idnes prefers the proxy, bazos neither.
 **Gate per walk (7 days):** pages and reached-end per cycle, nominations per day (a moved walk keeps its declared
 cadence), ± 10 %; 403/429 share from
 Railway ≤ the GitHub baseline; 0 `ended_at NULL` after ≥ 5 mid-walk deploys; proxy GB/day within its band;

@@ -286,8 +286,9 @@ def test_the_largest_concurrent_declarations_fit_a_replica() -> None:
 
 def test_the_co_tenancy_census_fires() -> None:
     entries = jobs.declared()
-    assert co_tenancy_problems([*entries, replace(_entry("clip"), name="clip_twin")])
-    assert co_tenancy_problems(entries, cap=4)
+    budget = int(jobs.CO_TENANCY_SHARE * jobs.REPLICA_MEMORY_MB)
+    assert co_tenancy_problems([*entries, replace(_entry("clip"), name="clip_twin", memory_mb=budget)])
+    assert co_tenancy_problems(entries, cap=len(entries))  # every job at once would not fit one replica
 
 
 def _slots(job: Job) -> list[int] | None:

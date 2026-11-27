@@ -86,8 +86,9 @@ Session handoff points marked ⛳ (good places to end a session; update the ledg
   then assess coverage with operator. Operator confirms/dismisses into the training set. ⛳ per
   sample round.
   **Gate 1: 150 training images (human or machine) per target tag — the 12 tags ruled 2026-09-05 — AND the operator has reviewed and finalized the set.** **CLOSED 2026-09-09** (operator confirmation; tag model v1 live per 2026-09-09 (d)). The dashboard skeleton, W1's one unbuilt bullet, is carried into W2 (its funnel top ships with the candidate audit page).
-- **W2 — Level 0: candidate selection — PATH C FIRST (ruling 2026-09-10; paths A and B are
-  not built in this wave).** Three PRs, each draft-first with tests and CI green, the ledger
+- **W2 — Level 0: candidate selection — STOPPED: the lane was deleted 2026-11-26 (operator decision D3, #2681;
+  Gate 2 never ran). The plan below is the record of what was built.** PATH C FIRST (ruling 2026-09-10; paths A and B
+  were not built in this wave). Three PRs, each draft-first with tests and CI green, the ledger
   updated at every handoff: **(1)** the sim candidate store (migration 492: one row per listing
   pair × path × the inputs that produced it, a fingerprint so a changed input re-generates the
   pair; a `simulation_runs` row per generation run; the confirmed parameters as settings);
@@ -207,6 +208,17 @@ the two gaps found while adding property list are closed in the same PR that add
 8. **Ledger entry** here, memory note, roadmap line.
 
 ## Progress ledger (update every session, newest first)
+
+- 2026-11-26 — **The Level 0 candidate lane is deleted (operator decision D3, #2681); Gate 2 never ran.** The
+  full-corpus generate had waited on the operator since 09-10 and the attended tool last ran 09-15. Gone: the
+  dispatch-only workflow, `scripts/dedup_candidates_generate.py`, the rule and its SQL under `toolkit/`, the
+  `/new-dedup/candidates` route and page, the dashboard's funnel panel, the funnel-only step vocabulary
+  (`frontend/src/lib/locationSteps.ts`, the run step keys in `location_data/location_steps.py`) and every test
+  of them. The data stays: migration 492's three tables and `simulation_runs` (5 lane runs, 58,279 pairs) are read
+  by nothing and are dropped in their own destructive ticket. The nine L0 knobs leave the settings registry
+  (no override row held any of them). **If path C resumes,** take PR #2684's merge commit, which carries all four
+  of its commits (`m=$(gh pr view 2684 --json mergeCommit --jq .mergeCommit.oid)`), restore every file
+  `git diff --stat "$m^1" "$m"` lists from `"$m^1"`, and re-check each against the schema of that day.
 
 - 2026-10-31 — **The DINOv3 bake-off manifest is deleted (Actions exit R6a, #2018); Set 2 stays unrun.** The
   operator approved deleting `scripts/dinov3_bakeoff_manifest.py`, its dispatch-only workflow and its test: no

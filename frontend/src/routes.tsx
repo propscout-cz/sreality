@@ -33,7 +33,6 @@ const BrokerReview = lazyChunk(() => import('./pages/BrokerReview'));
 const LocationQuality = lazyChunk(() => import('./pages/LocationQuality'));
 const NewDedupDashboard = lazyChunk(() => import('./pages/NewDedupDashboard'));
 const NewDedupSettings = lazyChunk(() => import('./pages/NewDedupSettings'));
-const NewDedupCandidates = lazyChunk(() => import('./pages/NewDedupCandidates'));
 const NewDedupLabeling = lazyChunk(() => import('./pages/NewDedupLabeling'));
 const NewDedupTrainingSet = lazyChunk(() => import('./pages/NewDedupTrainingSet'));
 const NewDedupExam = lazyChunk(() => import('./pages/NewDedupExam'));
@@ -241,7 +240,6 @@ export const routes: RouteObject[] = [
       { path: ROUTES.settings.childPath, element: <AdminPage><Settings /></AdminPage>, handle: { title: 'Settings' } },
       { path: ROUTES.newDedup.childPath, element: <AdminPage><NewDedupDashboard /></AdminPage>, handle: { title: 'NEW DEDUP' } },
       { path: ROUTES.newDedupSettings.childPath, element: <AdminPage><NewDedupSettings /></AdminPage>, handle: { title: 'NEW DEDUP · Settings' } },
-      { path: ROUTES.newDedupCandidates.childPath, element: <AdminPage><NewDedupCandidates /></AdminPage>, handle: { title: 'NEW DEDUP · Candidates' } },
       { path: ROUTES.newDedupLabeling.childPath, element: <AdminPage><NewDedupLabeling /></AdminPage>, handle: { title: 'NEW DEDUP · Labeling' } },
       { path: ROUTES.newDedupTaxonomy.childPath, element: <AdminPage><NewDedupTaxonomy /></AdminPage>, handle: { title: 'NEW DEDUP · Taxonomy' } },
       { path: ROUTES.newDedupTrainingSet.childPath, element: <AdminPage><NewDedupTrainingSet /></AdminPage>, handle: { title: 'NEW DEDUP · Training set' } },

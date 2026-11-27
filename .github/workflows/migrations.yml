@@ -227,8 +227,7 @@ jobs:
                  tests/test_761_sold_building_live.py \
                  tests/scraper/test_connect_read_only_live.py \
                  tests/autodedup/test_shadow_ties_live.py \
-                 tests/toolkit/test_description_extraction_walk_live.py \
-                 tests/toolkit/test_dedup_candidates_sql.py -q
+                 tests/toolkit/test_description_extraction_walk_live.py -q
 
       - name: Tenant-isolation sweep (RLS cross-tenant denial, Phase 1)
         env:

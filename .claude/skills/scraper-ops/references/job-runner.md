@@ -7,7 +7,7 @@ rulings: `docs/design/actions-exit/PROGRAM.md` § 4.2. Since #2025's move PR it 
 and since #2028 `location_intake`, whose workflows those PRs deleted, since #2604 `ruian_buildings` (13:00 UTC, born
 on the runner; `docs/architecture.md` § Register facts), since #2029 the walks of web, maxima and bezrealitky, since
 #2033 the daily `ruian_load` (below), since #2030 the hourly sreality walk and the walks of remax and mmreality, and
-since #2031 the bazos walk; each later #2031 PR flips more entries' host. On Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and 8 GB
+since #2031 the bazos walk; each later #2031 PR flips more entries' host. On Railway it is the service `job-runner` in the realtime-worker project, two replicas of 4 vCPU and 12 GB
 (`.railway/railway.ts` `jobRunner`; settings, drain and image: `docs/architecture.md` § Railway service
 configuration). Its Health cells and the "Jobs: run now" form are #2026's (below).
 
@@ -87,7 +87,7 @@ Recipes:
 | `JOBS skip job=… why=…` (ERROR) | The database refused that entry (a CHECK, a bad value): never claimed until a deploy fixes it. |
 | `RUN start job=… run=… pid=… requested_by=… args=…` | A claim spawned. The child's own output follows as `[<job>#<run>] <line>`. |
 | `RUN term job=<job>#<run> pid=… why=timeout\|deploy` | The guard sent SIGTERM to the leader. |
-| `RUN kill job=… pid=… why=timeout\|deploy\|fence (…)` | The guard SIGKILLed the group: the grace ran out, or the lease's fence passed / a renewal was refused. |
+| `RUN kill job=… pid=… why=timeout\|deploy\|fence (…)` | The guard SIGKILLed the job's process tree (its group and every group a descendant started): the grace ran out, or the lease's fence passed / a renewal was refused. |
 | `RUN end job=… run=… outcome=… due=… exit=… peak_mb=…` | Released. |
 | `LEASE lost job=…: …` | A renewal or a release was refused, or the reaper closed a lapsed run as `lost`. Each claim is its own holder (`<BOOT holder>/<n>`), so a late release never touches a later run of the job. |
 | `LEDGER <call> failed (connection lost): …` | A database call failed; the tick asks nothing more after a lost connection. A finished run waits in memory and is released when the database answers. |
@@ -113,7 +113,8 @@ A DB-heavy job's backoff, retry and lost waits go to its own hour (the next day 
 a database restart** (#2660, ruling C): its first connect and every reconnect pass `db.JOB_PATIENCE`, 3 waits of 60 s,
 and with `probe` an attempt counts only once `SELECT 1` answers (a pooler that cannot reach the database fails it); a database
 down longer is an incident, and the day's Watch its signal. A census in `tests/scraper/test_db_connect_retry.py` holds
-every DB-heavy entry to it. **No DB-heavy job starts
+every DB-heavy entry to it. Three minutes is a ceiling, not a promise: the runner's fence still stops a child whose
+run lease lapses meanwhile. `rent_map` waits too, through `ingest_map_overlays.main`'s re-render (harmless). **No DB-heavy job starts
 while another one's run is open** (#2027; `job_lease`'s `due`/`claim` with `PgLedger.heavy`, main's whole registry, so
 `once` too; a transaction advisory lock makes two replicas' heavy claims take turns). A run off its hours (an
 interrupted one, a recovery after hours down, a request) waits instead, and past 10 min its cell reads Watch `due N ago
@@ -127,8 +128,10 @@ already due counts at its loss as having taken its slot, so its loss moves `due_
 ## Reading `job_runs`
 
 `exit_code` is signed: −9 / −15 = killed by that signal; 143 = the child exited after its own SIGTERM handling.
-`peak_rss_mb` is the larger of the leader's `VmHWM` and the group's summed `VmRSS` (pool workers included; shared
-pages count twice). `last_error` on `scheduled_jobs` names the cause in `settle`'s order (none for an `ok` run, a
+`peak_rss_mb` is the larger of the leader's `VmHWM` and its process tree's summed `VmRSS`: the job's group and every
+descendant in any group, so a browser in a group of its own counts (#2689; pool workers included; shared pages count
+twice). The leader is a child subreaper, so an orphan stays in its tree while it lives; one still running when the
+leader exits re-parents to the runner and drops out. `last_error` on `scheduled_jobs` names the cause in `settle`'s order (none for an `ok` run, a
 deploy or fence it outlived included; `killed by signal N` for a signal with no name) and never carries log text. **Never paste
 `log_tail` anywhere public: it can hold a connection string.**
 
@@ -216,8 +219,8 @@ of a sibling on its resource seen since its clock started. The worst condition w
 - **Which walks run here:** every walk whose Portal class's `walk_timeout_s` is at most `jobs.RUNNER_WALK_TIMEOUT_S`
   (130 min since #2031: `walk_web` 15 min, `walk_maxima` and `walk_bezrealitky` 30 min, `walk_remax` 60 min
   and `walk_bazos` 130 min, each every 6 h, `walk_mmreality` 60 min every 12 h (proxied; operator decision 2026-11-27), and
-  `walk_sreality` 50 min, hourly (R24); 512 MB,
-  1 CPU). The rest wait on their GitHub workflows (`github-actions-until-moved`). A batch raises the cutoff and deletes
+  `walk_sreality` 50 min, hourly (R24); 1,536 MB,
+  1 CPU, since #2031 for every walk). The rest wait on their GitHub workflows (`github-actions-until-moved`). A batch raises the cutoff and deletes
   the workflows it takes over, and names no portal (rule 21); the registry census `test_a_walks_host_is_the_cutoffs`
   refuses a per-portal host value (one would need a ruling). The next cutoff (180 min) would take realitymix and
   ceskereality (the `browser` extra) together, then idnes (240): their order or the image needs a ruling (PROGRAM § W4).

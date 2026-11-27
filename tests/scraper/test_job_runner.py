@@ -8,11 +8,13 @@ thread. The real-child tests spawn `tests/scraper/_job_runner_child.py` and alwa
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -648,6 +650,11 @@ def _kill_quietly(pgid: int) -> None:
         os.killpg(pgid, signal.SIGKILL)
 
 
+def _kill_pid_quietly(pid: int | None) -> None:
+    if pid is not None and _state(pid) not in (None, "Z"):
+        os.kill(pid, 9)
+
+
 def _state(pid: int) -> str | None:
     """The /proc state letter of `pid`, None once it is gone."""
     try:
@@ -699,6 +706,111 @@ def _children(rig: Rig) -> dict[str, job_process.ProcessChild]:
     return found  # type: ignore[return-value]
 
 
+def _stat_line(pid: int, ppid: int, pgrp: int, rss_pages: int, state: str = "S") -> str:
+    """A /proc/<pid>/stat line: after the command name, field 1 is ppid, 2 the process group, 21 the resident pages."""
+    fields = [state, str(ppid), str(pgrp)] + ["0"] * 18 + [str(rss_pages)]
+    return f"{pid} (job) {' '.join(fields)}\n"
+
+
+def test_a_jobs_process_tree_is_its_group_and_every_descendant_in_any_group(tmp_path: Path) -> None:
+    """#2689: Playwright's chromium (200) and its renderer (201) sit in a group of their own under the job's driver
+    (101); the job's memory, its stragglers and its kill reach them, and never an unrelated process (300)."""
+    rows = [(100, 1, 100, 1000, "S"), (101, 100, 100, 2000, "S"), (200, 101, 200, 3000, "S"),
+            (201, 200, 200, 4000, "S"), (202, 200, 200, 5000, "Z"), (300, 1, 300, 9000, "S")]
+    for pid, ppid, pgrp, rss, state in rows:
+        (tmp_path / str(pid)).mkdir()
+        (tmp_path / str(pid) / "stat").write_text(_stat_line(pid, ppid, pgrp, rss, state))
+    proc = str(tmp_path)
+
+    assert sorted(p.pid for p in job_process._process_tree(100, proc)) == [100, 101, 200, 201, 202]
+    page_kb = os.sysconf("SC_PAGE_SIZE") // 1024
+    assert job_process.process_memory_mb(100, proc) == -(-(10_000 * page_kb) // 1024)
+    assert job_process.stragglers(100, proc) == 4
+    killed: list[int] = []
+    with mock.patch.object(job_process.os, "killpg", lambda group, _sig: killed.append(group)):
+        job_process._kill_tree(100, proc)
+    assert sorted(killed) == [100, 200]
+
+
+def test_the_tree_kill_signals_the_jobs_own_group_first_and_goes_on_past_a_refusal(tmp_path: Path) -> None:
+    """#2689 review: the job's group dies first, and a group that refuses SIGKILL (EPERM) stops no other group's."""
+    rows = [(100, 1, 100, 1, "S"), (101, 100, 100, 1, "S"), (250, 101, 250, 1, "S"), (200, 101, 200, 1, "S")]
+    for pid, ppid, pgrp, rss, state in rows:
+        (tmp_path / str(pid)).mkdir()
+        (tmp_path / str(pid) / "stat").write_text(_stat_line(pid, ppid, pgrp, rss, state))
+    killed: list[int] = []
+
+    def killpg(group: int, _sig: int) -> None:
+        killed.append(group)
+        if group == 200:
+            raise PermissionError(1, "Operation not permitted")
+
+    with mock.patch.object(job_process.os, "killpg", killpg):
+        job_process._kill_tree(100, str(tmp_path))
+    assert killed[0] == 100 and sorted(killed) == [100, 200, 250]
+
+
+def test_the_tree_kill_never_signals_the_runners_own_group_or_group_zero(tmp_path: Path) -> None:
+    """The belt under the setsid shim: whatever pid it is handed, the kill never reaches the runner's own group."""
+    killed: list[int] = []
+    with mock.patch.object(job_process.os, "killpg", lambda group, _sig: killed.append(group)):
+        job_process._kill_tree(os.getpgrp(), str(tmp_path))
+        job_process._kill_tree(0, str(tmp_path))
+    assert killed == []
+
+
+def test_a_browser_in_a_session_of_its_own_is_counted_and_killed_with_its_job() -> None:
+    """#2689, with real processes: a grandchild that setsid()s (as chromium) is in the job's memory and its kill."""
+    child = job_process.spawn_process([sys.executable, "-m", CHILD, "--detached-grandchild-mb", "96"],
+                                      dict(os.environ), "browser#1", lambda _c: None)
+    detached = None
+    try:
+        _wait_for(lambda: "ready" in child.tail())
+        [detached] = [int(line.split()[1]) for line in child.tail().splitlines() if line.startswith("detached ")]
+        _wait_for(lambda: os.getpgid(detached) != child.pid)  # its setsid() races the parent's prints
+        _wait_for(lambda: (job_process.process_memory_mb(child.pid) or 0) >= 96)  # and it allocates late
+
+        job_process._kill_tree(child.pid)
+        _wait_for(lambda: _state(detached) in (None, "Z"))
+        child.reap()
+    finally:
+        job_process._kill_tree(child.pid)
+        _kill_pid_quietly(detached)  # once the leader is reaped, the tree no longer reaches its setsid() grandchild
+
+
+def test_a_runner_job_whose_browser_runs_in_its_own_session_records_it_and_kills_it_at_the_timeout() -> None:
+    """#2689's acceptance through the runner: `peak_rss_mb` includes the setsid() grandchild, and the timeout's kill
+    leaves it dead."""
+    import time
+
+    argv = (CHILD, "--ignore-term", "--detached-grandchild-mb", "96")
+    rig = _real_rig([_job("browser", argv=argv, timeout_s=1)])
+    pgid = detached = None
+    try:
+        rig.runner.tick()
+        child = _children(rig)["browser"]
+        pgid = child.pid
+        _wait_for(lambda: "ready" in child.tail())
+        [detached] = [int(line.split()[1]) for line in child.tail().splitlines() if line.startswith("detached ")]
+        _wait_for(lambda: (job_process.process_memory_mb(pgid) or 0) >= 96)
+
+        rig.guard.run_once(rig.clock())  # a sample while both are alive
+        rig.clock.advance(1.5)
+        rig.guard.run_once(rig.clock())
+        rig.clock.advance(job_process.GRACE_S)
+        rig.guard.run_once(rig.clock())
+        time.sleep(0.2)
+        _wait_for(lambda: bool(rig.releases()), tick=rig.runner.tick)
+        [done] = rig.releases()
+        assert done.outcome == "timeout"
+        assert done.peak_rss_mb is not None and done.peak_rss_mb >= 96, done.peak_rss_mb
+        _wait_for(lambda: _state(detached) in (None, "Z"))
+    finally:
+        if pgid is not None:
+            job_process._kill_tree(pgid)
+        _kill_pid_quietly(detached)
+
+
 def test_a_real_child_that_ignores_sigterm_is_killed_after_the_grace_and_recorded_whole() -> None:
     """N14 (AC2): the parent holds 256 MB, so a peak read from ru_maxrss (which inherits it at exec) would show."""
     import time
@@ -716,7 +828,7 @@ def test_a_real_child_that_ignores_sigterm_is_killed_after_the_grace_and_recorde
             assert int(its.read()) == min(1000, int(mine.read()) + 500), "the shim raised the job's OOM score"
         with open(f"/proc/{pgid}/environ", "rb") as environ:
             assert b"JOB_CPUS=2" in environ.read().split(b"\0")
-        [grandchild] = [pid for pid, _, _ in job_process._group(pgid) if pid != pgid]
+        [grandchild] = [p.pid for p in job_process._process_tree(pgid) if p.pid != pgid]
 
         rig.clock.advance(1.5)
         rig.guard.run_once(rig.clock())
