@@ -292,7 +292,7 @@ The detail-drain writes `scrape_runs` rows too (`run_type='detail'`), but only t
 ## Onboarding a portal — and the tenth, `web` (2026-10-21)
 
 A portal is one row per registry, never a branch (the registry list: `docs/architecture.md` § rule 21 and
-`docs/design/new-property-from-link.md` §3.4; its Portal class declares `walk_every_s`/`walk_timeout_s` (`scraper/jobs.py`)). A walk whose `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (40 min, #2030) is born on the runner; a longer one fails the waiting-set ratchet (`ORIGINAL_UNTIL_MOVED`, `tests/scraper/test_job_registry.py`) until the cutoff reaches it or the operator rules. Run a new portal's first walk at deploy (a runner `request`): `scraping` judges every portal in `SOURCES` from then, so `<portal>/walks` reads Problem until it walks (web, 2026-10-22).
+`docs/design/new-property-from-link.md` §3.4; its Portal class declares `walk_every_s`/`walk_timeout_s` (`scraper/jobs.py`)). A walk whose `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (50 min, #2030) is born on the runner; a longer one fails the waiting-set ratchet (`ORIGINAL_UNTIL_MOVED`, `tests/scraper/test_job_registry.py`) until the cutoff reaches it or the operator rules. Run a new portal's first walk at deploy (a runner `request`): `scraping` judges every portal in `SOURCES` from then, so `<portal>/walks` reads Problem until it walks (web, 2026-10-22).
 `web` (`scraper/web_main.py`) is `indexless`: its 6-hourly walk sees
 nothing, reaches the end and nominates every active row as an orphan (its unit has no scope); the worker drains it FIRST;
 its pages go through `scraper/egress.py` (private ranges refused per hop, a wall-clock deadline, a decoded cap). A pasted

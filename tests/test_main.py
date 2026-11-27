@@ -486,14 +486,16 @@ def test_walk_category_split_deadline_between_districts_suppresses_nomination(
         _FakeClient, "district_result_size", {1: 6000, 2: 6000}, raising=False,
     )
     calls: list[object] = []
+    real_walk = scraper_main._walk_category
 
     def walk(client, *args, **kwargs):
         calls.append(client)
-        stop.EVENT.set()
-        raise stop.StopRequested()
+        if cut == "stop inside the first district":
+            stop.EVENT.set()
+            raise stop.StopRequested()
+        return real_walk(client, *args, **kwargs)
 
-    if cut == "stop inside the first district":
-        monkeypatch.setattr(scraper_main, "_walk_category", walk)
+    monkeypatch.setattr(scraper_main, "_walk_category", walk)
     if cut == "stop before the first district":
         stop.EVENT.set()
     deadline = time.monotonic() - 1 if cut == "budget spent" else None

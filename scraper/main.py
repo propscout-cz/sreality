@@ -559,7 +559,9 @@ class SrealityPortal(portal_runner.PortalDefaults):
     source = "sreality"
     price_change_min_pct = 0.0  # instance reads from config (portal_factory)
     walk_every_s = 3600  # PROGRAM R24: hourly, on the job runner since #2030
-    walk_timeout_s = 40 * 60
+    # job/walk_sreality reads Watch past 2/3 of it (2,000 s): the slowest of 22 GitHub walks in the 7 days to
+    # 2026-11-26 took 1,578 s (p95 1,518 s), so the line sits 27 % above it.
+    walk_timeout_s = 50 * 60
     index_rate = DEFAULT_DETAIL_RATE  # baked floor; instance reads from config
     shared_rate_limiter = False  # instance reads from config (portal_factory)
 
