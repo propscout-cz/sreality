@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from scraper import bazos_main
+from scraper import bazos_main, stop
 from scraper.bazos_main import BazosPortal
 from scraper.portal_base import ListingGoneError
 from scraper.portal_runner import DrainItem
@@ -318,6 +318,16 @@ def test_walk_category_deadline_is_not_an_end(monkeypatch):
     monkeypatch.setattr(bazos_main, "deadline_reached", lambda _d: True)
     _seen, _counts, _result_size, pages, reached_end = _walk_with(monkeypatch, 5, 5)
     assert pages == 0 and reached_end is False
+
+
+def test_the_runners_stop_signal_is_our_stop_without_a_deadline(monkeypatch, caplog):
+    """W4 (#2031): on the job runner the walk carries no --max-seconds; the runner's SIGTERM at timeout_s (the stop
+    event) is its one budget, and reaches the page loop through deadline_reached(None)."""
+    stop.EVENT.set()
+    with caplog.at_level("INFO", logger=bazos_main.LOG.name):
+        _seen, _counts, _result_size, pages, reached_end = _walk_with(monkeypatch, 5, 5)
+    assert pages == 0 and reached_end is False
+    assert "INDEX deadline reached" in caplog.text
 
 
 class _RecIdxClient:

@@ -133,13 +133,13 @@ them; `tests/scraper/test_portal_category_coverage.py` now fails CI whenever a p
 ("Nové projekty" — developer marketing that also appears under byt/dum, and no other portal
 in the fleet carries such a category) and the rent-only `podnajem`/`ubytovani` (roommate
 search and short-term lodging classifieds, not the sale or rental of a property). So — like
-sreality/idnes (rule #19) — it is **cadence-split**: `bazos_index_walk.yml` (every 6h, full
-walk + presence nomination + enqueue) feeds the realtime worker's drain lane (bazos's only
+sreality/idnes (rule #19) — it is **cadence-split**: the job runner's `walk_bazos` (every 6 h since #2031;
+`bazos_index_walk.yml` before; full walk + presence nomination + enqueue) feeds the realtime worker's drain lane (bazos's only
 drain since Actions-exit W0, #2010). A combined run can't do both inside one job (the full 22-scope walk is
-~2600 index pages ≈ 80 min inside bazos's one 0.7 req/s budget, which the drain shares (migration 676;
-before #1852's fix the walk and drain each paced themselves at 0.5 and 0.6) — a 130-minute job timeout with a 110-minute budget — which eats
-the window, starving the drain); narrow ad-hoc runs go through the split
-workflows' dispatch inputs (`-f sale_type=… -f category=…`, or locality + radius) or
+~1,300 index pages ≈ 51 min in the 7 days to 2026-11-26 inside bazos's one 0.7 req/s budget, which the drain shares (migration 676;
+before #1852's fix the walk and drain each paced themselves at 0.5 and 0.6) — a 130-minute timeout, the runner's SIGTERM its one
+budget — which eats the window, starving the drain); narrow ad-hoc runs are runner requests with
+args (`--sale-type … --category …`, or `--locality` + `--radius-km`) or
 `scraper.bazos_main` locally. **A REMOVED ad answers HTTP 200 with the CATEGORY INDEX page** —
 bazos lands `/inzerat/<id>/…` on `/inzeraty/<slug>/`, titled `… inzerce - Reality | Bazoš.cz`,
 carrying an "Inzerát byl vymazán" banner — so, like mmreality/ceskereality/remax,
@@ -329,12 +329,12 @@ prodej + pronájem today). Image-URL rows are recorded by the drain; the realtim
 `images` lane downloads the bytes to R2 (source-agnostic).
 
 **Data source (mmreality.cz).** A crawler (`scraper/mmreality_client.py`,
-`mmreality_parser.py`, `mmreality_main.py`, workflow `scrape_mmreality.yml` — pilot,
-cron `50 */6` — **every request rides the residential proxy** (`SCRAPER_PROXY_URL`,
-`USE_PROXY=True`): Cloudflare hard-403s datacenter IPs (the first 101 direct scheduled runs
-ingested zero listings), so the proxy is mandatory from ANY datacenter egress, GitHub or
-Railway alike; the cron is offset from ceskereality's `25 */6` so the two proxied portals
-don't hammer the shared proxy at the same minute) tagged `source='mmreality'`. M&M Reality is server-rendered HTML
+`mmreality_parser.py`, `mmreality_main.py`, the job runner's `walk_mmreality` since #2030 (every 12 h, its proxy traffic at GitHub's ~2 walks a day: operator decision 2026-11-27;
+`scrape_mmreality.yml` before) — pilot — **every request rides the residential proxy** (`SCRAPER_PROXY_URL`,
+`USE_PROXY=True`; job-runner reads the worker's by reference): Cloudflare hard-403s datacenter IPs (the first 101
+direct scheduled runs ingested zero listings), so the proxy is mandatory from ANY datacenter egress, GitHub or
+Railway alike; its runner slot (`jobs._walks()` spreads each cadence's walks evenly) is 06:00/18:00, six hours off ceskereality's
+in the 12 h group since #2031) tagged `source='mmreality'`. M&M Reality is server-rendered HTML
 but **every detail page embeds a COMPLETE structured estate object** as a Vue
 `:property` prop (HTML-entity-encoded JSON), so `mmreality_parser.parse_detail` decodes
 that JSON rather than scraping markup: precise per-listing coordinates (`point`), typed
@@ -360,8 +360,8 @@ inactive on a second one at least the dwell later (rule #3's hysteresis).
 Registered as a scraper portal (migration 117, sort 35).
 
 **Data source (remax-czech.cz).** A scheduled scraper (`scraper/remax_client.py`,
-`remax_parser.py`, `remax_main.py`, workflow `scrape_remax.yml` — pilot, every 6h +
-dispatch) tagged `source='remax'`. RE/MAX is a national franchise catalogue (~7,900
+`remax_parser.py`, `remax_main.py`, the job runner's `walk_remax` since #2030, every 6 h; `scrape_remax.yml`
+before — pilot) tagged `source='remax'`. RE/MAX is a national franchise catalogue (~7,900
 listings) served as STRUCTURED server-rendered HTML (no JSON API), so
 `remax_parser` is deterministic: the search cards are `<div class="pl-items__item"
 data-url=… data-price=… data-gps=… data-title=…>` (price, coordinates and title
@@ -402,15 +402,17 @@ on-demand LLM URL parser itself was deleted on 2026-10-20 (`docs/design/new-prop
 ruling 3): a pasted link of any portal becomes an ad through `POST /listings/ingest` and the drain.
 
 **Data source (ceskereality.cz).** A scheduled scraper (`scraper/ceskereality_client.py`,
-`ceskereality_parser.py`, `ceskereality_main.py`) tagged `source='ceskereality'`. **Its bytes
+`ceskereality_parser.py`, `ceskereality_main.py`, the job runner's `walk_ceskereality` since #2031, every 12 h, its
+proxy traffic at GitHub's ~2 walks a day: operator decision 2026-11-27; `ceskereality_index_walk.yml` before) tagged
+`source='ceskereality'`. **Its bytes
 arrive through a HEADLESS BROWSER, not `requests` (since 2026-11-16, #2529).** On 2026-10-31 the
 portal put an Anubis v1.28.2 JS proof-of-work interstitial in front of every page: it answers
 **HTTP 200 with challenge HTML**, so a plain fetch collected the challenge, the parser found zero
 cards, and each page read as EMPTY — an our-stop, so walks never reached the portal's end and
 stopped nominating (pages/walk fell ~2,400 → ~140 the day the wall went up; #2479). The one seam is
 `BasePortalClient._send`, which `CeskerealityClient` overrides to drive `scraper/browser_fetch.py`
-(Python Playwright, imported lazily, the `browser` pyproject extra, chromium baked into the scraper
-image by `EXTRAS=api,browser`): one chromium context per phase solves the interstitial ONCE and
+(Python Playwright, imported lazily, the `browser` pyproject extra, chromium baked into each image
+whose `EXTRAS` names `browser`: the worker's, and the job runner's since #2031): one chromium context per phase solves the interstitial ONCE and
 carries its ~7-day cookie, pinned to ONE residential exit IP (the gateway rotates per request and a
 rotating IP re-challenges every page). **That exit IP is RETIRED every 250 pages, and after 2
 consecutive 403s** (`rotate()`: a new sticky session, and the browser goes with it, since the
@@ -440,8 +442,8 @@ ended a whole walk slice. The worker skips this portal's lanes when playwright i
 queue row's attempts. Measured live 2026-11-16: 20 index pages, one solve, ~1.3 s and ~30 KB per
 steady page.
 It is large
-(~49k listings), so — like sreality/idnes — it is **cadence-split**: `ceskereality_index_walk.yml`
-(every 6h, full walk + presence nomination + enqueue) feeds the realtime worker's drain
+(~49k listings), so — like sreality/idnes — it is **cadence-split**: the runner's `walk_ceskereality`
+(full walk + presence nomination + enqueue) feeds the realtime worker's drain
 lane. The index walk partitions each
 category on the **14 declared kraj slugs** (`KRAJ_SLUGS`, a proven row-level partition —
 never the rendered facet block, which is a top-10-by-popularity list), pages each slice to
@@ -1653,8 +1655,8 @@ on 2026-12-01, and until then a file of that name would override the applied set
   `tests/fixtures/railway_plans/` is synthetic until #2025 pins it to a real plan's change list (names only).
 - **Every variable NAME is declared,** a secret as `preserve()` (values stay in Railway) or as a reference to another
   service's (the runner's `SUPABASE_DB_URL`), a plain value written out: add a name in the same PR as the secret;
-  removing one is a destructive delete the apply asks to confirm. `EXTRAS` (API and worker: `api`; the runner:
-  `api,clip,geo`) is the root Dockerfile's build argument: a service variable reaches the ARG of its name, and the
+  removing one is a destructive delete the apply asks to confirm. `EXTRAS` (API: `api`; worker: `api,browser`; the
+  runner: `api,browser,clip,geo`) is the root Dockerfile's build argument: a service variable reaches the ARG of its name, and the
   build log echoes it.
 - **Domains stay dashboard-owned, custom and generated (`*.up.railway.app`)**: no plan diffs either, and IaC cannot
   register one. The file names the custom domains that exist (`api.`, `app.` and, since 2026-10-31, the bare `propscout.cz`: the privacy page and a redirect to the app since the landing came down 2026-11-09), so removing one of those also takes it out of the
@@ -1672,11 +1674,12 @@ on 2026-12-01, and until then a file of that name would override the applied set
   daily `property_sweep` (03:00 UTC) and `broker_sweep` (06:00 UTC) since #2027, which never run beside each other
   or any other DB-heavy job (`job_lease`'s heavy turn), of the hourly claim intake `location_intake` since #2028
   and the RÚIAN registry load `ruian_load` since #2033, daily (§ Location data), and of the walks whose
-  `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (50 min: web, maxima and bezrealitky since #2029, each
-  `walk_<source>` every 6 h, and sreality hourly since #2030, with no `--max-seconds`, the runner's SIGTERM at the
-  timeout its one budget; the longer walks wait on their workflows):
-  - two replicas in the worker's region, each 4 vCPU and 8 GB, restart policy ALWAYS, `checkSuites: false`. Railway
-    counts decimal bytes, so 8e9 B is 7,629 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
+  `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (180 min: web, maxima and bezrealitky since #2029, remax and
+  mmreality since #2030, bazos, realitymix and ceskereality since #2031, each `walk_<source>` every 6 h (mmreality and
+  ceskereality 12 h), and sreality hourly since #2030, with no `--max-seconds`, the runner's SIGTERM at the timeout its
+  one budget; idnes, the longer walk, waits on its workflow):
+  - two replicas in the worker's region, each 4 vCPU and 12 GB (8 GB until #2031), restart policy ALWAYS, `checkSuites: false`.
+    Railway counts decimal bytes, so 12e9 B is 11,444 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
     line and every beat carry `memory_limit_mb` and `cpus` as the replica's cgroup reads them;
   - `drainingSeconds` 250: the runner checks its own 180 s drain only between ticks, then forgets its heartbeat, so
     Railway's SIGKILL must wait a guard poll, that drain, a tick, one stopping tick and the forget, 243 s (a test ties
@@ -1684,8 +1687,9 @@ on 2026-12-01, and until then a file of that name would override the applied set
   - `BACKEND_WATCH`: every repo tree the Dockerfile COPYs (not `COPY --from=` a stage) plus `/Dockerfile` and
     `/.dockerignore`, pinned to the COPY lines by a census, so a move PR never forgets a tree; `.railway/` stays out;
   - variables `EXTRAS`, `HF_HUB_OFFLINE: "1"` (no runtime download), `SUPABASE_DB_URL: sreality.env.SUPABASE_DB_URL`,
-    `SUPABASE_DB_SESSION_URL` likewise (#2604: `ruian_buildings` refuses the transaction pooler) and the R2 set, by reference (#2032: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`,
-    each `sreality.env.<NAME>`), references to the worker's variables (`${{sreality.NAME}}`, ruling #2025-R3): one
+    `SUPABASE_DB_SESSION_URL` likewise (#2604: `ruian_buildings` refuses the transaction pooler), the R2 set, by reference (#2032: `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME`,
+    each `sreality.env.<NAME>`) and `SCRAPER_PROXY_URL` (#2030: a proxied portal's walk; `tests/scraper/test_proxy_wiring.py`
+    refuses one on the runner without it), references to the worker's variables (`${{sreality.NAME}}`, ruling #2025-R3): one
     stored value each, so a rotation changes one place, and applying the worker's staged change redeploys job-runner
     after it (Railway's deployment dependencies), cutting any run in flight (closed `interrupted`, re-claimed at once).
     The secrets inventory's rotation steps say so and check its Health cells. Later moves add their names in their
@@ -1711,6 +1715,15 @@ on 2026-12-01, and until then a file of that name would override the applied set
   within fp32 tolerance, read-only) and lift the pause on a pass, so no vector of the new stack lands unproven.
   The `api-image` job of the same workflow builds `EXTRAS=api` at the PR's base and head and fails if the head can
   import torch or transformers or holds a Hugging Face cache, so the API and worker images stay clip-free.
+- **The runner image bakes chromium too (#2031):** its `EXTRAS` name `browser`, so the Dockerfile's browser layer
+  (the worker's, #2529) runs in it, for the ceskereality walk W4 moves there. `CI: runner image` runs
+  `scripts/browser_image_check.py` in each finished browser image (worker and runner) with no network: chromium
+  launches, serves a loopback page and closes through `scraper/browser_fetch.py`, and as PID 1 the check holds no child
+  after the close; in the runner image it then loads one exit IP's session (`PAGES_PER_EXIT_IP`, 250) of a full-size
+  ceskereality page and prints the memory held, the walk's sizing (information, not a verdict). A census holds every
+  `EXTRAS` a service declares to one CI build, and each one naming `browser` to that check. Playwright launches
+  chromium as its own process group; since #2689 the runner reads a job's whole process tree, so `peak_rss_mb` counts
+  it and the timeout's kill reaches it, and its exited helpers go to PID 1, the runner, which reaps them.
 - **The runner is cut only by a new deployment:** a Redeploy of the ACTIVE deployment (same image and configuration)
   or Deploy Latest Commit. Restart restarts the process inside its container, and no doc says it honours
   `drainingSeconds`, so it is never a runner procedure. **Never boot an older runner image:** no dashboard Rollback,

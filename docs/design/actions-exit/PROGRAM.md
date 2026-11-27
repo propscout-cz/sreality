@@ -111,7 +111,8 @@ production.
   identical replicas**, 8 GB / 4 vCPU each,
   `restartPolicy ALWAYS`, built from the same Dockerfile, whose `ARG EXTRAS` shipped with
   #2060 (no default; unset installs `api`): the runner sets `EXTRAS: "api,clip,geo"` in its `.railway/railway.ts`
-  env, so CPU torch, the pinned CLIP weights (revision 3d74acf9) and the geo wheels live in this image only.
+  env (`api,browser,clip,geo` since #2031), so CPU torch, the pinned CLIP weights (revision 3d74acf9) and the geo
+  wheels live in this image only.
   `watchPatterns` cover the trees jobs import. **As built (#2025):** service `job-runner` in the realtime-worker
   project (no new project); `drainingSeconds` 250, outlasting the runner's own 180 s drain by its last tick and
   forget (243 s); 8 GB is 8e9 B = 7,629 MiB (`jobs.REPLICA_MEMORY_MB`); the watch patterns are every tree the
@@ -348,6 +349,55 @@ slowest walk; 40 min would have put it 22 s above. Each walk touches every
 sighted active ad (110k), so hourly walks add about 2.3M `listings` updates a day to today's ~2.5M (one 5-min reading
 on 11-26, 97 % heap-only since migration 743 dropped the last index on `last_seen_at`). sreality is not proxied and
 the runner already carries `SUPABASE_DB_URL` and the R2 set: no `.railway/` change, no migration.
+**As built (#2030), batch 2 ends with remax and mmreality.** The cutoff rises to 60 min, which takes both (each
+`walk_timeout_s` 60 min; remax every 6 h, mmreality every 12 h, because its every request rides the paid residential
+proxy and 12 h keeps that traffic at GitHub's ~2 walks a day: operator decision 2026-11-27) and nothing else (bazos is
+next, at 130). `scrape_remax.yml` and
+`scrape_mmreality.yml` and their groups (`remax-scrape`, `mmreality-scrape`) are deleted; their dispatch inputs
+(`--max-pages`, `--max-seconds`) are request args now. GitHub's throttled cron delivered 14 walks of each in the 7
+days to 11-26 (p95 525 s and 961 s against the 60 min timeout, none near its old 2,100 s and 2,400 s budgets).
+mmreality is `PROXY_REQUIRED`, so job-runner takes `SCRAPER_PROXY_URL` by reference to the worker's (its own PR,
+applied by the operator's wizard, `window worker 0 0 job-runner`) and `tests/scraper/test_proxy_wiring.py` refuses a
+proxied portal's runner job without it. At 12 h the runner walks it twice a day, as GitHub managed, so its walk's proxy
+traffic holds at about 1,930 index pages a day. **This PR merges only after gate #2647 has read remax (2026-11-29) and the wizard
+apply has put the variable on job-runner.** remax's walk changed under #2646 on 11-24 (466 to 385 pages, and a
+deferral backlog of sold/let ads still draining), so its gate baseline is re-read on the day.
+**As built (#2031), batch 3 starts with bazos alone.** The cutoff rises to 130 min, which takes bazos (`walk_timeout_s`
+130 min, every 6 h) and nothing else (realitymix and ceskereality at 180 and idnes at 240 wait). `bazos_index_walk.yml`
+and its group `bazos-index-walk` are deleted; its dispatch inputs (`--sale-type`, `--category`, `--locality`,
+`--radius-km`, `--max-pages`, `--max-seconds`) are request args now. GitHub's throttled `0 */6` cron delivered 15 walks
+in the 7 days to 11-26 (1,300 pages on average, p50 3,053 s, p95 3,272 s against the 7,800 s timeout, none near the
+6,600 s budget it carried; 14 of 15 cycles closed, the fifteenth cut by one uncorroborated blank page). bazos needs
+neither the proxy nor the browser, and the runner already carries `SUPABASE_DB_URL` and the R2 set: no `.railway/`
+change, no migration. The runner walks it 4 times a day where GitHub managed about 2, so its direct index requests rise
+from about 2,800 to 5,200 a day beside the drain's 4,200, all inside bazos's one 0.7 req/s budget (60,480 slots a day).
+Its 51 min walk then spans about 3.4 h a day, so a deploy cuts one most days and the resumed walk re-reads the cut scope.
+**The runner image, before batch 3 (#2031):** the runner's `EXTRAS` gain `browser` (`api,browser,clip,geo`), so its
+image bakes chromium as the worker's does, and `CI: runner image` launches it through `scraper/browser_fetch.py` in the
+finished image with no network; no walk moves. The ceskereality walk still needs `SCRAPER_PROXY_URL` by reference (a
+datacenter IP is refused before the interstitial) and a memory value that fits it: one exit IP's 250-page browser
+session of a full-size page held ~1,260 MB PSS (Python 231, Playwright's driver 252, chromium 780; 360 after one page;
+the image's Playwright 1.65.2 and chromium 159, 2026-11-26) against `WALK_MEMORY_MB` 512 and 35 MB of co-tenancy
+headroom (the operator chose option A on 2026-11-27: every walk declares 1,536 MB and each replica gets 12 GB, billed
+by use; since #2689 a job's `peak_rss_mb` and kill follow its whole process tree, chromium included). Its 31 failed GitHub runs in 30 days
+were all the Anubis wall (11-02 to 11-16, `CHECK empty_walk`: 0 ads from ~165 pages), none in the 22 since #2530.
+realitymix needs neither the proxy nor the browser; idnes prefers the proxy, bazos neither.
+**As built (#2031), batch 3 continues with realitymix and ceskereality.** The cutoff rises to 180 min, which takes
+both (each `walk_timeout_s` 180 min; realitymix every 6 h, ceskereality every 12 h, because its every request rides the
+paid residential proxy and 12 h keeps that traffic at GitHub's ~2 walks a day: operator decision 2026-11-27) and leaves
+idnes (240) the last waiting walk. `realitymix_index_walk.yml` and `ceskereality_index_walk.yml` and their groups
+(`realitymix-index-walk`, `ceskereality-index-walk`) are deleted; their dispatch inputs (`--max-pages`,
+`--max-seconds`, ceskereality's `--kraj`) are request args now. GitHub's throttled cron delivered 14 walks of each in
+the 7 days to 11-27 (p95 3,053 s and 4,421 s, none near the 9,000 s budget each carried). The job cell reads Watch
+past ⅔ of the 180 min timeout (7,200 s): realitymix's slowest of 68 walks in 30 days took 3,295 s (119 % above),
+ceskereality's slowest of 21 since its exit IP rotates (#2547, 11-17) 4,421 s (63 %); its two walks of 11-16 on one sticky exit IP (4,633
+and 8,246 s, the second past the line) predate that fix. realitymix needs neither the proxy nor the browser;
+ceskereality is `USE_PROXY`/`PROXY_REQUIRED` and fetches through `scraper/browser_fetch.py`, so it moves only onto
+#2685's `SCRAPER_PROXY_URL` reference and #2688's chromium and 1,536 MB declaration. Joining the 12 h group moves
+mmreality's slot to 06:00/18:00 (ceskereality takes 00:00/12:00), and the 6 h group's seven walks respace 51 min apart.
+The runner walks realitymix 4 times a day where GitHub managed 2 (its direct index requests about 4,900 to 9,800 a day,
+inside its 1 req/s budget); ceskereality's proxied walk holds at about 4,800 pages a day. **This PR merges only after
+the bazos step and #2685's and #2688's wizard applies.**
 **Gate per walk (7 days):** pages and reached-end per cycle, nominations per day (a moved walk keeps its declared
 cadence), ± 10 %; 403/429 share from
 Railway ≤ the GitHub baseline; 0 `ended_at NULL` after ≥ 5 mid-walk deploys; proxy GB/day within its band;

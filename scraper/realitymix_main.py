@@ -75,6 +75,7 @@ class RealitymixPortal(portal_runner.PortalDefaults):
 
     source = SOURCE
     walk_every_s = 6 * 3600
+    # Its 2/3 Watch line clears its slowest GitHub walk (PROGRAM § W4).
     walk_timeout_s = 180 * 60
     index_rate = 1.0
 
@@ -313,9 +314,9 @@ def main(argv: list[str] | None = None) -> int:
             portal, dry_run=args.dry_run, probe_pages=args.probe_pages)
         return rc
 
-    # realitymix is large (~48k), so production runs the cadence split via the
-    # workflows (--index-only feeds --drain-only). A bare combined run (omit both
-    # flags) still works for ad-hoc/local use; the split flags are the norm.
+    # realitymix is large (~48k), so production runs the cadence split: the job
+    # runner's walk_realitymix (--index-only, #2031) feeds the worker's drain lane.
+    # A bare combined run (omit both flags) still works for ad-hoc/local use.
     rc = 0
     if not args.drain_only:
         rc = portal_runner.run_phase(

@@ -54,7 +54,7 @@ class MmRealityClient(BasePortalClient):
     DETAIL_URL = re.compile(r"/nemovitosti/[^/]")
     GONE_PAGE = (gone_phrases(*_GONE_MARKERS),)
     # Route every request through the residential proxy in SCRAPER_PROXY_URL.
-    # mmreality's Cloudflare edge HARD-403s our datacenter (GitHub-Actions) IP on
+    # mmreality's Cloudflare edge HARD-403s our datacenter (GitHub, Railway) IP on
     # the first request (verified — the portal ingested 0 listings across 101
     # blocked runs); a residential exit IP returns 200. Same opt-in ceskereality
     # uses; the shared browser UA is most natural once proxied, so no USER_AGENT

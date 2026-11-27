@@ -181,7 +181,10 @@ def test_a_walks_host_is_the_cutoffs() -> None:
     assert walk_host_problems(jobs.declared(), _portal_classes()) == []
     hosts = {j.name: j.host for j in jobs.declared() if j.name.startswith(jobs.WALK_PREFIX)}
     assert {n for n, h in hosts.items() if h == jobs.RUNNER} == {
-        "walk_web", "walk_maxima", "walk_bezrealitky", "walk_sreality"}, "batch 1 (#2029), batch 2's first (#2030)"
+        "walk_web", "walk_maxima", "walk_bezrealitky", "walk_sreality", "walk_remax", "walk_mmreality",
+        "walk_bazos", "walk_realitymix", "walk_ceskereality"}, \
+        "batch 1 (#2029), batch 2 (#2030: sreality at 50 min, remax and mmreality at 60), batch 3 (#2031: bazos at 130, " \
+        "realitymix and ceskereality at 180)"
 
 
 def test_the_walk_host_census_fires() -> None:
@@ -285,8 +288,9 @@ def test_the_largest_concurrent_declarations_fit_a_replica() -> None:
 
 def test_the_co_tenancy_census_fires() -> None:
     entries = jobs.declared()
-    assert co_tenancy_problems([*entries, replace(_entry("clip"), name="clip_twin")])
-    assert co_tenancy_problems(entries, cap=4)
+    budget = int(jobs.CO_TENANCY_SHARE * jobs.REPLICA_MEMORY_MB)
+    assert co_tenancy_problems([*entries, replace(_entry("clip"), name="clip_twin", memory_mb=budget)])
+    assert co_tenancy_problems(entries, cap=len(entries))  # every job at once would not fit one replica
 
 
 def _slots(job: Job) -> list[int] | None:
@@ -573,13 +577,16 @@ def test_every_job_has_exactly_one_host() -> None:
 
 
 # Each move PR's job and the workflow it deleted: W2 (#2025), W5 (#2032, #2033), W3 (#2027, #2028), W4 batch 1 (#2029),
-# W4 batch 2's sreality (#2030).
+# W4 batch 2 (#2030: sreality, then remax and mmreality), W4 batch 3 (#2031: bazos, then realitymix and ceskereality).
 MOVED = (("stale_images", "refresh_stale_images.yml"), ("rent_map", "fetch_rent_map.yml"),
          ("map_overlays", "ingest_map_overlays.yml"), ("clip", "clip_tag.yml"),
          ("property_sweep", "recompute_property_stats.yml"), ("broker_sweep", "resolve_brokers_full.yml"),
          ("location_intake", "location_claims_intake.yml"), ("ruian_load", "location_registry_load.yml"),
          ("walk_web", "web_index_walk.yml"), ("walk_maxima", "scrape_maxima.yml"),
-         ("walk_bezrealitky", "scrape_bezrealitky.yml"), ("walk_sreality", "index_walk.yml"))
+         ("walk_bezrealitky", "scrape_bezrealitky.yml"), ("walk_sreality", "index_walk.yml"),
+         ("walk_remax", "scrape_remax.yml"), ("walk_mmreality", "scrape_mmreality.yml"),
+         ("walk_bazos", "bazos_index_walk.yml"), ("walk_realitymix", "realitymix_index_walk.yml"),
+         ("walk_ceskereality", "ceskereality_index_walk.yml"))
 
 
 @pytest.mark.parametrize(("name", "file"), MOVED)
@@ -597,9 +604,9 @@ def test_a_move_is_a_host_flip_plus_its_workflows_deletion(name: str, file: str)
 
 def test_the_pairing_census_fires() -> None:
     workflows = _repo_workflows()
-    walk = workflows["bazos_index_walk.yml"]
-    silent = replace(walk, invocations=tuple(c for c in walk.invocations if c.module != "scraper.bazos_main"))
-    assert pairing_problems(jobs.declared(), {**workflows, "bazos_index_walk.yml": silent})
+    walk = workflows["idnes_index_walk.yml"]
+    silent = replace(walk, invocations=tuple(c for c in walk.invocations if c.module != "scraper.idnes_main"))
+    assert pairing_problems(jobs.declared(), {**workflows, "idnes_index_walk.yml": silent})
     stray = Workflow("stray.yml", True, 600, (Invocation("scripts.stray_job", frozenset()),))
     assert pairing_problems(jobs.declared(), {**workflows, "stray.yml": stray})
     # #2033's tick hosts price_stats only once read_workflows reads the `once` form; until then B3 is red.
@@ -651,7 +658,7 @@ def test_the_github_set_tightens_itself_when_the_last_job_moves() -> None:
     github_only = {f: w for f, w in workflows.items() if f in GITHUB_SCHEDULES or not w.scheduled}
     assert github_set_problems(all_moved, github_only) == []
     assert pairing_problems(all_moved, github_only) == []
-    assert github_set_problems(all_moved, {**github_only, "bazos_index_walk.yml": workflows["bazos_index_walk.yml"]})
+    assert github_set_problems(all_moved, {**github_only, "idnes_index_walk.yml": workflows["idnes_index_walk.yml"]})
 
 
 def test_the_github_set_census_fires() -> None:
