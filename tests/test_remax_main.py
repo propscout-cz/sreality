@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from scraper.portal import PortalConfig
-from scraper import remax_main
+from scraper import remax_main, stop
 from scraper.remax_main import RemaxPortal
 from scraper.remax_parser import IndexItem
 
@@ -342,6 +342,16 @@ def test_a_deadline_stop_nominates_nothing(monkeypatch: pytest.MonkeyPatch) -> N
         monkeypatch, portal, {(1, 1): [_page(2, ("r1", "Prodej bytu"))]},
         deadline=time.monotonic() - 1.0,
     )
+    walk = portal._agenda_cache[1]
+    assert (walk.stop_reason, walk.reached_end) == ("deadline", False)
+
+
+def test_the_runners_stop_signal_is_our_stop_without_a_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """W4 (#2030): on the job runner the walk carries no --max-seconds; the runner's SIGTERM at timeout_s (the stop
+    event) is its one budget, and reaches the page loop through deadline_reached(None)."""
+    stop.EVENT.set()
+    portal = _portal()
+    _walk_sale_agenda(monkeypatch, portal, {(1, 1): [_page(2, ("r1", "Prodej bytu"))]})
     walk = portal._agenda_cache[1]
     assert (walk.stop_reason, walk.reached_end) == ("deadline", False)
 

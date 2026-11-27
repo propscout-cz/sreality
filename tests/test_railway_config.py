@@ -252,14 +252,16 @@ def test_a_backend_service_watches_the_whole_image_or_nothing(service: str) -> N
 def test_the_runner_reads_the_workers_secrets_by_reference() -> None:
     """#2025-R3: the runner stores no secret of its own; it references the worker's SUPABASE_DB_URL and its R2 set
     (#2032: clip downloads photos; #2028: location_intake reads archived bodies back, and without R2 it mines no page
-    and says so only in its log), so a rotation changes one place (and redeploys the runner after the worker)."""
+    and says so only in its log) and its SCRAPER_PROXY_URL (#2030: a proxied portal's walk), so a rotation changes one
+    place (and redeploys the runner after the worker)."""
     runner = iac_entry("jobRunner")
     env = re.search(r"\benv: \{ (.*?) \},", runner, re.S)
     assert env, "the runner declares its variables inline"
     declared = re.findall(r"(\w+): ", env.group(1))
     assert len(declared) == len(set(declared))
     plain = {"EXTRAS", "HF_HUB_OFFLINE"}
-    assert set(declared) == plain | {"SUPABASE_DB_URL", "SUPABASE_DB_SESSION_URL", *image_storage.R2_ENV_VARS}
+    assert set(declared) == plain | {"SUPABASE_DB_URL", "SUPABASE_DB_SESSION_URL", "SCRAPER_PROXY_URL",
+                                     *image_storage.R2_ENV_VARS}
     worker_kept = re.search(r"\bkept\((.*?)\)", iac_entry("worker"), re.S)
     assert worker_kept, "the worker keeps its secrets"
     kept_names = set(re.findall(r'"(\w+)"', worker_kept.group(1)))
@@ -292,7 +294,8 @@ def test_the_api_and_the_worker_pass_their_extras_to_the_root_dockerfile_build()
     # scrapes, so it must NOT carry the extra (and the weight).
     assert 'EXTRAS: "api,browser"' in iac_entry("worker")
     assert "browser" not in iac_entry("api")
-    assert 'EXTRAS: "api,clip,geo"' in iac_entry("jobRunner")
+    # The runner takes it too (#2031): W4 moves the ceskereality walk onto it.
+    assert 'EXTRAS: "api,browser,clip,geo"' in iac_entry("jobRunner")
     assert 'EXTRAS: "api"' not in iac_entry("jobRunner")
 
 
@@ -411,7 +414,63 @@ def test_the_runner_image_workflow_builds_on_every_image_input() -> None:
     assert {"Dockerfile", ".dockerignore", "pyproject.toml", "scripts/bake_clip_weights.py",
             "data/clip_taxonomy.json"} <= set(paths)
     runs = [s.get("run", "") for job in workflow["jobs"].values() for s in job["steps"]]
-    assert any(r.startswith("docker build ") and "--build-arg EXTRAS=api,clip,geo" in r for r in runs), runs
+    assert any(r.startswith("docker build ") and "--build-arg EXTRAS=api,browser,clip,geo " in r for r in runs), runs
+
+
+def _image_jobs() -> dict[str, tuple[str, list[str]]]:
+    """EXTRAS value -> (the image tag its CI job builds, that job's run lines)."""
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "runner_image.yml").read_text(encoding="utf-8"))
+    built: dict[str, tuple[str, list[str]]] = {}
+    for job in workflow["jobs"].values():
+        runs = [s.get("run", "") for s in job["steps"]]
+        for extras, tag in re.findall(r"docker build .*?--build-arg EXTRAS=(\S+) -t (\S+)", "\n".join(runs)):
+            built.setdefault(extras, (tag, runs))
+    return built
+
+
+def test_every_railway_extras_variant_is_built_and_each_browser_one_launches_offline() -> None:
+    """A green suite is not an image that builds (2026-11-16: the worker's first browser image failed on Railway, never
+    built in CI). Every EXTRAS a service declares is built by `CI: runner image`, and every one naming `browser`
+    launches chromium through the repo's own helper in its finished image with no network."""
+    declared = set(re.findall(r'\bEXTRAS: "([\w,]+)"', iac_text()))
+    assert declared == {"api", "api,browser", "api,browser,clip,geo"}, declared
+    built = _image_jobs()
+    assert declared <= set(built), sorted(declared - set(built))
+    for extras in sorted(e for e in declared if "browser" in e.split(",")):
+        tag, runs = built[extras]
+        checks = [r for r in runs if "--network none" in r and re.search(
+            rf" {re.escape(tag)}\s+python -m scripts\.browser_image_check\b", r)]
+        assert len(checks) == 1, (extras, runs)
+        assert "docker run --rm --network none " in checks[0] and "||" not in checks[0], checks[0]
+
+
+def test_the_runner_s_browser_reading_is_one_exit_ip_s_session() -> None:
+    """The runner's check loads as many pages on one browser as the ceskereality client does before it retires the
+    exit IP (and the browser with it), so the memory it prints is a walk's peak per browser."""
+    from scraper.ceskereality_client import PAGES_PER_EXIT_IP
+
+    _, runs = _image_jobs()["api,browser,clip,geo"]
+    check, = [r for r in runs if "scripts.browser_image_check" in r]
+    pages = re.search(r"--pages (\d+)\b", check)
+    assert pages and int(pages.group(1)) == PAGES_PER_EXIT_IP, check
+    page = re.search(r"--page /fixtures/(\S+)", check)
+    assert page and (ROOT / "tests" / "fixtures" / page.group(1)).is_file(), check
+    assert '-v "$PWD/tests/fixtures:/fixtures:ro"' in check
+
+
+def test_the_image_check_runs_when_the_browser_check_s_code_changes() -> None:
+    """The browser images' check runs scripts/browser_image_check.py over scraper/browser_fetch.py, inside the image:
+    those files and every scraper module they import are image inputs, in the workflow's paths and the wizard's list."""
+    script = ROOT / "scripts" / "browser_image_check.py"
+    modules = sorted({n.module for n in ast.walk(ast.parse(script.read_text(encoding="utf-8")))
+                      if isinstance(n, ast.ImportFrom) and (n.module or "").startswith("scraper")})
+    assert modules == ["scraper.browser_fetch"], modules
+    closure = _scraper_import_closure(modules) | {"scripts/browser_image_check.py"}
+    assert {"scraper/browser_fetch.py", "scraper/cgroup.py", "scraper/stop.py"} <= closure
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "runner_image.yml").read_text(encoding="utf-8"))
+    inputs = re.search(r"^IMAGE_INPUTS=\((.*?)\)$", WIZARD.read_text(encoding="utf-8"), re.M | re.S)
+    assert inputs and sorted(closure - set(inputs.group(1).split())) == []
+    assert sorted(closure - set(workflow[True]["pull_request"]["paths"])) == []
 
 
 def _scraper_import_closure(modules: list[str]) -> set[str]:

@@ -29,7 +29,7 @@ import pytest
 from scraper import ceskereality_main as m
 from scraper.browser_fetch import BrowserResponse
 from scraper import portal as m_portal
-from scraper import portal_runner
+from scraper import portal_runner, stop
 from scraper.ceskereality_client import (
     KRAJ_SLUGS,
     OKRES_SLUGS,
@@ -1013,6 +1013,19 @@ def test_walk_slice_reports_deadline_when_budget_already_spent(monkeypatch):
     assert fake.urls == []                  # not one request past the budget
     assert (r.rows, r.pages, r.outcome, r.positive) == ([], 0, "deadline", False)
     assert (r.stop, r.reached_end) == ("deadline", False)
+
+
+def test_the_runners_stop_signal_is_our_stop_without_a_deadline(monkeypatch):
+    """W4 (#2031): on the job runner the walk carries no --max-seconds; the runner's SIGTERM at timeout_s (the stop
+    event) is its one budget, and reaches the slice loop through deadline_reached(None)."""
+    stop.EVENT.set()
+    fake = _PartitionClient({"praha": 400})
+    r = m.CeskerealityPortal(default_config("ceskereality"))._walk_slice(fake, "prodej", "byty", "praha")
+    assert fake.urls == []
+    assert (r.rows, r.pages, r.outcome, r.positive) == ([], 0, "deadline", False)
+    assert (r.stop, r.reached_end) == ("deadline", False)
+    *_rest, complete = _walk(m.CeskerealityPortal(default_config("ceskereality")), fake, monkeypatch)
+    assert complete is False and fake.urls == []
 
 
 def test_search_url_puts_subtype_before_kraj():

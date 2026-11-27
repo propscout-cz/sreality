@@ -73,22 +73,12 @@ def _visible_env(doc: dict, job: dict, step: dict) -> set[str]:
 
 @pytest.mark.parametrize("module", sorted(_portal_entrypoints()))
 def test_page_fetching_lane_carries_r2_credentials(module: str) -> None:
-    """RED by: a walk moved to the runner (W4, #2029) whose service lost an R2_* variable."""
-    steps = _steps_running(module)
-    on_runner = module in {job.argv[0] for job in jobs.runner_jobs()}
-    assert steps or on_runner, f"{module} is invoked by no workflow and no runner job — stale entrypoint or renamed lane"
-    if on_runner:
-        # The runner hands its service's env to every child.
-        missing = [v for v in R2_VARS if v not in iac_env_names("jobRunner")]
-        assert not missing, f"the job runner runs {module} without {', '.join(missing)}: it would archive nothing"
-    for path, doc, ctx in steps:
-        visible = _visible_env(doc, ctx["job"], ctx["step"])
-        missing = [v for v in R2_VARS if v not in visible]
-        assert not missing, (
-            f"{path.name} runs {module} without {', '.join(missing)}. The payload archive "
-            f"stores bodies in R2, so this lane would archive nothing while scraping "
-            f"normally. Add the four R2_* secrets to the step's env."
-        )
+    """RED by: a walk on the runner (every walk since #2031) whose service lost an R2_* variable. A workflow running a
+    portal's entrypoint fails the registry's pairing census instead."""
+    assert module in {job.argv[0] for job in jobs.runner_jobs()}, f"no runner job runs {module}: stale or renamed"
+    # The runner hands its service's env to every child.
+    missing = [v for v in R2_VARS if v not in iac_env_names("jobRunner")]
+    assert not missing, f"the job runner runs {module} without {', '.join(missing)}: it would archive nothing"
 
 
 def test_price_stats_is_correctly_exempt() -> None:

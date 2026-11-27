@@ -117,6 +117,9 @@ class IdnesPortal(portal_runner.PortalDefaults):
 
     source = SOURCE
     walk_every_s = 6 * 3600
+    # job/walk_idnes reads Watch past 2/3 of it (9,600 s): the slowest of 14 GitHub walks in the 7 days to 2026-11-27
+    # took 7,129 s, so the line sits 35 % above it. On 11-14 two walks took 8,891 and 12,594 s (2.0 and 2.8 s a page
+    # through the proxy, against 1.3 a page since): a day like that reads Watch, still inside the timeout.
     walk_timeout_s = 240 * 60
     # idnes is a large portal walked page-by-page (≈26 listings/page, tens of
     # thousands per category), so the index needs a faster ceiling than the

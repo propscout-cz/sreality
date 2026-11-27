@@ -13,7 +13,8 @@ apply" and "the proxy applied" produce the same status codes and the same parsed
 rows — only 13x apart in wall-clock, which nothing asserts on.
 
 Each portal's own unit tests can see its own client. None of them can see a
-missing line in a YAML file.
+missing line in `.railway/railway.ts`: the job runner runs every walk (#2031)
+and hands its service's env to every child.
 """
 
 from __future__ import annotations
@@ -21,13 +22,16 @@ from __future__ import annotations
 import importlib
 import inspect
 import re
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
+from scraper import jobs
+from tests._railway_iac import iac_env_names
+
 _ROOT = Path(__file__).resolve().parents[2]
 _SCRAPER = _ROOT / "scraper"
-_WORKFLOWS = _ROOT / ".github" / "workflows"
 
 PROXY_ENV = "SCRAPER_PROXY_URL"
 
@@ -53,23 +57,36 @@ def test_at_least_one_portal_is_proxied() -> None:
     assert _proxied_clients(), "no client declares USE_PROXY — has the attribute moved?"
 
 
+def _runs(job: jobs.Job, source: str) -> bool:
+    return re.fullmatch(rf"scraper\.{source}(_main)?", job.argv[0]) is not None
+
+
+def runner_proxy_problems(entries: Sequence[jobs.Job], proxied: Sequence[tuple[str, str]],
+                          runner_env: set[str]) -> list[str]:
+    """A runner job that runs a proxied portal's scraper needs the proxy on job-runner (#2030): without it the
+    client falls back to the direct IP, and a PROXY_REQUIRED portal's edge 403s every page of the walk."""
+    return [f"{job.name} runs scraper.{source} on job-runner, which carries no {PROXY_ENV}: it would walk from the "
+            f"direct IP" for job in entries for _stem, source in proxied
+            if _runs(job, source) and PROXY_ENV not in runner_env]
+
+
+def test_a_proxied_portal_on_the_runner_gets_the_proxy() -> None:
+    assert runner_proxy_problems(jobs.runner_jobs(), _proxied_clients(), iac_env_names("jobRunner")) == []
+
+
+def test_the_runner_proxy_census_fires() -> None:
+    proxied = _proxied_clients()
+    walk = next(j for j in jobs.declared() if j.name.startswith(jobs.WALK_PREFIX) and _runs(j, proxied[0][1]))
+    on_runner = [walk]
+    assert runner_proxy_problems(on_runner, proxied, iac_env_names("jobRunner") - {PROXY_ENV})
+    assert runner_proxy_problems(on_runner, proxied, iac_env_names("jobRunner") | {PROXY_ENV}) == []
+
+
 @pytest.mark.parametrize("stem,source", _proxied_clients())
-def test_a_proxied_portals_workflows_pass_the_secret(stem: str, source: str) -> None:
-    """Every workflow that runs this portal's scraper must hand it the secret."""
-    runners = [
-        p for p in sorted(_WORKFLOWS.glob("*.yml"))
-        if re.search(rf"scraper\.{source}(_main)?\b", p.read_text(encoding="utf-8"))
-    ]
-    assert runners, f"no workflow runs scraper.{source}* — did a workflow get renamed?"
-    missing = [
-        p.name for p in runners
-        if PROXY_ENV not in p.read_text(encoding="utf-8")
-    ]
-    assert missing == [], (
-        f"{stem} sets USE_PROXY but {missing} never pass {PROXY_ENV}: those jobs "
-        f"fall back to the direct IP with only a log warning, so the portal keeps "
-        f"the throttled egress while every check stays green"
-    )
+def test_a_proxied_portal_is_walked_on_the_runner(stem: str, source: str) -> None:
+    """The census above judges runner jobs only, so a proxied portal no runner job runs (a renamed module) would pass
+    it vacuously. A workflow that ran one would fail the registry's pairing census (no walk is on GitHub, #2031)."""
+    assert [j.name for j in jobs.runner_jobs() if _runs(j, source)], f"no runner job runs scraper.{source}* ({stem})"
 
 
 def test_the_fallback_warns_rather_than_failing_silently() -> None:
