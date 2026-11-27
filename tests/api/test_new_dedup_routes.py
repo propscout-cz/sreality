@@ -111,14 +111,14 @@ def test_put_setting_unknown_key_404s(client):
 
 
 def test_delete_setting_reverts_to_default(client):
-    client.put("/new-dedup/settings/l0_floor_tolerance", json={"value": 3})
+    client.put("/new-dedup/settings/labeling_gate1_target_per_tag", json={"value": 3})
     assert client.get("/new-dedup/settings").json()["data"]
 
-    res = client.delete("/new-dedup/settings/l0_floor_tolerance")
+    res = client.delete("/new-dedup/settings/labeling_gate1_target_per_tag")
     assert res.status_code == 200
     body = res.json()
     assert body["is_override"] is False
-    assert body["value"] == body["default"] == 2
+    assert body["value"] == body["default"] == 150
 
 
 def test_delete_setting_unknown_key_404s(client):

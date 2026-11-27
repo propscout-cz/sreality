@@ -7,7 +7,7 @@ numbers are read from `autodedup.iterations` exactly as the lane wrote them — 
 
 The store lives in migration 528. Until it is applied every route answers 200 with
 `store_ready: false` and `data: null`, so an un-migrated database shows "the store is not
-created yet" rather than a 500 — the probe-first idiom of api/routes/new_dedup_candidates.py.
+created yet" rather than a 500.
 
 W5 adds the validation UI's reads on top: proposed GROUPS (clusters + members + edge
 evidence), the RESIDUAL pairs the engine did not join, one PAIR's full evidence, and the one

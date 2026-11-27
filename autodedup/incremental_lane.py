@@ -187,6 +187,7 @@ from autodedup.incremental_sql import (
     RT_PAIRS_WITHIN_SQL,
     RT_REJECT_LEDGER_DELETE_SQL,
     RT_REJECT_LEDGER_LOOKUP_SQL,
+    RT_REJECT_LEDGER_SALVAGE_SQL,
     RT_REJECT_LEDGER_UPSERT_SQL,
     RT_RESCORE_SQL,
     RT_RESCORE_WRITE_SQL,
@@ -720,6 +721,10 @@ class SqlStore:
         self.statements = 0
         self.sql: dict[str, list[float]] = {}
         self._pending: dict[int, tuple[FpRow, list[tuple[str, str]]]] = {}
+        # E997: what `salvage` needs once the pass has rolled back: the adverts it refreshed
+        # or retired, and the rejects it decided.
+        self._touched: set[int] = set()
+        self._rejects: dict[tuple[int, int], tuple[str, str]] = {}
         self._lookups: dict[tuple[str, str], list[int]] = {}
         self._fp: dict[int, FpRow | None] = {}
         self._cells: dict[tuple[str, str], CellRow] = {}
@@ -818,6 +823,7 @@ class SqlStore:
     def put_listing(self, listing_id: int, row: FpRow,
                     keys: Sequence[tuple[str, str]]) -> None:
         self._pending[int(listing_id)] = (row, list(keys))
+        self._touched.add(int(listing_id))
         self._fp[int(listing_id)] = row
 
     def put_decision_digests(self, dds: Mapping[int, str]) -> None:
@@ -833,6 +839,7 @@ class SqlStore:
 
     def drop_listing(self, listing_id: int) -> None:
         self._pending.pop(int(listing_id), None)
+        self._touched.add(int(listing_id))
         self._fp[int(listing_id)] = None
         self._run(RT_KEY_DELETE_SQL, {"generation": self.generation, "ids": [int(listing_id)]})
         self._run(RT_FP_DELETE_SQL, {"generation": self.generation, "ids": [int(listing_id)]})
@@ -997,7 +1004,11 @@ class SqlStore:
     def _ledger(self, evicted: Sequence[PairRow], kept: Sequence[PairRow]) -> None:
         """E943: every pair deleted for its score goes into the reject ledger and every pair
         stored leaves it — inside the pass's transaction, so a pass that rolls back ledgers
-        nothing."""
+        nothing there. What it remembers here is what `salvage` writes after a deadline's
+        rollback (E997)."""
+        self._rejects.update({(row.lo, row.hi): (row.dd_lo, row.dd_hi) for row in evicted})
+        for row in kept:
+            self._rejects.pop((row.lo, row.hi), None)
         for start in range(0, len(evicted), LEDGER_CHUNK):
             chunk = evicted[start:start + LEDGER_CHUNK]
             self._run(RT_REJECT_LEDGER_UPSERT_SQL, {
@@ -1009,6 +1020,28 @@ class SqlStore:
             self._run(RT_REJECT_LEDGER_DELETE_SQL, {
                 "generation": self.generation,
                 "los": [row.lo for row in chunk], "his": [row.hi for row in chunk]})
+
+    def salvage(self) -> int:
+        """E997: a decided reject survives its pass. Called once the pass's transaction has
+        ROLLED BACK at its deadline, in a transaction of its own: the rejects it decided between
+        two adverts it did not refresh are ledgered, and nothing else is written. Each row is
+        the row the pass would have written had it committed (the same pair, the same two
+        stored digests); that the decision also read a third advert the pass refreshed changes
+        nothing, since a third advert never re-decides a reject, by design. The store, the
+        clusters and the cursors are what the rollback left, so no merge can rest on it. A side
+        the pass refreshed is left out: its refresh rolled back with the pass. Returns the rows
+        written: the statement skips a pair that holds a stored row."""
+        keys = sorted((lo, hi, dds[0], dds[1]) for (lo, hi), dds in self._rejects.items()
+                      if lo not in self._touched and hi not in self._touched
+                      and dds[0] and dds[1])
+        written = 0
+        for start in range(0, len(keys), LEDGER_CHUNK):
+            chunk = keys[start:start + LEDGER_CHUNK]
+            written += len(self._query(RT_REJECT_LEDGER_SALVAGE_SQL, {
+                "generation": self.generation,
+                "los": [key[0] for key in chunk], "his": [key[1] for key in chunk],
+                "dd_los": [key[2] for key in chunk], "dd_his": [key[3] for key in chunk]}))
+        return written
 
     def rejected(self, keys: Sequence[tuple[int, int, str, str]]) -> set[tuple[int, int]]:
         out: set[tuple[int, int]] = set()
@@ -1493,6 +1526,11 @@ class SqlWork:
         self.enter_blocks = walk_blocks(scope, self.parents, self.districts)
         self.statements = 0
         self.windows: dict[str, int] = {}
+        # What each forward feed's window still held, in scope, once this claim had taken its
+        # part and WAITING for a later pass: `new` and `flipped` in adverts, `changed` in
+        # snapshots (an advert that changed twice counts twice). Bounded by the window
+        # (`FEED_WINDOW`): a count that large means "at least".
+        self.waiting: dict[str, int] = {}
         # What this pass spent on `public` for the entrant feed, for the run summary: a block
         # refresh, a refusal against the daily cap, or nothing at all.
         self.enter_scan: dict[str, Any] = {}
@@ -1549,9 +1587,12 @@ class SqlWork:
         items: list[WorkItem] = []
         self._pending = {}
         self.windows = {}
+        self.waiting = {"new": 0, "changed": 0, "flipped": 0}
         self._claimed = {}
         self._unread_scan = None
         cut = False
+        # The arrivals this claim's window read past its fifth, for the top-up below.
+        new_left: tuple[list[Any], list[Any], int] = ([], [], 0)
 
         after_new = cursors[CURSOR_NEW][0]
         # The straggler sweep FIRST: a row that committed after the cursor passed its id is
@@ -1579,10 +1620,10 @@ class SqlWork:
                 self.claim_bound["new_known"] = len(known)
         if size:
             taken = min(len(ids), share)
-            cut = cut or taken < len(ids)
             self._pending[CURSOR_NEW] = (int(ids[taken - 1]) if taken < len(ids) else int(end))
             for listing_id, stamp in zip(ids[:taken], stamps[:taken]):
                 items.append(WorkItem(int(listing_id), "new", _epoch(stamp), None))
+            new_left = (list(ids[taken:]), list(stamps[taken:]), int(end))
 
         after_changed = cursors[CURSOR_CHANGED][1]
         end, size, ids, stamps, snapshot_ids = _window(self._query(RT_CHANGED_LISTINGS_SQL, {
@@ -1592,6 +1633,7 @@ class SqlWork:
         if size:
             taken = min(len(ids), share)
             cut = cut or taken < len(ids)
+            self.waiting["changed"] = len(ids) - taken
             self._pending[CURSOR_CHANGED] = (int(snapshot_ids[taken - 1])
                                              if taken < len(ids) else int(end))
             for listing_id, stamp in zip(ids[:taken], stamps[:taken]):
@@ -1605,6 +1647,7 @@ class SqlWork:
         if size:
             taken = min(len(ids), share)
             cut = cut or taken < len(ids)
+            self.waiting["flipped"] = len(ids) - taken
             self._pending[CURSOR_FLIPPED] = ((stamps[taken - 1], int(ids[taken - 1]))
                                              if taken < len(ids)
                                              else (stamp_end, int(id_end)))
@@ -1706,6 +1749,27 @@ class SqlWork:
             # longer holds it, so there is nothing to re-decide it into.
             retiring = {item.listing_id for item in items if item.retire}
             items.extend(self._evidence_feed(cursors[CURSOR_EVIDENCE][0], share, retiring))
+        # ARRIVALS TAKE THE UNUSED CLAIM (2026-11-27). Every forward feed has had its fifth;
+        # what they left of the limit goes to the arrivals the window above already read, in
+        # id order, before the rescore sweep (which took it until now: a background re-read
+        # ahead of adverts no pass has seen). A new property is held from Browse and the
+        # watchdog until the engine has read its adverts, so an arrival waiting is user-facing
+        # and a sweep waiting is not. No statement: the cursor stops at the last one taken.
+        # The stale re-claims ride this attempt on top of the claim (below): their slots are
+        # not the arrivals' (E971: a build's limit + 200 re-claims outgrows what the worker's
+        # memory holds), so a pass holds at most the limit plus the sweep's room, as before.
+        stale = (sum(1 for i in self.stale_claims
+                     if i not in {item.listing_id for item in items if item.retire})
+                 if self.attempt == 0 else 0)
+        left_ids, left_stamps, new_end = new_left
+        extra = max(0, min(len(left_ids), limit - len(items) - stale))
+        for listing_id, stamp in zip(left_ids[:extra], left_stamps[:extra]):
+            items.append(WorkItem(int(listing_id), "new", _epoch(stamp), None))
+        if extra:
+            self._pending[CURSOR_NEW] = (int(left_ids[extra - 1]) if extra < len(left_ids)
+                                         else new_end)
+        self.waiting["new"] = len(left_ids) - extra
+        cut = cut or extra < len(left_ids)
         # E991: the rescore sweep. After a seed switched the settings in place, every in-scope
         # row no pass refreshed since is re-claimed once, the live rows first (E976's order),
         # each cycle in id order behind its own cursor, and re-decided as the evidence sweep's
@@ -1714,13 +1778,10 @@ class SqlWork:
         # pair it holds is decided again. It takes what the feeds above left of the limit, never
         # less than a fifth (a build's entrant feed leaves it the fifth), as the build itself does.
         if self.rescore is not None and self.rescore_slice:
-            # The stale re-claims below ride on the same pass: the sweep leaves them their room,
-            # so a pass holds what the feeds above took plus the sweep's room, never more.
-            # In a build too: the entrant feed only SHRANK by them (`reserved`, above), which
-            # leaves their slots open in `limit - len(items)`; taken out here once, they are held.
-            stale = (sum(1 for i in self.stale_claims
-                         if i not in {item.listing_id for item in items if item.retire})
-                     if self.attempt == 0 else 0)
+            # The stale re-claims below ride on the same pass: the sweep leaves them their room
+            # (`stale`, counted above, where the arrivals' top-up left it too), so a pass holds
+            # what the feeds above took plus the sweep's room, never more. In a build too: the
+            # entrant feed only SHRANK by them (`reserved`, above).
             items.extend(self._rescore_feed(self.rescore, cursors[CURSOR_RESCORE][0], limit,
                                             share, items, scope, stale))
             cut = cut or bool(self.rescore_report and self.rescore_report["left"])
@@ -3286,6 +3347,25 @@ def _measure_rate(claimed: int, elapsed_s: float, previous: float,
     return round(blended, 6), False
 
 
+def _salvage(conn: Any, store: "SqlStore", holder: str) -> tuple[int, str | None]:
+    """E997: ledger the rejects of a pass its deadline stopped, in one transaction after its
+    rollback, fenced by the lease like every lane transaction: the rows written, and why none
+    were when it failed. Best effort: a lost lease or a failed statement rolls it back and the
+    next pass decides those pairs again, as before. Bounded by the connection's statement
+    timeout a chunk, at most `max_pairs / LEDGER_CHUNK` chunks."""
+    started = time.perf_counter()
+    try:
+        with _transaction(conn):
+            written = store.salvage()
+            rt_lease.hold(conn, holder)
+    except Exception as exc:  # noqa: BLE001
+        LOG.warning("AUTODEDUP: the stopped pass's rejects were not ledgered: %s", exc)
+        return 0, str(exc)[:300]
+    LOG.info("AUTODEDUP: the stopped pass ledgered %d rejects in %.1f s", written,
+             time.perf_counter() - started)
+    return written, None
+
+
 def _engine_since(conn: Any, generation: str, recorded: Any, digest: str) -> str:
     """Since when the lane has run under `digest` (E960): the recorded instant while the digest
     is the recorded one, else the database's now, written in a commit of its own (the clock
@@ -3804,6 +3884,10 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         elif stopped and not shutting_down():
             # E913: the next pass claims half as much (the half E941 wrote ahead, named).
             _write_rate(conn, generation, rate_per_s / 2.0, "halved")
+        # E997: None while no salvage ran; the rows written, and the error when it failed.
+        salvaged, salvage_error = (_salvage(conn, store, holder)
+                                   if stopped == "deadline" and not shutting_down()
+                                   else (None, None))
         if stale_claims and not shutting_down():
             # E973: the pass that carried the re-claims ended on its own terms — it committed,
             # the pair budget refused them or its deadline cut it (a raise stamps on its own
@@ -3822,6 +3906,8 @@ def run_incremental(conn_factory: Callable[[], Any], *,
         summary: dict[str, Any] = (result.to_json() if result is not None
                                    else {"counts": {}, "aborted": stopped})
         summary["aborted"] = stopped
+        summary["ledger_salvaged"] = salvaged
+        summary["ledger_salvage_error"] = salvage_error
         # A9: the reconcile, after the pass committed and under the same lease. Off after a pass
         # that rolled back, and off over a generation no seed of this design built (the 09-21
         # `rt` predates F2: its groups are not the ones this build would draw). ON during a
@@ -3919,6 +4005,7 @@ def run_incremental(conn_factory: Callable[[], Any], *,
             _rows(conn, RT_FP_COUNT_SQL, {"generation": generation})[0][0])
         summary["scope"] = scope.as_json()
         summary["windows"] = dict(work.windows)
+        summary["waiting"] = dict(work.waiting)
         summary["enter_scan"] = dict(work.enter_scan)
         # E991: the rescore sweep's slice this pass, while one is owed.
         summary["rescore"] = work.rescore_report

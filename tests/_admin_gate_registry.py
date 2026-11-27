@@ -58,7 +58,7 @@ ADMIN_ONLY_RELATIONS: tuple[str, ...] = (
     # The versioned tag model (migration 490, PUBLIC schema so it survives the drop of dedup_sim), read through
     # /new-dedup/tags/*. images_public publishes the ACTIVE model's per-photo scores (UNGATED below).
     "tag_head_models", "tag_head_model_heads", "image_tag_scores",
-    # The Level-0 candidate store (migration 492, schema dedup_sim), read through /new-dedup/candidates/*.
+    # The Level-0 candidate store (migration 492, schema dedup_sim): read by nothing since #2681, kept until its drop.
     "dedup_sim.candidate_inputs",
     "dedup_sim.candidate_generations",
     "dedup_sim.candidate_pairs",

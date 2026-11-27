@@ -142,11 +142,10 @@ test. W3 S4 deleted it, the same way and for the same reason W2-b deleted `servi
 rail that nothing evaluates reads as enforcement and is not. A floor now lives where its consumer
 does, in the code that would violate it.
 
-One survives as code, because it is the one that was ever reached:
+One survived as code, because it was the one ever reached:
 
-* **path C's town floor** — `obec`, any confidence — is `toolkit/dedup_candidates.PATHS["C"]`
-  itself (`block_key="obec_kod"`, `district_key="cast_obce_kod"`). The path definition IS the floor:
-  it cannot block on anything finer than the column it blocks on.
+* *(deleted 2026-11-26, #2681)* **path C's town floor** — `obec`, any confidence — was the path
+  definition itself (`block_key="obec_kod"`) and went with the NEW DEDUP candidate lane.
 * *(superseded 2026-10-02, operator ruling Q2)* operator action A5's filter default
   `include_and_badge`: a chip is strict code equality at its level; the badge half was never built
   and the unread constant was deleted with the street chip (migration 605).

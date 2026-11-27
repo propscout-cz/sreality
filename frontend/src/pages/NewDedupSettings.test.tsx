@@ -31,14 +31,14 @@ vi.mock('@/lib/api', async (importOriginal) => {
 
 const SETTINGS: NewDedupSetting[] = [
   {
-    key: 'l0_geo_radius_m',
-    category: 'l0_candidates',
+    key: 'l3_runpod_daily_cost_cap_usd', // gitleaks:allow (a setting key, not a secret)
+    category: 'l3_embeddings',
     value_type: 'numeric',
-    value: 75,
-    default: 75,
+    value: 1,
+    default: 1,
     is_override: false,
     decided: true,
-    explanation: 'How close two listings need to be to become a candidate pair.',
+    explanation: 'Soft daily spend cap for the RunPod GPU pods.',
     enum_choices: null,
     minimum: null,
     maximum: null,
@@ -120,24 +120,24 @@ describe('<NewDedupSettings>', () => {
 
   it('groups settings by category, compact by default with explanations on hover', async () => {
     renderPage();
-    expect(await screen.findByText('L0 · Candidate selection')).toBeInTheDocument();
+    expect(await screen.findByText('L3 · Embeddings')).toBeInTheDocument();
     expect(screen.getByText('L2 · Perceptual hash')).toBeInTheDocument();
     // Compact (the default): the explanation lives on the InfoHint icon's
     // title/aria-label, not as its own visible text node.
     expect(
-      screen.getByTitle('How close two listings need to be to become a candidate pair.'),
+      screen.getByTitle('Soft daily spend cap for the RunPod GPU pods.'),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText('How close two listings need to be to become a candidate pair.'),
+      screen.queryByText('Soft daily spend cap for the RunPod GPU pods.'),
     ).not.toBeInTheDocument();
   });
 
   it('Detailed mode shows every explanation inline', async () => {
     renderPage();
-    await screen.findByText('L0 · Candidate selection');
+    await screen.findByText('L3 · Embeddings');
     fireEvent.click(screen.getByRole('button', { name: 'Detailed' }));
     expect(
-      await screen.findByText('How close two listings need to be to become a candidate pair.'),
+      await screen.findByText('Soft daily spend cap for the RunPod GPU pods.'),
     ).toBeInTheDocument();
     expect(
       screen.getByText('Whether the exact-attributes level is active.'),
@@ -151,9 +151,9 @@ describe('<NewDedupSettings>', () => {
     // the badge is the second occurrence.
     expect(screen.getAllByText('not yet calibrated')).toHaveLength(2);
     expect(screen.getByText('edited')).toBeInTheDocument();
-    // l0_geo_radius_m is decided and not overridden — neither badge for it.
-    const radiusRow = screen.getByText('l0_geo_radius_m').closest('div');
-    expect(radiusRow?.textContent).not.toContain('not yet calibrated');
+    // l3_runpod_daily_cost_cap_usd is decided and not overridden — neither badge for it.
+    const capRow = screen.getByText('l3_runpod_daily_cost_cap_usd').closest('div');
+    expect(capRow?.textContent).not.toContain('not yet calibrated');
   });
 
   it('flips the boolean toggle immediately, no explicit save step', async () => {
@@ -174,16 +174,16 @@ describe('<NewDedupSettings>', () => {
   it('number field only saves on Enter, not per keystroke', async () => {
     vi.mocked(api.updateNewDedupSetting).mockResolvedValue({
       ...SETTINGS[0],
-      value: 90,
+      value: 2,
       is_override: true,
     });
     renderPage();
-    const input = await screen.findByDisplayValue('75');
-    fireEvent.change(input, { target: { value: '90' } });
+    const input = await screen.findByDisplayValue('1');
+    fireEvent.change(input, { target: { value: '2' } });
     expect(api.updateNewDedupSetting).not.toHaveBeenCalled();
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() =>
-      expect(api.updateNewDedupSetting).toHaveBeenCalledWith('l0_geo_radius_m', 90),
+      expect(api.updateNewDedupSetting).toHaveBeenCalledWith('l3_runpod_daily_cost_cap_usd', 2),
     );
   });
 
@@ -203,7 +203,7 @@ describe('<NewDedupSettings>', () => {
 
   it('every value type announces itself by its setting key', async () => {
     renderPage();
-    await screen.findByText('l0_geo_radius_m');
+    await screen.findByText('l3_runpod_daily_cost_cap_usd');
     // The four arms of SettingControl — switch, select, number, text — all
     // carry the key a sighted operator reads in the row's header.
     expect(
@@ -212,7 +212,7 @@ describe('<NewDedupSettings>', () => {
     expect(
       screen.getByRole('combobox', { name: 'l2_phash_family_semantics' }),
     ).toHaveAccessibleName('l2_phash_family_semantics');
-    expect(screen.getByRole('spinbutton', { name: 'l0_geo_radius_m' })).toHaveValue(75);
+    expect(screen.getByRole('spinbutton', { name: 'l3_runpod_daily_cost_cap_usd' })).toHaveValue(1);
     expect(screen.getByRole('spinbutton', { name: 'l2_phash_hamming_threshold' })).toHaveValue(8);
     expect(screen.getByRole('textbox', { name: 'l3_embeddings_encoder' })).toHaveValue('dinov3');
   });

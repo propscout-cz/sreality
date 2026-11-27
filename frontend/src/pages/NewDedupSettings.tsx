@@ -3,7 +3,7 @@
  *
  * Shares its section chrome with the main Settings page (see
  * components/settings/SectionChrome): each category is a numbered-free
- * CollapsibleSection folio (the "L0 · …" label already carries its own
+ * CollapsibleSection folio (the "L1 · …" label already carries its own
  * ordinal, so no extra index chip), and every explanation collapses to an
  * InfoHint icon unless the page's Compact/Detailed toggle is set to
  * Detailed — in Compact, rows also pack two-up since a bare key + control
@@ -29,7 +29,6 @@ import {
 
 const CATEGORY_ORDER = [
   'general',
-  'l0_candidates',
   'l1_exact_attrs',
   'l2_phash',
   'l3_embeddings',
@@ -38,7 +37,6 @@ const CATEGORY_ORDER = [
 
 const CATEGORY_LABELS: Record<string, string> = {
   general: 'General',
-  l0_candidates: 'L0 · Candidate selection',
   l1_exact_attrs: 'L1 · Exact attributes',
   l2_phash: 'L2 · Perceptual hash',
   l3_embeddings: 'L3 · Embeddings',
