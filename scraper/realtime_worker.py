@@ -2239,6 +2239,10 @@ def _autodedup_outcome(
             # salvage ran), and why none were when the salvage failed.
             ledger_salvaged=summary.get("ledger_salvaged"),
             ledger_salvage_error=summary.get("ledger_salvage_error"),
+            # What each forward feed left WAITING in its window this pass (arrivals, changes,
+            # flips; bounded by the window, so a count that large means "at least"): the
+            # adverts refreshed in a pass are not the arrivals read.
+            waiting=summary.get("waiting"),
             # E960: the probe-key neighbourhood the last attempt re-retrieved from the store's
             # keys and guard rows, and the adverts whose facts the pass read, by why (claim,
             # order, digest, decided, cluster, rail), summed over every attempt.
