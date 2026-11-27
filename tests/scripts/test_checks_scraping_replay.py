@@ -77,6 +77,7 @@
 #                   join listings l on l.source = c.source and l.source_id_native = c.native_id
 #                  where c.outcome = 'gone' and l.is_active
 #                    and c.completed_at > coalesce(l.last_seen_at, '-infinity'::timestamptz)
+#                    and c.completed_at > now() - interval '7 days'  -- db.COMPLETION_EVIDENCE_DAYS
 #                  group by 1, 2),
 #        basis as (select distinct on (wu.source, wu.unit) wu.source, wu.unit,
 #                         abs(wu.adb_sum - l.held) <= abs(wu.adb_max - l.held) by_sum

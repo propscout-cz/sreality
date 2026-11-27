@@ -92,6 +92,8 @@ Comment the numbers, leave this open and open a fix ticket that blocks this one;
 - #<build>
 ```
 
+**A gate that reads a pruned ledger** names its retention in How to measure and is measured inside it: `detail_queue_completions` keeps 21 days (`db.COMPLETION_RETENTION_DAYS`), so a 7-day window must be read within 14 days of its end.
+
 **Merging a build PR**: once the rollout wait exits 0 (§ Merging), start the clock on each gate ticket the build ticket blocks, listed by `gh api repos/{owner}/{repo}/issues/<build>/dependencies/blocking -q '.[] | select(any(.labels[]; .name == "gate")) | .number'`: comment `Clock started: deployed <UTC>; due <UTC>. Baseline: <numbers>`, then date the title with `gh issue edit <gate> --title "…(due YYYY-MM-DD)"`.
 
 **Owed gates**, soonest first: `gh issue list --label gate --state open --json number,title -q '.[] | "\((.title | capture("due (?<d>[0-9]{4}-[0-9]{2}-[0-9]{2})")).d // "not started")  #\(.number)  \(.title)"' | sort`

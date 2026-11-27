@@ -23,7 +23,8 @@
 #  oldest first unrefuted gone verdict (the earliest gone row within 12 h before the last one
 #  before the flip, newer than a still-inactive ad's last sighting) and longest verdict-to-flip.
 #   with c as (select c.*, date_trunc('hour', c.completed_at) as hour
-#                from detail_queue_completions c),
+#                from detail_queue_completions c
+#               where c.completed_at > now() - interval '7 days'),  -- the week; it keeps 21 since #2665
 #        fl as (select c.id, l.is_active,
 #                      (select min(g.completed_at) from detail_queue_completions g
 #                        where g.source = c.source and g.native_id = c.native_id
@@ -61,6 +62,7 @@
 #                  on l.source = c.source and l.source_id_native = c.native_id
 #               where c.outcome = 'gone' and l.is_active
 #                 and c.completed_at > coalesce(l.last_seen_at, '-infinity')
+#                 and c.completed_at > now() - interval '7 days'  -- db.COMPLETION_EVIDENCE_DAYS
 #               group by l.source, l.id)
 #   select 'pending', date_trunc('hour', first_gone), source, null, count(*), null, null, null,
 #          null, null, null, null, null, null,
