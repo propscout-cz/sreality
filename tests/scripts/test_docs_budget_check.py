@@ -427,7 +427,10 @@ def test_runner_a_budget_crash_is_no_verdict(pushable: Path) -> None:
     assert done.returncode == 3
 
 
-def test_the_job_keeps_its_required_name_and_is_one_call_to_the_runner() -> None:
-    job = yaml.safe_load((ROOT / ".github" / "workflows" / "docs-budget.yml").read_text())["jobs"]["docs-budget"]
-    assert [step["run"] for step in job["steps"] if "run" in step] == [f"{RUNNER} HEAD^1"]
+def test_the_required_frontend_job_runs_the_docs_checks_as_one_call_to_the_runner() -> None:
+    """#2034: the docs-budget job became a step of test.yml's `frontend` job, a required context."""
+    job = yaml.safe_load((ROOT / ".github" / "workflows" / "test.yml").read_text())["jobs"]["frontend"]
+    calls = [step for step in job["steps"] if RUNNER in step.get("run", "")]
+    assert [step["run"] for step in calls] == [f"{RUNNER} HEAD^1"]
+    assert calls[0]["working-directory"] == "."
     assert job["steps"][0]["with"]["fetch-depth"] == 0

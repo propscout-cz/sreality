@@ -21,7 +21,7 @@ api/                FastAPI service exposing the toolkit (deployed to Railway)
 frontend/           Vite + React + TS database-browser UI (deployed to Railway as its own project; see frontend/README.md)
 tests/              pytest suite
 .railway/           Railway settings for the three projects (TypeScript IaC, operator-applied; Node only for the pinned CLI/SDK, never in an image)
-.github/workflows/  test.yml (per-push), the walks still on Actions (`*_index_walk.yml`, `scrape_remax.yml`, `scrape_mmreality.yml`; the job runner runs the rest), frontend-build.yml (typecheck + bundle-size guardrail)
+.github/workflows/  test.yml (every PR and push to main; its frontend job typechecks, builds and guards the bundle size), the walks still on Actions (`*_index_walk.yml`, `scrape_remax.yml`, `scrape_mmreality.yml`; the job runner runs the rest)
 ```
 
 ## Scope

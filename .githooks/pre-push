@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Refuses what the docs-budget CI job would fail (#2235), then the secret scan of every commit this push sends that no
+# Refuses what CI's docs checks would fail (#2235), then the secret scan of every commit this push sends that no
 # remote holds yet, rebased and cherry-picked ones included, a merge by what it changed beyond the automatic merge (#2035).
 set -euo pipefail
 tips=()

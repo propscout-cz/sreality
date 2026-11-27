@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The docs-budget job, once: CI and the pre-push hook both call this, so a local run gets CI's verdict (#2235). Docs
-# checks only; ruff and codegen keep their single home. The budget blocks and reads the working tree; the symbol and
+# The docs checks, once: CI (test.yml's frontend job) and the pre-push hook both call this, so a local run gets
+# CI's verdict (#2235). Docs checks only; ruff and codegen keep their single home. The budget blocks and reads the working tree; the symbol and
 # staleness checks warn and read the committed head. Only annotations print: no OK lines.
 #
 # Usage: .github/scripts/docs-check.sh [base-ref]
