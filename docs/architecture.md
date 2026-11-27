@@ -333,8 +333,8 @@ prodej + pronájem today). Image-URL rows are recorded by the drain; the realtim
 `scrape_mmreality.yml` before) — pilot — **every request rides the residential proxy** (`SCRAPER_PROXY_URL`,
 `USE_PROXY=True`; job-runner reads the worker's by reference): Cloudflare hard-403s datacenter IPs (the first 101
 direct scheduled runs ingested zero listings), so the proxy is mandatory from ANY datacenter egress, GitHub or
-Railway alike; its runner slot (`jobs._walks()` spreads each cadence's walks evenly; mmreality is the 12 h group's) is off ceskereality's
-`25 */6` minute) tagged `source='mmreality'`. M&M Reality is server-rendered HTML
+Railway alike; its runner slot (`jobs._walks()` spreads each cadence's walks evenly) is 06:00/18:00, six hours off ceskereality's
+in the 12 h group since #2031) tagged `source='mmreality'`. M&M Reality is server-rendered HTML
 but **every detail page embeds a COMPLETE structured estate object** as a Vue
 `:property` prop (HTML-entity-encoded JSON), so `mmreality_parser.parse_detail` decodes
 that JSON rather than scraping markup: precise per-listing coordinates (`point`), typed
@@ -402,7 +402,9 @@ on-demand LLM URL parser itself was deleted on 2026-10-20 (`docs/design/new-prop
 ruling 3): a pasted link of any portal becomes an ad through `POST /listings/ingest` and the drain.
 
 **Data source (ceskereality.cz).** A scheduled scraper (`scraper/ceskereality_client.py`,
-`ceskereality_parser.py`, `ceskereality_main.py`) tagged `source='ceskereality'`. **Its bytes
+`ceskereality_parser.py`, `ceskereality_main.py`, the job runner's `walk_ceskereality` since #2031, every 12 h, its
+proxy traffic at GitHub's ~2 walks a day: operator decision 2026-11-27; `ceskereality_index_walk.yml` before) tagged
+`source='ceskereality'`. **Its bytes
 arrive through a HEADLESS BROWSER, not `requests` (since 2026-11-16, #2529).** On 2026-10-31 the
 portal put an Anubis v1.28.2 JS proof-of-work interstitial in front of every page: it answers
 **HTTP 200 with challenge HTML**, so a plain fetch collected the challenge, the parser found zero
@@ -440,8 +442,8 @@ ended a whole walk slice. The worker skips this portal's lanes when playwright i
 queue row's attempts. Measured live 2026-11-16: 20 index pages, one solve, ~1.3 s and ~30 KB per
 steady page.
 It is large
-(~49k listings), so — like sreality/idnes — it is **cadence-split**: `ceskereality_index_walk.yml`
-(every 6h, full walk + presence nomination + enqueue) feeds the realtime worker's drain
+(~49k listings), so — like sreality/idnes — it is **cadence-split**: the runner's `walk_ceskereality`
+(full walk + presence nomination + enqueue) feeds the realtime worker's drain
 lane. The index walk partitions each
 category on the **14 declared kraj slugs** (`KRAJ_SLUGS`, a proven row-level partition —
 never the rendered facet block, which is a top-10-by-popularity list), pages each slice to
@@ -1672,9 +1674,10 @@ on 2026-12-01, and until then a file of that name would override the applied set
   daily `property_sweep` (03:00 UTC) and `broker_sweep` (06:00 UTC) since #2027, which never run beside each other
   or any other DB-heavy job (`job_lease`'s heavy turn), of the hourly claim intake `location_intake` since #2028
   and the RÚIAN registry load `ruian_load` since #2033, daily (§ Location data), and of the walks whose
-  `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (130 min: web, maxima and bezrealitky since #2029, remax and
-  mmreality since #2030, bazos since #2031, each `walk_<source>` every 6 h (mmreality 12 h), and sreality hourly since #2030, with no
-  `--max-seconds`, the runner's SIGTERM at the timeout its one budget; the longer walks wait on their workflows):
+  `walk_timeout_s` fits `jobs.RUNNER_WALK_TIMEOUT_S` (180 min: web, maxima and bezrealitky since #2029, remax and
+  mmreality since #2030, bazos, realitymix and ceskereality since #2031, each `walk_<source>` every 6 h (mmreality and
+  ceskereality 12 h), and sreality hourly since #2030, with no `--max-seconds`, the runner's SIGTERM at the timeout its
+  one budget; idnes, the longer walk, waits on its workflow):
   - two replicas in the worker's region, each 4 vCPU and 12 GB (8 GB until #2031), restart policy ALWAYS, `checkSuites: false`.
     Railway counts decimal bytes, so 12e9 B is 11,444 MiB in the cgroup, `jobs.REPLICA_MEMORY_MB` (a test ties them); the BOOT
     line and every beat carry `memory_limit_mb` and `cpus` as the replica's cgroup reads them;

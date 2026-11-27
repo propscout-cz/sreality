@@ -172,61 +172,6 @@
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/build-extension.yml"
     },
     {
-      "filename": "ceskereality_index_walk.yml",
-      "name": "Scraping: Českéreality index walk",
-      "description": "The fast half of the ceskereality cadence split (architectural rule #19, like sreality/idnes). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, presence nomination (rule #3) nominates unseen ones for a page check once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='ceskereality'). No detail fetch — the realtime worker's drain lane consumes the queue. Records run_type='index'.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "25 */6 * * *",
-          "human": "Every 6 hours at :25"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_pages",
-          "description": "cap index pages per category (ad-hoc partial; suppresses presence nomination (rule",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "max_seconds",
-          "description": "wall-clock budget; the walk finalizes cleanly before this (blank = 9000 = 150 min).",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "kraj",
-          "description": "limit the walk to ONE kraj (e.g. stredocesky-kraj) for an ad-hoc partial run; suppresses presence nomination (rule",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SCRAPER_PROXY_URL",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "ceskereality-index-walk",
-      "cancelInProgress": false,
-      "timeoutMinutes": 180,
-      "permissions": null,
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/ceskereality_index_walk.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/ceskereality_index_walk.yml"
-    },
-    {
       "filename": "condition_score_batches.yml",
       "name": "Scraping: Sreality condition scoring (batch API)",
       "description": "PARKED (rule #14, operator ruling 2026-10-20): both crons are off and no filter, agent fact or estimate reads the levels. Phase 1.8b — async condition scoring via the Anthropic Message Batches API (50% cheaper than the synchronous condition_scores.yml job). Two modes, selected by the `mode` input:",
@@ -1042,52 +987,6 @@
       "permissions": "contents: read, pull-requests: read",
       "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/migrations.yml",
       "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/migrations.yml"
-    },
-    {
-      "filename": "realitymix_index_walk.yml",
-      "name": "Scraping: RealityMix index walk",
-      "description": "The fast half of the realitymix cadence split (architectural rule #19, like sreality/idnes/ceskereality). Walks the ENTIRE index of every configured category (no --max-pages), touch_listings bumps last_seen on still-listed ids, presence nomination (rule #3) nominates unseen ones for a page check once the walk reached the portal's end (source-scoped; the page, not the count, decides), and new/price-changed ids are enqueued into listing_detail_queue (source='realitymix'). No detail fetch — the realtime worker's drain lane consumes the queue. Records run_type='index'.",
-      "manual": true,
-      "schedules": [
-        {
-          "cron": "20 */6 * * *",
-          "human": "Every 6 hours at :20"
-        }
-      ],
-      "onPush": false,
-      "onPullRequest": false,
-      "paths": null,
-      "inputs": [
-        {
-          "name": "max_pages",
-          "description": "cap index pages per category (ad-hoc partial; suppresses presence nomination (rule",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        },
-        {
-          "name": "max_seconds",
-          "description": "wall-clock budget; the walk finalizes cleanly before this (blank = 9000 = 150 min).",
-          "required": false,
-          "type": "string",
-          "default": "",
-          "options": null
-        }
-      ],
-      "secrets": [
-        "R2_ACCESS_KEY_ID",
-        "R2_ACCOUNT_ID",
-        "R2_BUCKET_NAME",
-        "R2_SECRET_ACCESS_KEY",
-        "SUPABASE_DB_URL"
-      ],
-      "concurrencyGroup": "realitymix-index-walk",
-      "cancelInProgress": false,
-      "timeoutMinutes": 180,
-      "permissions": null,
-      "runsUrl": "https://github.com/propscout-cz/sreality/actions/workflows/realitymix_index_walk.yml",
-      "sourceUrl": "https://github.com/propscout-cz/sreality/blob/main/.github/workflows/realitymix_index_walk.yml"
     },
     {
       "filename": "reextract.yml",

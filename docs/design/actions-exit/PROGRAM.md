@@ -382,6 +382,22 @@ headroom (the operator chose option A on 2026-11-27: every walk declares 1,536 M
 by use; since #2689 a job's `peak_rss_mb` and kill follow its whole process tree, chromium included). Its 31 failed GitHub runs in 30 days
 were all the Anubis wall (11-02 to 11-16, `CHECK empty_walk`: 0 ads from ~165 pages), none in the 22 since #2530.
 realitymix needs neither the proxy nor the browser; idnes prefers the proxy, bazos neither.
+**As built (#2031), batch 3 continues with realitymix and ceskereality.** The cutoff rises to 180 min, which takes
+both (each `walk_timeout_s` 180 min; realitymix every 6 h, ceskereality every 12 h, because its every request rides the
+paid residential proxy and 12 h keeps that traffic at GitHub's ~2 walks a day: operator decision 2026-11-27) and leaves
+idnes (240) the last waiting walk. `realitymix_index_walk.yml` and `ceskereality_index_walk.yml` and their groups
+(`realitymix-index-walk`, `ceskereality-index-walk`) are deleted; their dispatch inputs (`--max-pages`,
+`--max-seconds`, ceskereality's `--kraj`) are request args now. GitHub's throttled cron delivered 14 walks of each in
+the 7 days to 11-27 (p95 3,053 s and 4,421 s, none near the 9,000 s budget each carried). The job cell reads Watch
+past ⅔ of the 180 min timeout (7,200 s): realitymix's slowest walk in 30 days took 3,295 s (119 % above), ceskereality's
+slowest since its exit IP rotates (#2547, 11-17) 4,421 s (63 %); its two walks of 11-16 on one sticky exit IP (4,633
+and 8,246 s, the second past the line) predate that fix. realitymix needs neither the proxy nor the browser;
+ceskereality is `USE_PROXY`/`PROXY_REQUIRED` and fetches through `scraper/browser_fetch.py`, so it moves only onto
+#2685's `SCRAPER_PROXY_URL` reference and #2688's chromium and 1,536 MB declaration. Joining the 12 h group moves
+mmreality's slot to 06:00/18:00 (ceskereality takes 00:00/12:00), and the 6 h group's seven walks respace 51 min apart.
+The runner walks realitymix 4 times a day where GitHub managed 2 (its direct index requests about 4,900 to 9,800 a day,
+inside its 1 req/s budget); ceskereality's proxied walk holds at about 4,800 pages a day. **This PR merges only after
+the bazos step and #2685's and #2688's wizard applies.**
 **Gate per walk (7 days):** pages and reached-end per cycle, nominations per day (a moved walk keeps its declared
 cadence), ± 10 %; 403/429 share from
 Railway ≤ the GitHub baseline; 0 `ended_at NULL` after ≥ 5 mid-walk deploys; proxy GB/day within its band;
