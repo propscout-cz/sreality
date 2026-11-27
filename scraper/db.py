@@ -312,6 +312,10 @@ _KEEPALIVES: dict[str, int] = {
 # of database_url() and a real bug fails loud instead of spinning ~30s.
 _CONNECT_ATTEMPTS = 3
 _CONNECT_RETRY_DELAY = 10.0
+# A DB-heavy runner job's failed run retries a day later, so its first connect and every reconnect outwait a database
+# restart (#2660, ruling C): 3 waits of a minute. The pooler can accept a connection before it can reach a restarting
+# database, so `probe` counts an attempt only once the database answers.
+JOB_PATIENCE: dict[str, Any] = {"attempts": 4, "retry_delay": 60.0, "probe": True}
 
 
 def _connect_with_retry(
@@ -319,11 +323,19 @@ def _connect_with_retry(
     *,
     attempts: int,
     delay: float,
+    probe: bool = False,
 ) -> psycopg.Connection:
     for attempt in range(1, attempts + 1):
+        conn: psycopg.Connection | None = None
         try:
-            return opener()
+            conn = opener()
+            if probe:
+                conn.execute("SELECT 1")
+            return conn
         except Exception as exc:  # noqa: BLE001 - re-raised below unless transient
+            if conn is not None:
+                with contextlib.suppress(Exception):
+                    conn.close()
             if not is_transient_db_error(exc) or attempt >= attempts:
                 raise
             LOG.warning(
@@ -340,6 +352,7 @@ def connect(
     attempts: int = _CONNECT_ATTEMPTS,
     retry_delay: float = _CONNECT_RETRY_DELAY,
     connect_timeout: int | None = None,
+    probe: bool = False,
 ) -> psycopg.Connection:
     """Open an autocommit connection. Callers manage transactions explicitly.
 
@@ -352,7 +365,7 @@ def connect(
     apart (see _connect_with_retry). Callers that can't afford the full budget —
     the synchronous API per-request path — pass a smaller one, and a caller that
     must finish quickly passes `connect_timeout` (seconds per address; psycopg's
-    default is 130).
+    default is 130). A runner job passes JOB_PATIENCE.
     """
     return _connect_with_retry(
         lambda: psycopg.connect(
@@ -364,6 +377,7 @@ def connect(
         ),
         attempts=attempts,
         delay=retry_delay,
+        probe=probe,
     )
 
 
@@ -372,6 +386,7 @@ def connect_session(
     *,
     attempts: int = _CONNECT_ATTEMPTS,
     retry_delay: float = _CONNECT_RETRY_DELAY,
+    probe: bool = False,
 ) -> psycopg.Connection:
     """Open a connection that lets psycopg3 auto-prepare statements.
 
@@ -387,11 +402,12 @@ def connect_session(
     """
     session_url = url or os.environ.get("SUPABASE_DB_SESSION_URL")
     if not session_url:
-        return connect(attempts=attempts, retry_delay=retry_delay)
+        return connect(attempts=attempts, retry_delay=retry_delay, probe=probe)
     return _connect_with_retry(
         lambda: psycopg.connect(session_url, autocommit=True, **_KEEPALIVES),
         attempts=attempts,
         delay=retry_delay,
+        probe=probe,
     )
 
 
@@ -1126,7 +1142,8 @@ def gone_evidence(
     """What the ledger holds against this listing before a gone verdict may flip it (rule #3
     hysteresis, `delist_policy.gone_confirmed`): (the row exists, when its EARLIEST unrefuted
     gone verdict landed). A verdict older than the row's last sighting was refuted by that
-    sighting and does not count; None = no unrefuted verdict yet."""
+    sighting and does not count, nor one older than COMPLETION_EVIDENCE_DAYS; None = no unrefuted
+    verdict yet."""
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -1136,12 +1153,13 @@ def gone_evidence(
                      WHERE c.source = %(source)s
                        AND c.native_id = %(native_id)s
                        AND c.outcome = 'gone'
-                       AND c.completed_at > COALESCE(l.last_seen_at, '-infinity'::timestamptz))
+                       AND c.completed_at > COALESCE(l.last_seen_at, '-infinity'::timestamptz)
+                       AND c.completed_at > now() - make_interval(days => %(days)s))
             FROM (SELECT 1) AS one
             LEFT JOIN listings l
                    ON l.source = %(source)s AND l.source_id_native = %(native_id)s
             """,
-            {"source": source, "native_id": native_id},
+            {"source": source, "native_id": native_id, "days": COMPLETION_EVIDENCE_DAYS},
         )
         exists, first_gone_at = cur.fetchone()
     return bool(exists), first_gone_at
@@ -1910,13 +1928,14 @@ def queue_state(conn: psycopg.Connection, source: str, native_id: str) -> dict[s
 
 def latest_completion_outcome(conn: psycopg.Connection, source: str, native_id: str) -> str | None:
     """What the drain last DID with this ad (a `complete_detail` / `fail_detail` outcome), or
-    None when the ledger (7-day retention) holds no completion for it."""
+    None when it did nothing in the last COMPLETION_EVIDENCE_DAYS."""
     with conn.cursor() as cur:
         cur.execute(
             "SELECT outcome FROM detail_queue_completions "
             "WHERE source = %s AND native_id = %s "
+            "AND completed_at > now() - make_interval(days => %s) "
             "ORDER BY completed_at DESC, id DESC LIMIT 1",
-            (source, str(native_id)),
+            (source, str(native_id), COMPLETION_EVIDENCE_DAYS),
         )
         row = cur.fetchone()
     return row[0] if row else None
@@ -2312,7 +2331,11 @@ def release_claims(
         return cur.rowcount or 0
 
 
-COMPLETION_RETENTION_DAYS = 7
+# The ledger keeps three weeks, so a 7-day gate read up to two weeks late still finds its window (#2665). The drain's
+# gone evidence, the paste path's answer and Health's in-dwell ads (scripts.checks.common.in_dwell_ctes) judge only
+# the week the 7-day prune left them: a longer ledger changes no verdict.
+COMPLETION_RETENTION_DAYS = 21
+COMPLETION_EVIDENCE_DAYS = 7
 
 
 def reclaim_stale_claims(
@@ -2323,7 +2346,7 @@ def reclaim_stale_claims(
     """Release `source` claims older than the cutoff (a drain SIGKILLed
     mid-flight), so its rows become claimable again. Mirrors
     sweep_stuck_scrape_runs. Also prunes this source's expired
-    detail_queue_completions rows (7-day ephemeral ledger, the rule-#9
+    detail_queue_completions rows (COMPLETION_RETENTION_DAYS, the rule-#9
     posture) — running it here, at every drain start, keeps the ledger
     bounded without pg_cron."""
     with conn.transaction(), conn.cursor() as cur:

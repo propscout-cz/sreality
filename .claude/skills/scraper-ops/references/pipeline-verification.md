@@ -1258,7 +1258,8 @@ there when any unit reached the end (coverage's portal-level walk needs every un
 its own question); outflow compares windows, not walks, so a walk that runs further off its baseline
 weeks' timing than the alignment absorbs can still read as a dip; location-refetch rows share the
 VERIFY priority and count in the backlog; "active again" includes probe and refetch revivals; and a
-verdict older than the ledger's 7 days is pruned, so stuck can never see it. It replaces
+verdict older than `db.COMPLETION_EVIDENCE_DAYS` (7; the ledger keeps 21) is never read, so stuck
+can never see it. It replaces
 `false_delist_share` (a mixed 7-day window) and `delist_flip_refused` (7 days of
 `delist_flip_refusals`, a table nothing reads after it); the old page's `delisting_latency` and
 `delisting_spike` matview checks rendered until wave 8 retired the page (migration 643 dropped the matview).
@@ -1301,7 +1302,7 @@ were NULL-category ads) and the category-trends panels rendered until wave 8 ret
 fixtures under `tests/fixtures/health_*.csv`, exported read-only from production with the refresh
 SQL in each test's header: walks, missing, residual, inflow and outflow from `scrape_runs` and
 `listings`, where 28 days exist; fetch errors, stuck, the verify backlog and precision from
-`detail_queue_completions` and the queue, where only 7 days exist, so that export ran first, before
+`detail_queue_completions` and the queue, where only 7 days existed, so that export ran first, before
 the 10-13 bazos burst and the 10-12/13 cohorts aged out. Where no store keeps history — the 08-17
 starvation, the 09-14 Browse drop, the 09-17 bazos location loss, the iDNES photo throttle, a 30 %
 revived cohort — the incident-shaped fixture is SYNTHETIC, and its test says so with the figures it

@@ -182,7 +182,7 @@ def test_a_walks_host_is_the_cutoffs() -> None:
     hosts = {j.name: j.host for j in jobs.declared() if j.name.startswith(jobs.WALK_PREFIX)}
     assert {n for n, h in hosts.items() if h == jobs.RUNNER} == {
         "walk_web", "walk_maxima", "walk_bezrealitky", "walk_sreality", "walk_remax", "walk_mmreality"}, \
-        "batch 1 (#2029), batch 2 (#2030: sreality at 40 min, remax and mmreality at 60)"
+        "batch 1 (#2029), batch 2 (#2030: sreality at 50 min, remax and mmreality at 60)"
 
 
 def test_the_walk_host_census_fires() -> None:
@@ -448,8 +448,7 @@ def _invocations(run: str, root: Path) -> list[Invocation]:
 
 
 def read_workflows(root: Path) -> dict[str, Workflow]:
-    """Every workflow file: whether it runs unattended, its timeout, and each `python -m <repo module>` it runs.
-    #2033 adds one rule here: `scraper.job_runner once <job>` runs <job> (the CLI is #2024's)."""
+    """Every workflow file: whether it runs unattended, its timeout, and each `python -m <repo module>` it runs."""
     workflows: dict[str, Workflow] = {}
     for path in sorted(p for p in (root / ".github" / "workflows").iterdir() if p.suffix in (".yml", ".yaml")):
         data = yaml.safe_load(path.read_text()) or {}

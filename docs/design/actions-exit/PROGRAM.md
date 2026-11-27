@@ -330,19 +330,20 @@ are deleted; their dispatch inputs (`--max-pages`, `--max-seconds`) are request 
 (15, 30, 30 min) against a GitHub p95 of 3, 40 and 137 s (7 days to 11-25). None of the three is proxied and the runner
 already carries `SUPABASE_DB_URL` and the R2 set (#2032): no `.railway/` change, no migration. **remax is held to a later
 batch:** its sold/let measurement gate #2647 reads remax until 2026-11-29, and a new host, cadence and egress would
-confound it. A cutoff moves walks in `walk_timeout_s` order (sreality 40; remax, mmreality 60; bazos 130; realitymix,
+confound it. A cutoff moves walks in `walk_timeout_s` order (sreality 50; remax, mmreality 60; bazos 130; realitymix,
 ceskereality 180; idnes 240), so 60 min takes sreality with remax and mmreality; #2030's listed set and this section's
 order after it (realitymix before bazos) are not one cutoff, and ceskereality needs the `browser` extra the runner image
 lacks: later batches need a ruling on their order or the image. GitHub's throttled cron fired these walks
 about twice a day (14 runs each in those 7 days), the runner's grid four times, so the gate reads nominations per day
 beside per cycle (#2029's gate ticket).
-**As built (#2030), batch 2 starts with sreality alone.** The cutoff rises to 40 min, which takes sreality (hourly,
+**As built (#2030), batch 2 starts with sreality alone.** The cutoff rises to 50 min, which takes sreality (hourly,
 R24) and nothing else. The next cutoff (60 min) takes remax and mmreality together, once gate #2647 has read remax
 (2026-11-29) and job-runner carries `SCRAPER_PROXY_URL` (a `.railway/` change, the operator's wizard); realitymix
 (180 min) is not on either, so its place needs the ruling above. `index_walk.yml` and its group `sreality-index-walk`
 are deleted; its dispatch inputs (`--max-seconds`, `--dry-run`) are request args now. GitHub's throttled `*/15` cron
 delivered 22 walks in the 7 days to 11-26 (p50 1,165 s, p95 1,518 s, max 1,578 s, 476 pages on average, none near the
-1,800 s budget it carried); the runner's grid delivers 24 a day under the 40 min timeout. Each walk touches every
+1,800 s budget it carried); the runner's grid delivers 24 a day under a 50 min timeout, whose ⅔ Watch line (2,000 s) sits 27 % above that
+slowest walk; 40 min would have put it 22 s above. Each walk touches every
 sighted active ad (110k), so hourly walks add about 2.3M `listings` updates a day to today's ~2.5M (one 5-min reading
 on 11-26, 97 % heap-only since migration 743 dropped the last index on `last_seen_at`). sreality is not proxied and
 the runner already carries `SUPABASE_DB_URL` and the R2 set: no `.railway/` change, no migration.
@@ -366,7 +367,7 @@ delisting and coverage cells unchanged; aggregate peak ≤ 70 % of a replica.
 ### W5 — CLIP, the registry load, the GitHub tick, the leftovers
 `clip` every 15 min in the runner image (one unsharded run, exit 75 for backlogs; `clip_tag.yml`, the shard
 plumbing and the weights cache deleted); `ruian_load` moves to the runner (geo wheels in the build);
-price_stats ticks daily through `job_runner once` on GitHub so it has a row and a cell; `location_refetch`
+price_stats ticks daily through `job_runner once` on GitHub (not built: § As decided below); `location_refetch`
 reads its due time from its row (`first_delay_seconds` deleted). The test pinning the GitHub schedule set
 exists from W2 (#2023) and tightens by itself when the last waiting job moves; W5 adds its one workflow-reader
 rule, `scraper.job_runner once <job>` read as running `<job>`, without which the pairing census reads
@@ -397,6 +398,13 @@ finish, ~20 s) and `location_registry_load.yml` is deleted. The runner claims it
 `job_lease.held_job`, its only off-runner caller gone, is deleted with its tests. Migration 775 re-hosts the
 `place_facts` artifact row, keeping its fail line. A dry run of the 2026-11 vintage peaked at 342 MB (declared 2,048)
 and wrote 918 MB to its temporary directory. A by-hand run is `request ruian_load -- --vintage YYYYMMDD`.
+**As decided (2026-11-26), price statistics gets no tick.** The operator's subtraction audit ("migrate nothing we do
+not need") found the tick adds nothing that exists. Health's `gh/scrape_price_stats` cell already judges each weekly
+run's lateness and red streak, `price_stat_choropleth`'s artifact cell judges its output, and the pairing census reads
+`scraper.price_stats_main` in the workflow. A tick would have cost a second cell for the same job, a `once` path for a
+GitHub-hosted row (the lease helper #2033 had just deleted), the workflow-reader rule above and six "not due" runs a week.
+`scrape_price_stats.yml` stays as it is, its chain step included (gate #2106: one chained run in 14 days). The
+`location_refetch` half left W5 for the location programme's W2 (#2215).
 **Gate:** CLIP lag p90 ≤ 45 min; a 100-image re-embed identical within fp32 tolerance; both GitHub-hosted
 jobs show cells; `location_refetch` runs once a day across ≥ 3 deploys; **the flip gate: 7 days of billed
 GitHub run-rate under 50,000 min/month.**
@@ -440,7 +448,9 @@ budget) and the hand-kept stuck-run cutoff; the per-walk
 `--max-seconds` duplicate; idnes's own slice ordering; the `LOCATION_INTAKE_WORKERS` override; the 4-way
 CLIP shard matrix and weights cache; `location_refetch`'s first-delay machinery; the 18 h GitHub slack on
 artifact rows, re-hosted row by row in each move PR; the anonymous GitHub clone in RunPod pods; 13.2 GB of public artifacts. By ruling:
-up to 9 more files (R6a) and the dead lease columns, alias view and index (R6b).
+up to 9 more files (R6a; the last of its eight, the idnes broker backfill and its script, went 2026-11-26 after the
+re-measure: its 637 pages hold no broker block) and the dead lease columns, alias view and index (R6b). Never built
+either: the price-statistics tick (2026-11-26, W5 above).
 Never built (dropped from the first design): the shared `lanes.py` move, 17 interval knobs, the due-gated
 GitHub matrix, the overdue-only fallback rule, the disarm wave, runtime memory admission.
 

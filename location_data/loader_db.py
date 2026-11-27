@@ -129,9 +129,9 @@ def open_loader_connection() -> psycopg.Connection:
     direct = os.environ.get("LOCATION_DB_DIRECT_URL")
     session = os.environ.get("SUPABASE_DB_SESSION_URL")
     if direct:
-        mode, url, conn = "direct", direct, db.connect(direct)
+        mode, url, conn = "direct", direct, db.connect(direct, **db.JOB_PATIENCE)
     elif session:
-        mode, url, conn = "session-pooler", session, db.connect_session(session)
+        mode, url, conn = "session-pooler", session, db.connect_session(session, **db.JOB_PATIENCE)
     else:
         raise LoadAborted(
             "no session-mode connection: set LOCATION_DB_DIRECT_URL (a direct 5432 URL) or "
