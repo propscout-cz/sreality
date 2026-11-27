@@ -3235,7 +3235,7 @@ def read_cut(conn: Any, settings: Settings, generation: str = GENERATION, *,
 # after a switch back to w31 in place, a reverted worker reads the generation again.
 SETTINGS_KEYS_SINCE_W31: tuple[str, ...] = (
     "area_veto_gallery_exempt", "area_veto_basis_floor_exempt",
-    "ref_code_structured_categories", "content_key_town_grain")
+    "ref_code_structured_categories", "content_key_town_grain", "gallery_window_photo_key")
 
 
 def stored_settings(settings: Settings) -> dict[str, Any]:

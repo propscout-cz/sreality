@@ -49,6 +49,13 @@ class Settings:
     # other pair keeps `area_reject_pct`. Only the veto reads it: `area_relation`, D43's area
     # limbs and the cluster spread keep their own bars. Empty = w31.
     area_veto_gallery_exempt: dict[str, float] = field(default_factory=dict)
+    # E1000: a candidate only the gallery exemption admits is seated only when a photo-hash key
+    # also reaches it (`guards.gallery_window_only`). Under w34 the 20 % bar let through
+    # retrieval every pair of one category 8-20 % apart in area, and the real test (one price,
+    # one gallery) ran at decision: 281,799 of 288,275 added pairs on nine blocks ended as
+    # `guard:area` vetoes. One gallery implies a shared photo-hash key; the basis exemption is
+    # not gated. Off = w34.
+    gallery_window_photo_key: bool = False
     # The pair veto's area clause yields, up to the mapped gap, when a side of that portal states
     # `area_basis = 'floor'` (`guards.area_basis_exempt`): realitymix prints "celková podlahová
     # plocha", which may hold the cellar, balcony or terrace a partner leaves out. The area stays

@@ -105,6 +105,25 @@ def in_exemption_window(a: GuardSide, b: GuardSide, cfg: Settings) -> bool:
     return bar is not None and gap <= bar
 
 
+def gallery_window_only(a: GuardSide, b: GuardSide, cfg: Settings) -> bool:
+    """E1000: whether a window pair is the gallery exemption's alone, so that under
+    `gallery_window_photo_key` a photo-hash key must also reach it. Read of a pair
+    `in_exemption_window` holds: basis-exempt pairs are not gated."""
+    if not cfg.gallery_window_photo_key:
+        return False
+    gap = area_rel_diff(a.area_m2, b.area_m2)
+    return gap is not None and not area_basis_exempt(a, b, gap, cfg)
+
+
+PHOTO_PROBE: str = "phash"
+
+
+def photo_key_still_possible(probe: str, probes: Sequence[str]) -> bool:
+    """E1000: whether a candidate first met under `probe` can still be reached by a photo-hash
+    key: the probes fill in priority order, so one first met after the photo probe was not."""
+    return PHOTO_PROBE in probes and probes.index(probe) <= probes.index(PHOTO_PROBE)
+
+
 def exemption_window_quota(cap: int) -> int:
     """C4c: the most exemption-window candidates one listing's retrieval seats."""
     return int(cap * EXEMPTION_WINDOW_CAP_SHARE)

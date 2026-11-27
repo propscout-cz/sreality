@@ -32,7 +32,10 @@ from __future__ import annotations
 from typing import Any
 
 from autodedup.fingerprint import Fingerprint
-from autodedup.guards import exemption_window_quota, in_exemption_window, pair_veto
+from autodedup.guards import (
+    PHOTO_PROBE, exemption_window_quota, gallery_window_only, in_exemption_window, pair_veto,
+    photo_key_still_possible,
+)
 from autodedup.settings import Settings
 
 # Fan-out fills in this order (E17), so the cap can only ever discard the weakest class.
@@ -248,6 +251,9 @@ class BlockIndex:
             by_probe[probe].append((probe, key))
         out: dict[int, set[str]] = {}
         window: dict[int, set[str]] = {}
+        # E1000, as `incremental._fill` seats them: `waiting` holds a place in the fill order
+        # and none in the quota until a photo key confirms it.
+        waiting: set[int] = set()
         cap = self.settings.max_candidates_per_listing
         quota = exemption_window_quota(cap)
         for probe in self.probes:
@@ -262,11 +268,20 @@ class BlockIndex:
                         hit = window.get(other)
                     if hit is not None:
                         hit.add(probe)
+                        if (probe == PHOTO_PROBE and other in waiting
+                                and len(window) - len(waiting) < quota):
+                            waiting.discard(other)
                     elif len(out) < cap and not self._guarded(fp, other):
-                        if not in_exemption_window(fp, self.fingerprints[other], self.settings):
+                        mate = self.fingerprints[other]
+                        if not in_exemption_window(fp, mate, self.settings):
                             out[other] = {probe}
-                        elif len(window) < quota:
+                        elif (gallery_window_only(fp, mate, self.settings)
+                              and probe != PHOTO_PROBE):
+                            if photo_key_still_possible(probe, self.probes):
+                                window[other] = {probe}
+                                waiting.add(other)
+                        elif len(window) - len(waiting) < quota:
                             window[other] = {probe}
-        for other in list(window)[:cap - len(out)]:
+        for other in [other for other in window if other not in waiting][:cap - len(out)]:
             out[other] = window[other]
         return out
