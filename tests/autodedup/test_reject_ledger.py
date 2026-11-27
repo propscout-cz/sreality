@@ -758,8 +758,11 @@ def test_a_committed_pass_ledgers_and_reports_it(tmp_path) -> None:
 
 
 @pytest.mark.parametrize("how", ["refused", "deadline", "stopped", "lease_lost"])
-def test_a_pass_that_does_not_commit_ledgers_nothing(how: str, tmp_path,
-                                                     monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_first_pass_that_does_not_commit_ledgers_nothing(
+        how: str, tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every advert of this world is refreshed by its first pass, so even the deadline's
+    salvage (E997: rejects between two adverts the pass did NOT refresh;
+    `test_reject_salvage.py`) has nothing to keep."""
     world = _seeded_reject_world(tmp_path)
     original = incremental_lane.run_pass_bounded
     if how == "refused":
