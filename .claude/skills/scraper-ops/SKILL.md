@@ -130,7 +130,7 @@ portals' structured pages don't: field-capture W7 runs it as the worker's `text_
 (`toolkit/description_extraction.py`), never in the scrape — the LLM is behind publication, never
 in front of it.
 The bezrealitky, maxima and web
-walks are job-runner jobs since #2029, remax and mmreality since #2030 (`walk_<source>`, every 6 h; run now:
+walks are job-runner jobs since #2029, remax and mmreality since #2030 (`walk_<source>`, every 6 h, mmreality 12 h; run now:
 `references/job-runner.md`). mmreality sends
 every request via the residential `SCRAPER_PROXY_URL` (CF 403s datacenter IPs; job-runner reads the worker's; `USE_PROXY` +
 `PROXY_REQUIRED=True` so the worker skips it when unset — idnes is proxied too but sets
