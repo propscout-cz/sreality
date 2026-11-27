@@ -75,8 +75,7 @@ class RealitymixPortal(portal_runner.PortalDefaults):
 
     source = SOURCE
     walk_every_s = 6 * 3600
-    # job/walk_realitymix reads Watch past 2/3 of it (7,200 s): the slowest of 68 GitHub walks in the 30 days to
-    # 2026-11-27 took 3,295 s, so the line sits 119 % above it.
+    # Its 2/3 Watch line clears its slowest GitHub walk (PROGRAM § W4).
     walk_timeout_s = 180 * 60
     index_rate = 1.0
 

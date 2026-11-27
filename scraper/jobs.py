@@ -27,7 +27,7 @@ STUCK_RUN_GRACE_S = 600
 # for all three since the address load moved too (#2033).
 LOCATION_HEAVY = "location-heavy"
 WALK_PREFIX = "walk_"
-# One declaration for every walk (no per-portal value): a ceskereality walk's chromium held ~1,263 MB (#2031).
+# One declaration for every walk (no per-portal value): a walk with chromium held ~1,263 MB (#2031; PROGRAM § W4).
 WALK_MEMORY_MB, WALK_CPUS = 1536, 1
 
 
