@@ -14,7 +14,7 @@ relevant section here before modifying any code an architectural rule touches.
 
 How each portal is ingested: API/HTML shape, parser strategy, coordinate source,
 completeness posture (`supports_complete_walk`), and quirks. The **operational** side —
-which workflows run each portal, their crons, dispatch inputs, and log lines — is in the
+each portal's walk job, its cadence, run inputs and log lines — is in the
 `scraper-ops` skill; cross-source grouping is rule #15 (and, for the rebuild in progress,
 `docs/design/new-dedup/PROGRAM.md`).
 
@@ -712,7 +712,7 @@ rules. Identify which one a task belongs to before you start.
 `.github/workflows/`):
 - Python 3.12, stdlib-first, `psycopg` direct to Postgres.
 - Service-role database access. Reads and writes anything.
-- Runs in GitHub Actions (scrapers + scheduled jobs) or Railway (the API and the realtime worker).
+- Runs on Railway (the API, the realtime worker, the job runner) or GitHub Actions (CI, the canary, price stats, attended tools).
 - All rules below apply: append-only migrations, snapshot-on-change, no deletes, no
   `supabase-py`, etc.
 
@@ -1894,9 +1894,8 @@ renumber.** Navigate by area:
    orphans. Any anchor is sound (every group reached the end since it, and an ad still listed was
    sighted since it); the partition only decides how much a resumed run re-walks. Health dates the
    end entry, and so the orphans and the portal's every-unit walk, at the cycle's anchor
-   (`scripts/checks/scraping.py`). On GitHub the next scheduled walk lies past the timeout and starts
-   afresh, as before; the job runner re-runs an interrupted job at once, inside the cycle (the runner's
-   walks since #2029).
+   (`scripts/checks/scraping.py`). The job runner re-runs an interrupted job at once, inside the cycle (the
+   runner's walks since #2029).
 
    **2026-09-08 — the nomination gate became STRUCTURAL; the count stopped voting.** Until this
    date the 5th element of `walk_category` was arithmetic: `walk_is_complete(collected,

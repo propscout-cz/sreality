@@ -379,8 +379,8 @@ Database:
 Image storage (Cloudflare R2, S3-compatible):
 - `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET_NAME` (usually
   `sreality-images`).
-- **TWO runtimes need these, set them on BOTH:** (1) the **scraper** (GitHub Actions secrets)
-  to *download* image bytes — optional there, a missing var just logs a skip and exits zero;
+- **TWO runtimes need these, set them on BOTH:** (1) the **worker** (`images` lane)
+  to *download* image bytes — optional there, a missing var just logs a skip and idles;
   (2) the **FastAPI service** (Railway env vars) to *serve* them, since `GET /images/{key}`
   presigns R2 (the frontend's image path since PR #255) and `GET /properties/{id}/download.zip`
   (JWT) zips them with a PDF of the ad and, under `moje-fotky/`, the acting identity's own photo

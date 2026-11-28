@@ -85,11 +85,11 @@ the old key. The account also holds other projects' domains and keys: leave thos
 
 - Rotated 2026-10-22, before the M0 rotation: `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `QWEN_API_KEY`,
   `RUNPOD_API_KEY`, the Cloudflare API token. `VAPID_PRIVATE_KEY` was created after the incident and stays.
-- `SCRAPER_PROXY_URL` (GH + worker; job-runner by reference since #2030; the DataImpulse residential proxy, `http://<login>:<password>@gw.dataimpulse.com:823`,
+- `SCRAPER_PROXY_URL` (worker; job-runner by reference since #2030; GH's copy read by no workflow since #2031; the DataImpulse residential proxy, `http://<login>:<password>@gw.dataimpulse.com:823`,
   read through `scraper/portal_base.py` `PROXY_ENV` by idnes, mmreality, ceskereality): rotated 2026-10-27 by operator
   ruling. The plan page's ↻ regenerates the password with no overlap, so take the autodedup brake first, then
   regenerate, test (`curl -K -` with the proxy on stdin → CONNECT 200), stage + deploy the worker (job-runner redeploys
-  after it), `gh secret set`.
+  after it).
   A rejected proxy login is a `ProxyError`, retried, never a gone signal.
 - GitHub-only, so outside Railway's incident: `HF_TOKEN`, `SREALITY_LOGIN_EMAIL` / `SREALITY_LOGIN_PASSWORD` /
   `SREALITY_SESSION_COOKIE`.
