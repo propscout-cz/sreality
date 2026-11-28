@@ -206,7 +206,7 @@ slice ledger, went with migration 689.)
   so it writes no end; the next run skips the groups that reached the end since
   the anchor (`CYCLE … resumed=True skipped=N`), while the cycle is younger than
   the portal's `walk_timeout_s`. Past it the cycle is left (`CYCLE the open cycle
-  from … outlived …`) and a fresh one starts: on GitHub, the next scheduled walk.
+  from … outlived …`) and a fresh one starts.
 - The first run that walks its **whole plan ends the cycle**: the orphans are
   nominated only when every group reached the end since the anchor, against what
   nothing sighted since it (`last_seen_at < anchor`). Otherwise the end entry reads
